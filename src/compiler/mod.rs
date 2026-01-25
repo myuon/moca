@@ -4,6 +4,7 @@ pub mod lexer;
 mod module;
 mod parser;
 mod resolver;
+pub mod types;
 
 pub use codegen::Codegen;
 pub use lexer::Lexer;
