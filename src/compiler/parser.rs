@@ -1,5 +1,6 @@
 use crate::compiler::ast::*;
 use crate::compiler::lexer::{Span, Token, TokenKind};
+use crate::compiler::types::TypeAnnotation;
 
 /// A recursive descent parser for mica.
 pub struct Parser<'a> {
@@ -73,33 +74,46 @@ impl<'a> Parser<'a> {
 
         let mut params = Vec::new();
         if !self.check(&TokenKind::RParen) {
-            let param_span = self.current_span();
-            let param_name = self.expect_ident()?;
-            params.push(Param {
-                name: param_name,
-                type_annotation: None,
-                span: param_span,
-            });
+            params.push(self.parse_param()?);
             while self.match_token(&TokenKind::Comma) {
-                let param_span = self.current_span();
-                let param_name = self.expect_ident()?;
-                params.push(Param {
-                    name: param_name,
-                    type_annotation: None,
-                    span: param_span,
-                });
+                params.push(self.parse_param()?);
             }
         }
         self.expect(&TokenKind::RParen)?;
+
+        // Parse optional return type: -> Type
+        let return_type = if self.match_token(&TokenKind::Arrow) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
 
         let body = self.block()?;
 
         Ok(FnDef {
             name,
             params,
-            return_type: None,
+            return_type,
             body,
             span,
+        })
+    }
+
+    fn parse_param(&mut self) -> Result<Param, String> {
+        let param_span = self.current_span();
+        let param_name = self.expect_ident()?;
+
+        // Parse optional type annotation: : Type
+        let type_annotation = if self.match_token(&TokenKind::Colon) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
+        Ok(Param {
+            name: param_name,
+            type_annotation,
+            span: param_span,
         })
     }
 
@@ -147,6 +161,14 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Let)?;
 
         let name = self.expect_ident()?;
+
+        // Parse optional type annotation: : Type
+        let type_annotation = if self.match_token(&TokenKind::Colon) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
         self.expect(&TokenKind::Eq)?;
         let init = self.expression()?;
         self.expect(&TokenKind::Semi)?;
@@ -154,7 +176,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Let {
             name,
             mutable: false,
-            type_annotation: None,
+            type_annotation,
             init,
             span,
         })
@@ -165,6 +187,14 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Var)?;
 
         let name = self.expect_ident()?;
+
+        // Parse optional type annotation: : Type
+        let type_annotation = if self.match_token(&TokenKind::Colon) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
         self.expect(&TokenKind::Eq)?;
         let init = self.expression()?;
         self.expect(&TokenKind::Semi)?;
@@ -172,7 +202,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Let {
             name,
             mutable: true,
-            type_annotation: None,
+            type_annotation,
             init,
             span,
         })
@@ -325,6 +355,92 @@ impl<'a> Parser<'a> {
             catch_block,
             span,
         })
+    }
+
+    // Type annotation parsing
+
+    /// Parse a type annotation.
+    /// Type ::= PrimaryType ('?')?
+    /// PrimaryType ::= NamedType | ArrayType | ObjectType | FunctionType
+    fn parse_type_annotation(&mut self) -> Result<TypeAnnotation, String> {
+        let base_type = self.parse_primary_type()?;
+
+        // Check for nullable suffix: T?
+        if self.match_token(&TokenKind::Question) {
+            Ok(TypeAnnotation::Nullable(Box::new(base_type)))
+        } else {
+            Ok(base_type)
+        }
+    }
+
+    fn parse_primary_type(&mut self) -> Result<TypeAnnotation, String> {
+        // Check for function type: (T1, T2) -> R
+        if self.check(&TokenKind::LParen) {
+            return self.parse_function_type();
+        }
+
+        // Check for object type: {field: T, ...}
+        if self.check(&TokenKind::LBrace) {
+            return self.parse_object_type();
+        }
+
+        // Named type (int, float, bool, string, nil) or array<T>
+        let name = self.expect_ident()?;
+
+        // Check for array<T>
+        if name == "array" && self.match_token(&TokenKind::Lt) {
+            let element_type = self.parse_type_annotation()?;
+            self.expect(&TokenKind::Gt)?;
+            return Ok(TypeAnnotation::Array(Box::new(element_type)));
+        }
+
+        Ok(TypeAnnotation::Named(name))
+    }
+
+    fn parse_function_type(&mut self) -> Result<TypeAnnotation, String> {
+        self.expect(&TokenKind::LParen)?;
+
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            params.push(self.parse_type_annotation()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.parse_type_annotation()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+
+        self.expect(&TokenKind::Arrow)?;
+        let ret = self.parse_type_annotation()?;
+
+        Ok(TypeAnnotation::Function {
+            params,
+            ret: Box::new(ret),
+        })
+    }
+
+    fn parse_object_type(&mut self) -> Result<TypeAnnotation, String> {
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut fields = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            let field_name = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let field_type = self.parse_type_annotation()?;
+            fields.push((field_name, field_type));
+
+            while self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break; // Allow trailing comma
+                }
+                let field_name = self.expect_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let field_type = self.parse_type_annotation()?;
+                fields.push((field_name, field_type));
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(TypeAnnotation::Object(fields))
     }
 
     // Expression parsing with precedence climbing
@@ -1004,6 +1120,119 @@ mod tests {
                 assert!(relative);
             }
             _ => panic!("expected import statement"),
+        }
+    }
+
+    // Type annotation tests
+
+    #[test]
+    fn test_let_with_type_annotation() {
+        let program = parse("let x: int = 42;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                name,
+                type_annotation,
+                ..
+            }) => {
+                assert_eq!(name, "x");
+                assert!(type_annotation.is_some());
+                assert_eq!(
+                    type_annotation.as_ref().unwrap().to_string(),
+                    "int"
+                );
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_let_with_nullable_type() {
+        let program = parse("let x: string? = nil;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                type_annotation, ..
+            }) => {
+                assert!(type_annotation.is_some());
+                assert_eq!(
+                    type_annotation.as_ref().unwrap().to_string(),
+                    "string?"
+                );
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_let_with_array_type() {
+        let program = parse("let arr: array<int> = [1, 2, 3];").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                type_annotation, ..
+            }) => {
+                assert!(type_annotation.is_some());
+                assert_eq!(
+                    type_annotation.as_ref().unwrap().to_string(),
+                    "array<int>"
+                );
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_function_with_type_annotations() {
+        let program = parse("fun add(a: int, b: int) -> int { return a + b; }").unwrap();
+        match &program.items[0] {
+            Item::FnDef(FnDef {
+                name,
+                params,
+                return_type,
+                ..
+            }) => {
+                assert_eq!(name, "add");
+                assert_eq!(params.len(), 2);
+                assert!(params[0].type_annotation.is_some());
+                assert_eq!(params[0].type_annotation.as_ref().unwrap().to_string(), "int");
+                assert!(params[1].type_annotation.is_some());
+                assert_eq!(params[1].type_annotation.as_ref().unwrap().to_string(), "int");
+                assert!(return_type.is_some());
+                assert_eq!(return_type.as_ref().unwrap().to_string(), "int");
+            }
+            _ => panic!("expected function definition"),
+        }
+    }
+
+    #[test]
+    fn test_function_without_type_annotations() {
+        let program = parse("fun add(a, b) { return a + b; }").unwrap();
+        match &program.items[0] {
+            Item::FnDef(FnDef {
+                params,
+                return_type,
+                ..
+            }) => {
+                assert!(params[0].type_annotation.is_none());
+                assert!(params[1].type_annotation.is_none());
+                assert!(return_type.is_none());
+            }
+            _ => panic!("expected function definition"),
+        }
+    }
+
+    #[test]
+    fn test_object_type_annotation() {
+        let program = parse("let obj: {x: int, y: string} = {x: 1, y: \"a\"};").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                type_annotation, ..
+            }) => {
+                assert!(type_annotation.is_some());
+                assert_eq!(
+                    type_annotation.as_ref().unwrap().to_string(),
+                    "{x: int, y: string}"
+                );
+            }
+            _ => panic!("expected let statement"),
         }
     }
 }

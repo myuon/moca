@@ -42,6 +42,8 @@ pub enum TokenKind {
     Bang,
     Eq,
     Dot,
+    Arrow,    // ->
+    Question, // ?
 
     // Delimiters
     LParen,
@@ -131,7 +133,15 @@ impl<'a> Lexer<'a> {
                 ':' => { self.advance(); TokenKind::Colon }
                 '.' => { self.advance(); TokenKind::Dot }
                 '+' => { self.advance(); TokenKind::Plus }
-                '-' => { self.advance(); TokenKind::Minus }
+                '-' => {
+                    self.advance();
+                    if self.match_char('>') {
+                        TokenKind::Arrow
+                    } else {
+                        TokenKind::Minus
+                    }
+                }
+                '?' => { self.advance(); TokenKind::Question }
                 '*' => { self.advance(); TokenKind::Star }
                 '/' => { self.advance(); TokenKind::Slash }
                 '%' => { self.advance(); TokenKind::Percent }
