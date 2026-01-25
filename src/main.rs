@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 mod compiler;
 mod debugger;
+mod jit;
 mod lsp;
 mod package;
 mod vm;
