@@ -2,11 +2,13 @@ mod value;
 mod ops;
 mod heap;
 mod vm;
+pub mod debug;
 
 pub use value::Value;
 pub use ops::Op;
 pub use heap::{GcRef, Heap, HeapObject, MicaArray, MicaObject, MicaString, ObjectType};
 pub use vm::VM;
+pub use debug::{DebugInfo, FunctionDebugInfo, LineTable, LocalVarInfo};
 
 /// A compiled function.
 #[derive(Debug, Clone)]
@@ -24,4 +26,6 @@ pub struct Chunk {
     pub main: Function,
     /// String constants pool
     pub strings: Vec<String>,
+    /// Debug information (optional)
+    pub debug: Option<DebugInfo>,
 }

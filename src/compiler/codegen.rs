@@ -1,11 +1,13 @@
 use crate::compiler::ast::{BinaryOp, UnaryOp};
 use crate::compiler::resolver::{ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement};
-use crate::vm::{Chunk, Function, Op};
+use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
 
 /// Code generator that compiles resolved AST to bytecode.
 pub struct Codegen {
     functions: Vec<Function>,
     strings: Vec<String>,
+    debug: DebugInfo,
+    emit_debug: bool,
 }
 
 impl Codegen {
@@ -13,6 +15,18 @@ impl Codegen {
         Self {
             functions: Vec::new(),
             strings: Vec::new(),
+            debug: DebugInfo::new(),
+            emit_debug: true, // Enable debug info by default
+        }
+    }
+
+    /// Create a codegen without debug info (for release builds).
+    pub fn without_debug() -> Self {
+        Self {
+            functions: Vec::new(),
+            strings: Vec::new(),
+            debug: DebugInfo::new(),
+            emit_debug: false,
         }
     }
 
@@ -33,6 +47,10 @@ impl Codegen {
         for func in &program.functions {
             let compiled = self.compile_function(func)?;
             self.functions.push(compiled);
+            // Add debug info placeholder for each function
+            if self.emit_debug {
+                self.debug.functions.push(FunctionDebugInfo::new());
+            }
         }
 
         // Compile main body
@@ -51,10 +69,17 @@ impl Codegen {
             code: main_ops,
         };
 
+        let debug = if self.emit_debug {
+            Some(self.debug.clone())
+        } else {
+            None
+        };
+
         Ok(Chunk {
             functions: self.functions.clone(),
             main: main_func,
             strings: self.strings.clone(),
+            debug,
         })
     }
 

@@ -704,6 +704,7 @@ mod tests {
                 code: ops,
             },
             strings: vec![],
+            debug: None,
         };
 
         let mut vm = VM::new();
@@ -721,6 +722,7 @@ mod tests {
                 code: ops,
             },
             strings,
+            debug: None,
         };
 
         let mut vm = VM::new();
