@@ -53,12 +53,14 @@ impl<'a> AstPrinter<'a> {
 
     fn print_item(&mut self, item: &Item, is_last: bool) {
         let prefix = if is_last { "└── " } else { "├── " };
+        let child_prefix = if is_last { "    " } else { "│   " };
+        self.write_indent();
         match item {
             Item::Import(import) => self.print_import(import, prefix),
-            Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, is_last),
-            Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, is_last),
-            Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, is_last),
-            Item::Statement(stmt) => self.print_statement(stmt, prefix, is_last),
+            Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, &child_prefix),
+            Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, &child_prefix),
+            Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, &child_prefix),
+            Item::Statement(stmt) => self.print_statement(stmt, prefix, &child_prefix),
         }
     }
 
@@ -69,7 +71,7 @@ impl<'a> AstPrinter<'a> {
         self.newline();
     }
 
-    fn print_fn_def(&mut self, fn_def: &FnDef, prefix: &str, is_last: bool) {
+    fn print_fn_def(&mut self, fn_def: &FnDef, prefix: &str, parent_prefix: &str) {
         let params = fn_def
             .params
             .iter()
@@ -86,40 +88,40 @@ impl<'a> AstPrinter<'a> {
         self.write_prefixed(prefix, &format!("FnDef: {}({}){}", fn_def.name, params, ret_type));
         self.newline();
 
-        let child_prefix = if is_last { "    " } else { "│   " };
-        self.print_block_contents(&fn_def.body, child_prefix);
+        self.print_block_contents(&fn_def.body, parent_prefix);
     }
 
-    fn print_struct_def(&mut self, struct_def: &StructDef, prefix: &str, is_last: bool) {
+    fn print_struct_def(&mut self, struct_def: &StructDef, prefix: &str, parent_prefix: &str) {
         self.write_prefixed(prefix, &format!("StructDef: {}", struct_def.name));
         self.newline();
 
-        let child_prefix = if is_last { "    " } else { "│   " };
         for (i, field) in struct_def.fields.iter().enumerate() {
             let field_is_last = i == struct_def.fields.len() - 1;
             let field_prefix = if field_is_last { "└── " } else { "├── " };
-            self.write_indent_with(child_prefix);
+            self.write_indent_with(parent_prefix);
             self.write(&format!("{}Field: {}: {}", field_prefix, field.name, field.type_annotation));
             self.newline();
         }
     }
 
-    fn print_impl_block(&mut self, impl_block: &ImplBlock, prefix: &str, is_last: bool) {
+    fn print_impl_block(&mut self, impl_block: &ImplBlock, prefix: &str, parent_prefix: &str) {
         self.write_prefixed(prefix, &format!("ImplBlock: {}", impl_block.struct_name));
         self.newline();
 
-        let child_prefix = if is_last { "    " } else { "│   " };
         for (i, method) in impl_block.methods.iter().enumerate() {
             let method_is_last = i == impl_block.methods.len() - 1;
             let method_prefix = if method_is_last { "└── " } else { "├── " };
-            self.write_indent_with(child_prefix);
-            self.print_fn_def(method, method_prefix, method_is_last);
+            let method_child_prefix = if method_is_last {
+                format!("{}    ", parent_prefix)
+            } else {
+                format!("{}│   ", parent_prefix)
+            };
+            self.write_indent_with(parent_prefix);
+            self.print_fn_def(method, method_prefix, &method_child_prefix);
         }
     }
 
-    fn print_statement(&mut self, stmt: &Statement, prefix: &str, is_last: bool) {
-        let child_prefix = if is_last { "    " } else { "│   " };
-
+    fn print_statement(&mut self, stmt: &Statement, prefix: &str, parent_prefix: &str) {
         match stmt {
             Statement::Let {
                 name,
@@ -135,15 +137,15 @@ impl<'a> AstPrinter<'a> {
                     .unwrap_or_default();
                 self.write_prefixed(prefix, &format!("Let: {}{}{}", mut_str, name, type_str));
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(init, "└── ", true, child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(init, "└── ", true, parent_prefix);
             }
 
             Statement::Assign { name, value, .. } => {
                 self.write_prefixed(prefix, &format!("Assign: {}", name));
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── ", true, child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── ", true, parent_prefix);
             }
 
             Statement::IndexAssign {
@@ -154,12 +156,12 @@ impl<'a> AstPrinter<'a> {
             } => {
                 self.write_prefixed(prefix, "IndexAssign");
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, "├── object: ", false, child_prefix);
-                self.write_indent_with(child_prefix);
-                self.print_expr(index, "├── index: ", false, child_prefix);
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── value: ", true, child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, "├── object: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(index, "├── index: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── value: ", true, parent_prefix);
             }
 
             Statement::FieldAssign {
@@ -170,10 +172,10 @@ impl<'a> AstPrinter<'a> {
             } => {
                 self.write_prefixed(prefix, &format!("FieldAssign: .{}", field));
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, "├── object: ", false, child_prefix);
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── value: ", true, child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, "├── object: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── value: ", true, parent_prefix);
             }
 
             Statement::If {
@@ -184,24 +186,24 @@ impl<'a> AstPrinter<'a> {
             } => {
                 self.write_prefixed(prefix, "If");
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(condition, "├── condition: ", false, child_prefix);
-                self.write_indent_with(child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(condition, "├── condition: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
                 let has_else = else_block.is_some();
                 let then_prefix = if has_else { "├── " } else { "└── " };
                 self.write(&format!("{}then:", then_prefix));
                 self.newline();
                 let then_child = if has_else {
-                    format!("{}│   ", child_prefix)
+                    format!("{}│   ", parent_prefix)
                 } else {
-                    format!("{}    ", child_prefix)
+                    format!("{}    ", parent_prefix)
                 };
                 self.print_block_contents(then_block, &then_child);
                 if let Some(else_blk) = else_block {
-                    self.write_indent_with(child_prefix);
+                    self.write_indent_with(parent_prefix);
                     self.write("└── else:");
                     self.newline();
-                    let else_child = format!("{}    ", child_prefix);
+                    let else_child = format!("{}    ", parent_prefix);
                     self.print_block_contents(else_blk, &else_child);
                 }
             }
@@ -211,12 +213,12 @@ impl<'a> AstPrinter<'a> {
             } => {
                 self.write_prefixed(prefix, "While");
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(condition, "├── condition: ", false, child_prefix);
-                self.write_indent_with(child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(condition, "├── condition: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
                 self.write("└── body:");
                 self.newline();
-                let body_child = format!("{}    ", child_prefix);
+                let body_child = format!("{}    ", parent_prefix);
                 self.print_block_contents(body, &body_child);
             }
 
@@ -228,12 +230,12 @@ impl<'a> AstPrinter<'a> {
             } => {
                 self.write_prefixed(prefix, &format!("ForIn: {}", var));
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(iterable, "├── iterable: ", false, child_prefix);
-                self.write_indent_with(child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(iterable, "├── iterable: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
                 self.write("└── body:");
                 self.newline();
-                let body_child = format!("{}    ", child_prefix);
+                let body_child = format!("{}    ", parent_prefix);
                 self.print_block_contents(body, &body_child);
             }
 
@@ -241,16 +243,16 @@ impl<'a> AstPrinter<'a> {
                 self.write_prefixed(prefix, "Return");
                 self.newline();
                 if let Some(expr) = value {
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(expr, "└── ", true, child_prefix);
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(expr, "└── ", true, parent_prefix);
                 }
             }
 
             Statement::Throw { value, .. } => {
                 self.write_prefixed(prefix, "Throw");
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── ", true, child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── ", true, parent_prefix);
             }
 
             Statement::Try {
@@ -261,29 +263,33 @@ impl<'a> AstPrinter<'a> {
             } => {
                 self.write_prefixed(prefix, "Try");
                 self.newline();
-                self.write_indent_with(child_prefix);
+                self.write_indent_with(parent_prefix);
                 self.write("├── try:");
                 self.newline();
-                let try_child = format!("{}│   ", child_prefix);
+                let try_child = format!("{}│   ", parent_prefix);
                 self.print_block_contents(try_block, &try_child);
-                self.write_indent_with(child_prefix);
+                self.write_indent_with(parent_prefix);
                 self.write(&format!("└── catch ({}):", catch_var));
                 self.newline();
-                let catch_child = format!("{}    ", child_prefix);
+                let catch_child = format!("{}    ", parent_prefix);
                 self.print_block_contents(catch_block, &catch_child);
             }
 
             Statement::Expr { expr, .. } => {
                 self.write_prefixed(prefix, "Expr");
                 self.newline();
-                self.write_indent_with(child_prefix);
-                self.print_expr(expr, "└── ", true, child_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(expr, "└── ", true, parent_prefix);
             }
         }
     }
 
-    fn print_expr(&mut self, expr: &Expr, prefix: &str, _is_last: bool, parent_prefix: &str) {
-        let child_prefix = format!("{}    ", parent_prefix);
+    fn print_expr(&mut self, expr: &Expr, prefix: &str, is_last: bool, parent_prefix: &str) {
+        let child_prefix = if is_last {
+            format!("{}    ", parent_prefix)
+        } else {
+            format!("{}│   ", parent_prefix)
+        };
 
         match expr {
             Expr::Int { value, .. } => {
@@ -467,12 +473,17 @@ impl<'a> AstPrinter<'a> {
         }
     }
 
-    fn print_block_contents(&mut self, block: &Block, prefix: &str) {
+    fn print_block_contents(&mut self, block: &Block, parent_prefix: &str) {
         for (i, stmt) in block.statements.iter().enumerate() {
             let is_last = i == block.statements.len() - 1;
             let stmt_prefix = if is_last { "└── " } else { "├── " };
-            self.write_indent_with(prefix);
-            self.print_statement(stmt, stmt_prefix, is_last);
+            let child_prefix = if is_last {
+                format!("{}    ", parent_prefix)
+            } else {
+                format!("{}│   ", parent_prefix)
+            };
+            self.write_indent_with(parent_prefix);
+            self.print_statement(stmt, stmt_prefix, &child_prefix);
         }
     }
 
@@ -617,7 +628,7 @@ impl ResolvedProgramPrinter {
 
     fn print_function(&mut self, func: &ResolvedFunction, index: usize, is_last: bool) {
         let prefix = if is_last { "└── " } else { "├── " };
-        let child_prefix = if is_last { "    " } else { "│   " };
+        let func_child_prefix = if is_last { "    " } else { "│   " };
 
         // Print function signature
         let params: Vec<String> = func
@@ -642,31 +653,33 @@ impl ResolvedProgramPrinter {
         for (i, stmt) in func.body.iter().enumerate() {
             let stmt_is_last = i == func.body.len() - 1;
             let stmt_prefix = if stmt_is_last { "└── " } else { "├── " };
-            let stmt_child_prefix = if stmt_is_last { "    " } else { "│   " };
-            self.write_indent_with(child_prefix);
-            self.print_statement(stmt, stmt_prefix, stmt_child_prefix);
+            let stmt_child_prefix = if stmt_is_last {
+                format!("{}    ", func_child_prefix)
+            } else {
+                format!("{}│   ", func_child_prefix)
+            };
+            self.write_indent_with(&func_child_prefix);
+            self.print_statement(stmt, stmt_prefix, &stmt_child_prefix);
         }
         self.indent -= 1;
     }
 
-    fn print_statement(&mut self, stmt: &ResolvedStatement, prefix: &str, child_prefix: &str) {
+    fn print_statement(&mut self, stmt: &ResolvedStatement, prefix: &str, parent_prefix: &str) {
         match stmt {
             ResolvedStatement::Let { slot, init } => {
                 self.write(&format!("{}Let slot:{}", prefix, slot));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(init, "└── init: ", "    ");
-                self.indent -= 1;
+                self.write_indent_with(parent_prefix);
+                let expr_child = format!("{}    ", parent_prefix);
+                self.print_expr(init, "└── init: ", &expr_child);
             }
 
             ResolvedStatement::Assign { slot, value } => {
                 self.write(&format!("{}Assign slot:{}", prefix, slot));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── value: ", "    ");
-                self.indent -= 1;
+                self.write_indent_with(parent_prefix);
+                let expr_child = format!("{}    ", parent_prefix);
+                self.print_expr(value, "└── value: ", &expr_child);
             }
 
             ResolvedStatement::IndexAssign {
@@ -676,14 +689,14 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}IndexAssign", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, "├── object: ", "│   ");
-                self.write_indent_with(child_prefix);
-                self.print_expr(index, "├── index: ", "│   ");
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── value: ", "    ");
-                self.indent -= 1;
+                let obj_child = format!("{}│   ", parent_prefix);
+                let val_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, "├── object: ", &obj_child);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(index, "├── index: ", &obj_child);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── value: ", &val_child);
             }
 
             ResolvedStatement::FieldAssign {
@@ -693,12 +706,12 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}FieldAssign .{}", prefix, field));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, "├── object: ", "│   ");
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── value: ", "    ");
-                self.indent -= 1;
+                let obj_child = format!("{}│   ", parent_prefix);
+                let val_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, "├── object: ", &obj_child);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── value: ", &val_child);
             }
 
             ResolvedStatement::If {
@@ -708,36 +721,40 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}If", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(condition, "├── condition: ", "│   ");
-                self.write_indent_with(child_prefix);
+                let cond_child = format!("{}│   ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(condition, "├── condition: ", &cond_child);
+                self.write_indent_with(parent_prefix);
                 let has_else = else_block.is_some();
                 let then_prefix = if has_else { "├── " } else { "└── " };
                 self.write(&format!("{}then:", then_prefix));
                 self.newline();
-                let then_child = if has_else { "│   " } else { "    " };
-                self.print_block(then_block, child_prefix, then_child);
+                let then_child = if has_else {
+                    format!("{}│   ", parent_prefix)
+                } else {
+                    format!("{}    ", parent_prefix)
+                };
+                self.print_block(then_block, &then_child);
                 if let Some(else_blk) = else_block {
-                    self.write_indent_with(child_prefix);
+                    self.write_indent_with(parent_prefix);
                     self.write("└── else:");
                     self.newline();
-                    self.print_block(else_blk, child_prefix, "    ");
+                    let else_child = format!("{}    ", parent_prefix);
+                    self.print_block(else_blk, &else_child);
                 }
-                self.indent -= 1;
             }
 
             ResolvedStatement::While { condition, body } => {
                 self.write(&format!("{}While", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(condition, "├── condition: ", "│   ");
-                self.write_indent_with(child_prefix);
+                let cond_child = format!("{}│   ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(condition, "├── condition: ", &cond_child);
+                self.write_indent_with(parent_prefix);
                 self.write("└── body:");
                 self.newline();
-                self.print_block(body, child_prefix, "    ");
-                self.indent -= 1;
+                let body_child = format!("{}    ", parent_prefix);
+                self.print_block(body, &body_child);
             }
 
             ResolvedStatement::ForIn {
@@ -747,34 +764,32 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}ForIn slot:{}", prefix, slot));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(iterable, "├── iterable: ", "│   ");
-                self.write_indent_with(child_prefix);
+                let iter_child = format!("{}│   ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(iterable, "├── iterable: ", &iter_child);
+                self.write_indent_with(parent_prefix);
                 self.write("└── body:");
                 self.newline();
-                self.print_block(body, child_prefix, "    ");
-                self.indent -= 1;
+                let body_child = format!("{}    ", parent_prefix);
+                self.print_block(body, &body_child);
             }
 
             ResolvedStatement::Return { value } => {
                 self.write(&format!("{}Return", prefix));
                 self.newline();
                 if let Some(v) = value {
-                    self.indent += 1;
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(v, "└── ", "    ");
-                    self.indent -= 1;
+                    self.write_indent_with(parent_prefix);
+                    let expr_child = format!("{}    ", parent_prefix);
+                    self.print_expr(v, "└── ", &expr_child);
                 }
             }
 
             ResolvedStatement::Throw { value } => {
                 self.write(&format!("{}Throw", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(value, "└── ", "    ");
-                self.indent -= 1;
+                self.write_indent_with(parent_prefix);
+                let expr_child = format!("{}    ", parent_prefix);
+                self.print_expr(value, "└── ", &expr_child);
             }
 
             ResolvedStatement::Try {
@@ -784,43 +799,43 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}Try", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
+                self.write_indent_with(parent_prefix);
                 self.write("├── try:");
                 self.newline();
-                self.print_block(try_block, child_prefix, "│   ");
-                self.write_indent_with(child_prefix);
+                let try_child = format!("{}│   ", parent_prefix);
+                self.print_block(try_block, &try_child);
+                self.write_indent_with(parent_prefix);
                 self.write(&format!("└── catch slot:{}:", catch_slot));
                 self.newline();
-                self.print_block(catch_block, child_prefix, "    ");
-                self.indent -= 1;
+                let catch_child = format!("{}    ", parent_prefix);
+                self.print_block(catch_block, &catch_child);
             }
 
             ResolvedStatement::Expr { expr } => {
                 self.write(&format!("{}Expr", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(expr, "└── ", "    ");
-                self.indent -= 1;
+                self.write_indent_with(parent_prefix);
+                let expr_child = format!("{}    ", parent_prefix);
+                self.print_expr(expr, "└── ", &expr_child);
             }
         }
     }
 
-    fn print_block(&mut self, block: &[ResolvedStatement], parent_prefix: &str, child_prefix: &str) {
-        self.indent += 1;
+    fn print_block(&mut self, block: &[ResolvedStatement], parent_prefix: &str) {
         for (i, stmt) in block.iter().enumerate() {
             let is_last = i == block.len() - 1;
             let stmt_prefix = if is_last { "└── " } else { "├── " };
-            let stmt_child = if is_last { "    " } else { "│   " };
+            let stmt_child = if is_last {
+                format!("{}    ", parent_prefix)
+            } else {
+                format!("{}│   ", parent_prefix)
+            };
             self.write_indent_with(parent_prefix);
-            self.write_no_indent(child_prefix);
-            self.print_statement(stmt, stmt_prefix, stmt_child);
+            self.print_statement(stmt, stmt_prefix, &stmt_child);
         }
-        self.indent -= 1;
     }
 
-    fn print_expr(&mut self, expr: &ResolvedExpr, prefix: &str, child_prefix: &str) {
+    fn print_expr(&mut self, expr: &ResolvedExpr, prefix: &str, parent_prefix: &str) {
         match expr {
             ResolvedExpr::Int(v) => {
                 self.write(&format!("{}Int({})", prefix, v));
@@ -856,53 +871,56 @@ impl ResolvedProgramPrinter {
             ResolvedExpr::Array { elements } => {
                 self.write(&format!("{}Array[{}]", prefix, elements.len()));
                 self.newline();
-                self.indent += 1;
                 for (i, elem) in elements.iter().enumerate() {
                     let is_last = i == elements.len() - 1;
                     let elem_prefix = if is_last { "└── " } else { "├── " };
-                    let elem_child = if is_last { "    " } else { "│   " };
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(elem, elem_prefix, elem_child);
+                    let elem_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(elem, elem_prefix, &elem_child);
                 }
-                self.indent -= 1;
             }
 
             ResolvedExpr::Object { fields } => {
                 self.write(&format!("{}Object", prefix));
                 self.newline();
-                self.indent += 1;
                 for (i, (name, value)) in fields.iter().enumerate() {
                     let is_last = i == fields.len() - 1;
                     let field_prefix = if is_last { "└── " } else { "├── " };
-                    let field_child = if is_last { "    " } else { "│   " };
-                    self.write_indent_with(child_prefix);
+                    let field_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
                     self.write(&format!("{}{}: ", field_prefix, name));
                     self.newline();
-                    self.write_indent_with(child_prefix);
-                    self.write_no_indent(field_child);
-                    self.print_expr(value, "└── ", "    ");
+                    let value_child = format!("{}    ", field_child);
+                    self.write_indent_with(&field_child);
+                    self.print_expr(value, "└── ", &value_child);
                 }
-                self.indent -= 1;
             }
 
             ResolvedExpr::Index { object, index } => {
                 self.write(&format!("{}Index", prefix));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, "├── object: ", "│   ");
-                self.write_indent_with(child_prefix);
-                self.print_expr(index, "└── index: ", "    ");
-                self.indent -= 1;
+                let obj_child = format!("{}│   ", parent_prefix);
+                let idx_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, "├── object: ", &obj_child);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(index, "└── index: ", &idx_child);
             }
 
             ResolvedExpr::Field { object, field } => {
                 self.write(&format!("{}Field .{}", prefix, field));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, "└── ", "    ");
-                self.indent -= 1;
+                let obj_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, "└── ", &obj_child);
             }
 
             ResolvedExpr::Unary { op, operand } => {
@@ -912,10 +930,9 @@ impl ResolvedProgramPrinter {
                 };
                 self.write(&format!("{}Unary({})", prefix, op_str));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(operand, "└── ", "    ");
-                self.indent -= 1;
+                let operand_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(operand, "└── ", &operand_child);
             }
 
             ResolvedExpr::Binary { op, left, right } => {
@@ -936,40 +953,44 @@ impl ResolvedProgramPrinter {
                 };
                 self.write(&format!("{}Binary({})", prefix, op_str));
                 self.newline();
-                self.indent += 1;
-                self.write_indent_with(child_prefix);
-                self.print_expr(left, "├── ", "│   ");
-                self.write_indent_with(child_prefix);
-                self.print_expr(right, "└── ", "    ");
-                self.indent -= 1;
+                let left_child = format!("{}│   ", parent_prefix);
+                let right_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(left, "├── ", &left_child);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(right, "└── ", &right_child);
             }
 
             ResolvedExpr::Call { func_index, args } => {
                 self.write(&format!("{}Call func:{} args:{}", prefix, func_index, args.len()));
                 self.newline();
-                self.indent += 1;
                 for (i, arg) in args.iter().enumerate() {
                     let is_last = i == args.len() - 1;
                     let arg_prefix = if is_last { "└── " } else { "├── " };
-                    let arg_child = if is_last { "    " } else { "│   " };
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(arg, arg_prefix, arg_child);
+                    let arg_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(arg, arg_prefix, &arg_child);
                 }
-                self.indent -= 1;
             }
 
             ResolvedExpr::Builtin { name, args } => {
                 self.write(&format!("{}Builtin({}) args:{}", prefix, name, args.len()));
                 self.newline();
-                self.indent += 1;
                 for (i, arg) in args.iter().enumerate() {
                     let is_last = i == args.len() - 1;
                     let arg_prefix = if is_last { "└── " } else { "├── " };
-                    let arg_child = if is_last { "    " } else { "│   " };
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(arg, arg_prefix, arg_child);
+                    let arg_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(arg, arg_prefix, &arg_child);
                 }
-                self.indent -= 1;
             }
 
             ResolvedExpr::SpawnFunc { func_index } => {
@@ -983,15 +1004,17 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}StructLiteral struct:{}", prefix, struct_index));
                 self.newline();
-                self.indent += 1;
                 for (i, field) in fields.iter().enumerate() {
                     let is_last = i == fields.len() - 1;
                     let field_prefix = if is_last { "└── " } else { "├── " };
-                    let field_child = if is_last { "    " } else { "│   " };
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(field, &format!("{}[{}]: ", field_prefix, i), field_child);
+                    let field_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(field, &format!("{}[{}]: ", field_prefix, i), &field_child);
                 }
-                self.indent -= 1;
             }
 
             ResolvedExpr::MethodCall {
@@ -1001,20 +1024,26 @@ impl ResolvedProgramPrinter {
             } => {
                 self.write(&format!("{}MethodCall .{}({})", prefix, method, args.len()));
                 self.newline();
-                self.indent += 1;
                 let has_args = !args.is_empty();
                 let obj_prefix = if has_args { "├── " } else { "└── " };
-                let obj_child = if has_args { "│   " } else { "    " };
-                self.write_indent_with(child_prefix);
-                self.print_expr(object, &format!("{}object: ", obj_prefix), obj_child);
+                let obj_child = if has_args {
+                    format!("{}│   ", parent_prefix)
+                } else {
+                    format!("{}    ", parent_prefix)
+                };
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, &format!("{}object: ", obj_prefix), &obj_child);
                 for (i, arg) in args.iter().enumerate() {
                     let is_last = i == args.len() - 1;
                     let arg_prefix = if is_last { "└── " } else { "├── " };
-                    let arg_child = if is_last { "    " } else { "│   " };
-                    self.write_indent_with(child_prefix);
-                    self.print_expr(arg, &format!("{}arg: ", arg_prefix), arg_child);
+                    let arg_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
                 }
-                self.indent -= 1;
             }
         }
     }
