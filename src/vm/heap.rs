@@ -112,16 +112,8 @@ impl HeapObject {
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
             HeapObject::String(_) => vec![],
-            HeapObject::Array(arr) => arr
-                .elements
-                .iter()
-                .filter_map(|v| v.as_ptr())
-                .collect(),
-            HeapObject::Object(obj) => obj
-                .fields
-                .values()
-                .filter_map(|v| v.as_ptr())
-                .collect(),
+            HeapObject::Array(arr) => arr.elements.iter().filter_map(|v| v.as_ptr()).collect(),
+            HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ptr()).collect(),
         }
     }
 }
@@ -270,12 +262,12 @@ impl Heap {
 
         // Mark and trace
         while let Some(r) = worklist.pop() {
-            if let Some(obj) = self.objects.get_mut(r.index).and_then(|o| o.as_mut()) {
-                if !obj.header().marked {
-                    obj.header_mut().marked = true;
-                    // Trace children
-                    worklist.extend(obj.trace());
-                }
+            if let Some(obj) = self.objects.get_mut(r.index).and_then(|o| o.as_mut())
+                && !obj.header().marked
+            {
+                obj.header_mut().marked = true;
+                // Trace children
+                worklist.extend(obj.trace());
             }
         }
     }
@@ -297,23 +289,19 @@ impl Heap {
 
         // Recalculate bytes allocated
         self.bytes_allocated = 0;
-        for obj in &self.objects {
-            if let Some(o) = obj {
-                self.bytes_allocated += match o {
-                    HeapObject::String(s) => {
-                        std::mem::size_of::<MicaString>() + s.value.len()
-                    }
-                    HeapObject::Array(a) => {
-                        std::mem::size_of::<MicaArray>()
-                            + a.elements.len() * std::mem::size_of::<Value>()
-                    }
-                    HeapObject::Object(o) => {
-                        std::mem::size_of::<MicaObject>()
-                            + o.fields.len()
-                                * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
-                    }
-                };
-            }
+        for o in self.objects.iter().flatten() {
+            self.bytes_allocated += match o {
+                HeapObject::String(s) => std::mem::size_of::<MicaString>() + s.value.len(),
+                HeapObject::Array(a) => {
+                    std::mem::size_of::<MicaArray>()
+                        + a.elements.len() * std::mem::size_of::<Value>()
+                }
+                HeapObject::Object(o) => {
+                    std::mem::size_of::<MicaObject>()
+                        + o.fields.len()
+                            * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+                }
+            };
         }
 
         // Adjust threshold

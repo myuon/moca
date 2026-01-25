@@ -1,15 +1,18 @@
-/// Concurrent garbage collection support.
-///
-/// This module implements a concurrent mark-sweep GC with write barriers.
-/// The GC uses a snapshot-at-the-beginning (SATB) write barrier to ensure
-/// correctness during concurrent marking.
+//! Concurrent garbage collection support.
+//!
+//! This module implements a concurrent mark-sweep GC with write barriers.
+//! The GC uses a snapshot-at-the-beginning (SATB) write barrier to ensure
+//! correctness during concurrent marking.
+
+// Concurrent GC is not yet integrated, allow dead code
+#![allow(dead_code)]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::heap::{GcRef, HeapObject};
 use super::Value;
+use super::heap::GcRef;
 
 /// GC phase states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +143,10 @@ impl ConcurrentGc {
         }
 
         self.stats.initial_mark_us += start.elapsed().as_micros() as u64;
-        self.stats.max_pause_us = self.stats.max_pause_us.max(start.elapsed().as_micros() as u64);
+        self.stats.max_pause_us = self
+            .stats
+            .max_pause_us
+            .max(start.elapsed().as_micros() as u64);
 
         self.phase = GcPhase::ConcurrentMark;
         root_refs
@@ -182,12 +188,11 @@ impl ConcurrentGc {
         self.stats.concurrent_mark_us += start.elapsed().as_micros() as u64;
 
         // Check if there's more work
-        let has_more = {
+
+        {
             let gray_list = self.gray_list.lock().unwrap();
             !gray_list.is_empty()
-        };
-
-        has_more
+        }
     }
 
     /// Process SATB buffer entries during remark.
@@ -223,7 +228,10 @@ impl ConcurrentGc {
         self.process_satb_buffer(mark_fn);
 
         self.stats.remark_us += start.elapsed().as_micros() as u64;
-        self.stats.max_pause_us = self.stats.max_pause_us.max(start.elapsed().as_micros() as u64);
+        self.stats.max_pause_us = self
+            .stats
+            .max_pause_us
+            .max(start.elapsed().as_micros() as u64);
 
         self.marking.store(false, Ordering::Release);
         self.phase = GcPhase::ConcurrentSweep;
@@ -319,18 +327,24 @@ mod tests {
 
         // Process with a mock mark function
         let mut marked = Vec::new();
-        let has_more = gc.mark_step(|r| {
-            marked.push(r);
-            vec![] // No children
-        }, 2);
+        let has_more = gc.mark_step(
+            |r| {
+                marked.push(r);
+                vec![] // No children
+            },
+            2,
+        );
 
         assert_eq!(marked.len(), 2);
         assert!(has_more); // One more object remaining
 
-        let has_more = gc.mark_step(|r| {
-            marked.push(r);
-            vec![]
-        }, 10);
+        let has_more = gc.mark_step(
+            |r| {
+                marked.push(r);
+                vec![]
+            },
+            10,
+        );
 
         assert_eq!(marked.len(), 3);
         assert!(!has_more); // No more work

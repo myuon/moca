@@ -1,7 +1,7 @@
-/// JIT compiler for mica bytecode.
-///
-/// This module implements a baseline JIT compiler that translates mica bytecode
-/// to AArch64 machine code using a template-based approach.
+//! JIT compiler for mica bytecode.
+//!
+//! This module implements a baseline JIT compiler that translates mica bytecode
+//! to AArch64 machine code using a template-based approach.
 
 use super::aarch64::{AArch64Assembler, Cond, Reg};
 use super::codebuf::CodeBuffer;
@@ -130,11 +130,13 @@ impl JitCompiler {
             .map_err(|e| format!("Failed to allocate executable memory: {}", e))?;
 
         // Copy code to executable memory
-        memory.write(0, &code)
+        memory
+            .write(0, &code)
             .map_err(|e| format!("Failed to write code: {}", e))?;
 
         // Make executable
-        memory.make_executable()
+        memory
+            .make_executable()
             .map_err(|e| format!("Failed to make memory executable: {}", e))?;
 
         Ok(CompiledCode {
@@ -269,23 +271,20 @@ impl JitCompiler {
         // MOVK for remaining bits if needed
         if u > 0xFFFF {
             // MOVK Xd, #imm16, LSL #16
-            let inst = 0xF2A00000
-                | ((((u >> 16) & 0xFFFF) as u32) << 5)
-                | (regs::TMP0.code() as u32);
+            let inst =
+                0xF2A00000 | ((((u >> 16) & 0xFFFF) as u32) << 5) | (regs::TMP0.code() as u32);
             self.buf.emit_u32(inst);
         }
         if u > 0xFFFF_FFFF {
             // MOVK Xd, #imm16, LSL #32
-            let inst = 0xF2C00000
-                | ((((u >> 32) & 0xFFFF) as u32) << 5)
-                | (regs::TMP0.code() as u32);
+            let inst =
+                0xF2C00000 | ((((u >> 32) & 0xFFFF) as u32) << 5) | (regs::TMP0.code() as u32);
             self.buf.emit_u32(inst);
         }
         if u > 0xFFFF_FFFF_FFFF {
             // MOVK Xd, #imm16, LSL #48
-            let inst = 0xF2E00000
-                | ((((u >> 48) & 0xFFFF) as u32) << 5)
-                | (regs::TMP0.code() as u32);
+            let inst =
+                0xF2E00000 | ((((u >> 48) & 0xFFFF) as u32) << 5) | (regs::TMP0.code() as u32);
             self.buf.emit_u32(inst);
         }
     }
@@ -526,9 +525,7 @@ impl JitCompiler {
         };
         // CSINC Xd, XZR, XZR, inv_cond
         // 1001 1010 1001 1111 cccc 0111 1111 dddd
-        let inst = 0x9A9F07E0
-            | ((inv_cond as u32) << 12)
-            | (regs::TMP0.code() as u32);
+        let inst = 0x9A9F07E0 | ((inv_cond as u32) << 12) | (regs::TMP0.code() as u32);
         asm.emit_raw(inst);
 
         // Push bool result
@@ -708,12 +705,7 @@ mod tests {
             name: "add".to_string(),
             arity: 0,
             locals_count: 0,
-            code: vec![
-                Op::PushInt(10),
-                Op::PushInt(20),
-                Op::AddInt,
-                Op::Ret,
-            ],
+            code: vec![Op::PushInt(10), Op::PushInt(20), Op::AddInt, Op::Ret],
         };
 
         let compiler = JitCompiler::new();
@@ -728,18 +720,18 @@ mod tests {
             arity: 0,
             locals_count: 1,
             code: vec![
-                Op::PushInt(0),          // 0: push 0
-                Op::StoreLocal(0),       // 1: i = 0
-                Op::LoadLocal(0),        // 2: push i (loop start)
-                Op::PushInt(10),         // 3: push 10
-                Op::LtInt,               // 4: i < 10
-                Op::JmpIfFalse(9),       // 5: if false, exit
-                Op::LoadLocal(0),        // 6: push i
-                Op::PushInt(1),          // 7: push 1
-                Op::AddInt,              // 8: i + 1
-                Op::StoreLocal(0),       // 9: i = i + 1  (target of JmpIfFalse)
-                Op::Jmp(2),              // 10: goto loop start
-                Op::Ret,                 // 11: return
+                Op::PushInt(0),    // 0: push 0
+                Op::StoreLocal(0), // 1: i = 0
+                Op::LoadLocal(0),  // 2: push i (loop start)
+                Op::PushInt(10),   // 3: push 10
+                Op::LtInt,         // 4: i < 10
+                Op::JmpIfFalse(9), // 5: if false, exit
+                Op::LoadLocal(0),  // 6: push i
+                Op::PushInt(1),    // 7: push 1
+                Op::AddInt,        // 8: i + 1
+                Op::StoreLocal(0), // 9: i = i + 1  (target of JmpIfFalse)
+                Op::Jmp(2),        // 10: goto loop start
+                Op::Ret,           // 11: return
             ],
         };
 

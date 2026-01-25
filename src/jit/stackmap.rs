@@ -1,7 +1,7 @@
-/// Stack maps for precise GC in JIT-compiled code.
-///
-/// Stack maps track which stack slots contain references at each safepoint
-/// in the generated code, allowing the GC to accurately trace roots.
+//! Stack maps for precise GC in JIT-compiled code.
+//!
+//! Stack maps track which stack slots contain references at each safepoint
+//! in the generated code, allowing the GC to accurately trace roots.
 
 use std::collections::HashMap;
 
@@ -273,7 +273,7 @@ mod tests {
 
         // Simulate: push int, push ref, store local 0
         builder.push(false); // int
-        builder.push(true);  // ref
+        builder.push(true); // ref
         builder.set_local(0, true);
 
         builder.record_safepoint(10, 3);

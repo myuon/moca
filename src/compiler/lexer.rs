@@ -124,17 +124,50 @@ impl<'a> Lexer<'a> {
             };
 
             let kind = match ch {
-                '(' => { self.advance(); TokenKind::LParen }
-                ')' => { self.advance(); TokenKind::RParen }
-                '{' => { self.advance(); TokenKind::LBrace }
-                '}' => { self.advance(); TokenKind::RBrace }
-                '[' => { self.advance(); TokenKind::LBracket }
-                ']' => { self.advance(); TokenKind::RBracket }
-                ',' => { self.advance(); TokenKind::Comma }
-                ';' => { self.advance(); TokenKind::Semi }
-                ':' => { self.advance(); TokenKind::Colon }
-                '.' => { self.advance(); TokenKind::Dot }
-                '+' => { self.advance(); TokenKind::Plus }
+                '(' => {
+                    self.advance();
+                    TokenKind::LParen
+                }
+                ')' => {
+                    self.advance();
+                    TokenKind::RParen
+                }
+                '{' => {
+                    self.advance();
+                    TokenKind::LBrace
+                }
+                '}' => {
+                    self.advance();
+                    TokenKind::RBrace
+                }
+                '[' => {
+                    self.advance();
+                    TokenKind::LBracket
+                }
+                ']' => {
+                    self.advance();
+                    TokenKind::RBracket
+                }
+                ',' => {
+                    self.advance();
+                    TokenKind::Comma
+                }
+                ';' => {
+                    self.advance();
+                    TokenKind::Semi
+                }
+                ':' => {
+                    self.advance();
+                    TokenKind::Colon
+                }
+                '.' => {
+                    self.advance();
+                    TokenKind::Dot
+                }
+                '+' => {
+                    self.advance();
+                    TokenKind::Plus
+                }
                 '-' => {
                     self.advance();
                     if self.match_char('>') {
@@ -143,10 +176,22 @@ impl<'a> Lexer<'a> {
                         TokenKind::Minus
                     }
                 }
-                '?' => { self.advance(); TokenKind::Question }
-                '*' => { self.advance(); TokenKind::Star }
-                '/' => { self.advance(); TokenKind::Slash }
-                '%' => { self.advance(); TokenKind::Percent }
+                '?' => {
+                    self.advance();
+                    TokenKind::Question
+                }
+                '*' => {
+                    self.advance();
+                    TokenKind::Star
+                }
+                '/' => {
+                    self.advance();
+                    TokenKind::Slash
+                }
+                '%' => {
+                    self.advance();
+                    TokenKind::Percent
+                }
                 '!' => {
                     self.advance();
                     if self.match_char('=') {
@@ -279,16 +324,16 @@ impl<'a> Lexer<'a> {
             // Look ahead to see if it's followed by a digit
             let mut chars = self.chars.clone();
             chars.next(); // consume '.'
-            if let Some((_, ch)) = chars.peek() {
-                if ch.is_ascii_digit() {
-                    is_float = true;
-                    self.advance(); // consume '.'
-                    while let Some((_, ch)) = self.peek() {
-                        if ch.is_ascii_digit() {
-                            self.advance();
-                        } else {
-                            break;
-                        }
+            if let Some((_, ch)) = chars.peek()
+                && ch.is_ascii_digit()
+            {
+                is_float = true;
+                self.advance(); // consume '.'
+                while let Some((_, ch)) = self.peek() {
+                    if ch.is_ascii_digit() {
+                        self.advance();
+                    } else {
+                        break;
                     }
                 }
             }
@@ -325,12 +370,29 @@ impl<'a> Lexer<'a> {
                 Some((_, '\\')) => {
                     self.advance();
                     match self.peek() {
-                        Some((_, 'n')) => { self.advance(); value.push('\n'); }
-                        Some((_, 't')) => { self.advance(); value.push('\t'); }
-                        Some((_, 'r')) => { self.advance(); value.push('\r'); }
-                        Some((_, '\\')) => { self.advance(); value.push('\\'); }
-                        Some((_, '"')) => { self.advance(); value.push('"'); }
-                        Some((_, ch)) => return Err(self.error(&format!("invalid escape sequence '\\{}'", ch))),
+                        Some((_, 'n')) => {
+                            self.advance();
+                            value.push('\n');
+                        }
+                        Some((_, 't')) => {
+                            self.advance();
+                            value.push('\t');
+                        }
+                        Some((_, 'r')) => {
+                            self.advance();
+                            value.push('\r');
+                        }
+                        Some((_, '\\')) => {
+                            self.advance();
+                            value.push('\\');
+                        }
+                        Some((_, '"')) => {
+                            self.advance();
+                            value.push('"');
+                        }
+                        Some((_, ch)) => {
+                            return Err(self.error(&format!("invalid escape sequence '\\{}'", ch)));
+                        }
                         None => return Err(self.error("unterminated string")),
                     }
                 }

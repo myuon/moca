@@ -1,7 +1,7 @@
-/// Code buffer for building JIT code.
-///
-/// This module provides a buffer for incrementally building machine code
-/// before copying it to executable memory.
+//! Code buffer for building JIT code.
+//!
+//! This module provides a buffer for incrementally building machine code
+//! before copying it to executable memory.
 
 use super::memory::{ExecutableMemory, MemoryError};
 
@@ -110,7 +110,9 @@ impl CodeBuffer {
     /// Returns an error if any label is undefined.
     pub fn patch_forward_refs(&mut self) -> Result<(), String> {
         for (offset, label, size) in self.forward_refs.drain(..) {
-            let target = self.labels.get(&label)
+            let target = self
+                .labels
+                .get(&label)
                 .ok_or_else(|| format!("undefined label: {}", label))?;
 
             match size {
@@ -126,7 +128,7 @@ impl CodeBuffer {
                 ReferenceSize::AArch64Branch => {
                     // AArch64 branch encoding: offset is in instructions (4-byte units)
                     let rel_offset = ((*target as i64) - (offset as i64)) / 4;
-                    if rel_offset < -(1 << 25) || rel_offset >= (1 << 25) {
+                    if !(-(1 << 25)..(1 << 25)).contains(&rel_offset) {
                         return Err(format!("branch offset out of range for label: {}", label));
                     }
                     // Branch instruction: bits 25:0 are the offset
@@ -147,7 +149,8 @@ impl CodeBuffer {
     /// Finalize the code buffer and copy to executable memory.
     pub fn finalize(mut self) -> Result<ExecutableMemory, MemoryError> {
         // Patch forward references
-        self.patch_forward_refs().map_err(|_| MemoryError::InvalidSize)?;
+        self.patch_forward_refs()
+            .map_err(|_| MemoryError::InvalidSize)?;
 
         // Allocate executable memory
         let mut mem = ExecutableMemory::new(self.code.len())?;

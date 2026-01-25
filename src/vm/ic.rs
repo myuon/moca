@@ -1,7 +1,10 @@
-/// Inline Cache for property access optimization.
-///
-/// Inline caches store type information observed at runtime to speed up
-/// repeated property accesses on objects with the same shape/type.
+//! Inline Cache for property access optimization.
+//!
+//! Inline caches store type information observed at runtime to speed up
+//! repeated property accesses on objects with the same shape/type.
+
+// Inline caches are not yet integrated, allow dead code
+#![allow(dead_code)]
 
 /// Cache state for inline caches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

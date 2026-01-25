@@ -2,11 +2,9 @@
 //!
 //! This module provides human-readable output for debugging the compiler pipeline.
 
-use std::fmt::Write;
-
 use crate::compiler::ast::{
     BinaryOp, Block, Expr, FnDef, ImplBlock, Import, Item, Param, Program, Statement, StructDef,
-    StructField, UnaryOp,
+    UnaryOp,
 };
 use crate::compiler::resolver::{
     ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct,
@@ -57,10 +55,10 @@ impl<'a> AstPrinter<'a> {
         self.write_indent();
         match item {
             Item::Import(import) => self.print_import(import, prefix),
-            Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, &child_prefix),
-            Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, &child_prefix),
-            Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, &child_prefix),
-            Item::Statement(stmt) => self.print_statement(stmt, prefix, &child_prefix),
+            Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, child_prefix),
+            Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, child_prefix),
+            Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, child_prefix),
+            Item::Statement(stmt) => self.print_statement(stmt, prefix, child_prefix),
         }
     }
 
@@ -85,7 +83,10 @@ impl<'a> AstPrinter<'a> {
             .map(|t| format!(" -> {}", t))
             .unwrap_or_default();
 
-        self.write_prefixed(prefix, &format!("FnDef: {}({}){}", fn_def.name, params, ret_type));
+        self.write_prefixed(
+            prefix,
+            &format!("FnDef: {}({}){}", fn_def.name, params, ret_type),
+        );
         self.newline();
 
         self.print_block_contents(&fn_def.body, parent_prefix);
@@ -97,9 +98,16 @@ impl<'a> AstPrinter<'a> {
 
         for (i, field) in struct_def.fields.iter().enumerate() {
             let field_is_last = i == struct_def.fields.len() - 1;
-            let field_prefix = if field_is_last { "└── " } else { "├── " };
+            let field_prefix = if field_is_last {
+                "└── "
+            } else {
+                "├── "
+            };
             self.write_indent_with(parent_prefix);
-            self.write(&format!("{}Field: {}: {}", field_prefix, field.name, field.type_annotation));
+            self.write(&format!(
+                "{}Field: {}: {}",
+                field_prefix, field.name, field.type_annotation
+            ));
             self.newline();
         }
     }
@@ -110,7 +118,11 @@ impl<'a> AstPrinter<'a> {
 
         for (i, method) in impl_block.methods.iter().enumerate() {
             let method_is_last = i == impl_block.methods.len() - 1;
-            let method_prefix = if method_is_last { "└── " } else { "├── " };
+            let method_prefix = if method_is_last {
+                "└── "
+            } else {
+                "├── "
+            };
             let method_child_prefix = if method_is_last {
                 format!("{}    ", parent_prefix)
             } else {
@@ -335,7 +347,11 @@ impl<'a> AstPrinter<'a> {
                 self.newline();
                 for (i, elem) in elements.iter().enumerate() {
                     let elem_is_last = i == elements.len() - 1;
-                    let elem_prefix = if elem_is_last { "└── " } else { "├── " };
+                    let elem_prefix = if elem_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
                     self.write_indent_with(&child_prefix);
                     self.print_expr(elem, elem_prefix, elem_is_last, &child_prefix);
                 }
@@ -347,7 +363,11 @@ impl<'a> AstPrinter<'a> {
                 self.newline();
                 for (i, (name, value)) in fields.iter().enumerate() {
                     let field_is_last = i == fields.len() - 1;
-                    let field_prefix = if field_is_last { "└── " } else { "├── " };
+                    let field_prefix = if field_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
                     self.write_indent_with(&child_prefix);
                     self.write(&format!("{}{}: ", field_prefix, name));
                     self.newline();
@@ -424,7 +444,11 @@ impl<'a> AstPrinter<'a> {
                 self.newline();
                 for (i, arg) in args.iter().enumerate() {
                     let arg_is_last = i == args.len() - 1;
-                    let arg_prefix = if arg_is_last { "└── " } else { "├── " };
+                    let arg_prefix = if arg_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
                     self.write_indent_with(&child_prefix);
                     self.print_expr(arg, arg_prefix, arg_is_last, &child_prefix);
                 }
@@ -436,7 +460,11 @@ impl<'a> AstPrinter<'a> {
                 self.newline();
                 for (i, (field_name, value)) in fields.iter().enumerate() {
                     let field_is_last = i == fields.len() - 1;
-                    let field_prefix = if field_is_last { "└── " } else { "├── " };
+                    let field_prefix = if field_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
                     self.write_indent_with(&child_prefix);
                     self.write(&format!("{}{}: ", field_prefix, field_name));
                     self.newline();
@@ -456,18 +484,37 @@ impl<'a> AstPrinter<'a> {
                 args,
                 ..
             } => {
-                self.write(&format!("{}MethodCall: .{}({})", prefix, method, args.len()));
+                self.write(&format!(
+                    "{}MethodCall: .{}({})",
+                    prefix,
+                    method,
+                    args.len()
+                ));
                 self.write_type_suffix(expr);
                 self.newline();
                 let has_args = !args.is_empty();
                 let obj_prefix = if has_args { "├── " } else { "└── " };
                 self.write_indent_with(&child_prefix);
-                self.print_expr(object, &format!("{}object: ", obj_prefix), !has_args, &child_prefix);
+                self.print_expr(
+                    object,
+                    &format!("{}object: ", obj_prefix),
+                    !has_args,
+                    &child_prefix,
+                );
                 for (i, arg) in args.iter().enumerate() {
                     let arg_is_last = i == args.len() - 1;
-                    let arg_prefix = if arg_is_last { "└── " } else { "├── " };
+                    let arg_prefix = if arg_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
                     self.write_indent_with(&child_prefix);
-                    self.print_expr(arg, &format!("{}arg: ", arg_prefix), arg_is_last, &child_prefix);
+                    self.print_expr(
+                        arg,
+                        &format!("{}arg: ", arg_prefix),
+                        arg_is_last,
+                        &child_prefix,
+                    );
                 }
             }
         }
@@ -652,13 +699,17 @@ impl ResolvedProgramPrinter {
         self.indent += 1;
         for (i, stmt) in func.body.iter().enumerate() {
             let stmt_is_last = i == func.body.len() - 1;
-            let stmt_prefix = if stmt_is_last { "└── " } else { "├── " };
+            let stmt_prefix = if stmt_is_last {
+                "└── "
+            } else {
+                "├── "
+            };
             let stmt_child_prefix = if stmt_is_last {
                 format!("{}    ", func_child_prefix)
             } else {
                 format!("{}│   ", func_child_prefix)
             };
-            self.write_indent_with(&func_child_prefix);
+            self.write_indent_with(func_child_prefix);
             self.print_statement(stmt, stmt_prefix, &stmt_child_prefix);
         }
         self.indent -= 1;
@@ -962,7 +1013,12 @@ impl ResolvedProgramPrinter {
             }
 
             ResolvedExpr::Call { func_index, args } => {
-                self.write(&format!("{}Call func:{} args:{}", prefix, func_index, args.len()));
+                self.write(&format!(
+                    "{}Call func:{} args:{}",
+                    prefix,
+                    func_index,
+                    args.len()
+                ));
                 self.newline();
                 for (i, arg) in args.iter().enumerate() {
                     let is_last = i == args.len() - 1;
@@ -1160,7 +1216,12 @@ impl<'a> Disassembler<'a> {
             Op::PushFalse => self.output.push_str("PushFalse"),
             Op::PushNil => self.output.push_str("PushNil"),
             Op::PushString(idx) => {
-                let s = self.chunk.strings.get(*idx).map(|s| s.as_str()).unwrap_or("<?>");
+                let s = self
+                    .chunk
+                    .strings
+                    .get(*idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<?>");
                 let escaped = s.replace('\n', "\\n").replace('\t', "\\t");
                 self.output
                     .push_str(&format!("PushString {} ; \"{}\"", idx, escaped));
@@ -1236,20 +1297,42 @@ impl<'a> Disassembler<'a> {
             // Object operations
             Op::AllocObject(n) => self.output.push_str(&format!("AllocObject {}", n)),
             Op::GetField(idx) => {
-                let field = self.chunk.strings.get(*idx).map(|s| s.as_str()).unwrap_or("<?>");
-                self.output.push_str(&format!("GetField {} ; .{}", idx, field));
+                let field = self
+                    .chunk
+                    .strings
+                    .get(*idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<?>");
+                self.output
+                    .push_str(&format!("GetField {} ; .{}", idx, field));
             }
             Op::SetField(idx) => {
-                let field = self.chunk.strings.get(*idx).map(|s| s.as_str()).unwrap_or("<?>");
-                self.output.push_str(&format!("SetField {} ; .{}", idx, field));
+                let field = self
+                    .chunk
+                    .strings
+                    .get(*idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<?>");
+                self.output
+                    .push_str(&format!("SetField {} ; .{}", idx, field));
             }
             Op::GetFieldCached(idx, cache) => {
-                let field = self.chunk.strings.get(*idx).map(|s| s.as_str()).unwrap_or("<?>");
+                let field = self
+                    .chunk
+                    .strings
+                    .get(*idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<?>");
                 self.output
                     .push_str(&format!("GetFieldCached {}, {} ; .{}", idx, cache, field));
             }
             Op::SetFieldCached(idx, cache) => {
-                let field = self.chunk.strings.get(*idx).map(|s| s.as_str()).unwrap_or("<?>");
+                let field = self
+                    .chunk
+                    .strings
+                    .get(*idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<?>");
                 self.output
                     .push_str(&format!("SetFieldCached {}, {} ; .{}", idx, cache, field));
             }

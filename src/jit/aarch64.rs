@@ -1,7 +1,7 @@
-/// AArch64 instruction encoding for JIT compilation.
-///
-/// This module provides functions for encoding AArch64 instructions
-/// as machine code bytes.
+//! AArch64 instruction encoding for JIT compilation.
+//!
+//! This module provides functions for encoding AArch64 instructions
+//! as machine code bytes.
 
 use super::codebuf::CodeBuffer;
 
@@ -9,17 +9,38 @@ use super::codebuf::CodeBuffer;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Reg {
-    X0 = 0, X1 = 1, X2 = 2, X3 = 3,
-    X4 = 4, X5 = 5, X6 = 6, X7 = 7,
-    X8 = 8, X9 = 9, X10 = 10, X11 = 11,
-    X12 = 12, X13 = 13, X14 = 14, X15 = 15,
-    X16 = 16, X17 = 17, X18 = 18, X19 = 19,
-    X20 = 20, X21 = 21, X22 = 22, X23 = 23,
-    X24 = 24, X25 = 25, X26 = 26, X27 = 27,
+    X0 = 0,
+    X1 = 1,
+    X2 = 2,
+    X3 = 3,
+    X4 = 4,
+    X5 = 5,
+    X6 = 6,
+    X7 = 7,
+    X8 = 8,
+    X9 = 9,
+    X10 = 10,
+    X11 = 11,
+    X12 = 12,
+    X13 = 13,
+    X14 = 14,
+    X15 = 15,
+    X16 = 16,
+    X17 = 17,
+    X18 = 18,
+    X19 = 19,
+    X20 = 20,
+    X21 = 21,
+    X22 = 22,
+    X23 = 23,
+    X24 = 24,
+    X25 = 25,
+    X26 = 26,
+    X27 = 27,
     X28 = 28,
-    Fp = 29,  // Frame pointer
-    Lr = 30,  // Link register
-    Sp = 31,  // Stack pointer / Zero register (XZR in some contexts)
+    Fp = 29, // Frame pointer
+    Lr = 30, // Link register
+    Sp = 31, // Stack pointer / Zero register (XZR in some contexts)
 }
 
 impl Reg {
@@ -35,21 +56,21 @@ impl Reg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Cond {
-    Eq = 0b0000,  // Equal
-    Ne = 0b0001,  // Not equal
-    Cs = 0b0010,  // Carry set / unsigned higher or same
-    Cc = 0b0011,  // Carry clear / unsigned lower
-    Mi = 0b0100,  // Minus / negative
-    Pl = 0b0101,  // Plus / positive or zero
-    Vs = 0b0110,  // Overflow set
-    Vc = 0b0111,  // Overflow clear
-    Hi = 0b1000,  // Unsigned higher
-    Ls = 0b1001,  // Unsigned lower or same
-    Ge = 0b1010,  // Signed greater than or equal
-    Lt = 0b1011,  // Signed less than
-    Gt = 0b1100,  // Signed greater than
-    Le = 0b1101,  // Signed less than or equal
-    Al = 0b1110,  // Always
+    Eq = 0b0000, // Equal
+    Ne = 0b0001, // Not equal
+    Cs = 0b0010, // Carry set / unsigned higher or same
+    Cc = 0b0011, // Carry clear / unsigned lower
+    Mi = 0b0100, // Minus / negative
+    Pl = 0b0101, // Plus / positive or zero
+    Vs = 0b0110, // Overflow set
+    Vc = 0b0111, // Overflow clear
+    Hi = 0b1000, // Unsigned higher
+    Ls = 0b1001, // Unsigned lower or same
+    Ge = 0b1010, // Signed greater than or equal
+    Lt = 0b1011, // Signed less than
+    Gt = 0b1100, // Signed greater than
+    Le = 0b1101, // Signed less than or equal
+    Al = 0b1110, // Always
 }
 
 /// AArch64 assembler.
@@ -170,9 +191,7 @@ impl<'a> AArch64Assembler<'a> {
     pub fn mov_imm(&mut self, rd: Reg, imm16: u16) {
         // MOVZ Xd, #imm16
         // 1101 0010 100i iiii iiii iiii iiid dddd
-        let inst = 0xD2800000
-            | ((imm16 as u32) << 5)
-            | (rd.code() as u32);
+        let inst = 0xD2800000 | ((imm16 as u32) << 5) | (rd.code() as u32);
         self.emit_raw(inst);
     }
 
@@ -207,10 +226,8 @@ impl<'a> AArch64Assembler<'a> {
         // 1111 1001 01ii iiii iiii iinn nnnt tttt
         // imm12 is scaled by 8 (bytes)
         let scaled = (imm12 / 8) as u32;
-        let inst = 0xF9400000
-            | ((scaled & 0xFFF) << 10)
-            | ((rn.code() as u32) << 5)
-            | (rt.code() as u32);
+        let inst =
+            0xF9400000 | ((scaled & 0xFFF) << 10) | ((rn.code() as u32) << 5) | (rt.code() as u32);
         self.emit_raw(inst);
     }
 
@@ -218,10 +235,8 @@ impl<'a> AArch64Assembler<'a> {
     pub fn str(&mut self, rt: Reg, rn: Reg, imm12: u16) {
         // 1111 1001 00ii iiii iiii iinn nnnt tttt
         let scaled = (imm12 / 8) as u32;
-        let inst = 0xF9000000
-            | ((scaled & 0xFFF) << 10)
-            | ((rn.code() as u32) << 5)
-            | (rt.code() as u32);
+        let inst =
+            0xF9000000 | ((scaled & 0xFFF) << 10) | ((rn.code() as u32) << 5) | (rt.code() as u32);
         self.emit_raw(inst);
     }
 
@@ -264,27 +279,21 @@ impl<'a> AArch64Assembler<'a> {
     /// B.cond label (conditional branch)
     pub fn b_cond(&mut self, cond: Cond, offset: i32) {
         // 0101 0100 iiii iiii iiii iiii iii0 cccc
-        let inst = 0x54000000
-            | (((offset as u32 / 4) & 0x7FFFF) << 5)
-            | (cond as u32);
+        let inst = 0x54000000 | (((offset as u32 / 4) & 0x7FFFF) << 5) | (cond as u32);
         self.emit_raw(inst);
     }
 
     /// CBZ Xn, label (compare and branch if zero)
     pub fn cbz(&mut self, rn: Reg, offset: i32) {
         // 1011 0100 iiii iiii iiii iiii iiit tttt
-        let inst = 0xB4000000
-            | (((offset as u32 / 4) & 0x7FFFF) << 5)
-            | (rn.code() as u32);
+        let inst = 0xB4000000 | (((offset as u32 / 4) & 0x7FFFF) << 5) | (rn.code() as u32);
         self.emit_raw(inst);
     }
 
     /// CBNZ Xn, label (compare and branch if not zero)
     pub fn cbnz(&mut self, rn: Reg, offset: i32) {
         // 1011 0101 iiii iiii iiii iiii iiit tttt
-        let inst = 0xB5000000
-            | (((offset as u32 / 4) & 0x7FFFF) << 5)
-            | (rn.code() as u32);
+        let inst = 0xB5000000 | (((offset as u32 / 4) & 0x7FFFF) << 5) | (rn.code() as u32);
         self.emit_raw(inst);
     }
 

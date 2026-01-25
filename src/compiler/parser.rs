@@ -318,22 +318,18 @@ impl<'a> Parser<'a> {
 
             // Determine what kind of assignment this is
             match expr {
-                Expr::Index { object, index, .. } => {
-                    Ok(Statement::IndexAssign {
-                        object: *object,
-                        index: *index,
-                        value,
-                        span,
-                    })
-                }
-                Expr::Field { object, field, .. } => {
-                    Ok(Statement::FieldAssign {
-                        object: *object,
-                        field,
-                        value,
-                        span,
-                    })
-                }
+                Expr::Index { object, index, .. } => Ok(Statement::IndexAssign {
+                    object: *object,
+                    index: *index,
+                    value,
+                    span,
+                }),
+                Expr::Field { object, field, .. } => Ok(Statement::FieldAssign {
+                    object: *object,
+                    field,
+                    value,
+                    span,
+                }),
                 _ => Err(self.error("invalid assignment target")),
             }
         } else {
@@ -899,10 +895,7 @@ impl<'a> Parser<'a> {
     }
 
     fn check_ahead(&self, kind: &TokenKind, offset: usize) -> bool {
-        self.tokens
-            .get(self.current + offset)
-            .map(|t| &t.kind)
-            == Some(kind)
+        self.tokens.get(self.current + offset).map(|t| &t.kind) == Some(kind)
     }
 
     /// Check if the current position looks like the start of a struct literal.
@@ -917,10 +910,10 @@ impl<'a> Parser<'a> {
         }
 
         // Check for `{ ident :` pattern
-        if let Some(token) = self.tokens.get(self.current + 1) {
-            if matches!(&token.kind, TokenKind::Ident(_)) {
-                return self.check_ahead(&TokenKind::Colon, 2);
-            }
+        if let Some(token) = self.tokens.get(self.current + 1)
+            && matches!(&token.kind, TokenKind::Ident(_))
+        {
+            return self.check_ahead(&TokenKind::Colon, 2);
         }
 
         false
@@ -1058,12 +1051,16 @@ mod tests {
             Item::Statement(Statement::Let { init, .. }) => {
                 // Should be 1 + (2 * 3) due to precedence
                 match init {
-                    Expr::Binary { op: BinaryOp::Add, right, .. } => {
-                        match right.as_ref() {
-                            Expr::Binary { op: BinaryOp::Mul, .. } => {}
-                            _ => panic!("expected multiplication"),
-                        }
-                    }
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        right,
+                        ..
+                    } => match right.as_ref() {
+                        Expr::Binary {
+                            op: BinaryOp::Mul, ..
+                        } => {}
+                        _ => panic!("expected multiplication"),
+                    },
                     _ => panic!("expected binary expression"),
                 }
             }
@@ -1075,15 +1072,13 @@ mod tests {
     fn test_function_call() {
         let program = parse("print(42);").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Expr { expr, .. }) => {
-                match expr {
-                    Expr::Call { callee, args, .. } => {
-                        assert_eq!(callee, "print");
-                        assert_eq!(args.len(), 1);
-                    }
-                    _ => panic!("expected call expression"),
+            Item::Statement(Statement::Expr { expr, .. }) => match expr {
+                Expr::Call { callee, args, .. } => {
+                    assert_eq!(callee, "print");
+                    assert_eq!(args.len(), 1);
                 }
-            }
+                _ => panic!("expected call expression"),
+            },
             _ => panic!("expected expression statement"),
         }
     }
@@ -1092,14 +1087,12 @@ mod tests {
     fn test_float_literal() {
         let program = parse("let x = 3.14;").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::Float { value, .. } => {
-                        assert_eq!(*value, 3.14);
-                    }
-                    _ => panic!("expected float"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::Float { value, .. } => {
+                    assert_eq!(*value, 3.14);
                 }
-            }
+                _ => panic!("expected float"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1108,14 +1101,12 @@ mod tests {
     fn test_string_literal() {
         let program = parse(r#"let s = "hello";"#).unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::Str { value, .. } => {
-                        assert_eq!(value, "hello");
-                    }
-                    _ => panic!("expected string"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::Str { value, .. } => {
+                    assert_eq!(value, "hello");
                 }
-            }
+                _ => panic!("expected string"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1135,14 +1126,12 @@ mod tests {
     fn test_array_literal() {
         let program = parse("let arr = [1, 2, 3];").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::Array { elements, .. } => {
-                        assert_eq!(elements.len(), 3);
-                    }
-                    _ => panic!("expected array"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::Array { elements, .. } => {
+                    assert_eq!(elements.len(), 3);
                 }
-            }
+                _ => panic!("expected array"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1151,16 +1140,14 @@ mod tests {
     fn test_object_literal() {
         let program = parse("let obj = { x: 10, y: 20 };").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::Object { fields, .. } => {
-                        assert_eq!(fields.len(), 2);
-                        assert_eq!(fields[0].0, "x");
-                        assert_eq!(fields[1].0, "y");
-                    }
-                    _ => panic!("expected object"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::Object { fields, .. } => {
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(fields[0].0, "x");
+                    assert_eq!(fields[1].0, "y");
                 }
-            }
+                _ => panic!("expected object"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1180,14 +1167,12 @@ mod tests {
     fn test_field_access() {
         let program = parse("let x = obj.field;").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::Field { field, .. } => {
-                        assert_eq!(field, "field");
-                    }
-                    _ => panic!("expected field access"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::Field { field, .. } => {
+                    assert_eq!(field, "field");
                 }
-            }
+                _ => panic!("expected field access"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1274,10 +1259,7 @@ mod tests {
             }) => {
                 assert_eq!(name, "x");
                 assert!(type_annotation.is_some());
-                assert_eq!(
-                    type_annotation.as_ref().unwrap().to_string(),
-                    "int"
-                );
+                assert_eq!(type_annotation.as_ref().unwrap().to_string(), "int");
             }
             _ => panic!("expected let statement"),
         }
@@ -1291,10 +1273,7 @@ mod tests {
                 type_annotation, ..
             }) => {
                 assert!(type_annotation.is_some());
-                assert_eq!(
-                    type_annotation.as_ref().unwrap().to_string(),
-                    "string?"
-                );
+                assert_eq!(type_annotation.as_ref().unwrap().to_string(), "string?");
             }
             _ => panic!("expected let statement"),
         }
@@ -1308,10 +1287,7 @@ mod tests {
                 type_annotation, ..
             }) => {
                 assert!(type_annotation.is_some());
-                assert_eq!(
-                    type_annotation.as_ref().unwrap().to_string(),
-                    "array<int>"
-                );
+                assert_eq!(type_annotation.as_ref().unwrap().to_string(), "array<int>");
             }
             _ => panic!("expected let statement"),
         }
@@ -1330,9 +1306,15 @@ mod tests {
                 assert_eq!(name, "add");
                 assert_eq!(params.len(), 2);
                 assert!(params[0].type_annotation.is_some());
-                assert_eq!(params[0].type_annotation.as_ref().unwrap().to_string(), "int");
+                assert_eq!(
+                    params[0].type_annotation.as_ref().unwrap().to_string(),
+                    "int"
+                );
                 assert!(params[1].type_annotation.is_some());
-                assert_eq!(params[1].type_annotation.as_ref().unwrap().to_string(), "int");
+                assert_eq!(
+                    params[1].type_annotation.as_ref().unwrap().to_string(),
+                    "int"
+                );
                 assert!(return_type.is_some());
                 assert_eq!(return_type.as_ref().unwrap().to_string(), "int");
             }
@@ -1419,7 +1401,11 @@ mod tests {
     fn test_impl_block() {
         let program = parse("impl Point { fun get_x(self) -> int { return 0; } }").unwrap();
         match &program.items[0] {
-            Item::ImplBlock(ImplBlock { struct_name, methods, .. }) => {
+            Item::ImplBlock(ImplBlock {
+                struct_name,
+                methods,
+                ..
+            }) => {
                 assert_eq!(struct_name, "Point");
                 assert_eq!(methods.len(), 1);
                 assert_eq!(methods[0].name, "get_x");
@@ -1430,7 +1416,9 @@ mod tests {
 
     #[test]
     fn test_impl_with_self_method() {
-        let program = parse("impl Rectangle { fun area(self) -> int { return self.width * self.height; } }").unwrap();
+        let program =
+            parse("impl Rectangle { fun area(self) -> int { return self.width * self.height; } }")
+                .unwrap();
         match &program.items[0] {
             Item::ImplBlock(ImplBlock { methods, .. }) => {
                 assert_eq!(methods.len(), 1);
@@ -1446,17 +1434,15 @@ mod tests {
     fn test_struct_literal() {
         let program = parse("let p = Point { x: 1, y: 2 };").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::StructLiteral { name, fields, .. } => {
-                        assert_eq!(name, "Point");
-                        assert_eq!(fields.len(), 2);
-                        assert_eq!(fields[0].0, "x");
-                        assert_eq!(fields[1].0, "y");
-                    }
-                    _ => panic!("expected struct literal"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::StructLiteral { name, fields, .. } => {
+                    assert_eq!(name, "Point");
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(fields[0].0, "x");
+                    assert_eq!(fields[1].0, "y");
                 }
-            }
+                _ => panic!("expected struct literal"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1465,14 +1451,12 @@ mod tests {
     fn test_struct_literal_trailing_comma() {
         let program = parse("let p = Point { x: 1, };").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::StructLiteral { fields, .. } => {
-                        assert_eq!(fields.len(), 1);
-                    }
-                    _ => panic!("expected struct literal"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::StructLiteral { fields, .. } => {
+                    assert_eq!(fields.len(), 1);
                 }
-            }
+                _ => panic!("expected struct literal"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1481,15 +1465,13 @@ mod tests {
     fn test_method_call() {
         let program = parse("let a = rect.area();").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::MethodCall { method, args, .. } => {
-                        assert_eq!(method, "area");
-                        assert_eq!(args.len(), 0);
-                    }
-                    _ => panic!("expected method call"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::MethodCall { method, args, .. } => {
+                    assert_eq!(method, "area");
+                    assert_eq!(args.len(), 0);
                 }
-            }
+                _ => panic!("expected method call"),
+            },
             _ => panic!("expected let statement"),
         }
     }
@@ -1498,15 +1480,13 @@ mod tests {
     fn test_method_call_with_args() {
         let program = parse("let scaled = rect.scale(2, 3);").unwrap();
         match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => {
-                match init {
-                    Expr::MethodCall { method, args, .. } => {
-                        assert_eq!(method, "scale");
-                        assert_eq!(args.len(), 2);
-                    }
-                    _ => panic!("expected method call"),
+            Item::Statement(Statement::Let { init, .. }) => match init {
+                Expr::MethodCall { method, args, .. } => {
+                    assert_eq!(method, "scale");
+                    assert_eq!(args.len(), 2);
                 }
-            }
+                _ => panic!("expected method call"),
+            },
             _ => panic!("expected let statement"),
         }
     }

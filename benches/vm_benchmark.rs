@@ -1,8 +1,8 @@
 //! VM performance benchmarks comparing interpreter vs quickening/JIT modes.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use std::process::Command;
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::io::Write;
+use std::process::Command;
 use std::time::Duration;
 
 /// Run mica with the given source code and CLI args, return execution time
@@ -24,8 +24,11 @@ fn run_mica_timed(source: &str, args: &[&str]) -> Duration {
 
     let elapsed = start.elapsed();
 
-    assert!(output.status.success(), "benchmark should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "benchmark should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     std::fs::remove_file(&temp_file).ok();
 
@@ -34,7 +37,8 @@ fn run_mica_timed(source: &str, args: &[&str]) -> Duration {
 
 /// Fibonacci benchmark - tests recursive function calls
 fn fibonacci_source(n: u32) -> String {
-    format!(r#"
+    format!(
+        r#"
 fun fib(n) {{
     if n <= 1 {{
         return n;
@@ -43,12 +47,15 @@ fun fib(n) {{
 }}
 
 print(fib({}));
-"#, n)
+"#,
+        n
+    )
 }
 
 /// Sum loop benchmark - tests loop performance and arithmetic
 fn sum_loop_source(n: u32) -> String {
-    format!(r#"
+    format!(
+        r#"
 fun sum_to(n) {{
     var total = 0;
     var i = 1;
@@ -60,12 +67,15 @@ fun sum_to(n) {{
 }}
 
 print(sum_to({}));
-"#, n)
+"#,
+        n
+    )
 }
 
 /// Nested loop benchmark - tests nested loop performance
 fn nested_loop_source(n: u32) -> String {
-    format!(r#"
+    format!(
+        r#"
 fun nested(n) {{
     var count = 0;
     var i = 0;
@@ -81,12 +91,15 @@ fun nested(n) {{
 }}
 
 print(nested({}));
-"#, n)
+"#,
+        n
+    )
 }
 
 /// Array benchmark - tests array allocation and access
 fn array_bench_source(n: u32) -> String {
-    format!(r#"
+    format!(
+        r#"
 fun array_sum(n) {{
     var arr = [];
     var i = 0;
@@ -105,12 +118,15 @@ fun array_sum(n) {{
 }}
 
 print(array_sum({}));
-"#, n)
+"#,
+        n
+    )
 }
 
 /// Hot function benchmark - tests JIT compilation benefit
 fn hot_function_source(calls: u32, work: u32) -> String {
-    format!(r#"
+    format!(
+        r#"
 fun do_work(n) {{
     var sum = 0;
     var i = 0;
@@ -128,7 +144,9 @@ while j < {} {{
     j = j + 1;
 }}
 print(total);
-"#, calls, work)
+"#,
+        calls, work
+    )
 }
 
 fn bench_interpreter_vs_quickening(c: &mut Criterion) {
@@ -200,5 +218,10 @@ fn bench_array_operations(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_interpreter_vs_quickening, bench_fibonacci, bench_array_operations);
+criterion_group!(
+    benches,
+    bench_interpreter_vs_quickening,
+    bench_fibonacci,
+    bench_array_operations
+);
 criterion_main!(benches);

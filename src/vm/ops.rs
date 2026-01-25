@@ -23,14 +23,14 @@ pub enum Op {
     Neg,
 
     // Quickened arithmetic (specialized for known types)
-    AddInt,        // int + int -> int
-    AddFloat,      // float + float -> float
-    SubInt,        // int - int -> int
-    SubFloat,      // float - float -> float
-    MulInt,        // int * int -> int
-    MulFloat,      // float * float -> float
-    DivInt,        // int / int -> int
-    DivFloat,      // float / float -> float
+    AddInt,   // int + int -> int
+    AddFloat, // float + float -> float
+    SubInt,   // int - int -> int
+    SubFloat, // float - float -> float
+    MulInt,   // int * int -> int
+    MulFloat, // float * float -> float
+    DivInt,   // int / int -> int
+    DivFloat, // float / float -> float
 
     // Comparison
     Eq,
@@ -41,10 +41,10 @@ pub enum Op {
     Ge,
 
     // Quickened comparison
-    LtInt,         // int < int
-    LeInt,         // int <= int
-    GtInt,         // int > int
-    GeInt,         // int >= int
+    LtInt, // int < int
+    LeInt, // int <= int
+    GtInt, // int > int
+    GeInt, // int >= int
 
     // Logical
     Not,
@@ -67,7 +67,7 @@ pub enum Op {
     ArrayPop,  // stack: [array] -> [value]
 
     // Quickened array access (with int index)
-    ArrayGetInt,   // Array access with int index (no type check)
+    ArrayGetInt, // Array access with int index (no type check)
 
     // Object operations
     AllocObject(usize), // Allocate object with n field pairs from stack
@@ -83,9 +83,9 @@ pub enum Op {
     StringConcat,
 
     // Type operations
-    TypeOf,    // Push type name as string
-    ToString,  // Convert any value to string
-    ParseInt,  // Parse string to int
+    TypeOf,   // Push type name as string
+    ToString, // Convert any value to string
+    ParseInt, // Parse string to int
 
     // Exception handling
     Throw,

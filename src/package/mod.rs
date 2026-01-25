@@ -61,10 +61,9 @@ impl PackageManifest {
     /// Save manifest to a directory
     pub fn save(&self, dir: &Path) -> Result<(), String> {
         let manifest_path = dir.join("pkg.toml");
-        let content =
-            toml::to_string_pretty(self).map_err(|e| format!("failed to serialize pkg.toml: {}", e))?;
-        fs::write(&manifest_path, content)
-            .map_err(|e| format!("failed to write pkg.toml: {}", e))
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| format!("failed to serialize pkg.toml: {}", e))?;
+        fs::write(&manifest_path, content).map_err(|e| format!("failed to write pkg.toml: {}", e))
     }
 }
 
@@ -79,10 +78,7 @@ pub fn init_project(dir: &Path, name: Option<&str>) -> Result<(), String> {
     // Check if pkg.toml already exists
     let manifest_path = dir.join("pkg.toml");
     if manifest_path.exists() {
-        return Err(format!(
-            "pkg.toml already exists in {}",
-            dir.display()
-        ));
+        return Err(format!("pkg.toml already exists in {}", dir.display()));
     }
 
     // Create directory structure
@@ -99,11 +95,14 @@ pub fn init_project(dir: &Path, name: Option<&str>) -> Result<(), String> {
         let content = r#"// Welcome to mica!
 print("Hello, world!");
 "#;
-        fs::write(&main_mica, content)
-            .map_err(|e| format!("failed to write main.mica: {}", e))?;
+        fs::write(&main_mica, content).map_err(|e| format!("failed to write main.mica: {}", e))?;
     }
 
-    println!("Created new mica project '{}' in {}", project_name, dir.display());
+    println!(
+        "Created new mica project '{}' in {}",
+        project_name,
+        dir.display()
+    );
     Ok(())
 }
 

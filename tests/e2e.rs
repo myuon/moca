@@ -199,7 +199,11 @@ let x = 1;
 x = 2;
 "#;
     let stderr = assert_failure(source);
-    assert!(stderr.contains("cannot assign to immutable"), "stderr: {}", stderr);
+    assert!(
+        stderr.contains("cannot assign to immutable"),
+        "stderr: {}",
+        stderr
+    );
 }
 
 // ===== v1 Feature Tests =====
@@ -454,11 +458,16 @@ while i < 10 {
 }
 print("done");
 "#;
-    let (stdout, stderr, success) = run_mica_with_args(source, &["--trace-jit", "--jit-threshold=5"]);
+    let (stdout, stderr, success) =
+        run_mica_with_args(source, &["--trace-jit", "--jit-threshold=5"]);
     assert!(success, "trace-jit should work");
     assert_eq!(stdout.trim(), "done");
     // Should contain JIT trace information
-    assert!(stderr.contains("[JIT]"), "should have JIT trace output: {}", stderr);
+    assert!(
+        stderr.contains("[JIT]"),
+        "should have JIT trace output: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -483,11 +492,16 @@ while j < 20 {
 }
 print(total);
 "#;
-    let (stdout, stderr, success) = run_mica_with_args(source, &["--trace-jit", "--jit-threshold=10"]);
+    let (stdout, stderr, success) =
+        run_mica_with_args(source, &["--trace-jit", "--jit-threshold=10"]);
     assert!(success, "hot function detection should work");
     assert_eq!(stdout.trim(), "200");
     // Should detect hot function
-    assert!(stderr.contains("Hot function detected"), "should detect hot function: {}", stderr);
+    assert!(
+        stderr.contains("Hot function detected"),
+        "should detect hot function: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -509,7 +523,11 @@ print("done");
     assert!(success, "gc-stats should work");
     assert_eq!(stdout.trim(), "done");
     // Should contain GC statistics
-    assert!(stderr.contains("[GC]"), "should have GC stats output: {}", stderr);
+    assert!(
+        stderr.contains("[GC]"),
+        "should have GC stats output: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -620,7 +638,11 @@ let result = join(handle);
 print(result);
 "#;
     let (stdout, stderr, success) = run_mica(source);
-    assert!(success, "thread with computation should work, stderr: {}", stderr);
+    assert!(
+        success,
+        "thread with computation should work, stderr: {}",
+        stderr
+    );
     assert_eq!(stdout.trim(), "499500");
 }
 
@@ -658,7 +680,11 @@ print(p[0]);
 print(p[1]);
 "#;
     let (stdout, stderr, success) = run_mica(source);
-    assert!(success, "struct field access should work, stderr: {}", stderr);
+    assert!(
+        success,
+        "struct field access should work, stderr: {}",
+        stderr
+    );
     // Since structs are compiled as arrays, access by index
     assert_eq!(stdout, "5\n15\n");
 }
@@ -685,7 +711,11 @@ let result = sum_point(p1);
 print(result);
 "#;
     let (stdout, stderr, success) = run_mica(source);
-    assert!(success, "struct in function should work, stderr: {}", stderr);
+    assert!(
+        success,
+        "struct in function should work, stderr: {}",
+        stderr
+    );
     assert_eq!(stdout.trim(), "10");
 }
 
@@ -706,7 +736,11 @@ print(u2[0]);
 print(u2[1]);
 "#;
     let (stdout, stderr, success) = run_mica(source);
-    assert!(success, "struct with nullable field should work, stderr: {}", stderr);
+    assert!(
+        success,
+        "struct with nullable field should work, stderr: {}",
+        stderr
+    );
     assert_eq!(stdout, "Alice\n30\nBob\nnil\n");
 }
 
@@ -749,7 +783,11 @@ print(p.x);
 print(p.y);
 "#;
     let (stdout, stderr, success) = run_mica(source);
-    assert!(success, "struct field access with dot syntax should work, stderr: {}", stderr);
+    assert!(
+        success,
+        "struct field access with dot syntax should work, stderr: {}",
+        stderr
+    );
     assert_eq!(stdout, "10\n20\n");
 }
 
@@ -767,7 +805,11 @@ c.value = 42;
 print(c.value);
 "#;
     let (stdout, stderr, success) = run_mica(source);
-    assert!(success, "struct field mutation should work, stderr: {}", stderr);
+    assert!(
+        success,
+        "struct field mutation should work, stderr: {}",
+        stderr
+    );
     assert_eq!(stdout, "0\n42\n");
 }
 
@@ -807,11 +849,24 @@ let x = 1 + 2;
 print(x);
 "#;
     let (stdout, stderr, success) = run_mica_with_trailing_args(source, &["--dump-ast"]);
-    assert!(success, "program should succeed with --dump-ast, stderr: {}", stderr);
+    assert!(
+        success,
+        "program should succeed with --dump-ast, stderr: {}",
+        stderr
+    );
     // Check AST is in stderr
-    assert!(stderr.contains("== AST =="), "stderr should contain AST header");
-    assert!(stderr.contains("Program"), "stderr should contain 'Program'");
-    assert!(stderr.contains("Binary: +"), "stderr should contain binary op");
+    assert!(
+        stderr.contains("== AST =="),
+        "stderr should contain AST header"
+    );
+    assert!(
+        stderr.contains("Program"),
+        "stderr should contain 'Program'"
+    );
+    assert!(
+        stderr.contains("Binary: +"),
+        "stderr should contain binary op"
+    );
     // Check program still executes
     assert_eq!(stdout, "3\n", "program should produce correct output");
 }
@@ -823,13 +878,22 @@ fn test_dump_ast_and_bytecode() {
 let x = 42;
 print(x);
 "#;
-    let (stdout, stderr, success) = run_mica_with_trailing_args(source, &["--dump-ast", "--dump-bytecode"]);
+    let (stdout, stderr, success) =
+        run_mica_with_trailing_args(source, &["--dump-ast", "--dump-bytecode"]);
     assert!(success, "program should succeed with multiple dump options");
     // Check both dumps are present in stderr
-    assert!(stderr.contains("== AST =="), "stderr should contain AST header");
-    assert!(stderr.contains("== Bytecode ==") || stderr.contains("== Main =="),
-            "stderr should contain bytecode header");
-    assert!(stderr.contains("PushInt 42"), "stderr should contain PushInt instruction");
+    assert!(
+        stderr.contains("== AST =="),
+        "stderr should contain AST header"
+    );
+    assert!(
+        stderr.contains("== Bytecode ==") || stderr.contains("== Main =="),
+        "stderr should contain bytecode header"
+    );
+    assert!(
+        stderr.contains("PushInt 42"),
+        "stderr should contain PushInt instruction"
+    );
     // Check program still executes
     assert_eq!(stdout, "42\n");
 }
@@ -847,17 +911,26 @@ print(x);
 
     let (stdout, stderr, success) = run_mica_with_trailing_args(
         source,
-        &[&format!("--dump-bytecode={}", dump_file.to_str().unwrap())]
+        &[&format!("--dump-bytecode={}", dump_file.to_str().unwrap())],
     );
 
-    assert!(success, "program should succeed with file dump, stderr: {}", stderr);
+    assert!(
+        success,
+        "program should succeed with file dump, stderr: {}",
+        stderr
+    );
     assert_eq!(stdout, "10\n", "program should produce correct output");
 
     // Check dump file was created and contains bytecode
-    let dump_content = std::fs::read_to_string(&dump_file)
-        .expect("dump file should exist");
-    assert!(dump_content.contains("== Main =="), "dump file should contain Main header");
-    assert!(dump_content.contains("PushInt 10"), "dump file should contain PushInt instruction");
+    let dump_content = std::fs::read_to_string(&dump_file).expect("dump file should exist");
+    assert!(
+        dump_content.contains("== Main =="),
+        "dump file should contain Main header"
+    );
+    assert!(
+        dump_content.contains("PushInt 10"),
+        "dump file should contain PushInt instruction"
+    );
 
     // Cleanup
     std::fs::remove_file(&dump_file).ok();

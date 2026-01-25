@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::heap::{GcRef, HeapObject};
+use super::heap::GcRef;
 
 /// A 64-bit tagged value.
 ///

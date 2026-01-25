@@ -30,10 +30,7 @@ pub enum Type {
     /// Nullable type: `T?` (equivalent to T | nil)
     Nullable(Box<Type>),
     /// Function type: `(T1, T2, ...) -> R`
-    Function {
-        params: Vec<Type>,
-        ret: Box<Type>,
-    },
+    Function { params: Vec<Type>, ret: Box<Type> },
     /// Struct type: a named type with fixed fields in declaration order.
     /// Unlike Object, structs use nominal typing (name must match).
     Struct {
@@ -297,7 +294,11 @@ mod tests {
         );
 
         // Unknown type should error
-        assert!(TypeAnnotation::Named("unknown".to_string()).to_type().is_err());
+        assert!(
+            TypeAnnotation::Named("unknown".to_string())
+                .to_type()
+                .is_err()
+        );
     }
 
     #[test]
