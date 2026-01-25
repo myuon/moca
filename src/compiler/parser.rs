@@ -140,6 +140,33 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a struct literal expression: `Point { x: 1, y: 2 }`
+    /// The identifier has already been consumed.
+    fn struct_literal(&mut self, name: String, span: Span) -> Result<Expr, String> {
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut fields = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            let field_name = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let value = self.expression()?;
+            fields.push((field_name, value));
+
+            while self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break; // Allow trailing comma
+                }
+                let field_name = self.expect_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let value = self.expression()?;
+                fields.push((field_name, value));
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(Expr::StructLiteral { name, fields, span })
+    }
+
     /// Parse an impl block: `impl Point { fn methods... }`
     fn impl_block(&mut self) -> Result<ImplBlock, String> {
         let span = self.current_span();
@@ -713,15 +740,36 @@ impl<'a> Parser<'a> {
                     span,
                 };
             } else if self.match_token(&TokenKind::Dot) {
-                // Field access
+                // Field access or method call
                 let span = expr.span();
                 let field = self.expect_ident()?;
 
-                expr = Expr::Field {
-                    object: Box::new(expr),
-                    field,
-                    span,
-                };
+                // Check if this is a method call
+                if self.match_token(&TokenKind::LParen) {
+                    let mut args = Vec::new();
+
+                    if !self.check(&TokenKind::RParen) {
+                        args.push(self.expression()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.expression()?);
+                        }
+                    }
+
+                    self.expect(&TokenKind::RParen)?;
+
+                    expr = Expr::MethodCall {
+                        object: Box::new(expr),
+                        method: field,
+                        args,
+                        span,
+                    };
+                } else {
+                    expr = Expr::Field {
+                        object: Box::new(expr),
+                        field,
+                        span,
+                    };
+                }
             } else {
                 break;
             }
@@ -766,6 +814,13 @@ impl<'a> Parser<'a> {
         if let Some(TokenKind::Ident(name)) = self.peek_kind() {
             let name = name.clone();
             self.advance();
+
+            // Check if this is a struct literal: Name { field: value, ... }
+            // Use lookahead to distinguish from blocks: { must be followed by ident :
+            if self.check(&TokenKind::LBrace) && self.is_struct_literal_start() {
+                return self.struct_literal(name, span);
+            }
+
             return Ok(Expr::Ident { name, span });
         }
 
@@ -848,6 +903,27 @@ impl<'a> Parser<'a> {
             .get(self.current + offset)
             .map(|t| &t.kind)
             == Some(kind)
+    }
+
+    /// Check if the current position looks like the start of a struct literal.
+    /// We're at `{` and need to distinguish `Struct { field: value }` from a block `{ stmt; }`.
+    /// Returns true if it looks like `{ }` (empty struct) or `{ ident : ...`
+    fn is_struct_literal_start(&self) -> bool {
+        // Current is at `{`
+        // Check: `{ }` (empty struct) or `{ ident :`
+        if self.check_ahead(&TokenKind::RBrace, 1) {
+            // Empty struct literal `{}`
+            return true;
+        }
+
+        // Check for `{ ident :` pattern
+        if let Some(token) = self.tokens.get(self.current + 1) {
+            if matches!(&token.kind, TokenKind::Ident(_)) {
+                return self.check_ahead(&TokenKind::Colon, 2);
+            }
+        }
+
+        false
     }
 
     fn advance(&mut self) -> Option<&Token> {
@@ -1363,6 +1439,75 @@ mod tests {
                 assert_eq!(methods[0].params[0].name, "self");
             }
             _ => panic!("expected impl block"),
+        }
+    }
+
+    #[test]
+    fn test_struct_literal() {
+        let program = parse("let p = Point { x: 1, y: 2 };").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::StructLiteral { name, fields, .. } => {
+                        assert_eq!(name, "Point");
+                        assert_eq!(fields.len(), 2);
+                        assert_eq!(fields[0].0, "x");
+                        assert_eq!(fields[1].0, "y");
+                    }
+                    _ => panic!("expected struct literal"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_struct_literal_trailing_comma() {
+        let program = parse("let p = Point { x: 1, };").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::StructLiteral { fields, .. } => {
+                        assert_eq!(fields.len(), 1);
+                    }
+                    _ => panic!("expected struct literal"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_method_call() {
+        let program = parse("let a = rect.area();").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::MethodCall { method, args, .. } => {
+                        assert_eq!(method, "area");
+                        assert_eq!(args.len(), 0);
+                    }
+                    _ => panic!("expected method call"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_method_call_with_args() {
+        let program = parse("let scaled = rect.scale(2, 3);").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::MethodCall { method, args, .. } => {
+                        assert_eq!(method, "scale");
+                        assert_eq!(args.len(), 2);
+                    }
+                    _ => panic!("expected method call"),
+                }
+            }
+            _ => panic!("expected let statement"),
         }
     }
 }
