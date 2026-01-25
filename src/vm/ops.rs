@@ -22,6 +22,16 @@ pub enum Op {
     Mod,
     Neg,
 
+    // Quickened arithmetic (specialized for known types)
+    AddInt,        // int + int -> int
+    AddFloat,      // float + float -> float
+    SubInt,        // int - int -> int
+    SubFloat,      // float - float -> float
+    MulInt,        // int * int -> int
+    MulFloat,      // float * float -> float
+    DivInt,        // int / int -> int
+    DivFloat,      // float / float -> float
+
     // Comparison
     Eq,
     Ne,
@@ -29,6 +39,12 @@ pub enum Op {
     Le,
     Gt,
     Ge,
+
+    // Quickened comparison
+    LtInt,         // int < int
+    LeInt,         // int <= int
+    GtInt,         // int > int
+    GeInt,         // int >= int
 
     // Logical
     Not,
@@ -50,10 +66,17 @@ pub enum Op {
     ArrayPush, // stack: [array, value] -> []
     ArrayPop,  // stack: [array] -> [value]
 
+    // Quickened array access (with int index)
+    ArrayGetInt,   // Array access with int index (no type check)
+
     // Object operations
     AllocObject(usize), // Allocate object with n field pairs from stack
     GetField(usize),    // Get field by string constant index
     SetField(usize),    // Set field by string constant index
+
+    // Quickened field access (with cached offset)
+    GetFieldCached(usize, u16), // (field_name_idx, cached_offset)
+    SetFieldCached(usize, u16), // (field_name_idx, cached_offset)
 
     // String operations
     StringLen,

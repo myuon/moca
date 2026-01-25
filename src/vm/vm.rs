@@ -44,6 +44,60 @@ impl VM {
         }
     }
 
+    /// Run with quickening enabled - specializes instructions based on observed types.
+    pub fn run_with_quickening(&mut self, chunk: &mut Chunk) -> Result<(), String> {
+        // Start with main
+        self.frames.push(Frame {
+            func_index: usize::MAX, // Marker for main
+            pc: 0,
+            stack_base: 0,
+        });
+
+        loop {
+            // Check if GC should run
+            if self.heap.should_gc() {
+                self.collect_garbage();
+            }
+
+            let frame = self.frames.last_mut().unwrap();
+            let (func_index, pc) = (frame.func_index, frame.pc);
+
+            let func = if func_index == usize::MAX {
+                &chunk.main
+            } else {
+                &chunk.functions[func_index]
+            };
+
+            if pc >= func.code.len() {
+                // End of function without explicit return
+                break;
+            }
+
+            let op = func.code[pc].clone();
+            frame.pc += 1;
+
+            // Execute with potential quickening
+            let result = self.execute_op_quickening(op, chunk, func_index, pc);
+            match result {
+                Ok(ControlFlow::Continue) => {}
+                Ok(ControlFlow::Return) => {
+                    if self.frames.is_empty() {
+                        break;
+                    }
+                }
+                Ok(ControlFlow::Exit) => break,
+                Err(e) => {
+                    // Try to handle exception
+                    if !self.handle_exception_mut(e.clone(), chunk)? {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), String> {
         // Start with main
         self.frames.push(Frame {
@@ -479,9 +533,308 @@ impl VM {
                     self.collect_garbage();
                 }
             }
+
+            // Quickened arithmetic operations (specialized for known types)
+            Op::AddInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                // Fast path: both are ints (no type check needed after quickening)
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Int(a + b));
+                } else {
+                    // Fallback if types changed
+                    let result = self.add(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::AddFloat => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Float(a), Value::Float(b)) = (a, b) {
+                    self.stack.push(Value::Float(a + b));
+                } else {
+                    let result = self.add(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::SubInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Int(a - b));
+                } else {
+                    let result = self.sub(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::SubFloat => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Float(a), Value::Float(b)) = (a, b) {
+                    self.stack.push(Value::Float(a - b));
+                } else {
+                    let result = self.sub(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::MulInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Int(a * b));
+                } else {
+                    let result = self.mul(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::MulFloat => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Float(a), Value::Float(b)) = (a, b) {
+                    self.stack.push(Value::Float(a * b));
+                } else {
+                    let result = self.mul(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::DivInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    if b == 0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack.push(Value::Int(a / b));
+                } else {
+                    let result = self.div(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+            Op::DivFloat => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Float(a), Value::Float(b)) = (a, b) {
+                    if b == 0.0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack.push(Value::Float(a / b));
+                } else {
+                    let result = self.div(a, b)?;
+                    self.stack.push(result);
+                }
+            }
+
+            // Quickened comparison operations
+            Op::LtInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Bool(a < b));
+                } else {
+                    let result = self.compare(&a, &b)? < 0;
+                    self.stack.push(Value::Bool(result));
+                }
+            }
+            Op::LeInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Bool(a <= b));
+                } else {
+                    let result = self.compare(&a, &b)? <= 0;
+                    self.stack.push(Value::Bool(result));
+                }
+            }
+            Op::GtInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Bool(a > b));
+                } else {
+                    let result = self.compare(&a, &b)? > 0;
+                    self.stack.push(Value::Bool(result));
+                }
+            }
+            Op::GeInt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                    self.stack.push(Value::Bool(a >= b));
+                } else {
+                    let result = self.compare(&a, &b)? >= 0;
+                    self.stack.push(Value::Bool(result));
+                }
+            }
+
+            // Quickened array access
+            Op::ArrayGetInt => {
+                let index = self.stack.pop().ok_or("stack underflow")?;
+                let arr = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::Ptr(r), Value::Int(index)) = (arr, index) {
+                    let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                    let arr = obj.as_array().ok_or("runtime error: expected array")?;
+                    if index < 0 || index as usize >= arr.elements.len() {
+                        return Err(format!(
+                            "runtime error: array index {} out of bounds (length {})",
+                            index,
+                            arr.elements.len()
+                        ));
+                    }
+                    let value = arr.elements[index as usize];
+                    self.stack.push(value);
+                } else {
+                    return Err("runtime error: expected array and int index".to_string());
+                }
+            }
+
+            // Quickened field access (with cached offset - for future IC)
+            Op::GetFieldCached(str_idx, _cached_offset) => {
+                // For now, fall back to regular GetField
+                // Once IC is fully implemented, we'll use cached_offset
+                let obj = self.stack.pop().ok_or("stack underflow")?;
+                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+
+                let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
+
+                let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let obj = heap_obj.as_object().ok_or("runtime error: expected object")?;
+
+                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Nil);
+                self.stack.push(value);
+            }
+            Op::SetFieldCached(str_idx, _cached_offset) => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let obj = self.stack.pop().ok_or("stack underflow")?;
+                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+
+                let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
+
+                let heap_obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let obj = heap_obj.as_object_mut().ok_or("runtime error: expected object")?;
+
+                obj.fields.insert(field_name, value);
+            }
         }
 
         Ok(ControlFlow::Continue)
+    }
+
+    /// Execute an operation with quickening - specializes instructions based on observed types.
+    fn execute_op_quickening(
+        &mut self,
+        op: Op,
+        chunk: &mut Chunk,
+        func_index: usize,
+        pc: usize,
+    ) -> Result<ControlFlow, String> {
+        match &op {
+            // Quickening for Add: if both operands are ints, rewrite to AddInt
+            Op::Add => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+
+                let (result, quickened_op) = match (&a, &b) {
+                    (Value::Int(av), Value::Int(bv)) => {
+                        (Value::Int(av + bv), Some(Op::AddInt))
+                    }
+                    (Value::Float(av), Value::Float(bv)) => {
+                        (Value::Float(av + bv), Some(Op::AddFloat))
+                    }
+                    _ => (self.add(a, b)?, None),
+                };
+
+                self.stack.push(result);
+
+                // Quicken the instruction for next time
+                if let Some(new_op) = quickened_op {
+                    self.quicken_instruction(chunk, func_index, pc, new_op);
+                }
+
+                return Ok(ControlFlow::Continue);
+            }
+            Op::Sub => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+
+                let (result, quickened_op) = match (&a, &b) {
+                    (Value::Int(av), Value::Int(bv)) => {
+                        (Value::Int(av - bv), Some(Op::SubInt))
+                    }
+                    (Value::Float(av), Value::Float(bv)) => {
+                        (Value::Float(av - bv), Some(Op::SubFloat))
+                    }
+                    _ => (self.sub(a, b)?, None),
+                };
+
+                self.stack.push(result);
+
+                if let Some(new_op) = quickened_op {
+                    self.quicken_instruction(chunk, func_index, pc, new_op);
+                }
+
+                return Ok(ControlFlow::Continue);
+            }
+            Op::Mul => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+
+                let (result, quickened_op) = match (&a, &b) {
+                    (Value::Int(av), Value::Int(bv)) => {
+                        (Value::Int(av * bv), Some(Op::MulInt))
+                    }
+                    (Value::Float(av), Value::Float(bv)) => {
+                        (Value::Float(av * bv), Some(Op::MulFloat))
+                    }
+                    _ => (self.mul(a, b)?, None),
+                };
+
+                self.stack.push(result);
+
+                if let Some(new_op) = quickened_op {
+                    self.quicken_instruction(chunk, func_index, pc, new_op);
+                }
+
+                return Ok(ControlFlow::Continue);
+            }
+            Op::Lt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+
+                let (result, quickened_op) = match (&a, &b) {
+                    (Value::Int(av), Value::Int(bv)) => {
+                        (Value::Bool(av < bv), Some(Op::LtInt))
+                    }
+                    _ => (Value::Bool(self.compare(&a, &b)? < 0), None),
+                };
+
+                self.stack.push(result);
+
+                if let Some(new_op) = quickened_op {
+                    self.quicken_instruction(chunk, func_index, pc, new_op);
+                }
+
+                return Ok(ControlFlow::Continue);
+            }
+            _ => {}
+        }
+
+        // For non-quickenable ops, use the regular execute_op
+        self.execute_op(op, chunk)
+    }
+
+    /// Rewrite an instruction in the chunk to a quickened version.
+    fn quicken_instruction(&self, chunk: &mut Chunk, func_index: usize, pc: usize, new_op: Op) {
+        if func_index == usize::MAX {
+            chunk.main.code[pc] = new_op;
+        } else {
+            chunk.functions[func_index].code[pc] = new_op;
+        }
+    }
+
+    /// Handle exception with mutable chunk (for quickening mode).
+    fn handle_exception_mut(&mut self, error: String, chunk: &mut Chunk) -> Result<bool, String> {
+        // Convert mutable reference to immutable for the existing logic
+        self.handle_exception(error, chunk)
     }
 
     fn add(&mut self, a: Value, b: Value) -> Result<Value, String> {
