@@ -201,3 +201,193 @@ x = 2;
     let stderr = assert_failure(source);
     assert!(stderr.contains("cannot assign to immutable"), "stderr: {}", stderr);
 }
+
+// ===== v1 Feature Tests =====
+
+#[test]
+fn test_string_operations() {
+    let source = r#"
+let s = "hello";
+print(s);
+let s2 = "world";
+print(s + " " + s2);
+print(len(s));
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "hello\nhello world\n5\n");
+}
+
+#[test]
+fn test_float_operations() {
+    let source = r#"
+let x = 3.14;
+let y = 2.0;
+print(x + y);
+print(x * y);
+print(x > y);
+"#;
+    let stdout = assert_success(source);
+    assert!(stdout.contains("5.14"));
+    assert!(stdout.contains("6.28"));
+    assert!(stdout.contains("true"));
+}
+
+#[test]
+fn test_nil_value() {
+    let source = r#"
+let x = nil;
+print(x);
+print(x == nil);
+print(x != nil);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "nil\ntrue\nfalse\n");
+}
+
+#[test]
+fn test_array_literal_and_access() {
+    let source = r#"
+let arr = [1, 2, 3, 4, 5];
+print(arr[0]);
+print(arr[2]);
+print(arr[4]);
+print(len(arr));
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "1\n3\n5\n5\n");
+}
+
+#[test]
+fn test_array_mutation() {
+    let source = r#"
+var arr = [10, 20, 30];
+arr[1] = 25;
+print(arr[1]);
+push(arr, 40);
+print(len(arr));
+print(arr[3]);
+let last = pop(arr);
+print(last);
+print(len(arr));
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "25\n4\n40\n40\n3\n");
+}
+
+#[test]
+fn test_object_literal_and_access() {
+    let source = r#"
+let obj = { x: 10, y: 20, name: "point" };
+print(obj.x);
+print(obj.y);
+print(obj.name);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "10\n20\npoint\n");
+}
+
+#[test]
+fn test_object_mutation() {
+    let source = r#"
+var obj = { value: 100 };
+print(obj.value);
+obj.value = 200;
+print(obj.value);
+obj.newField = 300;
+print(obj.newField);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "100\n200\n300\n");
+}
+
+#[test]
+fn test_for_in_loop() {
+    let source = r#"
+let arr = [1, 2, 3, 4, 5];
+var sum = 0;
+for x in arr {
+    sum = sum + x;
+}
+print(sum);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "15\n");
+}
+
+#[test]
+fn test_for_in_with_print() {
+    let source = r#"
+let items = [10, 20, 30];
+for item in items {
+    print(item);
+}
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "10\n20\n30\n");
+}
+
+#[test]
+fn test_type_of_builtin() {
+    let source = r#"
+print(type_of(42));
+print(type_of(3.14));
+print(type_of(true));
+print(type_of(nil));
+print(type_of("hello"));
+print(type_of([1, 2, 3]));
+print(type_of({ x: 1 }));
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "int\nfloat\nbool\nnil\nstring\narray\nobject\n");
+}
+
+#[test]
+fn test_to_string_builtin() {
+    let source = r#"
+print(to_string(42));
+print(to_string(3.14));
+print(to_string(true));
+print(to_string(nil));
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "42\n3.14\ntrue\nnil\n");
+}
+
+#[test]
+fn test_parse_int_builtin() {
+    let source = r#"
+let n = parse_int("42");
+print(n);
+print(n + 8);
+let m = parse_int("  123  ");
+print(m);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "42\n50\n123\n");
+}
+
+#[test]
+fn test_nested_arrays_and_objects() {
+    let source = r#"
+let data = {
+    numbers: [1, 2, 3],
+    point: { x: 10, y: 20 }
+};
+print(data.numbers[1]);
+print(data.point.x);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "2\n10\n");
+}
+
+#[test]
+fn test_string_escape_sequences() {
+    let source = r#"
+let s = "line1\nline2";
+print(s);
+let t = "tab\there";
+print(t);
+"#;
+    let stdout = assert_success(source);
+    assert_eq!(stdout, "line1\nline2\ntab\there\n");
+}

@@ -1,9 +1,11 @@
 mod value;
 mod ops;
+mod heap;
 mod vm;
 
 pub use value::Value;
 pub use ops::Op;
+pub use heap::{GcRef, Heap, HeapObject, MicaArray, MicaObject, MicaString, ObjectType};
 pub use vm::VM;
 
 /// A compiled function.
@@ -20,4 +22,6 @@ pub struct Function {
 pub struct Chunk {
     pub functions: Vec<Function>,
     pub main: Function,
+    /// String constants pool
+    pub strings: Vec<String>,
 }

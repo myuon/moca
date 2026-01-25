@@ -5,18 +5,32 @@ use crate::vm::{Chunk, Function, Op};
 /// Code generator that compiles resolved AST to bytecode.
 pub struct Codegen {
     functions: Vec<Function>,
+    strings: Vec<String>,
 }
 
 impl Codegen {
     pub fn new() -> Self {
         Self {
             functions: Vec::new(),
+            strings: Vec::new(),
+        }
+    }
+
+    /// Add a string to the constants pool and return its index.
+    fn add_string(&mut self, s: String) -> usize {
+        // Check if string already exists
+        if let Some(idx) = self.strings.iter().position(|x| x == &s) {
+            idx
+        } else {
+            let idx = self.strings.len();
+            self.strings.push(s);
+            idx
         }
     }
 
     pub fn compile(&mut self, program: ResolvedProgram) -> Result<Chunk, String> {
         // Compile all user-defined functions first
-        for func in program.functions {
+        for func in &program.functions {
             let compiled = self.compile_function(func)?;
             self.functions.push(compiled);
         }
@@ -27,7 +41,7 @@ impl Codegen {
             self.compile_statement(&stmt, &mut main_ops)?;
         }
         // End of main
-        main_ops.push(Op::PushInt(0)); // Return value for main
+        main_ops.push(Op::PushNil); // Return value for main
         main_ops.push(Op::Ret);
 
         let main_func = Function {
@@ -40,31 +54,32 @@ impl Codegen {
         Ok(Chunk {
             functions: self.functions.clone(),
             main: main_func,
+            strings: self.strings.clone(),
         })
     }
 
-    fn compile_function(&mut self, func: ResolvedFunction) -> Result<Function, String> {
+    fn compile_function(&mut self, func: &ResolvedFunction) -> Result<Function, String> {
         let mut ops = Vec::new();
 
         for stmt in &func.body {
             self.compile_statement(stmt, &mut ops)?;
         }
 
-        // Implicit return nil (as 0 for v0)
+        // Implicit return nil
         if !matches!(ops.last(), Some(Op::Ret)) {
-            ops.push(Op::PushInt(0));
+            ops.push(Op::PushNil);
             ops.push(Op::Ret);
         }
 
         Ok(Function {
-            name: func.name,
+            name: func.name.clone(),
             arity: func.params.len(),
             locals_count: func.locals_count,
             code: ops,
         })
     }
 
-    fn compile_statement(&self, stmt: &ResolvedStatement, ops: &mut Vec<Op>) -> Result<(), String> {
+    fn compile_statement(&mut self, stmt: &ResolvedStatement, ops: &mut Vec<Op>) -> Result<(), String> {
         match stmt {
             ResolvedStatement::Let { slot, init } => {
                 self.compile_expr(init, ops)?;
@@ -73,6 +88,26 @@ impl Codegen {
             ResolvedStatement::Assign { slot, value } => {
                 self.compile_expr(value, ops)?;
                 ops.push(Op::StoreLocal(*slot));
+            }
+            ResolvedStatement::IndexAssign {
+                object,
+                index,
+                value,
+            } => {
+                self.compile_expr(object, ops)?;
+                self.compile_expr(index, ops)?;
+                self.compile_expr(value, ops)?;
+                ops.push(Op::ArraySet);
+            }
+            ResolvedStatement::FieldAssign {
+                object,
+                field,
+                value,
+            } => {
+                self.compile_expr(object, ops)?;
+                self.compile_expr(value, ops)?;
+                let field_idx = self.add_string(field.clone());
+                ops.push(Op::SetField(field_idx));
             }
             ResolvedStatement::If {
                 condition,
@@ -130,13 +165,116 @@ impl Codegen {
                 let loop_end = ops.len();
                 ops[jump_to_end] = Op::JmpIfFalse(loop_end);
             }
+            ResolvedStatement::ForIn {
+                slot,
+                iterable,
+                body,
+            } => {
+                // For-in loop: for x in arr { body }
+                // Desugars to:
+                //   let __arr = arr;     (slot = slot, reuse)
+                //   let __idx = 0;       (slot + 1)
+                //   while __idx < len(__arr) {
+                //     x = __arr[__idx];
+                //     body
+                //     __idx = __idx + 1;
+                //   }
+                //
+                // We use slot for x, slot+1 for __idx, slot+2 for __arr
+
+                let var_slot = *slot;
+                let idx_slot = slot + 1;
+                let arr_slot = slot + 2;
+
+                // Store array
+                self.compile_expr(iterable, ops)?;
+                ops.push(Op::StoreLocal(arr_slot));
+
+                // Initialize index to 0
+                ops.push(Op::PushInt(0));
+                ops.push(Op::StoreLocal(idx_slot));
+
+                let loop_start = ops.len();
+
+                // Check: idx < arr.len()
+                ops.push(Op::LoadLocal(idx_slot));
+                ops.push(Op::LoadLocal(arr_slot));
+                ops.push(Op::ArrayLen);
+                ops.push(Op::Lt);
+
+                let jump_to_end = ops.len();
+                ops.push(Op::JmpIfFalse(0)); // Placeholder
+
+                // x = arr[idx]
+                ops.push(Op::LoadLocal(arr_slot));
+                ops.push(Op::LoadLocal(idx_slot));
+                ops.push(Op::ArrayGet);
+                ops.push(Op::StoreLocal(var_slot));
+
+                // Body
+                for stmt in body {
+                    self.compile_statement(stmt, ops)?;
+                }
+
+                // idx = idx + 1
+                ops.push(Op::LoadLocal(idx_slot));
+                ops.push(Op::PushInt(1));
+                ops.push(Op::Add);
+                ops.push(Op::StoreLocal(idx_slot));
+
+                // Jump back to loop start
+                ops.push(Op::Jmp(loop_start));
+
+                // End of loop
+                let loop_end = ops.len();
+                ops[jump_to_end] = Op::JmpIfFalse(loop_end);
+            }
             ResolvedStatement::Return { value } => {
                 if let Some(value) = value {
                     self.compile_expr(value, ops)?;
                 } else {
-                    ops.push(Op::PushInt(0)); // Return 0 for void
+                    ops.push(Op::PushNil); // Return nil for void
                 }
                 ops.push(Op::Ret);
+            }
+            ResolvedStatement::Throw { value } => {
+                self.compile_expr(value, ops)?;
+                ops.push(Op::Throw);
+            }
+            ResolvedStatement::Try {
+                try_block,
+                catch_slot,
+                catch_block,
+            } => {
+                // TryBegin with placeholder for catch handler address
+                let try_begin_idx = ops.len();
+                ops.push(Op::TryBegin(0)); // Placeholder
+
+                // Compile try block
+                for stmt in try_block {
+                    self.compile_statement(stmt, ops)?;
+                }
+
+                // End of try block - remove handler and jump over catch
+                ops.push(Op::TryEnd);
+                let jump_over_catch = ops.len();
+                ops.push(Op::Jmp(0)); // Placeholder
+
+                // Catch handler starts here
+                let catch_start = ops.len();
+                ops[try_begin_idx] = Op::TryBegin(catch_start);
+
+                // Exception value is on stack, store to catch variable slot
+                ops.push(Op::StoreLocal(*catch_slot));
+
+                // Compile catch block
+                for stmt in catch_block {
+                    self.compile_statement(stmt, ops)?;
+                }
+
+                // Patch jump over catch
+                let after_catch = ops.len();
+                ops[jump_over_catch] = Op::Jmp(after_catch);
             }
             ResolvedStatement::Expr { expr } => {
                 self.compile_expr(expr, ops)?;
@@ -147,10 +285,13 @@ impl Codegen {
         Ok(())
     }
 
-    fn compile_expr(&self, expr: &ResolvedExpr, ops: &mut Vec<Op>) -> Result<(), String> {
+    fn compile_expr(&mut self, expr: &ResolvedExpr, ops: &mut Vec<Op>) -> Result<(), String> {
         match expr {
             ResolvedExpr::Int(value) => {
                 ops.push(Op::PushInt(*value));
+            }
+            ResolvedExpr::Float(value) => {
+                ops.push(Op::PushFloat(*value));
             }
             ResolvedExpr::Bool(value) => {
                 if *value {
@@ -159,8 +300,41 @@ impl Codegen {
                     ops.push(Op::PushFalse);
                 }
             }
+            ResolvedExpr::Str(value) => {
+                let idx = self.add_string(value.clone());
+                ops.push(Op::PushString(idx));
+            }
+            ResolvedExpr::Nil => {
+                ops.push(Op::PushNil);
+            }
             ResolvedExpr::Local(slot) => {
                 ops.push(Op::LoadLocal(*slot));
+            }
+            ResolvedExpr::Array { elements } => {
+                // Push all elements, then allocate array
+                for elem in elements {
+                    self.compile_expr(elem, ops)?;
+                }
+                ops.push(Op::AllocArray(elements.len()));
+            }
+            ResolvedExpr::Object { fields } => {
+                // Push field names and values as pairs
+                for (name, value) in fields {
+                    let name_idx = self.add_string(name.clone());
+                    ops.push(Op::PushString(name_idx));
+                    self.compile_expr(value, ops)?;
+                }
+                ops.push(Op::AllocObject(fields.len()));
+            }
+            ResolvedExpr::Index { object, index } => {
+                self.compile_expr(object, ops)?;
+                self.compile_expr(index, ops)?;
+                ops.push(Op::ArrayGet);
+            }
+            ResolvedExpr::Field { object, field } => {
+                self.compile_expr(object, ops)?;
+                let field_idx = self.add_string(field.clone());
+                ops.push(Op::GetField(field_idx));
             }
             ResolvedExpr::Unary { op, operand } => {
                 self.compile_expr(operand, ops)?;
@@ -230,6 +404,53 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::Print);
+                    }
+                    "len" => {
+                        if args.len() != 1 {
+                            return Err("len takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        // len works on both arrays and strings
+                        // VM will handle type dispatch
+                        ops.push(Op::ArrayLen); // This also works for strings via VM dispatch
+                    }
+                    "push" => {
+                        if args.len() != 2 {
+                            return Err("push takes exactly 2 arguments".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::ArrayPush);
+                        // push returns nil
+                        ops.push(Op::PushNil);
+                    }
+                    "pop" => {
+                        if args.len() != 1 {
+                            return Err("pop takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ArrayPop);
+                    }
+                    "type_of" => {
+                        if args.len() != 1 {
+                            return Err("type_of takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::TypeOf);
+                    }
+                    "to_string" => {
+                        if args.len() != 1 {
+                            return Err("to_string takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ToString);
+                    }
+                    "parse_int" => {
+                        if args.len() != 1 {
+                            return Err("parse_int takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ParseInt);
                     }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }

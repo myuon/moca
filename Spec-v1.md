@@ -72,10 +72,10 @@ let escaped = "line1\nline2";
 let greeting = "hello" + " " + "world";
 
 // 配列
-let arr = [1, 2, 3];
+var arr = [1, 2, 3];
 let first = arr[0];
 arr[1] = 42;
-let len = arr.len();
+let length = len(arr);
 
 // オブジェクト
 let obj = { x: 10, y: 20 };
@@ -285,7 +285,7 @@ print(point.x + point.y);
 
 **Given:** 以下の内容の `exception.mica`
 ```
-fn divide(a, b) {
+fun divide(a, b) {
     if b == 0 {
         throw "division by zero";
     }
@@ -300,7 +300,7 @@ try {
 }
 
 // GC stress test
-let mut i = 0;
+var i = 0;
 while i < 10000 {
     let arr = [i, i + 1, i + 2];
     i = i + 1;

@@ -1,4 +1,6 @@
-use crate::vm::{Chunk, Function, Op, Value};
+use std::collections::HashMap;
+
+use crate::vm::{Chunk, Function, Heap, Op, Value};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -11,10 +13,25 @@ struct Frame {
     stack_base: usize,
 }
 
+/// Exception handler frame.
+#[derive(Debug)]
+struct TryFrame {
+    /// Stack depth when try block started
+    stack_depth: usize,
+    /// Call frame depth when try block started
+    frame_depth: usize,
+    /// PC to jump to for catch handler
+    handler_pc: usize,
+    /// Function index when try started
+    func_index: usize,
+}
+
 /// The mica virtual machine.
 pub struct VM {
     stack: Vec<Value>,
     frames: Vec<Frame>,
+    heap: Heap,
+    try_frames: Vec<TryFrame>,
 }
 
 impl VM {
@@ -22,6 +39,8 @@ impl VM {
         Self {
             stack: Vec::with_capacity(1024),
             frames: Vec::with_capacity(64),
+            heap: Heap::new(),
+            try_frames: Vec::new(),
         }
     }
 
@@ -33,10 +52,12 @@ impl VM {
             stack_base: 0,
         });
 
-        // Pre-allocate locals for main (estimate based on code)
-        // For v0, we'll grow the stack as needed
-
         loop {
+            // Check if GC should run
+            if self.heap.should_gc() {
+                self.collect_garbage();
+            }
+
             let frame = self.frames.last_mut().unwrap();
             let func = if frame.func_index == usize::MAX {
                 &chunk.main
@@ -52,165 +73,20 @@ impl VM {
             let op = func.code[frame.pc].clone();
             frame.pc += 1;
 
-            match op {
-                Op::PushInt(n) => {
-                    self.stack.push(Value::Int(n));
-                }
-                Op::PushTrue => {
-                    self.stack.push(Value::Bool(true));
-                }
-                Op::PushFalse => {
-                    self.stack.push(Value::Bool(false));
-                }
-                Op::Pop => {
-                    self.stack.pop();
-                }
-                Op::LoadLocal(slot) => {
-                    let frame = self.frames.last().unwrap();
-                    let index = frame.stack_base + slot;
-                    let value = self.stack.get(index).copied().unwrap_or(Value::Int(0));
-                    self.stack.push(value);
-                }
-                Op::StoreLocal(slot) => {
-                    let value = self.stack.pop().ok_or("stack underflow")?;
-                    let frame = self.frames.last().unwrap();
-                    let index = frame.stack_base + slot;
-
-                    // Ensure stack is large enough
-                    while self.stack.len() <= index {
-                        self.stack.push(Value::Int(0));
-                    }
-
-                    self.stack[index] = value;
-                }
-                Op::Add => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Int(a + b));
-                }
-                Op::Sub => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Int(a - b));
-                }
-                Op::Mul => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Int(a * b));
-                }
-                Op::Div => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    if b == 0 {
-                        return Err("runtime error: division by zero".to_string());
-                    }
-                    self.stack.push(Value::Int(a / b));
-                }
-                Op::Mod => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    if b == 0 {
-                        return Err("runtime error: division by zero".to_string());
-                    }
-                    self.stack.push(Value::Int(a % b));
-                }
-                Op::Neg => {
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Int(-a));
-                }
-                Op::Eq => {
-                    let b = self.stack.pop().ok_or("stack underflow")?;
-                    let a = self.stack.pop().ok_or("stack underflow")?;
-                    self.stack.push(Value::Bool(a == b));
-                }
-                Op::Ne => {
-                    let b = self.stack.pop().ok_or("stack underflow")?;
-                    let a = self.stack.pop().ok_or("stack underflow")?;
-                    self.stack.push(Value::Bool(a != b));
-                }
-                Op::Lt => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Bool(a < b));
-                }
-                Op::Le => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Bool(a <= b));
-                }
-                Op::Gt => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Bool(a > b));
-                }
-                Op::Ge => {
-                    let b = self.pop_int()?;
-                    let a = self.pop_int()?;
-                    self.stack.push(Value::Bool(a >= b));
-                }
-                Op::Not => {
-                    let a = self.stack.pop().ok_or("stack underflow")?;
-                    self.stack.push(Value::Bool(!a.is_truthy()));
-                }
-                Op::Jmp(target) => {
-                    let frame = self.frames.last_mut().unwrap();
-                    frame.pc = target;
-                }
-                Op::JmpIfFalse(target) => {
-                    let cond = self.stack.pop().ok_or("stack underflow")?;
-                    if !cond.is_truthy() {
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.pc = target;
-                    }
-                }
-                Op::JmpIfTrue(target) => {
-                    let cond = self.stack.pop().ok_or("stack underflow")?;
-                    if cond.is_truthy() {
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.pc = target;
-                    }
-                }
-                Op::Call(func_index, argc) => {
-                    let func = &chunk.functions[func_index];
-
-                    if argc != func.arity {
-                        return Err(format!(
-                            "runtime error: function '{}' expects {} arguments, got {}",
-                            func.name, func.arity, argc
-                        ));
-                    }
-
-                    // Calculate the new stack base
-                    // Arguments are already on the stack
-                    let new_stack_base = self.stack.len() - argc;
-
-                    self.frames.push(Frame {
-                        func_index,
-                        pc: 0,
-                        stack_base: new_stack_base,
-                    });
-                }
-                Op::Ret => {
-                    let return_value = self.stack.pop().unwrap_or(Value::Int(0));
-
-                    let frame = self.frames.pop().unwrap();
-
+            let result = self.execute_op(op, chunk);
+            match result {
+                Ok(ControlFlow::Continue) => {}
+                Ok(ControlFlow::Return) => {
                     if self.frames.is_empty() {
-                        // Returning from main
                         break;
                     }
-
-                    // Clean up the stack (remove locals and arguments)
-                    self.stack.truncate(frame.stack_base);
-
-                    // Push return value
-                    self.stack.push(return_value);
                 }
-                Op::Print => {
-                    let value = self.stack.pop().ok_or("stack underflow")?;
-                    println!("{}", value);
-                    // print returns the value it printed (for expression statements)
-                    self.stack.push(value);
+                Ok(ControlFlow::Exit) => break,
+                Err(e) => {
+                    // Try to handle exception
+                    if !self.handle_exception(e.clone(), chunk)? {
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -218,9 +94,599 @@ impl VM {
         Ok(())
     }
 
+    fn execute_op(&mut self, op: Op, chunk: &Chunk) -> Result<ControlFlow, String> {
+        match op {
+            Op::PushInt(n) => {
+                self.stack.push(Value::Int(n));
+            }
+            Op::PushFloat(f) => {
+                self.stack.push(Value::Float(f));
+            }
+            Op::PushTrue => {
+                self.stack.push(Value::Bool(true));
+            }
+            Op::PushFalse => {
+                self.stack.push(Value::Bool(false));
+            }
+            Op::PushNil => {
+                self.stack.push(Value::Nil);
+            }
+            Op::PushString(idx) => {
+                let s = chunk.strings.get(idx).cloned().unwrap_or_default();
+                let r = self.heap.alloc_string(s);
+                self.stack.push(Value::Ptr(r));
+            }
+            Op::Pop => {
+                self.stack.pop();
+            }
+            Op::LoadLocal(slot) => {
+                let frame = self.frames.last().unwrap();
+                let index = frame.stack_base + slot;
+                let value = self.stack.get(index).copied().unwrap_or(Value::Nil);
+                self.stack.push(value);
+            }
+            Op::StoreLocal(slot) => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let frame = self.frames.last().unwrap();
+                let index = frame.stack_base + slot;
+
+                // Ensure stack is large enough
+                while self.stack.len() <= index {
+                    self.stack.push(Value::Nil);
+                }
+
+                self.stack[index] = value;
+            }
+            Op::Add => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.add(a, b)?;
+                self.stack.push(result);
+            }
+            Op::Sub => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.sub(a, b)?;
+                self.stack.push(result);
+            }
+            Op::Mul => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.mul(a, b)?;
+                self.stack.push(result);
+            }
+            Op::Div => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.div(a, b)?;
+                self.stack.push(result);
+            }
+            Op::Mod => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                if b == 0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                self.stack.push(Value::Int(a % b));
+            }
+            Op::Neg => {
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = match a {
+                    Value::Int(n) => Value::Int(-n),
+                    Value::Float(f) => Value::Float(-f),
+                    _ => return Err("runtime error: cannot negate non-numeric value".to_string()),
+                };
+                self.stack.push(result);
+            }
+            Op::Eq => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.values_equal(&a, &b);
+                self.stack.push(Value::Bool(result));
+            }
+            Op::Ne => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = !self.values_equal(&a, &b);
+                self.stack.push(Value::Bool(result));
+            }
+            Op::Lt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.compare(&a, &b)? < 0;
+                self.stack.push(Value::Bool(result));
+            }
+            Op::Le => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.compare(&a, &b)? <= 0;
+                self.stack.push(Value::Bool(result));
+            }
+            Op::Gt => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.compare(&a, &b)? > 0;
+                self.stack.push(Value::Bool(result));
+            }
+            Op::Ge => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.compare(&a, &b)? >= 0;
+                self.stack.push(Value::Bool(result));
+            }
+            Op::Not => {
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                self.stack.push(Value::Bool(!a.is_truthy()));
+            }
+            Op::Jmp(target) => {
+                let frame = self.frames.last_mut().unwrap();
+                frame.pc = target;
+            }
+            Op::JmpIfFalse(target) => {
+                let cond = self.stack.pop().ok_or("stack underflow")?;
+                if !cond.is_truthy() {
+                    let frame = self.frames.last_mut().unwrap();
+                    frame.pc = target;
+                }
+            }
+            Op::JmpIfTrue(target) => {
+                let cond = self.stack.pop().ok_or("stack underflow")?;
+                if cond.is_truthy() {
+                    let frame = self.frames.last_mut().unwrap();
+                    frame.pc = target;
+                }
+            }
+            Op::Call(func_index, argc) => {
+                let func = &chunk.functions[func_index];
+
+                if argc != func.arity {
+                    return Err(format!(
+                        "runtime error: function '{}' expects {} arguments, got {}",
+                        func.name, func.arity, argc
+                    ));
+                }
+
+                let new_stack_base = self.stack.len() - argc;
+
+                self.frames.push(Frame {
+                    func_index,
+                    pc: 0,
+                    stack_base: new_stack_base,
+                });
+            }
+            Op::Ret => {
+                let return_value = self.stack.pop().unwrap_or(Value::Nil);
+
+                let frame = self.frames.pop().unwrap();
+
+                if self.frames.is_empty() {
+                    return Ok(ControlFlow::Exit);
+                }
+
+                // Clean up the stack (remove locals and arguments)
+                self.stack.truncate(frame.stack_base);
+
+                // Push return value
+                self.stack.push(return_value);
+
+                return Ok(ControlFlow::Return);
+            }
+            Op::AllocArray(n) => {
+                let mut elements = Vec::with_capacity(n);
+                for _ in 0..n {
+                    elements.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                elements.reverse();
+                let r = self.heap.alloc_array(elements);
+                self.stack.push(Value::Ptr(r));
+            }
+            Op::ArrayLen => {
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ptr().ok_or("runtime error: expected array or string")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+
+                let len = if let Some(arr) = obj.as_array() {
+                    arr.elements.len() as i64
+                } else if let Some(s) = obj.as_string() {
+                    s.value.chars().count() as i64
+                } else {
+                    return Err("runtime error: len expects array or string".to_string());
+                };
+                self.stack.push(Value::Int(len));
+            }
+            Op::ArrayGet => {
+                let index = self.pop_int()?;
+                let arr = self.stack.pop().ok_or("stack underflow")?;
+                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let arr = obj.as_array().ok_or("runtime error: expected array")?;
+
+                if index < 0 || index as usize >= arr.elements.len() {
+                    return Err(format!(
+                        "runtime error: array index {} out of bounds (length {})",
+                        index,
+                        arr.elements.len()
+                    ));
+                }
+
+                let value = arr.elements[index as usize];
+                self.stack.push(value);
+            }
+            Op::ArraySet => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let index = self.pop_int()?;
+                let arr = self.stack.pop().ok_or("stack underflow")?;
+                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+
+                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
+
+                if index < 0 || index as usize >= arr.elements.len() {
+                    return Err(format!(
+                        "runtime error: array index {} out of bounds (length {})",
+                        index,
+                        arr.elements.len()
+                    ));
+                }
+
+                arr.elements[index as usize] = value;
+            }
+            Op::ArrayPush => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let arr = self.stack.pop().ok_or("stack underflow")?;
+                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+
+                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
+                arr.elements.push(value);
+            }
+            Op::ArrayPop => {
+                let arr = self.stack.pop().ok_or("stack underflow")?;
+                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+
+                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
+
+                let value = arr.elements.pop().ok_or("runtime error: cannot pop from empty array")?;
+                self.stack.push(value);
+            }
+            Op::AllocObject(n) => {
+                let mut fields = HashMap::new();
+                for _ in 0..n {
+                    let value = self.stack.pop().ok_or("stack underflow")?;
+                    let key = self.stack.pop().ok_or("stack underflow")?;
+
+                    // Key should be a string
+                    let key_ref = key.as_ptr().ok_or("runtime error: object key must be a string")?;
+                    let key_obj = self.heap.get(key_ref).ok_or("runtime error: invalid reference")?;
+                    let key_str = key_obj
+                        .as_string()
+                        .ok_or("runtime error: object key must be a string")?;
+                    fields.insert(key_str.value.clone(), value);
+                }
+                let r = self.heap.alloc_object_map(fields);
+                self.stack.push(Value::Ptr(r));
+            }
+            Op::GetField(str_idx) => {
+                let obj = self.stack.pop().ok_or("stack underflow")?;
+                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+
+                let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
+
+                let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let obj = heap_obj.as_object().ok_or("runtime error: expected object")?;
+
+                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Nil);
+                self.stack.push(value);
+            }
+            Op::SetField(str_idx) => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let obj = self.stack.pop().ok_or("stack underflow")?;
+                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+
+                let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
+
+                let heap_obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let obj = heap_obj.as_object_mut().ok_or("runtime error: expected object")?;
+
+                obj.fields.insert(field_name, value);
+            }
+            Op::StringLen => {
+                let s = self.stack.pop().ok_or("stack underflow")?;
+                let r = s.as_ptr().ok_or("runtime error: expected string")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let s = obj.as_string().ok_or("runtime error: expected string")?;
+                self.stack.push(Value::Int(s.value.chars().count() as i64));
+            }
+            Op::StringConcat => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+
+                let a_str = self.value_to_string(&a)?;
+                let b_str = self.value_to_string(&b)?;
+
+                let result = format!("{}{}", a_str, b_str);
+                let r = self.heap.alloc_string(result);
+                self.stack.push(Value::Ptr(r));
+            }
+            Op::TypeOf => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let type_name = match &value {
+                    Value::Int(_) => "int",
+                    Value::Float(_) => "float",
+                    Value::Bool(_) => "bool",
+                    Value::Nil => "nil",
+                    Value::Ptr(r) => {
+                        if let Some(obj) = self.heap.get(*r) {
+                            match obj.obj_type() {
+                                super::ObjectType::String => "string",
+                                super::ObjectType::Array => "array",
+                                super::ObjectType::Object => "object",
+                            }
+                        } else {
+                            "unknown"
+                        }
+                    }
+                };
+                let r = self.heap.alloc_string(type_name.to_string());
+                self.stack.push(Value::Ptr(r));
+            }
+            Op::ToString => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let s = self.value_to_string(&value)?;
+                let r = self.heap.alloc_string(s);
+                self.stack.push(Value::Ptr(r));
+            }
+            Op::ParseInt => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let r = value.as_ptr().ok_or("runtime error: parse_int expects string")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let s = obj.as_string().ok_or("runtime error: parse_int expects string")?;
+                let n: i64 = s
+                    .value
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("runtime error: cannot parse '{}' as int", s.value))?;
+                self.stack.push(Value::Int(n));
+            }
+            Op::Throw => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let msg = self.value_to_string(&value)?;
+                return Err(format!("runtime error: {}", msg));
+            }
+            Op::TryBegin(handler_pc) => {
+                let frame = self.frames.last().unwrap();
+                self.try_frames.push(TryFrame {
+                    stack_depth: self.stack.len(),
+                    frame_depth: self.frames.len(),
+                    handler_pc,
+                    func_index: frame.func_index,
+                });
+            }
+            Op::TryEnd => {
+                self.try_frames.pop();
+            }
+            Op::Print => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let s = self.value_to_string(&value)?;
+                println!("{}", s);
+                // print returns the value it printed (for expression statements)
+                self.stack.push(value);
+            }
+            Op::GcHint(_bytes) => {
+                // Hint about upcoming allocation - might trigger GC
+                if self.heap.should_gc() {
+                    self.collect_garbage();
+                }
+            }
+        }
+
+        Ok(ControlFlow::Continue)
+    }
+
+    fn add(&mut self, a: Value, b: Value) -> Result<Value, String> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
+            (Value::Ptr(a), Value::Ptr(b)) => {
+                // String concatenation
+                let a_obj = self.heap.get(a).ok_or("runtime error: invalid reference")?;
+                let b_obj = self.heap.get(b).ok_or("runtime error: invalid reference")?;
+
+                if let (Some(a_str), Some(b_str)) = (a_obj.as_string(), b_obj.as_string()) {
+                    let result = format!("{}{}", a_str.value, b_str.value);
+                    let r = self.heap.alloc_string(result);
+                    return Ok(Value::Ptr(r));
+                }
+
+                Err("runtime error: cannot add these types".to_string())
+            }
+            _ => Err("runtime error: cannot add these types".to_string()),
+        }
+    }
+
+    fn sub(&self, a: Value, b: Value) -> Result<Value, String> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - b as f64)),
+            _ => Err("runtime error: cannot subtract these types".to_string()),
+        }
+    }
+
+    fn mul(&self, a: Value, b: Value) -> Result<Value, String> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
+            _ => Err("runtime error: cannot multiply these types".to_string()),
+        }
+    }
+
+    fn div(&self, a: Value, b: Value) -> Result<Value, String> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => {
+                if b == 0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                Ok(Value::Int(a / b))
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                Ok(Value::Float(a / b))
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                Ok(Value::Float(a as f64 / b))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                if b == 0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                Ok(Value::Float(a / b as f64))
+            }
+            _ => Err("runtime error: cannot divide these types".to_string()),
+        }
+    }
+
+    fn compare(&self, a: &Value, b: &Value) -> Result<i32, String> {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b) as i32),
+            (Value::Float(a), Value::Float(b)) => {
+                Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0))
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                let a = *a as f64;
+                Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0))
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                let b = *b as f64;
+                Ok(a.partial_cmp(&b).map(|o| o as i32).unwrap_or(0))
+            }
+            _ => Err("runtime error: cannot compare these types".to_string()),
+        }
+    }
+
+    fn values_equal(&self, a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
+            (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Nil, Value::Nil) => true,
+            (Value::Ptr(a_ref), Value::Ptr(b_ref)) => {
+                // Compare by content for strings
+                let a_obj = self.heap.get(*a_ref);
+                let b_obj = self.heap.get(*b_ref);
+
+                match (a_obj, b_obj) {
+                    (Some(a), Some(b)) => {
+                        if let (Some(a_str), Some(b_str)) = (a.as_string(), b.as_string()) {
+                            return a_str.value == b_str.value;
+                        }
+                        // For arrays and objects, compare by reference
+                        a_ref.index == b_ref.index
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn value_to_string(&self, value: &Value) -> Result<String, String> {
+        match value {
+            Value::Int(n) => Ok(n.to_string()),
+            Value::Float(f) => {
+                if f.fract() == 0.0 {
+                    Ok(format!("{}.0", f))
+                } else {
+                    Ok(f.to_string())
+                }
+            }
+            Value::Bool(b) => Ok(b.to_string()),
+            Value::Nil => Ok("nil".to_string()),
+            Value::Ptr(r) => {
+                let obj = self.heap.get(*r).ok_or("runtime error: invalid reference")?;
+                match obj {
+                    super::HeapObject::String(s) => Ok(s.value.clone()),
+                    super::HeapObject::Array(a) => {
+                        let mut parts = Vec::new();
+                        for elem in &a.elements {
+                            parts.push(self.value_to_string(elem)?);
+                        }
+                        Ok(format!("[{}]", parts.join(", ")))
+                    }
+                    super::HeapObject::Object(o) => {
+                        let mut parts = Vec::new();
+                        for (k, v) in &o.fields {
+                            parts.push(format!("{}: {}", k, self.value_to_string(v)?));
+                        }
+                        Ok(format!("{{{}}}", parts.join(", ")))
+                    }
+                }
+            }
+        }
+    }
+
     fn pop_int(&mut self) -> Result<i64, String> {
         let value = self.stack.pop().ok_or("stack underflow")?;
         value.as_int().ok_or_else(|| "expected integer".to_string())
+    }
+
+    fn handle_exception(&mut self, error: String, _chunk: &Chunk) -> Result<bool, String> {
+        // Look for a try frame that can handle this exception
+        while let Some(try_frame) = self.try_frames.pop() {
+            // Unwind call stack to the try frame's depth
+            while self.frames.len() > try_frame.frame_depth {
+                self.frames.pop();
+            }
+
+            // Restore stack to the try frame's depth
+            self.stack.truncate(try_frame.stack_depth);
+
+            // Push the error message as a string
+            let error_ref = self.heap.alloc_string(error.clone());
+            self.stack.push(Value::Ptr(error_ref));
+
+            // Jump to the handler
+            if let Some(frame) = self.frames.last_mut() {
+                if frame.func_index == try_frame.func_index {
+                    frame.pc = try_frame.handler_pc;
+                    return Ok(true);
+                }
+            }
+        }
+
+        // No handler found
+        Ok(false)
+    }
+
+    fn collect_garbage(&mut self) {
+        // Collect all roots from the stack
+        let roots: Vec<Value> = self.stack.clone();
+        self.heap.collect(&roots);
+    }
+}
+
+enum ControlFlow {
+    Continue,
+    Return,
+    Exit,
+}
+
+impl Default for VM {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -237,6 +703,24 @@ mod tests {
                 locals_count: 0,
                 code: ops,
             },
+            strings: vec![],
+        };
+
+        let mut vm = VM::new();
+        vm.run(&chunk)?;
+        Ok(vm.stack)
+    }
+
+    fn run_code_with_strings(ops: Vec<Op>, strings: Vec<String>) -> Result<Vec<Value>, String> {
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 0,
+                code: ops,
+            },
+            strings,
         };
 
         let mut vm = VM::new();
@@ -251,9 +735,27 @@ mod tests {
     }
 
     #[test]
+    fn test_push_float() {
+        let stack = run_code(vec![Op::PushFloat(3.14)]).unwrap();
+        assert_eq!(stack, vec![Value::Float(3.14)]);
+    }
+
+    #[test]
+    fn test_push_nil() {
+        let stack = run_code(vec![Op::PushNil]).unwrap();
+        assert_eq!(stack, vec![Value::Nil]);
+    }
+
+    #[test]
     fn test_add() {
         let stack = run_code(vec![Op::PushInt(1), Op::PushInt(2), Op::Add]).unwrap();
         assert_eq!(stack, vec![Value::Int(3)]);
+    }
+
+    #[test]
+    fn test_add_float() {
+        let stack = run_code(vec![Op::PushFloat(1.5), Op::PushFloat(2.5), Op::Add]).unwrap();
+        assert_eq!(stack, vec![Value::Float(4.0)]);
     }
 
     #[test]
@@ -292,5 +794,31 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::Int(2)]);
+    }
+
+    #[test]
+    fn test_array_operations() {
+        let stack = run_code(vec![
+            Op::PushInt(1),
+            Op::PushInt(2),
+            Op::PushInt(3),
+            Op::AllocArray(3),
+            Op::ArrayLen,
+        ])
+        .unwrap();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0], Value::Int(3));
+    }
+
+    #[test]
+    fn test_string_operations() {
+        let stack = run_code_with_strings(
+            vec![Op::PushString(0), Op::PushString(1), Op::StringConcat],
+            vec!["Hello, ".to_string(), "World!".to_string()],
+        )
+        .unwrap();
+        assert_eq!(stack.len(), 1);
+        // The result should be a string pointer
+        assert!(stack[0].is_ptr());
     }
 }

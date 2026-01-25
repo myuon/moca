@@ -27,6 +27,16 @@ pub enum ResolvedStatement {
         slot: usize,
         value: ResolvedExpr,
     },
+    IndexAssign {
+        object: ResolvedExpr,
+        index: ResolvedExpr,
+        value: ResolvedExpr,
+    },
+    FieldAssign {
+        object: ResolvedExpr,
+        field: String,
+        value: ResolvedExpr,
+    },
     If {
         condition: ResolvedExpr,
         then_block: Vec<ResolvedStatement>,
@@ -36,8 +46,21 @@ pub enum ResolvedStatement {
         condition: ResolvedExpr,
         body: Vec<ResolvedStatement>,
     },
+    ForIn {
+        slot: usize,
+        iterable: ResolvedExpr,
+        body: Vec<ResolvedStatement>,
+    },
     Return {
         value: Option<ResolvedExpr>,
+    },
+    Throw {
+        value: ResolvedExpr,
+    },
+    Try {
+        try_block: Vec<ResolvedStatement>,
+        catch_slot: usize,
+        catch_block: Vec<ResolvedStatement>,
     },
     Expr {
         expr: ResolvedExpr,
@@ -47,8 +70,25 @@ pub enum ResolvedStatement {
 #[derive(Debug, Clone)]
 pub enum ResolvedExpr {
     Int(i64),
+    Float(f64),
     Bool(bool),
+    Str(String),
+    Nil,
     Local(usize),
+    Array {
+        elements: Vec<ResolvedExpr>,
+    },
+    Object {
+        fields: Vec<(String, ResolvedExpr)>,
+    },
+    Index {
+        object: Box<ResolvedExpr>,
+        index: Box<ResolvedExpr>,
+    },
+    Field {
+        object: Box<ResolvedExpr>,
+        field: String,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<ResolvedExpr>,
@@ -80,7 +120,15 @@ impl<'a> Resolver<'a> {
         Self {
             filename,
             functions: HashMap::new(),
-            builtins: vec!["print".to_string()],
+            builtins: vec![
+                "print".to_string(),
+                "len".to_string(),
+                "push".to_string(),
+                "pop".to_string(),
+                "type_of".to_string(),
+                "to_string".to_string(),
+                "parse_int".to_string(),
+            ],
         }
     }
 
@@ -241,18 +289,127 @@ impl<'a> Resolver<'a> {
                 let expr = self.resolve_expr(expr, scope)?;
                 Ok(ResolvedStatement::Expr { expr })
             }
+            Statement::IndexAssign {
+                object,
+                index,
+                value,
+                ..
+            } => {
+                let object = self.resolve_expr(object, scope)?;
+                let index = self.resolve_expr(index, scope)?;
+                let value = self.resolve_expr(value, scope)?;
+                Ok(ResolvedStatement::IndexAssign {
+                    object,
+                    index,
+                    value,
+                })
+            }
+            Statement::FieldAssign {
+                object,
+                field,
+                value,
+                ..
+            } => {
+                let object = self.resolve_expr(object, scope)?;
+                let value = self.resolve_expr(value, scope)?;
+                Ok(ResolvedStatement::FieldAssign {
+                    object,
+                    field,
+                    value,
+                })
+            }
+            Statement::ForIn {
+                var, iterable, body, ..
+            } => {
+                let iterable = self.resolve_expr(iterable, scope)?;
+
+                scope.enter_scope();
+                // Declare loop variable as mutable within the loop
+                let slot = scope.declare(var, true);
+                // Allocate 2 hidden slots for __idx and __arr used by codegen
+                let _idx_slot = scope.declare("__for_idx".to_string(), true);
+                let _arr_slot = scope.declare("__for_arr".to_string(), true);
+                let body_resolved = self.resolve_statements(body.statements, scope)?;
+                scope.exit_scope();
+
+                Ok(ResolvedStatement::ForIn {
+                    slot,
+                    iterable,
+                    body: body_resolved,
+                })
+            }
+            Statement::Throw { value, .. } => {
+                let value = self.resolve_expr(value, scope)?;
+                Ok(ResolvedStatement::Throw { value })
+            }
+            Statement::Try {
+                try_block,
+                catch_var,
+                catch_block,
+                ..
+            } => {
+                scope.enter_scope();
+                let try_resolved = self.resolve_statements(try_block.statements, scope)?;
+                scope.exit_scope();
+
+                scope.enter_scope();
+                let catch_slot = scope.declare(catch_var, false);
+                let catch_resolved = self.resolve_statements(catch_block.statements, scope)?;
+                scope.exit_scope();
+
+                Ok(ResolvedStatement::Try {
+                    try_block: try_resolved,
+                    catch_slot,
+                    catch_block: catch_resolved,
+                })
+            }
         }
     }
 
     fn resolve_expr(&self, expr: Expr, scope: &mut Scope) -> Result<ResolvedExpr, String> {
         match expr {
             Expr::Int { value, .. } => Ok(ResolvedExpr::Int(value)),
+            Expr::Float { value, .. } => Ok(ResolvedExpr::Float(value)),
             Expr::Bool { value, .. } => Ok(ResolvedExpr::Bool(value)),
+            Expr::Str { value, .. } => Ok(ResolvedExpr::Str(value)),
+            Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
             Expr::Ident { name, span } => {
                 let (slot, _) = scope.lookup(&name).ok_or_else(|| {
                     self.error(&format!("undefined variable '{}'", name), span)
                 })?;
                 Ok(ResolvedExpr::Local(slot))
+            }
+            Expr::Array { elements, .. } => {
+                let resolved: Vec<_> = elements
+                    .into_iter()
+                    .map(|e| self.resolve_expr(e, scope))
+                    .collect::<Result<_, _>>()?;
+                Ok(ResolvedExpr::Array { elements: resolved })
+            }
+            Expr::Object { fields, .. } => {
+                let resolved: Vec<_> = fields
+                    .into_iter()
+                    .map(|(name, expr)| {
+                        let resolved_expr = self.resolve_expr(expr, scope)?;
+                        Ok((name, resolved_expr))
+                    })
+                    .collect::<Result<_, String>>()?;
+                Ok(ResolvedExpr::Object { fields: resolved })
+            }
+            Expr::Index { object, index, .. } => {
+                let object = self.resolve_expr(*object, scope)?;
+                let index = self.resolve_expr(*index, scope)?;
+                Ok(ResolvedExpr::Index {
+                    object: Box::new(object),
+                    index: Box::new(index),
+                })
+            }
+            Expr::Field { object, field, .. } => {
+                let object = self.resolve_expr(*object, scope)?;
+                Ok(ResolvedExpr::Field {
+                    object: Box::new(object),
+                    field,
+                })
             }
             Expr::Unary { op, operand, .. } => {
                 let operand = self.resolve_expr(*operand, scope)?;

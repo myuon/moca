@@ -43,6 +43,18 @@ pub enum Statement {
         value: Expr,
         span: Span,
     },
+    IndexAssign {
+        object: Expr,
+        index: Expr,
+        value: Expr,
+        span: Span,
+    },
+    FieldAssign {
+        object: Expr,
+        field: String,
+        value: Expr,
+        span: Span,
+    },
     If {
         condition: Expr,
         then_block: Block,
@@ -54,8 +66,24 @@ pub enum Statement {
         body: Block,
         span: Span,
     },
+    ForIn {
+        var: String,
+        iterable: Expr,
+        body: Block,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
+        span: Span,
+    },
+    Throw {
+        value: Expr,
+        span: Span,
+    },
+    Try {
+        try_block: Block,
+        catch_var: String,
+        catch_block: Block,
         span: Span,
     },
     Expr {
@@ -71,12 +99,41 @@ pub enum Expr {
         value: i64,
         span: Span,
     },
+    Float {
+        value: f64,
+        span: Span,
+    },
     Bool {
         value: bool,
         span: Span,
     },
+    Str {
+        value: String,
+        span: Span,
+    },
+    Nil {
+        span: Span,
+    },
     Ident {
         name: String,
+        span: Span,
+    },
+    Array {
+        elements: Vec<Expr>,
+        span: Span,
+    },
+    Object {
+        fields: Vec<(String, Expr)>,
+        span: Span,
+    },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
+    Field {
+        object: Box<Expr>,
+        field: String,
         span: Span,
     },
     Unary {
@@ -101,8 +158,15 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Expr::Int { span, .. } => *span,
+            Expr::Float { span, .. } => *span,
             Expr::Bool { span, .. } => *span,
+            Expr::Str { span, .. } => *span,
+            Expr::Nil { span, .. } => *span,
             Expr::Ident { span, .. } => *span,
+            Expr::Array { span, .. } => *span,
+            Expr::Object { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
+            Expr::Field { span, .. } => *span,
             Expr::Unary { span, .. } => *span,
             Expr::Binary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
