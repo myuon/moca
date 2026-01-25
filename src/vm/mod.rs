@@ -4,6 +4,7 @@ mod heap;
 mod vm;
 pub mod debug;
 pub mod ic;
+pub mod concurrent_gc;
 
 pub use value::Value;
 pub use ops::Op;
@@ -11,6 +12,7 @@ pub use heap::{GcRef, Heap, HeapObject, MicaArray, MicaObject, MicaString, Objec
 pub use vm::VM;
 pub use debug::{DebugInfo, FunctionDebugInfo, LineTable, LocalVarInfo};
 pub use ic::{InlineCache, InlineCacheTable, CacheState};
+pub use concurrent_gc::{ConcurrentGc, GcPhase, GcStats};
 
 /// A compiled function.
 #[derive(Debug, Clone)]
