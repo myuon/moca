@@ -1,7 +1,6 @@
 //! VM performance benchmarks comparing interpreter vs quickening/JIT modes.
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use std::io::Write;
 use std::process::Command;
 use std::time::Duration;
 
@@ -154,8 +153,9 @@ fn bench_interpreter_vs_quickening(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(5));
 
-    // Sum loop benchmark
-    let source = sum_loop_source(10000);
+    // Sum loop benchmark (target: ~500ms)
+    // 300000 iterations took ~55ms, so 2500000 should take ~500ms
+    let source = sum_loop_source(2_500_000);
     group.bench_function("sum_loop_interpreter", |b| {
         b.iter(|| run_mica_timed(black_box(&source), &["--jit=off"]))
     });
@@ -163,8 +163,9 @@ fn bench_interpreter_vs_quickening(c: &mut Criterion) {
         b.iter(|| run_mica_timed(black_box(&source), &["--jit=on"]))
     });
 
-    // Nested loop benchmark
-    let source = nested_loop_source(100);
+    // Nested loop benchmark (target: ~500ms)
+    // 550x550 took ~55ms, so 1600x1600 should take ~500ms
+    let source = nested_loop_source(1600);
     group.bench_function("nested_loop_interpreter", |b| {
         b.iter(|| run_mica_timed(black_box(&source), &["--jit=off"]))
     });
@@ -172,8 +173,9 @@ fn bench_interpreter_vs_quickening(c: &mut Criterion) {
         b.iter(|| run_mica_timed(black_box(&source), &["--jit=on"]))
     });
 
-    // Hot function benchmark (many calls to same function)
-    let source = hot_function_source(1000, 100);
+    // Hot function benchmark (target: ~500ms)
+    // 15000x100 took ~210ms, so 35000x100 should take ~500ms
+    let source = hot_function_source(35_000, 100);
     group.bench_function("hot_function_interpreter", |b| {
         b.iter(|| run_mica_timed(black_box(&source), &["--jit=off"]))
     });
@@ -187,8 +189,11 @@ fn bench_interpreter_vs_quickening(c: &mut Criterion) {
 fn bench_fibonacci(c: &mut Criterion) {
     let mut group = c.benchmark_group("fibonacci");
     group.sample_size(10);
+    group.measurement_time(Duration::from_secs(5));
 
-    for n in [15, 20, 25] {
+    // fib(25) took ~45ms, fib grows exponentially (~1.6x per n increase)
+    // fib(30) should be ~500ms, fib(32) should be ~1.3s
+    for n in [28, 30, 32] {
         let source = fibonacci_source(n);
         group.bench_with_input(BenchmarkId::new("interpreter", n), &source, |b, s| {
             b.iter(|| run_mica_timed(black_box(s), &["--jit=off"]))
@@ -204,8 +209,10 @@ fn bench_fibonacci(c: &mut Criterion) {
 fn bench_array_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_operations");
     group.sample_size(10);
+    group.measurement_time(Duration::from_secs(5));
 
-    for n in [100, 500, 1000] {
+    // 50000 elements took ~35ms, so we need larger sizes for ~500ms
+    for n in [100_000, 300_000, 500_000] {
         let source = array_bench_source(n);
         group.bench_with_input(BenchmarkId::new("interpreter", n), &source, |b, s| {
             b.iter(|| run_mica_timed(black_box(s), &["--jit=off"]))
