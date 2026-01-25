@@ -9,8 +9,19 @@ pub struct Program {
 /// Top-level items in a program.
 #[derive(Debug, Clone)]
 pub enum Item {
+    Import(Import),
     FnDef(FnDef),
     Statement(Statement),
+}
+
+/// An import statement.
+#[derive(Debug, Clone)]
+pub struct Import {
+    /// Module path segments (e.g., ["utils", "http"] for `import utils.http;`)
+    pub path: Vec<String>,
+    /// Whether it's a relative import (starts with ./)
+    pub relative: bool,
+    pub span: Span,
 }
 
 /// A function definition.

@@ -17,6 +17,7 @@ pub enum TokenKind {
     Try,
     Catch,
     Throw,
+    Import,
 
     // Literals
     Int(i64),
@@ -364,6 +365,7 @@ impl<'a> Lexer<'a> {
             "try" => TokenKind::Try,
             "catch" => TokenKind::Catch,
             "throw" => TokenKind::Throw,
+            "import" => TokenKind::Import,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }

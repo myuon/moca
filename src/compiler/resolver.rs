@@ -139,6 +139,10 @@ impl<'a> Resolver<'a> {
 
         for item in program.items {
             match item {
+                Item::Import(_import) => {
+                    // Imports are handled in module resolution phase
+                    // For now, we just skip them during local resolution
+                }
                 Item::FnDef(fn_def) => {
                     let index = func_defs.len();
                     if self.functions.contains_key(&fn_def.name) {

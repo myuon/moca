@@ -28,11 +28,40 @@ impl<'a> Parser<'a> {
     }
 
     fn item(&mut self) -> Result<Item, String> {
-        if self.check(&TokenKind::Fun) {
+        if self.check(&TokenKind::Import) {
+            Ok(Item::Import(self.import_stmt()?))
+        } else if self.check(&TokenKind::Fun) {
             Ok(Item::FnDef(self.fn_def()?))
         } else {
             Ok(Item::Statement(self.statement()?))
         }
+    }
+
+    fn import_stmt(&mut self) -> Result<Import, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Import)?;
+
+        let mut path = Vec::new();
+        let mut relative = false;
+
+        // Check for relative import: import .local_mod;
+        if self.match_token(&TokenKind::Dot) {
+            relative = true;
+        }
+
+        // Parse module path: utils.http or local_mod
+        path.push(self.expect_ident()?);
+        while self.match_token(&TokenKind::Dot) {
+            path.push(self.expect_ident()?);
+        }
+
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Import {
+            path,
+            relative,
+            span,
+        })
     }
 
     fn fn_def(&mut self) -> Result<FnDef, String> {
@@ -923,6 +952,42 @@ mod tests {
                 assert!(matches!(value, Expr::Str { .. }));
             }
             _ => panic!("expected throw statement"),
+        }
+    }
+
+    #[test]
+    fn test_import_simple() {
+        let program = parse("import utils;").unwrap();
+        match &program.items[0] {
+            Item::Import(Import { path, relative, .. }) => {
+                assert_eq!(path, &["utils"]);
+                assert!(!relative);
+            }
+            _ => panic!("expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_import_nested() {
+        let program = parse("import utils.http.client;").unwrap();
+        match &program.items[0] {
+            Item::Import(Import { path, relative, .. }) => {
+                assert_eq!(path, &["utils", "http", "client"]);
+                assert!(!relative);
+            }
+            _ => panic!("expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_import_relative() {
+        let program = parse("import .local_mod;").unwrap();
+        match &program.items[0] {
+            Item::Import(Import { path, relative, .. }) => {
+                assert_eq!(path, &["local_mod"]);
+                assert!(relative);
+            }
+            _ => panic!("expected import statement"),
         }
     }
 }
