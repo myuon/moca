@@ -97,4 +97,11 @@ pub enum Op {
 
     // GC hint
     GcHint(usize), // Hint about upcoming allocation size
+
+    // Thread operations
+    ThreadSpawn(usize), // Spawn thread with function at given index, push handle
+    ChannelCreate,      // Create channel, push [sender, receiver] array
+    ChannelSend,        // stack: [channel_id, value] -> []
+    ChannelRecv,        // stack: [channel_id] -> [value]
+    ThreadJoin,         // stack: [handle] -> [result]
 }

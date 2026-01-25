@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::thread;
 
 use crate::vm::{Chunk, Function, Heap, Op, Value};
 use crate::vm::ic::InlineCacheTable;
+use crate::vm::threads::{Channel, ThreadSpawner};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -53,6 +56,10 @@ pub struct VM {
     trace_jit: bool,
     /// GC statistics
     gc_stats: VmGcStats,
+    /// Thread spawner for managing spawned threads
+    thread_spawner: ThreadSpawner,
+    /// Channels for inter-thread communication (id -> channel)
+    channels: Vec<Arc<Channel<Value>>>,
 }
 
 impl VM {
@@ -68,6 +75,8 @@ impl VM {
             jit_threshold: 1000,
             trace_jit: false,
             gc_stats: VmGcStats::default(),
+            thread_spawner: ThreadSpawner::new(),
+            channels: Vec::new(),
         }
     }
 
@@ -219,6 +228,65 @@ impl VM {
         }
 
         Ok(())
+    }
+
+    /// Run a chunk and return the result value (used for thread execution).
+    pub fn run_and_get_result(&mut self, chunk: &Chunk) -> Result<Value, String> {
+        // Start with main
+        self.frames.push(Frame {
+            func_index: usize::MAX, // Marker for main
+            pc: 0,
+            stack_base: 0,
+        });
+
+        let mut result = Value::Nil;
+
+        loop {
+            // Check if GC should run
+            if self.heap.should_gc() {
+                self.collect_garbage();
+            }
+
+            let frame = self.frames.last_mut().unwrap();
+            let func = if frame.func_index == usize::MAX {
+                &chunk.main
+            } else {
+                &chunk.functions[frame.func_index]
+            };
+
+            if frame.pc >= func.code.len() {
+                // End of function without explicit return
+                break;
+            }
+
+            let op = func.code[frame.pc].clone();
+            frame.pc += 1;
+
+            let control = self.execute_op(op, chunk);
+            match control {
+                Ok(ControlFlow::Continue) => {}
+                Ok(ControlFlow::Return) => {
+                    if self.frames.is_empty() {
+                        // Main returned - capture the return value from stack
+                        result = self.stack.pop().unwrap_or(Value::Nil);
+                        break;
+                    }
+                }
+                Ok(ControlFlow::Exit) => {
+                    // Capture the return value before exiting
+                    result = self.stack.pop().unwrap_or(Value::Nil);
+                    break;
+                }
+                Err(e) => {
+                    // Try to handle exception
+                    if !self.handle_exception(e.clone(), chunk)? {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     fn execute_op(&mut self, op: Op, chunk: &Chunk) -> Result<ControlFlow, String> {
@@ -387,6 +455,8 @@ impl VM {
                 let frame = self.frames.pop().unwrap();
 
                 if self.frames.is_empty() {
+                    // Push the return value back so run_and_get_result can retrieve it
+                    self.stack.push(return_value);
                     return Ok(ControlFlow::Exit);
                 }
 
@@ -786,6 +856,81 @@ impl VM {
                 let obj = heap_obj.as_object_mut().ok_or("runtime error: expected object")?;
 
                 obj.fields.insert(field_name, value);
+            }
+
+            // Thread operations
+            Op::ThreadSpawn(func_index) => {
+                // Clone the chunk for the new thread
+                let chunk_clone = chunk.clone();
+
+                // Spawn a new thread that creates a VM and runs the function
+                let thread_id = self.thread_spawner.spawn(move || {
+                    let mut vm = VM::new();
+
+                    // Create a wrapper main that calls the target function and captures return
+                    // The wrapper just calls the function and returns its result
+                    let wrapper_main = Function {
+                        name: "__thread_main__".to_string(),
+                        arity: 0,
+                        locals_count: 1, // To store return value
+                        code: vec![
+                            Op::Call(func_index, 0), // Call the target function (must be 0-arity)
+                            Op::Ret,                 // Return the result
+                        ],
+                    };
+
+                    let thread_chunk = Chunk {
+                        functions: chunk_clone.functions.clone(),
+                        main: wrapper_main,
+                        strings: chunk_clone.strings.clone(),
+                        debug: None,
+                    };
+
+                    match vm.run_and_get_result(&thread_chunk) {
+                        Ok(result) => result,
+                        Err(_e) => Value::Nil,
+                    }
+                });
+
+                // Push the thread handle ID as the result
+                self.stack.push(Value::Int(thread_id as i64));
+            }
+            Op::ChannelCreate => {
+                // Create a new channel and return [sender_id, receiver_id]
+                // For simplicity, we use the same id for both (same underlying channel)
+                let channel = Channel::new();
+                let id = self.channels.len();
+                self.channels.push(channel);
+
+                // Create an array with [id, id] (sender and receiver share the channel)
+                let arr = self.heap.alloc_array(vec![Value::Int(id as i64), Value::Int(id as i64)]);
+                self.stack.push(Value::Ptr(arr));
+            }
+            Op::ChannelSend => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let channel_id = self.pop_int()? as usize;
+
+                let channel = self.channels.get(channel_id)
+                    .ok_or_else(|| format!("runtime error: channel {} not found", channel_id))?
+                    .clone();
+
+                channel.send(value).map_err(|_| "runtime error: channel closed")?;
+            }
+            Op::ChannelRecv => {
+                let channel_id = self.pop_int()? as usize;
+
+                let channel = self.channels.get(channel_id)
+                    .ok_or_else(|| format!("runtime error: channel {} not found", channel_id))?
+                    .clone();
+
+                let value = channel.recv().unwrap_or(Value::Nil);
+                self.stack.push(value);
+            }
+            Op::ThreadJoin => {
+                let thread_id = self.pop_int()? as usize;
+
+                let result = self.thread_spawner.join(thread_id)?;
+                self.stack.push(result);
             }
         }
 

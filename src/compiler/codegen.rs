@@ -477,8 +477,46 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ParseInt);
                     }
+                    // Thread builtins
+                    "spawn" => {
+                        // spawn is handled specially in resolver as SpawnFunc
+                        return Err("spawn should be resolved to SpawnFunc".to_string());
+                    }
+                    "channel" => {
+                        if !args.is_empty() {
+                            return Err("channel takes no arguments".to_string());
+                        }
+                        ops.push(Op::ChannelCreate);
+                    }
+                    "send" => {
+                        if args.len() != 2 {
+                            return Err("send takes exactly 2 arguments (channel_id, value)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::ChannelSend);
+                        // send returns nil
+                        ops.push(Op::PushNil);
+                    }
+                    "recv" => {
+                        if args.len() != 1 {
+                            return Err("recv takes exactly 1 argument (channel_id)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ChannelRecv);
+                    }
+                    "join" => {
+                        if args.len() != 1 {
+                            return Err("join takes exactly 1 argument (handle)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ThreadJoin);
+                    }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }
+            }
+            ResolvedExpr::SpawnFunc { func_index } => {
+                ops.push(Op::ThreadSpawn(*func_index));
             }
         }
 

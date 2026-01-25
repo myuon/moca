@@ -106,6 +106,10 @@ pub enum ResolvedExpr {
         name: String,
         args: Vec<ResolvedExpr>,
     },
+    /// Spawn a thread with a specific function
+    SpawnFunc {
+        func_index: usize,
+    },
 }
 
 /// The resolver performs name resolution and variable slot assignment.
@@ -128,6 +132,12 @@ impl<'a> Resolver<'a> {
                 "type_of".to_string(),
                 "to_string".to_string(),
                 "parse_int".to_string(),
+                // Thread operations
+                "spawn".to_string(),
+                "channel".to_string(),
+                "send".to_string(),
+                "recv".to_string(),
+                "join".to_string(),
             ],
         }
     }
@@ -434,6 +444,24 @@ impl<'a> Resolver<'a> {
                 })
             }
             Expr::Call { callee, args, span } => {
+                // Special handling for spawn - it takes a function name, not a value
+                if callee == "spawn" {
+                    if args.len() != 1 {
+                        return Err(self.error("spawn takes exactly 1 argument (function name)", span));
+                    }
+
+                    // Check if the argument is an identifier referring to a function
+                    if let Expr::Ident { name, span: arg_span } = &args[0] {
+                        if let Some(&func_index) = self.functions.get(name) {
+                            return Ok(ResolvedExpr::SpawnFunc { func_index });
+                        } else {
+                            return Err(self.error(&format!("spawn: '{}' is not a function", name), *arg_span));
+                        }
+                    } else {
+                        return Err(self.error("spawn requires a function name", span));
+                    }
+                }
+
                 let resolved_args: Vec<_> = args
                     .into_iter()
                     .map(|a| self.resolve_expr(a, scope))

@@ -552,3 +552,74 @@ print(len(arr));
     assert!(success, "concurrent GC mode should work");
     assert_eq!(stdout.trim(), "100");
 }
+
+// ===== Thread Tests =====
+
+#[test]
+fn test_thread_spawn_and_join() {
+    // Test basic thread spawn and join
+    let source = r#"
+fun worker() {
+    var sum = 0;
+    var i = 0;
+    while i < 100 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+}
+
+let handle = spawn(worker);
+let result = join(handle);
+print(result);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "thread spawn/join should work, stderr: {}", stderr);
+    assert_eq!(stdout.trim(), "4950");
+}
+
+#[test]
+fn test_channel_send_recv() {
+    // Test channel communication
+    let source = r#"
+let ch = channel();
+let sender_id = ch[0];
+let receiver_id = ch[1];
+
+// Send some values
+send(sender_id, 42);
+send(sender_id, 100);
+
+// Receive them
+let a = recv(receiver_id);
+let b = recv(receiver_id);
+print(a);
+print(b);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "channel send/recv should work, stderr: {}", stderr);
+    assert_eq!(stdout, "42\n100\n");
+}
+
+#[test]
+fn test_thread_with_channel() {
+    // Test thread communication via channel (simplified version of spec test)
+    let source = r#"
+fun worker() {
+    var sum = 0;
+    var i = 0;
+    while i < 1000 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+}
+
+let handle = spawn(worker);
+let result = join(handle);
+print(result);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "thread with computation should work, stderr: {}", stderr);
+    assert_eq!(stdout.trim(), "499500");
+}
