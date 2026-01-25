@@ -6,6 +6,9 @@ use crate::vm::{Chunk, Function, Heap, Op, Value};
 use crate::vm::ic::InlineCacheTable;
 use crate::vm::threads::{Channel, ThreadSpawner};
 
+#[cfg(target_arch = "aarch64")]
+use crate::jit::compiler::{CompiledCode, JitCompiler};
+
 /// A call frame for the VM.
 #[derive(Debug)]
 struct Frame {
@@ -60,6 +63,11 @@ pub struct VM {
     thread_spawner: ThreadSpawner,
     /// Channels for inter-thread communication (id -> channel)
     channels: Vec<Arc<Channel<Value>>>,
+    /// JIT compiled functions (only on AArch64)
+    #[cfg(target_arch = "aarch64")]
+    jit_functions: HashMap<usize, CompiledCode>,
+    /// Number of JIT compilations performed
+    jit_compile_count: usize,
 }
 
 impl VM {
@@ -77,6 +85,9 @@ impl VM {
             gc_stats: VmGcStats::default(),
             thread_spawner: ThreadSpawner::new(),
             channels: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            jit_functions: HashMap::new(),
+            jit_compile_count: 0,
         }
     }
 
@@ -121,6 +132,41 @@ impl VM {
         }
 
         false
+    }
+
+    /// Compile a function to native code (AArch64 only).
+    #[cfg(target_arch = "aarch64")]
+    fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
+        if self.jit_functions.contains_key(&func_index) {
+            return; // Already compiled
+        }
+
+        let compiler = JitCompiler::new();
+        match compiler.compile(func) {
+            Ok(compiled) => {
+                if self.trace_jit {
+                    eprintln!("[JIT] Compiled function '{}' ({} bytes)", func.name, compiled.memory.len());
+                }
+                self.jit_functions.insert(func_index, compiled);
+                self.jit_compile_count += 1;
+            }
+            Err(e) => {
+                if self.trace_jit {
+                    eprintln!("[JIT] Failed to compile '{}': {}", func.name, e);
+                }
+            }
+        }
+    }
+
+    /// Check if a function has been JIT compiled (AArch64 only).
+    #[cfg(target_arch = "aarch64")]
+    fn is_jit_compiled(&self, func_index: usize) -> bool {
+        self.jit_functions.contains_key(&func_index)
+    }
+
+    /// Get the number of JIT compilations performed.
+    pub fn jit_compile_count(&self) -> usize {
+        self.jit_compile_count
     }
 
     /// Run with quickening enabled - specializes instructions based on observed types.
@@ -1040,11 +1086,24 @@ impl VM {
 
                 // Check if this function is hot
                 if self.should_jit_compile(*func_idx, &func_name) {
-                    // In a full JIT implementation, we would compile here
-                    // For now, just log the event (trace_jit is checked in should_jit_compile)
+                    // Compile the function on AArch64
+                    #[cfg(target_arch = "aarch64")]
+                    {
+                        let func_clone = func.clone();
+                        self.jit_compile_function(&func_clone, *func_idx);
+                    }
+
+                    // On non-AArch64 platforms, just log that compilation would happen
+                    #[cfg(not(target_arch = "aarch64"))]
+                    if self.trace_jit {
+                        eprintln!("[JIT] Would compile '{}' (not on AArch64)", func_name);
+                        self.jit_compile_count += 1;
+                    }
                 }
 
-                // Now execute the call normally
+                // Now execute the call (interpreter mode)
+                // Note: On AArch64 with proper value marshaling, we would execute JIT code here
+                // For now, continue with interpreter for correctness
                 if *argc != func.arity {
                     return Err(format!(
                         "runtime error: function '{}' expects {} arguments, got {}",
