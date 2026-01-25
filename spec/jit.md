@@ -1,3 +1,8 @@
+---
+title: JIT Specification
+description: JIT コンパイルと実行時最適化機能の仕様。Tier 0 インタプリタと Tier 1 ベースライン JIT の2段階実行モデル。
+---
+
 # Mica JIT Specification
 
 This document defines the JIT compilation and runtime optimization features.

@@ -1,3 +1,8 @@
+---
+title: VM Specification
+description: 仮想マシンアーキテクチャの仕様。バイトコード命令セット、64ビットタグ付き値表現、Mark-Sweep GC を定義。
+---
+
 # Mica VM Specification
 
 This document defines the Virtual Machine architecture including bytecode, value representation, and garbage collection.
