@@ -73,9 +73,21 @@ impl<'a> Parser<'a> {
 
         let mut params = Vec::new();
         if !self.check(&TokenKind::RParen) {
-            params.push(self.expect_ident()?);
+            let param_span = self.current_span();
+            let param_name = self.expect_ident()?;
+            params.push(Param {
+                name: param_name,
+                type_annotation: None,
+                span: param_span,
+            });
             while self.match_token(&TokenKind::Comma) {
-                params.push(self.expect_ident()?);
+                let param_span = self.current_span();
+                let param_name = self.expect_ident()?;
+                params.push(Param {
+                    name: param_name,
+                    type_annotation: None,
+                    span: param_span,
+                });
             }
         }
         self.expect(&TokenKind::RParen)?;
@@ -85,6 +97,7 @@ impl<'a> Parser<'a> {
         Ok(FnDef {
             name,
             params,
+            return_type: None,
             body,
             span,
         })
@@ -141,6 +154,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Let {
             name,
             mutable: false,
+            type_annotation: None,
             init,
             span,
         })
@@ -158,6 +172,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Let {
             name,
             mutable: true,
+            type_annotation: None,
             init,
             span,
         })
@@ -755,7 +770,8 @@ mod tests {
         match &program.items[0] {
             Item::FnDef(FnDef { name, params, .. }) => {
                 assert_eq!(name, "add");
-                assert_eq!(params, &["a", "b"]);
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                assert_eq!(param_names, vec!["a", "b"]);
             }
             _ => panic!("expected function definition"),
         }

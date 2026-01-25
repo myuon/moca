@@ -65,16 +65,14 @@ impl SymbolTable {
             .push(info);
 
         // Add parameters as definitions
-        // Note: parameters don't have their own spans in the current AST,
-        // so we use the function span as an approximation
         for param in &fn_def.params {
             let info = SymbolInfo {
-                name: param.clone(),
+                name: param.name.clone(),
                 kind: SymbolKind::Parameter,
-                def_span: fn_def.span,
+                def_span: param.span,
             };
             self.definitions
-                .entry(param.clone())
+                .entry(param.name.clone())
                 .or_default()
                 .push(info);
         }

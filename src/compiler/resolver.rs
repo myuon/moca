@@ -191,15 +191,16 @@ impl<'a> Resolver<'a> {
         let mut scope = Scope::new();
 
         // Add parameters to scope
-        for param in &fn_def.params {
-            scope.declare(param.clone(), false);
+        let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
+        for param_name in &param_names {
+            scope.declare(param_name.clone(), false);
         }
 
         let body = self.resolve_statements(fn_def.body.statements, &mut scope)?;
 
         Ok(ResolvedFunction {
             name: fn_def.name,
-            params: fn_def.params,
+            params: param_names,
             locals_count: scope.locals_count,
             body,
         })
@@ -228,6 +229,7 @@ impl<'a> Resolver<'a> {
             Statement::Let {
                 name,
                 mutable,
+                type_annotation: _,
                 init,
                 span: _,
             } => {
