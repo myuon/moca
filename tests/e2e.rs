@@ -48,7 +48,7 @@ print(y);
 #[test]
 fn test_control_flow() {
     let source = r#"
-let mut i = 0;
+var i = 0;
 while i < 5 {
     if i % 2 == 0 {
         print(i);
@@ -63,8 +63,8 @@ while i < 5 {
 #[test]
 fn test_fizzbuzz() {
     let source = r#"
-fn fizzbuzz(n) {
-    let mut i = 1;
+fun fizzbuzz(n) {
+    var i = 1;
     while i <= n {
         if i % 15 == 0 {
             print(-3);
@@ -89,14 +89,14 @@ fizzbuzz(15);
 #[test]
 fn test_fibonacci() {
     let source = r#"
-fn fib(n) {
+fun fib(n) {
     if n <= 1 {
         return n;
     }
     return fib(n - 1) + fib(n - 2);
 }
 
-let mut i = 0;
+var i = 0;
 while i < 10 {
     print(fib(i));
     i = i + 1;
@@ -110,7 +110,7 @@ while i < 10 {
 #[test]
 fn test_factorial() {
     let source = r#"
-fn fact(n) {
+fun fact(n) {
     if n <= 1 {
         return 1;
     }

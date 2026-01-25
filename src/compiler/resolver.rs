@@ -390,13 +390,13 @@ mod tests {
 
     #[test]
     fn test_mutable_assignment() {
-        let result = resolve("let mut x = 1; x = 2;");
+        let result = resolve("var x = 1; x = 2;");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_function_resolution() {
-        let program = resolve("fn add(a, b) { return a + b; } let r = add(1, 2);").unwrap();
+        let program = resolve("fun add(a, b) { return a + b; } let r = add(1, 2);").unwrap();
         assert_eq!(program.functions.len(), 1);
         assert_eq!(program.functions[0].name, "add");
     }

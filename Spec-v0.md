@@ -61,13 +61,13 @@
 let x = 42;
 
 // 変数宣言（ミュータブル）
-let mut y = 0;
+var y = 0;
 
-// 代入（mut 変数のみ）
+// 代入（var 変数のみ）
 y = y + 1;
 
 // 関数定義
-fn add(a, b) {
+fun add(a, b) {
     return a + b;
 }
 
@@ -95,7 +95,7 @@ print(42);
 
 | カテゴリ | トークン |
 |----------|----------|
-| キーワード | `let`, `mut`, `fn`, `if`, `else`, `while`, `return`, `true`, `false` |
+| キーワード | `let`, `var`, `fun`, `if`, `else`, `while`, `return`, `true`, `false` |
 | リテラル | 整数（`0`, `42`, `-1`）, bool（`true`, `false`） |
 | 識別子 | `[a-zA-Z_][a-zA-Z0-9_]*` |
 | 演算子 | `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!` |
@@ -118,19 +118,21 @@ print(42);
 program     = { item } ;
 item        = fn_def | statement ;
 
-fn_def      = "fn" IDENT "(" [ params ] ")" block ;
+fn_def      = "fun" IDENT "(" [ params ] ")" block ;
 params      = IDENT { "," IDENT } ;
 
 block       = "{" { statement } "}" ;
 
 statement   = let_stmt
+            | var_stmt
             | assign_stmt
             | if_stmt
             | while_stmt
             | return_stmt
             | expr_stmt ;
 
-let_stmt    = "let" [ "mut" ] IDENT "=" expr ";" ;
+let_stmt    = "let" IDENT "=" expr ";" ;
+var_stmt    = "var" IDENT "=" expr ";" ;
 assign_stmt = IDENT "=" expr ";" ;
 if_stmt     = "if" expr block [ "else" block ] ;
 while_stmt  = "while" expr block ;
@@ -228,10 +230,10 @@ error: <message>
 1. `mica run` コマンドが存在し、`.mica` ファイルを引数に取れる
 2. 整数リテラル・四則演算・剰余が正しく計算される
 3. 比較演算子（`==`, `!=`, `<`, `<=`, `>`, `>=`）が正しく動作する
-4. `let` で変数宣言、`let mut` でミュータブル変数が宣言できる
+4. `let` で immutable 変数、`var` で mutable 変数が宣言できる
 5. `if-else` 文が条件に応じて正しく分岐する
 6. `while` 文がループとして正しく動作する
-7. `fn` で関数定義、呼び出しが正しく動作する
+7. `fun` で関数定義、呼び出しが正しく動作する
 8. `return` 文が値を返す
 9. `print` で整数が stdout に出力される（改行付き）
 10. FizzBuzz プログラム（下記）が正しく動作する
@@ -260,7 +262,7 @@ print(y);
 
 **Given:** 以下の内容の `control.mica`
 ```
-let mut i = 0;
+var i = 0;
 while i < 5 {
     if i % 2 == 0 {
         print(i);
@@ -282,8 +284,8 @@ while i < 5 {
 
 **Given:** 以下の内容の `fizzbuzz.mica`
 ```
-fn fizzbuzz(n) {
-    let mut i = 1;
+fun fizzbuzz(n) {
+    var i = 1;
     while i <= n {
         if i % 15 == 0 {
             print(-3);  // FizzBuzz を -3 で表現（文字列なしのため）
@@ -328,14 +330,14 @@ fizzbuzz(15);
 
 ### fibonacci.mica
 ```
-fn fib(n) {
+fun fib(n) {
     if n <= 1 {
         return n;
     }
     return fib(n - 1) + fib(n - 2);
 }
 
-let mut i = 0;
+var i = 0;
 while i < 10 {
     print(fib(i));
     i = i + 1;
@@ -344,7 +346,7 @@ while i < 10 {
 
 ### factorial.mica
 ```
-fn fact(n) {
+fun fact(n) {
     if n <= 1 {
         return 1;
     }

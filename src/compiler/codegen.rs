@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_function_call() {
-        let chunk = compile("fn foo() { return 42; } print(foo());").unwrap();
+        let chunk = compile("fun foo() { return 42; } print(foo());").unwrap();
         assert_eq!(chunk.functions.len(), 1);
         assert_eq!(chunk.functions[0].name, "foo");
     }

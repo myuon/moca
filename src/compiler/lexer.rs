@@ -3,8 +3,8 @@
 pub enum TokenKind {
     // Keywords
     Let,
-    Mut,
-    Fn,
+    Var,
+    Fun,
     If,
     Else,
     While,
@@ -269,8 +269,8 @@ impl<'a> Lexer<'a> {
 
         match ident {
             "let" => TokenKind::Let,
-            "mut" => TokenKind::Mut,
-            "fn" => TokenKind::Fn,
+            "var" => TokenKind::Var,
+            "fun" => TokenKind::Fun,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
@@ -339,14 +339,14 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        let source = "let mut fn if else while return true false";
+        let source = "let var fun if else while return true false";
         let mut lexer = Lexer::new("test.mica", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         let expected = vec![
             TokenKind::Let,
-            TokenKind::Mut,
-            TokenKind::Fn,
+            TokenKind::Var,
+            TokenKind::Fun,
             TokenKind::If,
             TokenKind::Else,
             TokenKind::While,
@@ -378,11 +378,11 @@ mod tests {
 
     #[test]
     fn test_function_definition() {
-        let source = "fn add(a, b) { return a + b; }";
+        let source = "fun add(a, b) { return a + b; }";
         let mut lexer = Lexer::new("test.mica", source);
         let tokens = lexer.scan_tokens().unwrap();
 
-        assert_eq!(tokens[0].kind, TokenKind::Fn);
+        assert_eq!(tokens[0].kind, TokenKind::Fun);
         assert_eq!(tokens[1].kind, TokenKind::Ident("add".to_string()));
         assert_eq!(tokens[2].kind, TokenKind::LParen);
         assert_eq!(tokens[3].kind, TokenKind::Ident("a".to_string()));

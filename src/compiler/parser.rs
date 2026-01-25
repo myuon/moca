@@ -28,7 +28,7 @@ impl<'a> Parser<'a> {
     }
 
     fn item(&mut self) -> Result<Item, String> {
-        if self.check(&TokenKind::Fn) {
+        if self.check(&TokenKind::Fun) {
             Ok(Item::FnDef(self.fn_def()?))
         } else {
             Ok(Item::Statement(self.statement()?))
@@ -37,7 +37,7 @@ impl<'a> Parser<'a> {
 
     fn fn_def(&mut self) -> Result<FnDef, String> {
         let span = self.current_span();
-        self.expect(&TokenKind::Fn)?;
+        self.expect(&TokenKind::Fun)?;
 
         let name = self.expect_ident()?;
         self.expect(&TokenKind::LParen)?;
@@ -78,6 +78,8 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) -> Result<Statement, String> {
         if self.check(&TokenKind::Let) {
             self.let_stmt()
+        } else if self.check(&TokenKind::Var) {
+            self.var_stmt()
         } else if self.check(&TokenKind::If) {
             self.if_stmt()
         } else if self.check(&TokenKind::While) {
@@ -95,7 +97,6 @@ impl<'a> Parser<'a> {
         let span = self.current_span();
         self.expect(&TokenKind::Let)?;
 
-        let mutable = self.match_token(&TokenKind::Mut);
         let name = self.expect_ident()?;
         self.expect(&TokenKind::Eq)?;
         let init = self.expression()?;
@@ -103,7 +104,24 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Let {
             name,
-            mutable,
+            mutable: false,
+            init,
+            span,
+        })
+    }
+
+    fn var_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Var)?;
+
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let init = self.expression()?;
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Let {
+            name,
+            mutable: true,
             init,
             span,
         })
@@ -525,20 +543,20 @@ mod tests {
     }
 
     #[test]
-    fn test_let_mut_statement() {
-        let program = parse("let mut x = 0;").unwrap();
+    fn test_var_statement() {
+        let program = parse("var x = 0;").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let { name, mutable, .. }) => {
                 assert_eq!(name, "x");
                 assert!(mutable);
             }
-            _ => panic!("expected let statement"),
+            _ => panic!("expected var statement"),
         }
     }
 
     #[test]
     fn test_function_definition() {
-        let program = parse("fn add(a, b) { return a + b; }").unwrap();
+        let program = parse("fun add(a, b) { return a + b; }").unwrap();
         match &program.items[0] {
             Item::FnDef(FnDef { name, params, .. }) => {
                 assert_eq!(name, "add");
