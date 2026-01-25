@@ -1,0 +1,206 @@
+//! Value marshaling between VM and JIT representations.
+//!
+//! VM uses Rust enum `Value`, JIT uses 128-bit (tag: u64, payload: u64) format.
+
+use crate::vm::Value;
+
+/// Value tags for JIT representation.
+pub mod tags {
+    pub const TAG_INT: u64 = 0;
+    pub const TAG_FLOAT: u64 = 1;
+    pub const TAG_BOOL: u64 = 2;
+    pub const TAG_NIL: u64 = 3;
+    pub const TAG_PTR: u64 = 4;
+}
+
+/// JIT value representation (128-bit: tag + payload).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct JitValue {
+    pub tag: u64,
+    pub payload: u64,
+}
+
+impl JitValue {
+    /// Convert VM Value to JIT representation.
+    pub fn from_value(value: &Value) -> Self {
+        match value {
+            Value::Int(n) => JitValue {
+                tag: tags::TAG_INT,
+                payload: *n as u64,
+            },
+            Value::Float(f) => JitValue {
+                tag: tags::TAG_FLOAT,
+                payload: f.to_bits(),
+            },
+            Value::Bool(b) => JitValue {
+                tag: tags::TAG_BOOL,
+                payload: if *b { 1 } else { 0 },
+            },
+            Value::Nil => JitValue {
+                tag: tags::TAG_NIL,
+                payload: 0,
+            },
+            Value::Ptr(gc_ref) => JitValue {
+                tag: tags::TAG_PTR,
+                payload: gc_ref.index as u64,
+            },
+        }
+    }
+
+    /// Convert JIT representation back to VM Value.
+    pub fn to_value(&self) -> Value {
+        match self.tag {
+            tags::TAG_INT => Value::Int(self.payload as i64),
+            tags::TAG_FLOAT => Value::Float(f64::from_bits(self.payload)),
+            tags::TAG_BOOL => Value::Bool(self.payload != 0),
+            tags::TAG_NIL => Value::Nil,
+            tags::TAG_PTR => {
+                // Note: This is a simplified conversion. In a full implementation,
+                // we'd need to properly reconstruct the GcRef.
+                Value::Nil // Placeholder - pointer handling needs more work
+            }
+            _ => Value::Nil, // Unknown tag
+        }
+    }
+}
+
+/// JIT execution context passed to compiled functions.
+#[repr(C)]
+pub struct JitContext {
+    /// Value stack (array of JitValue)
+    pub stack: *mut JitValue,
+    /// Stack pointer (index into stack)
+    pub sp: usize,
+    /// Locals array
+    pub locals: *mut JitValue,
+    /// Number of locals
+    pub locals_count: usize,
+}
+
+impl JitContext {
+    /// Create a new JIT context with allocated stack and locals.
+    pub fn new(locals_count: usize) -> Self {
+        let stack = vec![JitValue { tag: 0, payload: 0 }; 256].into_boxed_slice();
+        let locals = vec![JitValue { tag: tags::TAG_NIL, payload: 0 }; locals_count].into_boxed_slice();
+
+        JitContext {
+            stack: Box::into_raw(stack) as *mut JitValue,
+            sp: 0,
+            locals: Box::into_raw(locals) as *mut JitValue,
+            locals_count,
+        }
+    }
+
+    /// Push a value onto the JIT stack.
+    pub fn push(&mut self, value: JitValue) {
+        unsafe {
+            *self.stack.add(self.sp) = value;
+        }
+        self.sp += 1;
+    }
+
+    /// Pop a value from the JIT stack.
+    pub fn pop(&mut self) -> JitValue {
+        self.sp -= 1;
+        unsafe { *self.stack.add(self.sp) }
+    }
+
+    /// Set a local variable.
+    pub fn set_local(&mut self, idx: usize, value: JitValue) {
+        unsafe {
+            *self.locals.add(idx) = value;
+        }
+    }
+
+    /// Get a local variable.
+    pub fn get_local(&self, idx: usize) -> JitValue {
+        unsafe { *self.locals.add(idx) }
+    }
+}
+
+impl Drop for JitContext {
+    fn drop(&mut self) {
+        unsafe {
+            // Reconstruct boxes and drop them
+            let _ = Box::from_raw(std::slice::from_raw_parts_mut(self.stack, 256));
+            let _ = Box::from_raw(std::slice::from_raw_parts_mut(self.locals, self.locals_count));
+        }
+    }
+}
+
+/// Return value from JIT compiled functions.
+/// Returned in RAX (tag) and RDX (payload) per System V AMD64 ABI.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct JitReturn {
+    pub tag: u64,
+    pub payload: u64,
+}
+
+impl JitReturn {
+    /// Convert to VM Value.
+    pub fn to_value(&self) -> Value {
+        JitValue {
+            tag: self.tag,
+            payload: self.payload,
+        }
+        .to_value()
+    }
+}
+
+/// Type signature for JIT compiled functions.
+/// Arguments: (vm_ctx: *mut u8, stack_ptr: *mut JitValue, locals_ptr: *mut JitValue)
+/// Returns: JitReturn (tag in RAX, payload in RDX)
+pub type JitFn = unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_int_roundtrip() {
+        let value = Value::Int(42);
+        let jit_val = JitValue::from_value(&value);
+        assert_eq!(jit_val.tag, tags::TAG_INT);
+        assert_eq!(jit_val.payload, 42);
+
+        let back = jit_val.to_value();
+        assert!(matches!(back, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_float_roundtrip() {
+        let value = Value::Float(3.14);
+        let jit_val = JitValue::from_value(&value);
+        assert_eq!(jit_val.tag, tags::TAG_FLOAT);
+
+        let back = jit_val.to_value();
+        if let Value::Float(f) = back {
+            assert!((f - 3.14).abs() < 0.0001);
+        } else {
+            panic!("Expected Float");
+        }
+    }
+
+    #[test]
+    fn test_bool_roundtrip() {
+        let value = Value::Bool(true);
+        let jit_val = JitValue::from_value(&value);
+        assert_eq!(jit_val.tag, tags::TAG_BOOL);
+        assert_eq!(jit_val.payload, 1);
+
+        let back = jit_val.to_value();
+        assert!(matches!(back, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_nil_roundtrip() {
+        let value = Value::Nil;
+        let jit_val = JitValue::from_value(&value);
+        assert_eq!(jit_val.tag, tags::TAG_NIL);
+
+        let back = jit_val.to_value();
+        assert!(matches!(back, Value::Nil));
+    }
+}

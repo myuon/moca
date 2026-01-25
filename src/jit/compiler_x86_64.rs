@@ -557,6 +557,12 @@ impl JitCompiler {
     fn emit_ret(&mut self) -> Result<(), String> {
         let mut asm = X86_64Assembler::new(&mut self.buf);
 
+        // Pop return value from JIT stack into RAX (tag) and RDX (payload)
+        // Stack layout: [tag: 8 bytes][payload: 8 bytes]
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(Reg::Rax, regs::VSTACK, 0);      // tag
+        asm.mov_rm(Reg::Rdx, regs::VSTACK, 8);      // payload
+
         // Restore callee-saved registers and return
         asm.pop(Reg::R15);
         asm.pop(Reg::R14);
