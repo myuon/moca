@@ -1,3 +1,8 @@
+---
+title: Debugger Specification
+description: TUI デバッガーの仕様。ブレークポイント、ステップ実行、変数検査、コールスタック確認機能を提供。
+---
+
 # Mica Debugger Specification
 
 This document defines the TUI debugger for the Mica language.

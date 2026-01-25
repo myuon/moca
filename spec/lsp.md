@@ -1,3 +1,8 @@
+---
+title: LSP Specification
+description: Language Server Protocol による IDE 統合機能の仕様。診断、補完、定義ジャンプ、ホバー情報などをサポート。
+---
+
 # Mica LSP Specification
 
 This document defines the Language Server Protocol support for the Mica language.

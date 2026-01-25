@@ -1,3 +1,8 @@
+---
+title: CLI Specification
+description: Mica ツールチェーンのコマンドラインインターフェース仕様。プロジェクト操作、依存関係管理、開発ツールのコマンドを定義。
+---
+
 # Mica CLI Specification
 
 This document defines the command-line interface for the Mica toolchain.

@@ -1,3 +1,8 @@
+---
+title: Package System Specification
+description: パッケージ管理システムの仕様。プロジェクト構造、依存関係解決、ロックファイルによる再現可能ビルドを定義。
+---
+
 # Mica Package System Specification
 
 This document defines the package management system for Mica projects.
