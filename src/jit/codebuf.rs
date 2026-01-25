@@ -162,6 +162,17 @@ impl CodeBuffer {
         &self.code
     }
 
+    /// Get mutable access to the code bytes (for patching).
+    pub fn code_mut(&mut self) -> &mut [u8] {
+        &mut self.code
+    }
+
+    /// Consume the buffer and return the raw code bytes.
+    /// Note: This does not patch forward references - use patch_forward_refs first.
+    pub fn into_code(self) -> Vec<u8> {
+        self.code
+    }
+
     /// Align the code to the given boundary.
     pub fn align(&mut self, alignment: usize) {
         let current = self.code.len();
