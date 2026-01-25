@@ -50,6 +50,22 @@ mica clean              # Remove build artifacts
 --gc-stats              # Output GC statistics
 ```
 
+### Debug Dump Options
+
+コンパイラパイプラインの中間表現を出力するオプション。
+
+```bash
+--dump-ast              # AST（抽象構文木）を stderr に出力
+--dump-ast=<file>       # AST をファイルに出力
+--dump-resolved         # 名前解決済みプログラムを stderr に出力
+--dump-resolved=<file>  # 名前解決済みプログラムをファイルに出力
+--dump-bytecode         # バイトコードを stderr に出力
+--dump-bytecode=<file>  # バイトコードをファイルに出力
+```
+
+複数同時指定可能。出力順序は AST → Resolved → Bytecode（パイプライン順）。
+ダンプ後もプログラムは通常実行される。
+
 ## Exit Codes
 
 - `0`: Success
@@ -115,4 +131,17 @@ mica add https://github.com/user/mica-utils@v1.0.0
 
 ```bash
 mica fmt src/
+```
+
+### Dump Compiler IR
+
+```bash
+# AST を stderr に出力
+mica run example.mica --dump-ast
+
+# バイトコードをファイルに出力
+mica run example.mica --dump-bytecode=out.txt
+
+# 複数同時出力
+mica run example.mica --dump-ast --dump-resolved --dump-bytecode
 ```

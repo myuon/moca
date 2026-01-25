@@ -770,3 +770,95 @@ print(c.value);
     assert!(success, "struct field mutation should work, stderr: {}", stderr);
     assert_eq!(stdout, "0\n42\n");
 }
+
+// ============================================================================
+// Dump Options Tests
+// ============================================================================
+
+/// Run mica with file path first, then additional args (for dump options)
+fn run_mica_with_trailing_args(source: &str, args: &[&str]) -> (String, String, bool) {
+    let temp_dir = std::env::temp_dir();
+    let unique_id = std::thread::current().id();
+    let temp_file = temp_dir.join(format!("mica_test_{:?}.mica", unique_id));
+    std::fs::write(&temp_file, source).unwrap();
+
+    let mut cmd_args = vec!["run", temp_file.to_str().unwrap()];
+    cmd_args.extend(args);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mica"))
+        .args(&cmd_args)
+        .output()
+        .expect("failed to execute mica");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let success = output.status.success();
+
+    std::fs::remove_file(&temp_file).ok();
+
+    (stdout, stderr, success)
+}
+
+#[test]
+fn test_dump_ast() {
+    // Test --dump-ast option outputs AST to stderr
+    let source = r#"
+let x = 1 + 2;
+print(x);
+"#;
+    let (stdout, stderr, success) = run_mica_with_trailing_args(source, &["--dump-ast"]);
+    assert!(success, "program should succeed with --dump-ast, stderr: {}", stderr);
+    // Check AST is in stderr
+    assert!(stderr.contains("== AST =="), "stderr should contain AST header");
+    assert!(stderr.contains("Program"), "stderr should contain 'Program'");
+    assert!(stderr.contains("Binary: +"), "stderr should contain binary op");
+    // Check program still executes
+    assert_eq!(stdout, "3\n", "program should produce correct output");
+}
+
+#[test]
+fn test_dump_ast_and_bytecode() {
+    // Test multiple dump options simultaneously
+    let source = r#"
+let x = 42;
+print(x);
+"#;
+    let (stdout, stderr, success) = run_mica_with_trailing_args(source, &["--dump-ast", "--dump-bytecode"]);
+    assert!(success, "program should succeed with multiple dump options");
+    // Check both dumps are present in stderr
+    assert!(stderr.contains("== AST =="), "stderr should contain AST header");
+    assert!(stderr.contains("== Bytecode ==") || stderr.contains("== Main =="),
+            "stderr should contain bytecode header");
+    assert!(stderr.contains("PushInt 42"), "stderr should contain PushInt instruction");
+    // Check program still executes
+    assert_eq!(stdout, "42\n");
+}
+
+#[test]
+fn test_dump_bytecode_to_file() {
+    // Test --dump-bytecode=path outputs to file
+    let source = r#"
+let x = 10;
+print(x);
+"#;
+    let temp_dir = std::env::temp_dir();
+    let unique_id = std::thread::current().id();
+    let dump_file = temp_dir.join(format!("mica_dump_{:?}.txt", unique_id));
+
+    let (stdout, stderr, success) = run_mica_with_trailing_args(
+        source,
+        &[&format!("--dump-bytecode={}", dump_file.to_str().unwrap())]
+    );
+
+    assert!(success, "program should succeed with file dump, stderr: {}", stderr);
+    assert_eq!(stdout, "10\n", "program should produce correct output");
+
+    // Check dump file was created and contains bytecode
+    let dump_content = std::fs::read_to_string(&dump_file)
+        .expect("dump file should exist");
+    assert!(dump_content.contains("== Main =="), "dump file should contain Main header");
+    assert!(dump_content.contains("PushInt 10"), "dump file should contain PushInt instruction");
+
+    // Cleanup
+    std::fs::remove_file(&dump_file).ok();
+}
