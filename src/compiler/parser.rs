@@ -1,0 +1,993 @@
+use crate::compiler::ast::*;
+use crate::compiler::lexer::{Span, Token, TokenKind};
+
+/// A recursive descent parser for mica.
+pub struct Parser<'a> {
+    filename: &'a str,
+    tokens: Vec<Token>,
+    current: usize,
+}
+
+impl<'a> Parser<'a> {
+    pub fn new(filename: &'a str, tokens: Vec<Token>) -> Self {
+        Self {
+            filename,
+            tokens,
+            current: 0,
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<Program, String> {
+        let mut items = Vec::new();
+
+        while !self.is_at_end() {
+            items.push(self.item()?);
+        }
+
+        Ok(Program { items })
+    }
+
+    fn item(&mut self) -> Result<Item, String> {
+        if self.check(&TokenKind::Import) {
+            Ok(Item::Import(self.import_stmt()?))
+        } else if self.check(&TokenKind::Fun) {
+            Ok(Item::FnDef(self.fn_def()?))
+        } else {
+            Ok(Item::Statement(self.statement()?))
+        }
+    }
+
+    fn import_stmt(&mut self) -> Result<Import, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Import)?;
+
+        let mut path = Vec::new();
+        let mut relative = false;
+
+        // Check for relative import: import .local_mod;
+        if self.match_token(&TokenKind::Dot) {
+            relative = true;
+        }
+
+        // Parse module path: utils.http or local_mod
+        path.push(self.expect_ident()?);
+        while self.match_token(&TokenKind::Dot) {
+            path.push(self.expect_ident()?);
+        }
+
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Import {
+            path,
+            relative,
+            span,
+        })
+    }
+
+    fn fn_def(&mut self) -> Result<FnDef, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Fun)?;
+
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LParen)?;
+
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            params.push(self.expect_ident()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.expect_ident()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+
+        let body = self.block()?;
+
+        Ok(FnDef {
+            name,
+            params,
+            body,
+            span,
+        })
+    }
+
+    fn block(&mut self) -> Result<Block, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut statements = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            statements.push(self.statement()?);
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(Block { statements, span })
+    }
+
+    fn statement(&mut self) -> Result<Statement, String> {
+        if self.check(&TokenKind::Let) {
+            self.let_stmt()
+        } else if self.check(&TokenKind::Var) {
+            self.var_stmt()
+        } else if self.check(&TokenKind::If) {
+            self.if_stmt()
+        } else if self.check(&TokenKind::While) {
+            self.while_stmt()
+        } else if self.check(&TokenKind::For) {
+            self.for_stmt()
+        } else if self.check(&TokenKind::Return) {
+            self.return_stmt()
+        } else if self.check(&TokenKind::Throw) {
+            self.throw_stmt()
+        } else if self.check(&TokenKind::Try) {
+            self.try_stmt()
+        } else if self.check_ident() && self.check_ahead(&TokenKind::Eq, 1) {
+            self.assign_stmt()
+        } else {
+            // Could be expression statement or complex assignment
+            self.expr_or_assign_stmt()
+        }
+    }
+
+    fn let_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Let)?;
+
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let init = self.expression()?;
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Let {
+            name,
+            mutable: false,
+            init,
+            span,
+        })
+    }
+
+    fn var_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Var)?;
+
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let init = self.expression()?;
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Let {
+            name,
+            mutable: true,
+            init,
+            span,
+        })
+    }
+
+    fn assign_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let value = self.expression()?;
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Assign { name, value, span })
+    }
+
+    fn expr_or_assign_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        let expr = self.expression()?;
+
+        // Check if this is an assignment
+        if self.match_token(&TokenKind::Eq) {
+            let value = self.expression()?;
+            self.expect(&TokenKind::Semi)?;
+
+            // Determine what kind of assignment this is
+            match expr {
+                Expr::Index { object, index, .. } => {
+                    Ok(Statement::IndexAssign {
+                        object: *object,
+                        index: *index,
+                        value,
+                        span,
+                    })
+                }
+                Expr::Field { object, field, .. } => {
+                    Ok(Statement::FieldAssign {
+                        object: *object,
+                        field,
+                        value,
+                        span,
+                    })
+                }
+                _ => Err(self.error("invalid assignment target")),
+            }
+        } else {
+            self.expect(&TokenKind::Semi)?;
+            Ok(Statement::Expr { expr, span })
+        }
+    }
+
+    fn if_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::If)?;
+
+        let condition = self.expression()?;
+        let then_block = self.block()?;
+
+        let else_block = if self.match_token(&TokenKind::Else) {
+            if self.check(&TokenKind::If) {
+                // else if -> treat as else { if ... }
+                let inner_if = self.if_stmt()?;
+                Some(Block {
+                    statements: vec![inner_if],
+                    span: self.current_span(),
+                })
+            } else {
+                Some(self.block()?)
+            }
+        } else {
+            None
+        };
+
+        Ok(Statement::If {
+            condition,
+            then_block,
+            else_block,
+            span,
+        })
+    }
+
+    fn while_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::While)?;
+
+        let condition = self.expression()?;
+        let body = self.block()?;
+
+        Ok(Statement::While {
+            condition,
+            body,
+            span,
+        })
+    }
+
+    fn for_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::For)?;
+
+        let var = self.expect_ident()?;
+        self.expect(&TokenKind::In)?;
+        let iterable = self.expression()?;
+        let body = self.block()?;
+
+        Ok(Statement::ForIn {
+            var,
+            iterable,
+            body,
+            span,
+        })
+    }
+
+    fn return_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Return)?;
+
+        let value = if self.check(&TokenKind::Semi) {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Return { value, span })
+    }
+
+    fn throw_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Throw)?;
+
+        let value = self.expression()?;
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Throw { value, span })
+    }
+
+    fn try_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Try)?;
+
+        let try_block = self.block()?;
+
+        self.expect(&TokenKind::Catch)?;
+        let catch_var = self.expect_ident()?;
+        let catch_block = self.block()?;
+
+        Ok(Statement::Try {
+            try_block,
+            catch_var,
+            catch_block,
+            span,
+        })
+    }
+
+    // Expression parsing with precedence climbing
+
+    fn expression(&mut self) -> Result<Expr, String> {
+        self.or_expr()
+    }
+
+    fn or_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.and_expr()?;
+
+        while self.match_token(&TokenKind::OrOr) {
+            let span = left.span();
+            let right = self.and_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn and_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.eq_expr()?;
+
+        while self.match_token(&TokenKind::AndAnd) {
+            let span = left.span();
+            let right = self.eq_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn eq_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.cmp_expr()?;
+
+        loop {
+            let op = if self.match_token(&TokenKind::EqEq) {
+                BinaryOp::Eq
+            } else if self.match_token(&TokenKind::NotEq) {
+                BinaryOp::Ne
+            } else {
+                break;
+            };
+
+            let span = left.span();
+            let right = self.cmp_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn cmp_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.add_expr()?;
+
+        loop {
+            let op = if self.match_token(&TokenKind::Lt) {
+                BinaryOp::Lt
+            } else if self.match_token(&TokenKind::Le) {
+                BinaryOp::Le
+            } else if self.match_token(&TokenKind::Gt) {
+                BinaryOp::Gt
+            } else if self.match_token(&TokenKind::Ge) {
+                BinaryOp::Ge
+            } else {
+                break;
+            };
+
+            let span = left.span();
+            let right = self.add_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn add_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.mul_expr()?;
+
+        loop {
+            let op = if self.match_token(&TokenKind::Plus) {
+                BinaryOp::Add
+            } else if self.match_token(&TokenKind::Minus) {
+                BinaryOp::Sub
+            } else {
+                break;
+            };
+
+            let span = left.span();
+            let right = self.mul_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn mul_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.unary_expr()?;
+
+        loop {
+            let op = if self.match_token(&TokenKind::Star) {
+                BinaryOp::Mul
+            } else if self.match_token(&TokenKind::Slash) {
+                BinaryOp::Div
+            } else if self.match_token(&TokenKind::Percent) {
+                BinaryOp::Mod
+            } else {
+                break;
+            };
+
+            let span = left.span();
+            let right = self.unary_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn unary_expr(&mut self) -> Result<Expr, String> {
+        if self.match_token(&TokenKind::Bang) {
+            let span = self.previous_span();
+            let operand = self.unary_expr()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+
+        if self.match_token(&TokenKind::Minus) {
+            let span = self.previous_span();
+            let operand = self.unary_expr()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+
+        self.postfix_expr()
+    }
+
+    fn postfix_expr(&mut self) -> Result<Expr, String> {
+        let mut expr = self.primary()?;
+
+        loop {
+            if self.match_token(&TokenKind::LParen) {
+                // Function call
+                if let Expr::Ident { name, span } = &expr {
+                    let mut args = Vec::new();
+
+                    if !self.check(&TokenKind::RParen) {
+                        args.push(self.expression()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.expression()?);
+                        }
+                    }
+
+                    self.expect(&TokenKind::RParen)?;
+
+                    expr = Expr::Call {
+                        callee: name.clone(),
+                        args,
+                        span: *span,
+                    };
+                } else {
+                    return Err(self.error("expected function name before '('"));
+                }
+            } else if self.match_token(&TokenKind::LBracket) {
+                // Index access
+                let span = expr.span();
+                let index = self.expression()?;
+                self.expect(&TokenKind::RBracket)?;
+
+                expr = Expr::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index),
+                    span,
+                };
+            } else if self.match_token(&TokenKind::Dot) {
+                // Field access
+                let span = expr.span();
+                let field = self.expect_ident()?;
+
+                expr = Expr::Field {
+                    object: Box::new(expr),
+                    field,
+                    span,
+                };
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn primary(&mut self) -> Result<Expr, String> {
+        let span = self.current_span();
+
+        if let Some(TokenKind::Int(value)) = self.peek_kind() {
+            let value = *value;
+            self.advance();
+            return Ok(Expr::Int { value, span });
+        }
+
+        if let Some(TokenKind::Float(value)) = self.peek_kind() {
+            let value = *value;
+            self.advance();
+            return Ok(Expr::Float { value, span });
+        }
+
+        if let Some(TokenKind::Str(value)) = self.peek_kind() {
+            let value = value.clone();
+            self.advance();
+            return Ok(Expr::Str { value, span });
+        }
+
+        if self.match_token(&TokenKind::True) {
+            return Ok(Expr::Bool { value: true, span });
+        }
+
+        if self.match_token(&TokenKind::False) {
+            return Ok(Expr::Bool { value: false, span });
+        }
+
+        if self.match_token(&TokenKind::Nil) {
+            return Ok(Expr::Nil { span });
+        }
+
+        if let Some(TokenKind::Ident(name)) = self.peek_kind() {
+            let name = name.clone();
+            self.advance();
+            return Ok(Expr::Ident { name, span });
+        }
+
+        if self.match_token(&TokenKind::LParen) {
+            let expr = self.expression()?;
+            self.expect(&TokenKind::RParen)?;
+            return Ok(expr);
+        }
+
+        if self.match_token(&TokenKind::LBracket) {
+            // Array literal
+            let mut elements = Vec::new();
+
+            if !self.check(&TokenKind::RBracket) {
+                elements.push(self.expression()?);
+                while self.match_token(&TokenKind::Comma) {
+                    if self.check(&TokenKind::RBracket) {
+                        break; // Allow trailing comma
+                    }
+                    elements.push(self.expression()?);
+                }
+            }
+
+            self.expect(&TokenKind::RBracket)?;
+            return Ok(Expr::Array { elements, span });
+        }
+
+        if self.match_token(&TokenKind::LBrace) {
+            // Object literal
+            let mut fields = Vec::new();
+
+            if !self.check(&TokenKind::RBrace) {
+                let name = self.expect_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let value = self.expression()?;
+                fields.push((name, value));
+
+                while self.match_token(&TokenKind::Comma) {
+                    if self.check(&TokenKind::RBrace) {
+                        break; // Allow trailing comma
+                    }
+                    let name = self.expect_ident()?;
+                    self.expect(&TokenKind::Colon)?;
+                    let value = self.expression()?;
+                    fields.push((name, value));
+                }
+            }
+
+            self.expect(&TokenKind::RBrace)?;
+            return Ok(Expr::Object { fields, span });
+        }
+
+        Err(self.error("expected expression"))
+    }
+
+    // Helper methods
+
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.current)
+    }
+
+    fn peek_kind(&self) -> Option<&TokenKind> {
+        self.peek().map(|t| &t.kind)
+    }
+
+    fn is_at_end(&self) -> bool {
+        matches!(self.peek_kind(), Some(TokenKind::Eof) | None)
+    }
+
+    fn check(&self, kind: &TokenKind) -> bool {
+        self.peek_kind() == Some(kind)
+    }
+
+    fn check_ident(&self) -> bool {
+        matches!(self.peek_kind(), Some(TokenKind::Ident(_)))
+    }
+
+    fn check_ahead(&self, kind: &TokenKind, offset: usize) -> bool {
+        self.tokens
+            .get(self.current + offset)
+            .map(|t| &t.kind)
+            == Some(kind)
+    }
+
+    fn advance(&mut self) -> Option<&Token> {
+        if !self.is_at_end() {
+            self.current += 1;
+        }
+        self.tokens.get(self.current - 1)
+    }
+
+    fn match_token(&mut self, kind: &TokenKind) -> bool {
+        if self.check(kind) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, kind: &TokenKind) -> Result<(), String> {
+        if self.check(kind) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error(&format!("expected {:?}", kind)))
+        }
+    }
+
+    fn expect_ident(&mut self) -> Result<String, String> {
+        if let Some(TokenKind::Ident(name)) = self.peek_kind() {
+            let name = name.clone();
+            self.advance();
+            Ok(name)
+        } else {
+            Err(self.error("expected identifier"))
+        }
+    }
+
+    fn current_span(&self) -> Span {
+        self.peek().map(|t| t.span).unwrap_or(Span::new(1, 1))
+    }
+
+    fn previous_span(&self) -> Span {
+        self.tokens
+            .get(self.current.saturating_sub(1))
+            .map(|t| t.span)
+            .unwrap_or(Span::new(1, 1))
+    }
+
+    fn error(&self, message: &str) -> String {
+        let span = self.current_span();
+        format!(
+            "error: {}\n  --> {}:{}:{}",
+            message, self.filename, span.line, span.column
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::lexer::Lexer;
+
+    fn parse(source: &str) -> Result<Program, String> {
+        let mut lexer = Lexer::new("test.mica", source);
+        let tokens = lexer.scan_tokens()?;
+        let mut parser = Parser::new("test.mica", tokens);
+        parser.parse()
+    }
+
+    #[test]
+    fn test_let_statement() {
+        let program = parse("let x = 42;").unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0] {
+            Item::Statement(Statement::Let { name, mutable, .. }) => {
+                assert_eq!(name, "x");
+                assert!(!mutable);
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_var_statement() {
+        let program = parse("var x = 0;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { name, mutable, .. }) => {
+                assert_eq!(name, "x");
+                assert!(mutable);
+            }
+            _ => panic!("expected var statement"),
+        }
+    }
+
+    #[test]
+    fn test_function_definition() {
+        let program = parse("fun add(a, b) { return a + b; }").unwrap();
+        match &program.items[0] {
+            Item::FnDef(FnDef { name, params, .. }) => {
+                assert_eq!(name, "add");
+                assert_eq!(params, &["a", "b"]);
+            }
+            _ => panic!("expected function definition"),
+        }
+    }
+
+    #[test]
+    fn test_if_else() {
+        let program = parse("if x > 0 { print(x); } else { print(0); }").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::If { else_block, .. }) => {
+                assert!(else_block.is_some());
+            }
+            _ => panic!("expected if statement"),
+        }
+    }
+
+    #[test]
+    fn test_while_loop() {
+        let program = parse("while i < 10 { i = i + 1; }").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::While { .. }) => {}
+            _ => panic!("expected while statement"),
+        }
+    }
+
+    #[test]
+    fn test_binary_expression() {
+        let program = parse("let x = 1 + 2 * 3;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                // Should be 1 + (2 * 3) due to precedence
+                match init {
+                    Expr::Binary { op: BinaryOp::Add, right, .. } => {
+                        match right.as_ref() {
+                            Expr::Binary { op: BinaryOp::Mul, .. } => {}
+                            _ => panic!("expected multiplication"),
+                        }
+                    }
+                    _ => panic!("expected binary expression"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_function_call() {
+        let program = parse("print(42);").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Expr { expr, .. }) => {
+                match expr {
+                    Expr::Call { callee, args, .. } => {
+                        assert_eq!(callee, "print");
+                        assert_eq!(args.len(), 1);
+                    }
+                    _ => panic!("expected call expression"),
+                }
+            }
+            _ => panic!("expected expression statement"),
+        }
+    }
+
+    #[test]
+    fn test_float_literal() {
+        let program = parse("let x = 3.14;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::Float { value, .. } => {
+                        assert_eq!(*value, 3.14);
+                    }
+                    _ => panic!("expected float"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_string_literal() {
+        let program = parse(r#"let s = "hello";"#).unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::Str { value, .. } => {
+                        assert_eq!(value, "hello");
+                    }
+                    _ => panic!("expected string"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_nil_literal() {
+        let program = parse("let x = nil;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                assert!(matches!(init, Expr::Nil { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_array_literal() {
+        let program = parse("let arr = [1, 2, 3];").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::Array { elements, .. } => {
+                        assert_eq!(elements.len(), 3);
+                    }
+                    _ => panic!("expected array"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_object_literal() {
+        let program = parse("let obj = { x: 10, y: 20 };").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::Object { fields, .. } => {
+                        assert_eq!(fields.len(), 2);
+                        assert_eq!(fields[0].0, "x");
+                        assert_eq!(fields[1].0, "y");
+                    }
+                    _ => panic!("expected object"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_index_access() {
+        let program = parse("let x = arr[0];").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                assert!(matches!(init, Expr::Index { .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_field_access() {
+        let program = parse("let x = obj.field;").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let { init, .. }) => {
+                match init {
+                    Expr::Field { field, .. } => {
+                        assert_eq!(field, "field");
+                    }
+                    _ => panic!("expected field access"),
+                }
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_for_in() {
+        let program = parse("for x in arr { print(x); }").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::ForIn { var, .. }) => {
+                assert_eq!(var, "x");
+            }
+            _ => panic!("expected for-in statement"),
+        }
+    }
+
+    #[test]
+    fn test_try_catch() {
+        let program = parse("try { throw x; } catch e { print(e); }").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Try { catch_var, .. }) => {
+                assert_eq!(catch_var, "e");
+            }
+            _ => panic!("expected try statement"),
+        }
+    }
+
+    #[test]
+    fn test_throw() {
+        let program = parse(r#"throw "error";"#).unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Throw { value, .. }) => {
+                assert!(matches!(value, Expr::Str { .. }));
+            }
+            _ => panic!("expected throw statement"),
+        }
+    }
+
+    #[test]
+    fn test_import_simple() {
+        let program = parse("import utils;").unwrap();
+        match &program.items[0] {
+            Item::Import(Import { path, relative, .. }) => {
+                assert_eq!(path, &["utils"]);
+                assert!(!relative);
+            }
+            _ => panic!("expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_import_nested() {
+        let program = parse("import utils.http.client;").unwrap();
+        match &program.items[0] {
+            Item::Import(Import { path, relative, .. }) => {
+                assert_eq!(path, &["utils", "http", "client"]);
+                assert!(!relative);
+            }
+            _ => panic!("expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_import_relative() {
+        let program = parse("import .local_mod;").unwrap();
+        match &program.items[0] {
+            Item::Import(Import { path, relative, .. }) => {
+                assert_eq!(path, &["local_mod"]);
+                assert!(relative);
+            }
+            _ => panic!("expected import statement"),
+        }
+    }
+}
