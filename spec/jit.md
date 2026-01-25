@@ -11,7 +11,7 @@ This document defines the JIT compilation and runtime optimization features.
 
 Mica uses a tiered execution model:
 1. **Tier 0**: Bytecode Interpreter with Quickening
-2. **Tier 1**: Baseline JIT (AArch64)
+2. **Tier 1**: Baseline JIT (AArch64, x86-64)
 
 ## Tiered Execution
 
@@ -257,6 +257,82 @@ $ mica run --trace-jit app.mica
 [JIT] Compiling: compute (1000 calls)
 [JIT] Generated 512 bytes of native code
 Result: 4950
+```
+
+## Baseline JIT (x86-64)
+
+### Code Generation Strategy
+
+- Template-based (fixed pattern per instruction)
+- Simple register allocation (maintain stack-based model)
+- System V AMD64 ABI compliant (Linux/macOS)
+
+### x86-64 Register Convention
+
+```
+rax     : Return value / scratch
+rcx     : 4th argument / scratch
+rdx     : 3rd argument / scratch
+rbx     : Callee-saved
+rsp     : Stack pointer
+rbp     : Frame pointer (callee-saved)
+rsi     : 2nd argument
+rdi     : 1st argument
+r8-r9   : 5th-6th arguments
+r10-r11 : Caller-saved temporaries
+r12-r15 : Callee-saved
+```
+
+### Mica JIT Register Usage (x86-64)
+
+```
+r12     : VM state pointer
+r13     : Value stack pointer
+r14     : Locals base pointer
+r15     : Constants pool pointer
+rax     : Temporary 0
+rcx     : Temporary 1
+```
+
+### Code Generation Example (ADD_SMI_SMI)
+
+```asm
+; Pop two values, add, push result
+mov rax, [r13 - 16]      ; load a (tag)
+mov rcx, [r13 - 8]       ; load a (payload)
+sub r13, 16              ; pop a
+mov rdx, [r13 - 16]      ; load b (tag)
+mov rsi, [r13 - 8]       ; load b (payload)
+sub r13, 16              ; pop b
+; Check both are integers
+cmp rax, TAG_INT
+jne slow_path
+cmp rdx, TAG_INT
+jne slow_path
+; Integer addition
+add rcx, rsi
+; Push result
+mov [r13], rax           ; tag (TAG_INT)
+mov [r13 + 8], rcx       ; payload
+add r13, 16
+```
+
+### Supported Operations (x86-64)
+
+- **Stack**: PushInt, PushFloat, PushTrue, PushFalse, PushNil, Pop
+- **Locals**: LoadLocal, StoreLocal
+- **Arithmetic**: Add, Sub, Mul, Div (integer variants included)
+- **Comparison**: Lt, Le, Gt, Ge, Eq, Ne (integer variants included)
+- **Control Flow**: Jmp, JmpIfTrue, JmpIfFalse, Ret
+
+### Conditional Compilation
+
+```rust
+#[cfg(all(target_arch = "x86_64", feature = "jit"))]
+mod x86_64;
+
+#[cfg(all(target_arch = "x86_64", feature = "jit"))]
+mod compiler_x86_64;
 ```
 
 ## Performance Considerations
