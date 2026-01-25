@@ -518,19 +518,27 @@ impl Codegen {
             ResolvedExpr::SpawnFunc { func_index } => {
                 ops.push(Op::ThreadSpawn(*func_index));
             }
-            ResolvedExpr::StructLiteral { name, fields } => {
-                // TODO: Implement struct literal codegen
-                // For now, compile as an object
-                for (fname, value) in fields {
-                    let name_idx = self.add_string(fname.clone());
-                    ops.push(Op::PushString(name_idx));
+            ResolvedExpr::StructLiteral { struct_index: _, fields } => {
+                // Compile struct as an array (tuple) with field values in declaration order
+                for value in fields {
                     self.compile_expr(value, ops)?;
                 }
-                ops.push(Op::AllocObject(fields.len()));
+                ops.push(Op::AllocArray(fields.len()));
             }
             ResolvedExpr::MethodCall { object, method, args } => {
-                // TODO: Implement method call codegen
-                // For now, return nil
+                // TODO: Implement proper method dispatch
+                // For now, compile as a function call with the method name
+                // Push object (self) first, then args
+                self.compile_expr(object, ops)?;
+                for arg in args {
+                    self.compile_expr(arg, ops)?;
+                }
+
+                // For now, pop arguments and return nil as we don't have method dispatch
+                ops.push(Op::Pop);
+                for _ in 0..args.len() {
+                    ops.push(Op::Pop);
+                }
                 ops.push(Op::PushNil);
             }
         }
