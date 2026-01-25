@@ -12,6 +12,8 @@ pub struct Program {
 pub enum Item {
     Import(Import),
     FnDef(FnDef),
+    StructDef(StructDef),
+    ImplBlock(ImplBlock),
     Statement(Statement),
 }
 
@@ -22,6 +24,30 @@ pub struct Import {
     pub path: Vec<String>,
     /// Whether it's a relative import (starts with ./)
     pub relative: bool,
+    pub span: Span,
+}
+
+/// A struct field definition.
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub type_annotation: TypeAnnotation,
+    pub span: Span,
+}
+
+/// A struct definition.
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+/// An impl block containing methods for a struct.
+#[derive(Debug, Clone)]
+pub struct ImplBlock {
+    pub struct_name: String,
+    pub methods: Vec<FnDef>,
     pub span: Span,
 }
 
@@ -174,6 +200,19 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Struct literal: `Point { x: 1, y: 2 }`
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, Expr)>,
+        span: Span,
+    },
+    /// Method call: `obj.method(args)`
+    MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -192,6 +231,8 @@ impl Expr {
             Expr::Unary { span, .. } => *span,
             Expr::Binary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
+            Expr::StructLiteral { span, .. } => *span,
+            Expr::MethodCall { span, .. } => *span,
         }
     }
 }

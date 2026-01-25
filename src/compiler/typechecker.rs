@@ -290,6 +290,12 @@ impl TypeChecker {
                 Item::FnDef(fn_def) => {
                     self.check_function(fn_def);
                 }
+                Item::StructDef(_struct_def) => {
+                    // TODO: Register and type check struct definitions
+                }
+                Item::ImplBlock(_impl_block) => {
+                    // TODO: Type check impl block methods
+                }
                 Item::Statement(stmt) => {
                     // Use shared environment for top-level statements
                     self.infer_statement(stmt, &mut main_env);
@@ -836,6 +842,29 @@ impl TypeChecker {
                     ));
                     self.fresh_var()
                 }
+            }
+
+            Expr::StructLiteral { name, fields, span } => {
+                // TODO: Implement struct literal type checking
+                // For now, return a type variable
+                for (_, expr) in fields {
+                    self.infer_expr(expr, env);
+                }
+                self.fresh_var()
+            }
+
+            Expr::MethodCall {
+                object,
+                method,
+                args,
+                span,
+            } => {
+                // TODO: Implement method call type checking
+                let obj_type = self.infer_expr(object, env);
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                self.fresh_var()
             }
         }
     }

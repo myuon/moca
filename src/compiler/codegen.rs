@@ -518,6 +518,21 @@ impl Codegen {
             ResolvedExpr::SpawnFunc { func_index } => {
                 ops.push(Op::ThreadSpawn(*func_index));
             }
+            ResolvedExpr::StructLiteral { name, fields } => {
+                // TODO: Implement struct literal codegen
+                // For now, compile as an object
+                for (fname, value) in fields {
+                    let name_idx = self.add_string(fname.clone());
+                    ops.push(Op::PushString(name_idx));
+                    self.compile_expr(value, ops)?;
+                }
+                ops.push(Op::AllocObject(fields.len()));
+            }
+            ResolvedExpr::MethodCall { object, method, args } => {
+                // TODO: Implement method call codegen
+                // For now, return nil
+                ops.push(Op::PushNil);
+            }
         }
 
         Ok(())

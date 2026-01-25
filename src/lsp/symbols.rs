@@ -45,6 +45,12 @@ impl SymbolTable {
                 Item::FnDef(fn_def) => {
                     self.collect_fn_def(fn_def);
                 }
+                Item::StructDef(_struct_def) => {
+                    // TODO: Collect struct definitions for LSP
+                }
+                Item::ImplBlock(_impl_block) => {
+                    // TODO: Collect impl block methods for LSP
+                }
                 Item::Statement(stmt) => {
                     self.collect_statement(stmt);
                 }
@@ -230,6 +236,17 @@ impl SymbolTable {
             Expr::Call { callee, args, span } => {
                 // The callee is a function reference
                 self.references.push((*span, callee.clone()));
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expr::StructLiteral { fields, .. } => {
+                for (_, expr) in fields {
+                    self.collect_expr(expr);
+                }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                self.collect_expr(object);
                 for arg in args {
                     self.collect_expr(arg);
                 }

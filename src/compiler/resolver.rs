@@ -110,6 +110,17 @@ pub enum ResolvedExpr {
     SpawnFunc {
         func_index: usize,
     },
+    /// Struct literal: `Point { x: 1, y: 2 }`
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, ResolvedExpr)>,
+    },
+    /// Method call: `obj.method(args)`
+    MethodCall {
+        object: Box<ResolvedExpr>,
+        method: String,
+        args: Vec<ResolvedExpr>,
+    },
 }
 
 /// The resolver performs name resolution and variable slot assignment.
@@ -163,6 +174,12 @@ impl<'a> Resolver<'a> {
                     }
                     self.functions.insert(fn_def.name.clone(), index);
                     func_defs.push(fn_def);
+                }
+                Item::StructDef(_struct_def) => {
+                    // TODO: Handle struct definitions in resolver
+                }
+                Item::ImplBlock(_impl_block) => {
+                    // TODO: Handle impl blocks in resolver
                 }
                 Item::Statement(stmt) => {
                     main_stmts.push(stmt);
@@ -486,6 +503,37 @@ impl<'a> Resolver<'a> {
                 }
 
                 Err(self.error(&format!("undefined function '{}'", callee), span))
+            }
+            Expr::StructLiteral { name, fields, span } => {
+                // TODO: Implement struct literal resolution
+                let resolved_fields: Vec<_> = fields
+                    .into_iter()
+                    .map(|(name, expr)| {
+                        let resolved_expr = self.resolve_expr(expr, scope)?;
+                        Ok((name, resolved_expr))
+                    })
+                    .collect::<Result<_, String>>()?;
+                Ok(ResolvedExpr::StructLiteral {
+                    name,
+                    fields: resolved_fields,
+                })
+            }
+            Expr::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let resolved_object = self.resolve_expr(*object, scope)?;
+                let resolved_args: Vec<_> = args
+                    .into_iter()
+                    .map(|a| self.resolve_expr(a, scope))
+                    .collect::<Result<_, _>>()?;
+                Ok(ResolvedExpr::MethodCall {
+                    object: Box::new(resolved_object),
+                    method,
+                    args: resolved_args,
+                })
             }
         }
     }
