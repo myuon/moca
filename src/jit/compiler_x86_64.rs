@@ -218,12 +218,8 @@ impl JitCompiler {
 
             Op::Ret => self.emit_ret(),
 
-            // Operations that fall back to interpreter
-            _ => {
-                // For now, unsupported ops are skipped
-                // In a full implementation, we'd call runtime helpers
-                Ok(())
-            }
+            // Unsupported operations - fail compilation so VM falls back to interpreter
+            _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
         }
     }
 
