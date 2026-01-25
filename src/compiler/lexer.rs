@@ -18,6 +18,8 @@ pub enum TokenKind {
     Catch,
     Throw,
     Import,
+    Struct,
+    Impl,
 
     // Literals
     Int(i64),
@@ -376,6 +378,8 @@ impl<'a> Lexer<'a> {
             "catch" => TokenKind::Catch,
             "throw" => TokenKind::Throw,
             "import" => TokenKind::Import,
+            "struct" => TokenKind::Struct,
+            "impl" => TokenKind::Impl,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }
