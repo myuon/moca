@@ -100,6 +100,11 @@ enum Commands {
         /// The source file to debug
         file: PathBuf,
     },
+    /// Type check a mica source file without running it
+    Check {
+        /// The source file to check (defaults to pkg.toml entry if in a project)
+        file: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -159,6 +164,29 @@ fn main() -> ExitCode {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }
+        }
+        Commands::Check { file } => {
+            let path = match file {
+                Some(p) => p,
+                None => {
+                    // Try to find pkg.toml and use entry point
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    match package::PackageManifest::load(&cwd) {
+                        Ok(manifest) => cwd.join(&manifest.package.entry),
+                        Err(_) => {
+                            eprintln!("error: no file specified and no pkg.toml found");
+                            eprintln!("usage: mica check <file> or run from a mica project directory");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            };
+
+            if let Err(e) = compiler::check_file(&path) {
+                eprintln!("{}", e);
+                return ExitCode::FAILURE;
+            }
+            println!("Type check passed.");
         }
     }
 

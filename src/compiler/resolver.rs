@@ -7,6 +7,15 @@ use std::collections::HashMap;
 pub struct ResolvedProgram {
     pub functions: Vec<ResolvedFunction>,
     pub main_body: Vec<ResolvedStatement>,
+    pub structs: Vec<ResolvedStruct>,
+}
+
+/// Information about a resolved struct.
+#[derive(Debug, Clone)]
+pub struct ResolvedStruct {
+    pub name: String,
+    /// Field names in declaration order
+    pub fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +119,30 @@ pub enum ResolvedExpr {
     SpawnFunc {
         func_index: usize,
     },
+    /// Struct literal: `Point { x: 1, y: 2 }`
+    /// Fields are resolved to expressions in declaration order (struct field order).
+    StructLiteral {
+        struct_index: usize,
+        /// Field values in declaration order (not named anymore)
+        fields: Vec<ResolvedExpr>,
+    },
+    /// Method call: `obj.method(args)`
+    /// Method name is kept for runtime dispatch (type not known statically).
+    MethodCall {
+        object: Box<ResolvedExpr>,
+        method: String,
+        args: Vec<ResolvedExpr>,
+    },
+}
+
+/// Information about a struct during resolution.
+#[derive(Debug, Clone)]
+struct StructDefInfo {
+    index: usize,
+    /// Field names in declaration order
+    fields: Vec<String>,
+    /// Methods: method_name -> function_index
+    methods: HashMap<String, usize>,
 }
 
 /// The resolver performs name resolution and variable slot assignment.
@@ -117,6 +150,10 @@ pub struct Resolver<'a> {
     filename: &'a str,
     functions: HashMap<String, usize>,
     builtins: Vec<String>,
+    /// Struct definitions: struct_name -> info
+    structs: HashMap<String, StructDefInfo>,
+    /// Resolved struct list (for output)
+    resolved_structs: Vec<ResolvedStruct>,
 }
 
 impl<'a> Resolver<'a> {
@@ -139,11 +176,15 @@ impl<'a> Resolver<'a> {
                 "recv".to_string(),
                 "join".to_string(),
             ],
+            structs: HashMap::new(),
+            resolved_structs: Vec::new(),
         }
     }
 
     pub fn resolve(&mut self, program: Program) -> Result<ResolvedProgram, String> {
-        // First pass: collect all function names
+        // First pass: collect struct definitions
+        let mut struct_defs = Vec::new();
+        let mut impl_blocks = Vec::new();
         let mut func_defs = Vec::new();
         let mut main_stmts = Vec::new();
 
@@ -151,22 +192,84 @@ impl<'a> Resolver<'a> {
             match item {
                 Item::Import(_import) => {
                     // Imports are handled in module resolution phase
-                    // For now, we just skip them during local resolution
+                }
+                Item::StructDef(struct_def) => {
+                    struct_defs.push(struct_def);
+                }
+                Item::ImplBlock(impl_block) => {
+                    impl_blocks.push(impl_block);
                 }
                 Item::FnDef(fn_def) => {
-                    let index = func_defs.len();
-                    if self.functions.contains_key(&fn_def.name) {
-                        return Err(self.error(
-                            &format!("function '{}' already defined", fn_def.name),
-                            fn_def.span,
-                        ));
-                    }
-                    self.functions.insert(fn_def.name.clone(), index);
                     func_defs.push(fn_def);
                 }
                 Item::Statement(stmt) => {
                     main_stmts.push(stmt);
                 }
+            }
+        }
+
+        // Register struct definitions
+        for struct_def in &struct_defs {
+            if self.structs.contains_key(&struct_def.name) {
+                return Err(self.error(
+                    &format!("struct '{}' already defined", struct_def.name),
+                    struct_def.span,
+                ));
+            }
+            let index = self.resolved_structs.len();
+            let fields: Vec<String> = struct_def.fields.iter().map(|f| f.name.clone()).collect();
+            self.structs.insert(
+                struct_def.name.clone(),
+                StructDefInfo {
+                    index,
+                    fields: fields.clone(),
+                    methods: HashMap::new(),
+                },
+            );
+            self.resolved_structs.push(ResolvedStruct {
+                name: struct_def.name.clone(),
+                fields,
+            });
+        }
+
+        // Register top-level functions
+        for fn_def in &func_defs {
+            let index = func_defs.iter().position(|f| f.name == fn_def.name).unwrap();
+            if self.functions.contains_key(&fn_def.name) {
+                return Err(self.error(
+                    &format!("function '{}' already defined", fn_def.name),
+                    fn_def.span,
+                ));
+            }
+            self.functions.insert(fn_def.name.clone(), index);
+        }
+
+        // Register impl block methods as functions
+        for impl_block in &impl_blocks {
+            let struct_info = self.structs.get(&impl_block.struct_name).ok_or_else(|| {
+                self.error(
+                    &format!("impl for undefined struct '{}'", impl_block.struct_name),
+                    impl_block.span,
+                )
+            })?;
+            let struct_index = struct_info.index;
+
+            for method in &impl_block.methods {
+                // Create a unique function name for the method: StructName::method_name
+                let func_name = format!("{}::{}", impl_block.struct_name, method.name);
+                let func_index = func_defs.len() + self.functions.len();
+
+                if self.functions.contains_key(&func_name) {
+                    return Err(self.error(
+                        &format!("method '{}' already defined for struct '{}'", method.name, impl_block.struct_name),
+                        method.span,
+                    ));
+                }
+                self.functions.insert(func_name.clone(), func_index);
+
+                // Add method to struct's method table
+                let struct_info = self.structs.get_mut(&impl_block.struct_name).unwrap();
+                struct_info.methods.insert(method.name.clone(), func_index);
             }
         }
 
@@ -177,6 +280,14 @@ impl<'a> Resolver<'a> {
             resolved_functions.push(resolved);
         }
 
+        // Resolve impl block methods as functions
+        for impl_block in impl_blocks {
+            for method in impl_block.methods {
+                let resolved = self.resolve_method(method, &impl_block.struct_name)?;
+                resolved_functions.push(resolved);
+            }
+        }
+
         // Resolve main body
         let mut scope = Scope::new();
         let resolved_main = self.resolve_statements(main_stmts, &mut scope)?;
@@ -184,6 +295,32 @@ impl<'a> Resolver<'a> {
         Ok(ResolvedProgram {
             functions: resolved_functions,
             main_body: resolved_main,
+            structs: self.resolved_structs.clone(),
+        })
+    }
+
+    fn resolve_method(&self, method: FnDef, struct_name: &str) -> Result<ResolvedFunction, String> {
+        let mut scope = Scope::new();
+
+        // Add 'self' as first parameter
+        let mut param_names: Vec<String> = vec!["self".to_string()];
+        scope.declare("self".to_string(), false);
+
+        // Add other parameters
+        for param in &method.params {
+            if param.name != "self" {
+                param_names.push(param.name.clone());
+                scope.declare(param.name.clone(), false);
+            }
+        }
+
+        let body = self.resolve_statements(method.body.statements, &mut scope)?;
+
+        Ok(ResolvedFunction {
+            name: format!("{}::{}", struct_name, method.name),
+            params: param_names,
+            locals_count: scope.locals_count,
+            body,
         })
     }
 
@@ -191,15 +328,16 @@ impl<'a> Resolver<'a> {
         let mut scope = Scope::new();
 
         // Add parameters to scope
-        for param in &fn_def.params {
-            scope.declare(param.clone(), false);
+        let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
+        for param_name in &param_names {
+            scope.declare(param_name.clone(), false);
         }
 
         let body = self.resolve_statements(fn_def.body.statements, &mut scope)?;
 
         Ok(ResolvedFunction {
             name: fn_def.name,
-            params: fn_def.params,
+            params: param_names,
             locals_count: scope.locals_count,
             body,
         })
@@ -228,6 +366,7 @@ impl<'a> Resolver<'a> {
             Statement::Let {
                 name,
                 mutable,
+                type_annotation: _,
                 init,
                 span: _,
             } => {
@@ -484,6 +623,58 @@ impl<'a> Resolver<'a> {
                 }
 
                 Err(self.error(&format!("undefined function '{}'", callee), span))
+            }
+            Expr::StructLiteral { name, fields, span } => {
+                // Look up struct definition
+                let struct_info = self.structs.get(&name).ok_or_else(|| {
+                    self.error(&format!("undefined struct '{}'", name), span)
+                })?;
+                let struct_index = struct_info.index;
+                let struct_fields = struct_info.fields.clone();
+
+                // Create a map of provided field names to expressions
+                let mut field_map: HashMap<String, Expr> = fields.into_iter().collect();
+
+                // Resolve fields in declaration order
+                let mut resolved_fields = Vec::new();
+                for field_name in &struct_fields {
+                    let expr = field_map.remove(field_name).ok_or_else(|| {
+                        self.error(&format!("missing field '{}' in struct '{}'", field_name, name), span)
+                    })?;
+                    resolved_fields.push(self.resolve_expr(expr, scope)?);
+                }
+
+                // Check for extra fields
+                if let Some((extra_field, _)) = field_map.into_iter().next() {
+                    return Err(self.error(
+                        &format!("unknown field '{}' in struct '{}'", extra_field, name),
+                        span,
+                    ));
+                }
+
+                Ok(ResolvedExpr::StructLiteral {
+                    struct_index,
+                    fields: resolved_fields,
+                })
+            }
+            Expr::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let resolved_object = self.resolve_expr(*object, scope)?;
+                let resolved_args: Vec<_> = args
+                    .into_iter()
+                    .map(|a| self.resolve_expr(a, scope))
+                    .collect::<Result<_, _>>()?;
+
+                // Method name is kept for runtime dispatch
+                Ok(ResolvedExpr::MethodCall {
+                    object: Box::new(resolved_object),
+                    method,
+                    args: resolved_args,
+                })
             }
         }
     }

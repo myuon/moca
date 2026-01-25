@@ -623,3 +623,150 @@ print(result);
     assert!(success, "thread with computation should work, stderr: {}", stderr);
     assert_eq!(stdout.trim(), "499500");
 }
+
+// ===== Struct Tests =====
+
+#[test]
+fn test_struct_definition_and_literal() {
+    // Test basic struct definition and creation
+    let source = r#"
+struct Point {
+    x: int,
+    y: int
+}
+
+let p = Point { x: 10, y: 20 };
+print(p);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct creation should work, stderr: {}", stderr);
+    // Struct is compiled as an array [x_value, y_value]
+    assert_eq!(stdout.trim(), "[10, 20]");
+}
+
+#[test]
+fn test_struct_field_access() {
+    // Test struct field access
+    let source = r#"
+struct Point {
+    x: int,
+    y: int
+}
+
+let p = Point { x: 5, y: 15 };
+print(p[0]);
+print(p[1]);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct field access should work, stderr: {}", stderr);
+    // Since structs are compiled as arrays, access by index
+    assert_eq!(stdout, "5\n15\n");
+}
+
+#[test]
+fn test_struct_in_function() {
+    // Test struct passed to and returned from function
+    let source = r#"
+struct Point {
+    x: int,
+    y: int
+}
+
+fun make_point(a, b) {
+    return Point { x: a, y: b };
+}
+
+fun sum_point(p) {
+    return p[0] + p[1];
+}
+
+let p1 = make_point(3, 7);
+let result = sum_point(p1);
+print(result);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct in function should work, stderr: {}", stderr);
+    assert_eq!(stdout.trim(), "10");
+}
+
+#[test]
+fn test_struct_with_nullable_field() {
+    // Test struct with nullable field
+    let source = r#"
+struct User {
+    name: string,
+    age: int?
+}
+
+let u1 = User { name: "Alice", age: 30 };
+let u2 = User { name: "Bob", age: nil };
+print(u1[0]);
+print(u1[1]);
+print(u2[0]);
+print(u2[1]);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct with nullable field should work, stderr: {}", stderr);
+    assert_eq!(stdout, "Alice\n30\nBob\nnil\n");
+}
+
+#[test]
+fn test_multiple_structs() {
+    // Test multiple struct definitions
+    let source = r#"
+struct Point {
+    x: int,
+    y: int
+}
+
+struct Rectangle {
+    width: int,
+    height: int
+}
+
+let p = Point { x: 1, y: 2 };
+let r = Rectangle { width: 10, height: 20 };
+print(p[0]);
+print(r[0]);
+print(r[1]);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "multiple structs should work, stderr: {}", stderr);
+    assert_eq!(stdout, "1\n10\n20\n");
+}
+
+#[test]
+fn test_struct_field_access_dot_syntax() {
+    // Test struct field access with .field syntax
+    let source = r#"
+struct Point {
+    x: int,
+    y: int
+}
+
+let p = Point { x: 10, y: 20 };
+print(p.x);
+print(p.y);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct field access with dot syntax should work, stderr: {}", stderr);
+    assert_eq!(stdout, "10\n20\n");
+}
+
+#[test]
+fn test_struct_field_mutation() {
+    // Test struct field mutation with .field syntax
+    let source = r#"
+struct Counter {
+    value: int
+}
+
+var c = Counter { value: 0 };
+print(c.value);
+c.value = 42;
+print(c.value);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct field mutation should work, stderr: {}", stderr);
+    assert_eq!(stdout, "0\n42\n");
+}

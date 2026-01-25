@@ -18,6 +18,8 @@ pub enum TokenKind {
     Catch,
     Throw,
     Import,
+    Struct,
+    Impl,
 
     // Literals
     Int(i64),
@@ -42,6 +44,8 @@ pub enum TokenKind {
     Bang,
     Eq,
     Dot,
+    Arrow,    // ->
+    Question, // ?
 
     // Delimiters
     LParen,
@@ -131,7 +135,15 @@ impl<'a> Lexer<'a> {
                 ':' => { self.advance(); TokenKind::Colon }
                 '.' => { self.advance(); TokenKind::Dot }
                 '+' => { self.advance(); TokenKind::Plus }
-                '-' => { self.advance(); TokenKind::Minus }
+                '-' => {
+                    self.advance();
+                    if self.match_char('>') {
+                        TokenKind::Arrow
+                    } else {
+                        TokenKind::Minus
+                    }
+                }
+                '?' => { self.advance(); TokenKind::Question }
                 '*' => { self.advance(); TokenKind::Star }
                 '/' => { self.advance(); TokenKind::Slash }
                 '%' => { self.advance(); TokenKind::Percent }
@@ -366,6 +378,8 @@ impl<'a> Lexer<'a> {
             "catch" => TokenKind::Catch,
             "throw" => TokenKind::Throw,
             "import" => TokenKind::Import,
+            "struct" => TokenKind::Struct,
+            "impl" => TokenKind::Impl,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }

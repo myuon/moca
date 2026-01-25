@@ -1,4 +1,5 @@
 use crate::compiler::lexer::Span;
+use crate::compiler::types::TypeAnnotation;
 
 /// A complete program consisting of items (functions and statements).
 #[derive(Debug, Clone)]
@@ -11,6 +12,8 @@ pub struct Program {
 pub enum Item {
     Import(Import),
     FnDef(FnDef),
+    StructDef(StructDef),
+    ImplBlock(ImplBlock),
     Statement(Statement),
 }
 
@@ -24,11 +27,44 @@ pub struct Import {
     pub span: Span,
 }
 
+/// A struct field definition.
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub type_annotation: TypeAnnotation,
+    pub span: Span,
+}
+
+/// A struct definition.
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+/// An impl block containing methods for a struct.
+#[derive(Debug, Clone)]
+pub struct ImplBlock {
+    pub struct_name: String,
+    pub methods: Vec<FnDef>,
+    pub span: Span,
+}
+
+/// A function parameter with optional type annotation.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub type_annotation: Option<TypeAnnotation>,
+    pub span: Span,
+}
+
 /// A function definition.
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeAnnotation>,
     pub body: Block,
     pub span: Span,
 }
@@ -46,6 +82,7 @@ pub enum Statement {
     Let {
         name: String,
         mutable: bool,
+        type_annotation: Option<TypeAnnotation>,
         init: Expr,
         span: Span,
     },
@@ -163,6 +200,19 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Struct literal: `Point { x: 1, y: 2 }`
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, Expr)>,
+        span: Span,
+    },
+    /// Method call: `obj.method(args)`
+    MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -181,6 +231,8 @@ impl Expr {
             Expr::Unary { span, .. } => *span,
             Expr::Binary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
+            Expr::StructLiteral { span, .. } => *span,
+            Expr::MethodCall { span, .. } => *span,
         }
     }
 }

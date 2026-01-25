@@ -147,6 +147,12 @@ impl ModuleLoader {
                     Item::FnDef(fn_def) => {
                         all_items.push(Item::FnDef(fn_def.clone()));
                     }
+                    Item::StructDef(struct_def) => {
+                        all_items.push(Item::StructDef(struct_def.clone()));
+                    }
+                    Item::ImplBlock(impl_block) => {
+                        all_items.push(Item::ImplBlock(impl_block.clone()));
+                    }
                     Item::Statement(_) => {
                         // Module-level statements are not imported
                     }
