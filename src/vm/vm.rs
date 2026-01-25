@@ -7,6 +7,8 @@ use crate::vm::{Chunk, Function, Heap, Op, Value};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler::{CompiledCode, JitCompiler};
+#[cfg(all(target_arch = "x86_64", feature = "jit"))]
+use crate::jit::compiler_x86_64::{CompiledCode, JitCompiler};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -65,6 +67,9 @@ pub struct VM {
     /// JIT compiled functions (only on AArch64 with jit feature)
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     jit_functions: HashMap<usize, CompiledCode>,
+    /// JIT compiled functions (only on x86-64 with jit feature)
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
 }
@@ -85,6 +90,8 @@ impl VM {
             thread_spawner: ThreadSpawner::new(),
             channels: Vec::new(),
             #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+            jit_functions: HashMap::new(),
+            #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
         }
@@ -150,7 +157,7 @@ impl VM {
                     eprintln!(
                         "[JIT] Compiled function '{}' ({} bytes)",
                         func.name,
-                        compiled.memory.len()
+                        compiled.memory.size()
                     );
                 }
                 self.jit_functions.insert(func_index, compiled);
@@ -166,6 +173,40 @@ impl VM {
 
     /// Check if a function has been JIT compiled (AArch64 with jit feature only).
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn is_jit_compiled(&self, func_index: usize) -> bool {
+        self.jit_functions.contains_key(&func_index)
+    }
+
+    /// Compile a function to native code (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
+        if self.jit_functions.contains_key(&func_index) {
+            return; // Already compiled
+        }
+
+        let compiler = JitCompiler::new();
+        match compiler.compile(func) {
+            Ok(compiled) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Compiled function '{}' ({} bytes)",
+                        func.name,
+                        compiled.memory.size()
+                    );
+                }
+                self.jit_functions.insert(func_index, compiled);
+                self.jit_compile_count += 1;
+            }
+            Err(e) => {
+                if self.trace_jit {
+                    eprintln!("[JIT] Failed to compile '{}': {}", func.name, e);
+                }
+            }
+        }
+    }
+
+    /// Check if a function has been JIT compiled (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn is_jit_compiled(&self, func_index: usize) -> bool {
         self.jit_functions.contains_key(&func_index)
     }
@@ -1129,15 +1170,15 @@ impl VM {
 
                 // Check if this function is hot
                 if self.should_jit_compile(*func_idx, &func_name) {
-                    // Compile the function on AArch64 with jit feature enabled
-                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    // Compile the function with JIT (architecture-specific)
+                    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
                     {
                         let func_clone = func.clone();
                         self.jit_compile_function(&func_clone, *func_idx);
                     }
 
-                    // On non-AArch64 platforms or without jit feature, just log that compilation would happen
-                    #[cfg(not(all(target_arch = "aarch64", feature = "jit")))]
+                    // On unsupported platforms or without jit feature, just log that compilation would happen
+                    #[cfg(not(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit")))]
                     if self.trace_jit {
                         eprintln!("[JIT] Would compile '{}' (JIT not available)", func_name);
                         self.jit_compile_count += 1;
