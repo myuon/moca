@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 mod compiler;
 mod debugger;
+#[cfg(feature = "jit")]
 mod jit;
 mod lsp;
 mod package;
