@@ -116,6 +116,9 @@ impl VM {
 
     /// Run with quickening enabled - specializes instructions based on observed types.
     pub fn run_with_quickening(&mut self, chunk: &mut Chunk) -> Result<(), String> {
+        // Initialize call counters for hot function detection
+        self.init_call_counts(chunk);
+
         // Start with main
         self.frames.push(Frame {
             func_index: usize::MAX, // Marker for main
@@ -882,6 +885,35 @@ impl VM {
                 if let Some(new_op) = quickened_op {
                     self.quicken_instruction(chunk, func_index, pc, new_op);
                 }
+
+                return Ok(ControlFlow::Continue);
+            }
+            // Track function calls for JIT hot function detection
+            Op::Call(func_idx, argc) => {
+                let func = &chunk.functions[*func_idx];
+                let func_name = func.name.clone();
+
+                // Check if this function is hot
+                if self.should_jit_compile(*func_idx, &func_name) {
+                    // In a full JIT implementation, we would compile here
+                    // For now, just log the event (trace_jit is checked in should_jit_compile)
+                }
+
+                // Now execute the call normally
+                if *argc != func.arity {
+                    return Err(format!(
+                        "runtime error: function '{}' expects {} arguments, got {}",
+                        func.name, func.arity, argc
+                    ));
+                }
+
+                let new_stack_base = self.stack.len() - argc;
+
+                self.frames.push(Frame {
+                    func_index: *func_idx,
+                    pc: 0,
+                    stack_base: new_stack_base,
+                });
 
                 return Ok(ControlFlow::Continue);
             }

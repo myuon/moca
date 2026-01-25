@@ -391,3 +391,164 @@ print(t);
     let stdout = assert_success(source);
     assert_eq!(stdout, "line1\nline2\ntab\there\n");
 }
+
+// ===== v3 Feature Tests: JIT and GC =====
+
+fn run_mica_with_args(source: &str, args: &[&str]) -> (String, String, bool) {
+    let temp_dir = std::env::temp_dir();
+    let unique_id = std::thread::current().id();
+    let temp_file = temp_dir.join(format!("mica_test_{:?}.mica", unique_id));
+    std::fs::write(&temp_file, source).unwrap();
+
+    let mut cmd_args = vec!["run"];
+    cmd_args.extend(args);
+    cmd_args.push(temp_file.to_str().unwrap());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mica"))
+        .args(&cmd_args)
+        .output()
+        .expect("failed to execute mica");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let success = output.status.success();
+
+    std::fs::remove_file(&temp_file).ok();
+
+    (stdout, stderr, success)
+}
+
+#[test]
+fn test_jit_mode_off() {
+    // Test that --jit=off works correctly
+    let source = r#"
+fun sum(n) {
+    var total = 0;
+    var i = 0;
+    while i < n {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+print(sum(100));
+"#;
+    let (stdout, _stderr, success) = run_mica_with_args(source, &["--jit=off"]);
+    assert!(success, "JIT=off mode should work");
+    assert_eq!(stdout.trim(), "4950");
+}
+
+#[test]
+fn test_jit_trace() {
+    // Test that --trace-jit outputs JIT information
+    let source = r#"
+fun hot_func() {
+    return 42;
+}
+
+var i = 0;
+while i < 10 {
+    hot_func();
+    i = i + 1;
+}
+print("done");
+"#;
+    let (stdout, stderr, success) = run_mica_with_args(source, &["--trace-jit", "--jit-threshold=5"]);
+    assert!(success, "trace-jit should work");
+    assert_eq!(stdout.trim(), "done");
+    // Should contain JIT trace information
+    assert!(stderr.contains("[JIT]"), "should have JIT trace output: {}", stderr);
+}
+
+#[test]
+fn test_jit_hot_function_detection() {
+    // Test that hot functions are detected with low threshold
+    let source = r#"
+fun counter(n) {
+    var sum = 0;
+    var i = 0;
+    while i < n {
+        sum = sum + 1;
+        i = i + 1;
+    }
+    return sum;
+}
+
+var total = 0;
+var j = 0;
+while j < 20 {
+    total = total + counter(10);
+    j = j + 1;
+}
+print(total);
+"#;
+    let (stdout, stderr, success) = run_mica_with_args(source, &["--trace-jit", "--jit-threshold=10"]);
+    assert!(success, "hot function detection should work");
+    assert_eq!(stdout.trim(), "200");
+    // Should detect hot function
+    assert!(stderr.contains("Hot function detected"), "should detect hot function: {}", stderr);
+}
+
+#[test]
+fn test_gc_stats() {
+    // Test that --gc-stats outputs GC statistics
+    let source = r#"
+fun allocate_arrays() {
+    var i = 0;
+    while i < 1000 {
+        let arr = [i, i + 1, i + 2];
+        i = i + 1;
+    }
+}
+
+allocate_arrays();
+print("done");
+"#;
+    let (stdout, stderr, success) = run_mica_with_args(source, &["--gc-stats"]);
+    assert!(success, "gc-stats should work");
+    assert_eq!(stdout.trim(), "done");
+    // Should contain GC statistics
+    assert!(stderr.contains("[GC]"), "should have GC stats output: {}", stderr);
+}
+
+#[test]
+fn test_quickening_sum_loop() {
+    // Test that quickening works correctly for a sum loop
+    let source = r#"
+fun sum_to(n) {
+    var total = 0;
+    var i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+print(sum_to(100));
+print(sum_to(1000));
+"#;
+    let (stdout, _, success) = run_mica_with_args(source, &["--jit=on"]);
+    assert!(success, "quickening should work");
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "5050");
+    assert_eq!(lines[1], "500500");
+}
+
+#[test]
+fn test_gc_mode_concurrent() {
+    // Test that --gc-mode=concurrent works (even if behavior is same as stw for now)
+    let source = r#"
+var arr = [];
+var i = 0;
+while i < 100 {
+    push(arr, i);
+    i = i + 1;
+}
+print(len(arr));
+"#;
+    let (stdout, _, success) = run_mica_with_args(source, &["--gc-mode=concurrent"]);
+    assert!(success, "concurrent GC mode should work");
+    assert_eq!(stdout.trim(), "100");
+}
