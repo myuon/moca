@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -8,6 +8,50 @@ mod jit;
 mod lsp;
 mod package;
 mod vm;
+
+/// JIT compilation mode
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum JitMode {
+    /// JIT disabled, interpreter only
+    Off,
+    /// JIT enabled (compile hot functions)
+    On,
+    /// Automatic: JIT enabled if supported on this platform
+    #[default]
+    Auto,
+}
+
+/// GC mode
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum GcMode {
+    /// Stop-the-world GC
+    #[default]
+    Stw,
+    /// Concurrent GC (reduced pause times)
+    Concurrent,
+}
+
+/// Runtime configuration for the VM
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    pub jit_mode: JitMode,
+    pub jit_threshold: u32,
+    pub trace_jit: bool,
+    pub gc_mode: GcMode,
+    pub gc_stats: bool,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            jit_mode: JitMode::Auto,
+            jit_threshold: 1000,
+            trace_jit: false,
+            gc_mode: GcMode::Stw,
+            gc_stats: false,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "mica")]
@@ -28,6 +72,26 @@ enum Commands {
     Run {
         /// The source file to run (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
+
+        /// JIT compilation mode (off, on, auto)
+        #[arg(long, value_enum, default_value = "auto")]
+        jit: JitMode,
+
+        /// JIT compilation threshold (number of calls before JIT)
+        #[arg(long, default_value = "1000")]
+        jit_threshold: u32,
+
+        /// Trace JIT compilation events
+        #[arg(long)]
+        trace_jit: bool,
+
+        /// GC mode (stw, concurrent)
+        #[arg(long, value_enum, default_value = "stw")]
+        gc_mode: GcMode,
+
+        /// Print GC statistics
+        #[arg(long)]
+        gc_stats: bool,
     },
     /// Start the language server
     Lsp,
@@ -49,7 +113,14 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
-        Commands::Run { file } => {
+        Commands::Run {
+            file,
+            jit,
+            jit_threshold,
+            trace_jit,
+            gc_mode,
+            gc_stats,
+        } => {
             let path = match file {
                 Some(p) => p,
                 None => {
@@ -65,7 +136,16 @@ fn main() -> ExitCode {
                     }
                 }
             };
-            if let Err(e) = run_file(&path) {
+
+            let config = RuntimeConfig {
+                jit_mode: jit,
+                jit_threshold,
+                trace_jit,
+                gc_mode,
+                gc_stats,
+            };
+
+            if let Err(e) = run_file(&path, &config) {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }
@@ -85,7 +165,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_file(path: &PathBuf) -> Result<(), String> {
+fn run_file(path: &PathBuf, config: &RuntimeConfig) -> Result<(), String> {
     // Use the module-aware run_file for import support
-    compiler::run_file(path)
+    compiler::run_file_with_config(path, config)
 }

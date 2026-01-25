@@ -27,6 +27,14 @@ struct TryFrame {
     func_index: usize,
 }
 
+/// GC statistics.
+#[derive(Debug, Clone, Default)]
+pub struct VmGcStats {
+    pub cycles: usize,
+    pub total_pause_us: u64,
+    pub max_pause_us: u64,
+}
+
 /// The mica virtual machine.
 pub struct VM {
     stack: Vec<Value>,
@@ -37,6 +45,14 @@ pub struct VM {
     ic_tables: Vec<InlineCacheTable>,
     /// Inline cache table for main function
     main_ic: InlineCacheTable,
+    /// Function call counters for JIT (index matches Chunk::functions)
+    call_counts: Vec<u32>,
+    /// JIT threshold
+    jit_threshold: u32,
+    /// Whether to trace JIT events
+    trace_jit: bool,
+    /// GC statistics
+    gc_stats: VmGcStats,
 }
 
 impl VM {
@@ -48,7 +64,22 @@ impl VM {
             try_frames: Vec::new(),
             ic_tables: Vec::new(),
             main_ic: InlineCacheTable::new(),
+            call_counts: Vec::new(),
+            jit_threshold: 1000,
+            trace_jit: false,
+            gc_stats: VmGcStats::default(),
         }
+    }
+
+    /// Configure JIT settings.
+    pub fn set_jit_config(&mut self, threshold: u32, trace: bool) {
+        self.jit_threshold = threshold;
+        self.trace_jit = trace;
+    }
+
+    /// Get GC statistics.
+    pub fn gc_stats(&self) -> &VmGcStats {
+        &self.gc_stats
     }
 
     /// Initialize IC tables for a chunk (call before run_with_ic).
@@ -58,6 +89,29 @@ impl VM {
             self.ic_tables.push(InlineCacheTable::new());
         }
         self.main_ic = InlineCacheTable::new();
+    }
+
+    /// Initialize call counts for a chunk.
+    fn init_call_counts(&mut self, chunk: &Chunk) {
+        self.call_counts = vec![0; chunk.functions.len()];
+    }
+
+    /// Increment call count and check if function should be JIT compiled.
+    fn should_jit_compile(&mut self, func_index: usize, func_name: &str) -> bool {
+        if func_index >= self.call_counts.len() {
+            return false;
+        }
+
+        self.call_counts[func_index] += 1;
+
+        if self.call_counts[func_index] == self.jit_threshold {
+            if self.trace_jit {
+                eprintln!("[JIT] Hot function detected: {} (calls: {})", func_name, self.jit_threshold);
+            }
+            return true;
+        }
+
+        false
     }
 
     /// Run with quickening enabled - specializes instructions based on observed types.
