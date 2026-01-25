@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod compiler;
+mod debugger;
 mod lsp;
 mod package;
 mod vm;
@@ -29,6 +30,11 @@ enum Commands {
     },
     /// Start the language server
     Lsp,
+    /// Debug a mica source file with TUI debugger
+    Debug {
+        /// The source file to debug
+        file: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -66,6 +72,12 @@ fn main() -> ExitCode {
         Commands::Lsp => {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(lsp::run_server());
+        }
+        Commands::Debug { file } => {
+            if let Err(e) = debugger::run_debugger(&file) {
+                eprintln!("{}", e);
+                return ExitCode::FAILURE;
+            }
         }
     }
 
