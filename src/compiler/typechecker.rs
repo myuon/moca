@@ -888,15 +888,32 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
 
-                // Object should be array<T>
-                let elem_type = self.fresh_var();
-                let arr_type = Type::Array(Box::new(elem_type.clone()));
-                if let Err(e) = self.unify(&obj_type, &arr_type, *span) {
-                    self.errors.push(e);
-                    return self.fresh_var();
+                // Object can be array<T> or struct (structs are compiled as arrays)
+                match self.substitution.apply(&obj_type) {
+                    Type::Array(elem) => self.substitution.apply(&elem),
+                    Type::Struct { fields, .. } => {
+                        // For structs, index access returns a type variable
+                        // (we'd need to know the index value at compile time to be precise)
+                        // All fields may have different types, so return a fresh var
+                        if fields.is_empty() {
+                            self.fresh_var()
+                        } else {
+                            // Return first field type as approximation (or unify all)
+                            self.fresh_var()
+                        }
+                    }
+                    Type::Var(_) => {
+                        // Unknown type, could be array or struct
+                        self.fresh_var()
+                    }
+                    _ => {
+                        self.errors.push(TypeError::new(
+                            format!("expected array or struct, found `{}`", obj_type),
+                            *span,
+                        ));
+                        self.fresh_var()
+                    }
                 }
-
-                self.substitution.apply(&elem_type)
             }
 
             Expr::Field { object, field, span } => {
