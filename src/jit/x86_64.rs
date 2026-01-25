@@ -417,6 +417,55 @@ impl<'a> X86_64Assembler<'a> {
 
     // ==================== Control Flow ====================
 
+    /// JMP rel32 (relative jump, near)
+    pub fn jmp_rel32(&mut self, offset: i32) {
+        self.buf.emit_u8(0xE9); // JMP rel32
+        self.buf.emit_u32(offset as u32);
+    }
+
+    /// JMP rel8 (short jump)
+    pub fn jmp_rel8(&mut self, offset: i8) {
+        self.buf.emit_u8(0xEB); // JMP rel8
+        self.buf.emit_u8(offset as u8);
+    }
+
+    /// Jcc rel32 (conditional jump, near)
+    pub fn jcc_rel32(&mut self, cond: Cond, offset: i32) {
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x80 + cond as u8); // Jcc rel32
+        self.buf.emit_u32(offset as u32);
+    }
+
+    /// Jcc rel8 (conditional short jump)
+    pub fn jcc_rel8(&mut self, cond: Cond, offset: i8) {
+        self.buf.emit_u8(0x70 + cond as u8); // Jcc rel8
+        self.buf.emit_u8(offset as u8);
+    }
+
+    /// CALL rel32 (relative call)
+    pub fn call_rel32(&mut self, offset: i32) {
+        self.buf.emit_u8(0xE8); // CALL rel32
+        self.buf.emit_u32(offset as u32);
+    }
+
+    /// CALL r64 (indirect call through register)
+    pub fn call_r(&mut self, reg: Reg) {
+        if reg.needs_rex_ext() {
+            self.buf.emit_u8(0x41); // REX.B
+        }
+        self.buf.emit_u8(0xFF); // CALL r/m64
+        self.buf.emit_u8(Self::modrm(0b11, 2, reg.code()));
+    }
+
+    /// JMP r64 (indirect jump through register)
+    pub fn jmp_r(&mut self, reg: Reg) {
+        if reg.needs_rex_ext() {
+            self.buf.emit_u8(0x41); // REX.B
+        }
+        self.buf.emit_u8(0xFF); // JMP r/m64
+        self.buf.emit_u8(Self::modrm(0b11, 4, reg.code()));
+    }
+
     /// RET (return)
     pub fn ret(&mut self) {
         self.buf.emit_u8(0xC3);
@@ -425,6 +474,27 @@ impl<'a> X86_64Assembler<'a> {
     /// NOP (no operation)
     pub fn nop(&mut self) {
         self.buf.emit_u8(0x90);
+    }
+
+    // ==================== Conditional Set ====================
+
+    /// SETcc r8 (set byte based on condition)
+    pub fn setcc(&mut self, cond: Cond, dst: Reg) {
+        if dst.needs_rex_ext() || dst == Reg::Rsp || dst == Reg::Rbp || dst == Reg::Rsi || dst == Reg::Rdi {
+            // Need REX prefix to access SPL, BPL, SIL, DIL or R8B-R15B
+            self.buf.emit_u8(0x40 | dst.rex_b());
+        }
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x90 + cond as u8); // SETcc r/m8
+        self.buf.emit_u8(Self::modrm(0b11, 0, dst.code()));
+    }
+
+    /// MOVZX r64, r8 (zero-extend byte to qword)
+    pub fn movzx_r64_r8(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(dst, src);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0xB6); // MOVZX r64, r/m8
+        self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
     }
 }
 
@@ -681,5 +751,145 @@ mod tests {
 
         // TEST RAX, RAX = 48 85 C0
         assert_eq!(buf.code(), &[0x48, 0x85, 0xC0]);
+    }
+
+    #[test]
+    fn test_jmp_rel32() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jmp_rel32(0x10);
+
+        // JMP +16 = E9 10 00 00 00
+        assert_eq!(buf.code(), &[0xE9, 0x10, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_jmp_rel8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jmp_rel8(0x10);
+
+        // JMP +16 = EB 10
+        assert_eq!(buf.code(), &[0xEB, 0x10]);
+    }
+
+    #[test]
+    fn test_jcc_rel32_je() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jcc_rel32(Cond::E, 0x10);
+
+        // JE +16 = 0F 84 10 00 00 00
+        assert_eq!(buf.code(), &[0x0F, 0x84, 0x10, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_jcc_rel32_jne() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jcc_rel32(Cond::Ne, 0x10);
+
+        // JNE +16 = 0F 85 10 00 00 00
+        assert_eq!(buf.code(), &[0x0F, 0x85, 0x10, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_jcc_rel32_jl() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jcc_rel32(Cond::L, 0x10);
+
+        // JL +16 = 0F 8C 10 00 00 00
+        assert_eq!(buf.code(), &[0x0F, 0x8C, 0x10, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_jcc_rel32_jg() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jcc_rel32(Cond::G, 0x10);
+
+        // JG +16 = 0F 8F 10 00 00 00
+        assert_eq!(buf.code(), &[0x0F, 0x8F, 0x10, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_jcc_rel8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jcc_rel8(Cond::E, 0x10);
+
+        // JE +16 = 74 10
+        assert_eq!(buf.code(), &[0x74, 0x10]);
+    }
+
+    #[test]
+    fn test_call_rel32() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.call_rel32(0x10);
+
+        // CALL +16 = E8 10 00 00 00
+        assert_eq!(buf.code(), &[0xE8, 0x10, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_call_r() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.call_r(Reg::Rax);
+
+        // CALL RAX = FF D0
+        assert_eq!(buf.code(), &[0xFF, 0xD0]);
+    }
+
+    #[test]
+    fn test_call_r_r12() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.call_r(Reg::R12);
+
+        // CALL R12 = 41 FF D4
+        assert_eq!(buf.code(), &[0x41, 0xFF, 0xD4]);
+    }
+
+    #[test]
+    fn test_jmp_r() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.jmp_r(Reg::Rax);
+
+        // JMP RAX = FF E0
+        assert_eq!(buf.code(), &[0xFF, 0xE0]);
+    }
+
+    #[test]
+    fn test_setcc_sete() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.setcc(Cond::E, Reg::Rax);
+
+        // SETE AL = 0F 94 C0
+        assert_eq!(buf.code(), &[0x0F, 0x94, 0xC0]);
+    }
+
+    #[test]
+    fn test_setcc_setl() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.setcc(Cond::L, Reg::Rax);
+
+        // SETL AL = 0F 9C C0
+        assert_eq!(buf.code(), &[0x0F, 0x9C, 0xC0]);
+    }
+
+    #[test]
+    fn test_movzx_r64_r8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.movzx_r64_r8(Reg::Rax, Reg::Rax);
+
+        // MOVZX RAX, AL = 48 0F B6 C0
+        assert_eq!(buf.code(), &[0x48, 0x0F, 0xB6, 0xC0]);
     }
 }
