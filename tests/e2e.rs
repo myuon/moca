@@ -734,3 +734,39 @@ print(r[1]);
     assert!(success, "multiple structs should work, stderr: {}", stderr);
     assert_eq!(stdout, "1\n10\n20\n");
 }
+
+#[test]
+fn test_struct_field_access_dot_syntax() {
+    // Test struct field access with .field syntax
+    let source = r#"
+struct Point {
+    x: int,
+    y: int
+}
+
+let p = Point { x: 10, y: 20 };
+print(p.x);
+print(p.y);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct field access with dot syntax should work, stderr: {}", stderr);
+    assert_eq!(stdout, "10\n20\n");
+}
+
+#[test]
+fn test_struct_field_mutation() {
+    // Test struct field mutation with .field syntax
+    let source = r#"
+struct Counter {
+    value: int
+}
+
+var c = Counter { value: 0 };
+print(c.value);
+c.value = 42;
+print(c.value);
+"#;
+    let (stdout, stderr, success) = run_mica(source);
+    assert!(success, "struct field mutation should work, stderr: {}", stderr);
+    assert_eq!(stdout, "0\n42\n");
+}

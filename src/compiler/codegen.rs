@@ -1,6 +1,7 @@
 use crate::compiler::ast::{BinaryOp, UnaryOp};
-use crate::compiler::resolver::{ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement};
+use crate::compiler::resolver::{ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct};
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
+use std::collections::HashMap;
 
 /// Code generator that compiles resolved AST to bytecode.
 pub struct Codegen {
@@ -8,6 +9,10 @@ pub struct Codegen {
     strings: Vec<String>,
     debug: DebugInfo,
     emit_debug: bool,
+    /// Struct definitions for field access resolution
+    structs: Vec<ResolvedStruct>,
+    /// Map struct name -> (struct_index, field_name -> field_index)
+    struct_field_indices: HashMap<String, HashMap<String, usize>>,
 }
 
 impl Codegen {
@@ -17,6 +22,8 @@ impl Codegen {
             strings: Vec::new(),
             debug: DebugInfo::new(),
             emit_debug: true, // Enable debug info by default
+            structs: Vec::new(),
+            struct_field_indices: HashMap::new(),
         }
     }
 
@@ -27,7 +34,32 @@ impl Codegen {
             strings: Vec::new(),
             debug: DebugInfo::new(),
             emit_debug: false,
+            structs: Vec::new(),
+            struct_field_indices: HashMap::new(),
         }
+    }
+
+    /// Initialize struct field indices from resolved program.
+    fn init_structs(&mut self, structs: Vec<ResolvedStruct>) {
+        for s in &structs {
+            let mut field_map = HashMap::new();
+            for (idx, field_name) in s.fields.iter().enumerate() {
+                field_map.insert(field_name.clone(), idx);
+            }
+            self.struct_field_indices.insert(s.name.clone(), field_map);
+        }
+        self.structs = structs;
+    }
+
+    /// Look up a field index for any known struct.
+    fn get_field_index(&self, field_name: &str) -> Option<usize> {
+        // Check all structs for this field name
+        for field_map in self.struct_field_indices.values() {
+            if let Some(&idx) = field_map.get(field_name) {
+                return Some(idx);
+            }
+        }
+        None
     }
 
     /// Add a string to the constants pool and return its index.
@@ -43,6 +75,9 @@ impl Codegen {
     }
 
     pub fn compile(&mut self, program: ResolvedProgram) -> Result<Chunk, String> {
+        // Initialize struct field indices for field access resolution
+        self.init_structs(program.structs);
+
         // Compile all user-defined functions first
         for func in &program.functions {
             let compiled = self.compile_function(func)?;
@@ -129,10 +164,20 @@ impl Codegen {
                 field,
                 value,
             } => {
-                self.compile_expr(object, ops)?;
-                self.compile_expr(value, ops)?;
-                let field_idx = self.add_string(field.clone());
-                ops.push(Op::SetField(field_idx));
+                // Check if this might be a struct field (structs are compiled as arrays)
+                if let Some(idx) = self.get_field_index(&field) {
+                    // Known struct field - use array index assignment
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::PushInt(idx as i64));
+                    self.compile_expr(value, ops)?;
+                    ops.push(Op::ArraySet);
+                } else {
+                    // Regular object field assignment
+                    self.compile_expr(object, ops)?;
+                    self.compile_expr(value, ops)?;
+                    let field_idx = self.add_string(field.clone());
+                    ops.push(Op::SetField(field_idx));
+                }
             }
             ResolvedStatement::If {
                 condition,
@@ -358,8 +403,16 @@ impl Codegen {
             }
             ResolvedExpr::Field { object, field } => {
                 self.compile_expr(object, ops)?;
-                let field_idx = self.add_string(field.clone());
-                ops.push(Op::GetField(field_idx));
+                // Check if this might be a struct field (structs are compiled as arrays)
+                if let Some(idx) = self.get_field_index(field) {
+                    // Known struct field - use array index access
+                    ops.push(Op::PushInt(idx as i64));
+                    ops.push(Op::ArrayGet);
+                } else {
+                    // Regular object field access
+                    let field_idx = self.add_string(field.clone());
+                    ops.push(Op::GetField(field_idx));
+                }
             }
             ResolvedExpr::Unary { op, operand } => {
                 self.compile_expr(operand, ops)?;
