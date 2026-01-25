@@ -66,9 +66,6 @@ fn main() -> ExitCode {
 }
 
 fn run_file(path: &PathBuf) -> Result<(), String> {
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("error: could not read file '{}': {}", path.display(), e))?;
-
-    let filename = path.to_string_lossy().to_string();
-    compiler::run(&filename, &source)
+    // Use the module-aware run_file for import support
+    compiler::run_file(path)
 }
