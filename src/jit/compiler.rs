@@ -1,12 +1,17 @@
 //! JIT compiler for mica bytecode.
 //!
 //! This module implements a baseline JIT compiler that translates mica bytecode
-//! to AArch64 machine code using a template-based approach.
+//! to native machine code using a template-based approach.
 
+#[cfg(target_arch = "aarch64")]
 use super::aarch64::{AArch64Assembler, Cond, Reg};
+#[cfg(target_arch = "aarch64")]
 use super::codebuf::CodeBuffer;
+#[cfg(target_arch = "aarch64")]
 use super::memory::ExecutableMemory;
+#[cfg(target_arch = "aarch64")]
 use crate::vm::{Function, Op};
+#[cfg(target_arch = "aarch64")]
 use std::collections::HashMap;
 
 /// Value tag constants for JIT code.
@@ -19,7 +24,7 @@ pub mod value_tags {
     pub const TAG_PTR: u64 = 4;
 }
 
-/// Register conventions for mica JIT.
+/// Register conventions for mica JIT on AArch64.
 ///
 /// Following AArch64 calling convention with mica-specific assignments:
 /// - x19: VM context pointer (callee-saved)
@@ -28,6 +33,7 @@ pub mod value_tags {
 /// - x22: Constants pool pointer (callee-saved)
 /// - x0-x7: Temporaries and function arguments
 /// - x9-x15: Additional temporaries
+#[cfg(target_arch = "aarch64")]
 pub mod regs {
     use super::Reg;
 
@@ -49,6 +55,7 @@ pub mod regs {
 pub const VALUE_SIZE: u16 = 16;
 
 /// Compiled JIT code for a function.
+#[cfg(target_arch = "aarch64")]
 pub struct CompiledCode {
     /// The executable memory containing the compiled code
     pub memory: ExecutableMemory,
@@ -58,6 +65,7 @@ pub struct CompiledCode {
     pub stack_map: HashMap<usize, Vec<bool>>,
 }
 
+#[cfg(target_arch = "aarch64")]
 impl CompiledCode {
     /// Get the entry point as a function pointer.
     ///
@@ -75,6 +83,7 @@ impl CompiledCode {
 }
 
 /// JIT compiler for mica functions.
+#[cfg(target_arch = "aarch64")]
 pub struct JitCompiler {
     buf: CodeBuffer,
     /// Labels for jump targets (bytecode pc -> native offset)
@@ -87,6 +96,7 @@ pub struct JitCompiler {
     stack_depth: usize,
 }
 
+#[cfg(target_arch = "aarch64")]
 impl JitCompiler {
     pub fn new() -> Self {
         Self {
@@ -662,13 +672,14 @@ impl JitCompiler {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 impl Default for JitCompiler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "aarch64"))]
 mod tests {
     use super::*;
 
