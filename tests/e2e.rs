@@ -505,6 +505,159 @@ print(total);
 }
 
 #[test]
+fn test_jit_correctness_arithmetic() {
+    // Test that JIT produces same results as interpreter for arithmetic
+    let source = r#"
+fun compute(n) {
+    var sum = 0;
+    var i = 0;
+    while i < n {
+        sum = sum + i * 2 - 1;
+        i = i + 1;
+    }
+    return sum;
+}
+
+var total = 0;
+var k = 0;
+while k < 50 {
+    total = total + compute(100);
+    k = k + 1;
+}
+print(total);
+"#;
+    // Run with JIT off
+    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    assert!(success_off, "JIT off should succeed");
+
+    // Run with JIT on (low threshold to ensure JIT is used)
+    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    assert!(success_on, "JIT on should succeed");
+
+    // Results must match
+    assert_eq!(
+        stdout_off.trim(),
+        stdout_on.trim(),
+        "JIT on/off should produce same result"
+    );
+}
+
+#[test]
+fn test_jit_correctness_control_flow() {
+    // Test that JIT produces same results as interpreter for control flow
+    let source = r#"
+fun fizzbuzz_count(n) {
+    var fizz = 0;
+    var buzz = 0;
+    var fizzbuzz = 0;
+    var i = 1;
+    while i <= n {
+        if i % 15 == 0 {
+            fizzbuzz = fizzbuzz + 1;
+        } else if i % 3 == 0 {
+            fizz = fizz + 1;
+        } else if i % 5 == 0 {
+            buzz = buzz + 1;
+        }
+        i = i + 1;
+    }
+    return fizz * 1000000 + buzz * 1000 + fizzbuzz;
+}
+
+var result = 0;
+var j = 0;
+while j < 20 {
+    result = result + fizzbuzz_count(100);
+    j = j + 1;
+}
+print(result);
+"#;
+    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    assert!(success_off, "JIT off should succeed");
+
+    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    assert!(success_on, "JIT on should succeed");
+
+    assert_eq!(
+        stdout_off.trim(),
+        stdout_on.trim(),
+        "JIT on/off should produce same result for control flow"
+    );
+}
+
+#[test]
+fn test_jit_correctness_locals() {
+    // Test that JIT produces same results as interpreter for local variables
+    let source = r#"
+fun use_locals(a, b, c) {
+    var x = a + b;
+    var y = b + c;
+    var z = x * y;
+    var result = z - a - b - c;
+    return result;
+}
+
+var sum = 0;
+var i = 0;
+while i < 100 {
+    sum = sum + use_locals(i, i + 1, i + 2);
+    i = i + 1;
+}
+print(sum);
+"#;
+    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    assert!(success_off, "JIT off should succeed");
+
+    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    assert!(success_on, "JIT on should succeed");
+
+    assert_eq!(
+        stdout_off.trim(),
+        stdout_on.trim(),
+        "JIT on/off should produce same result for locals"
+    );
+}
+
+#[test]
+fn test_jit_correctness_nested_calls() {
+    // Test that JIT produces same results for nested function calls
+    let source = r#"
+fun inner(x) {
+    return x * 2 + 1;
+}
+
+fun outer(n) {
+    var sum = 0;
+    var i = 0;
+    while i < n {
+        sum = sum + inner(i);
+        i = i + 1;
+    }
+    return sum;
+}
+
+var total = 0;
+var j = 0;
+while j < 30 {
+    total = total + outer(20);
+    j = j + 1;
+}
+print(total);
+"#;
+    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    assert!(success_off, "JIT off should succeed");
+
+    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    assert!(success_on, "JIT on should succeed");
+
+    assert_eq!(
+        stdout_off.trim(),
+        stdout_on.trim(),
+        "JIT on/off should produce same result for nested calls"
+    );
+}
+
+#[test]
 fn test_gc_stats() {
     // Test that --gc-stats outputs GC statistics
     let source = r#"

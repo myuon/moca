@@ -7,6 +7,10 @@ use crate::vm::{Chunk, Function, Heap, Op, Value};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler::{CompiledCode, JitCompiler};
+#[cfg(all(target_arch = "x86_64", feature = "jit"))]
+use crate::jit::compiler_x86_64::{CompiledCode, JitCompiler};
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+use crate::jit::marshal::{JitContext, JitReturn, JitValue};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -65,6 +69,9 @@ pub struct VM {
     /// JIT compiled functions (only on AArch64 with jit feature)
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     jit_functions: HashMap<usize, CompiledCode>,
+    /// JIT compiled functions (only on x86-64 with jit feature)
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
 }
@@ -85,6 +92,8 @@ impl VM {
             thread_spawner: ThreadSpawner::new(),
             channels: Vec::new(),
             #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+            jit_functions: HashMap::new(),
+            #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
         }
@@ -150,7 +159,7 @@ impl VM {
                     eprintln!(
                         "[JIT] Compiled function '{}' ({} bytes)",
                         func.name,
-                        compiled.memory.len()
+                        compiled.memory.size()
                     );
                 }
                 self.jit_functions.insert(func_index, compiled);
@@ -168,6 +177,99 @@ impl VM {
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn is_jit_compiled(&self, func_index: usize) -> bool {
         self.jit_functions.contains_key(&func_index)
+    }
+
+    /// Compile a function to native code (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
+        if self.jit_functions.contains_key(&func_index) {
+            return; // Already compiled
+        }
+
+        let compiler = JitCompiler::new();
+        match compiler.compile(func) {
+            Ok(compiled) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Compiled function '{}' ({} bytes)",
+                        func.name,
+                        compiled.memory.size()
+                    );
+                }
+                self.jit_functions.insert(func_index, compiled);
+                self.jit_compile_count += 1;
+            }
+            Err(e) => {
+                if self.trace_jit {
+                    eprintln!("[JIT] Failed to compile '{}': {}", func.name, e);
+                }
+            }
+        }
+    }
+
+    /// Check if a function has been JIT compiled (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn is_jit_compiled(&self, func_index: usize) -> bool {
+        self.jit_functions.contains_key(&func_index)
+    }
+
+    /// Execute a JIT compiled function (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn execute_jit_function(
+        &mut self,
+        func_index: usize,
+        argc: usize,
+        func: &Function,
+    ) -> Result<Value, String> {
+        let compiled = self.jit_functions.get(&func_index).unwrap();
+
+        // Create JIT context with locals
+        let locals_count = func.locals_count;
+        let mut ctx = JitContext::new(locals_count);
+
+        // Pop arguments from VM stack and push to JIT stack (in reverse order)
+        let args: Vec<Value> = (0..argc)
+            .map(|_| self.stack.pop().unwrap())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        // Set up arguments as locals (arguments are the first locals)
+        for (i, arg) in args.iter().enumerate() {
+            ctx.set_local(i, JitValue::from_value(arg));
+        }
+
+        // Get the function pointer
+        // Signature: fn(vm_ctx: *mut u8, vstack: *mut JitValue, locals: *mut JitValue) -> JitReturn
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
+            unsafe { compiled.entry_point() };
+
+        // Execute the JIT code
+        // Pass null for vm_ctx (not used currently), stack and locals pointers
+        let result: JitReturn = unsafe { entry(std::ptr::null_mut(), ctx.stack, ctx.locals) };
+
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Executed function '{}', result: tag={}, payload={}",
+                func.name, result.tag, result.payload
+            );
+        }
+
+        // Convert return value to VM Value
+        Ok(result.to_value())
+    }
+
+    /// Execute a JIT compiled function (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn execute_jit_function(
+        &mut self,
+        _func_index: usize,
+        _argc: usize,
+        _func: &Function,
+    ) -> Result<Value, String> {
+        // AArch64 JIT execution not yet implemented
+        Err("AArch64 JIT execution not implemented".to_string())
     }
 
     /// Get the number of JIT compilations performed.
@@ -1129,24 +1231,22 @@ impl VM {
 
                 // Check if this function is hot
                 if self.should_jit_compile(*func_idx, &func_name) {
-                    // Compile the function on AArch64 with jit feature enabled
-                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    // Compile the function with JIT (architecture-specific)
+                    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
                     {
                         let func_clone = func.clone();
                         self.jit_compile_function(&func_clone, *func_idx);
                     }
 
-                    // On non-AArch64 platforms or without jit feature, just log that compilation would happen
-                    #[cfg(not(all(target_arch = "aarch64", feature = "jit")))]
+                    // On unsupported platforms or without jit feature, just log that compilation would happen
+                    #[cfg(not(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit")))]
                     if self.trace_jit {
                         eprintln!("[JIT] Would compile '{}' (JIT not available)", func_name);
                         self.jit_compile_count += 1;
                     }
                 }
 
-                // Now execute the call (interpreter mode)
-                // Note: On AArch64 with proper value marshaling, we would execute JIT code here
-                // For now, continue with interpreter for correctness
+                // Check argument count
                 if *argc != func.arity {
                     return Err(format!(
                         "runtime error: function '{}' expects {} arguments, got {}",
@@ -1154,6 +1254,25 @@ impl VM {
                     ));
                 }
 
+                // Try to execute with JIT if compiled
+                #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+                if self.is_jit_compiled(*func_idx) {
+                    // Execute JIT compiled function
+                    let result = self.execute_jit_function(*func_idx, *argc, &chunk.functions[*func_idx]);
+                    match result {
+                        Ok(ret_val) => {
+                            // Push return value onto stack
+                            self.stack.push(ret_val);
+                            return Ok(ControlFlow::Continue);
+                        }
+                        Err(_) => {
+                            // JIT execution failed, fall back to interpreter
+                            // This shouldn't happen in normal operation
+                        }
+                    }
+                }
+
+                // Fall back to interpreter mode
                 let new_stack_base = self.stack.len() - argc;
 
                 self.frames.push(Frame {
