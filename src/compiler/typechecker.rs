@@ -1057,4 +1057,71 @@ mod tests {
     fn test_object_type() {
         assert!(check(r#"let obj = {x: 1, y: "a"};"#).is_ok());
     }
+
+    // Acceptance Criteria tests
+
+    #[test]
+    fn test_ac1_let_infers_int() {
+        // AC1: `let x = 1;` infers x as int
+        assert!(check("let x = 1; let y: int = x;").is_ok());
+    }
+
+    #[test]
+    fn test_ac3_function_inference() {
+        // AC3: `fun f(a, b) { a + b }` called with f(1, 2) infers int
+        assert!(check(
+            "fun f(a, b) { return a + b; } let r: int = f(1, 2);"
+        ).is_ok());
+    }
+
+    #[test]
+    fn test_ac4_function_arg_mismatch() {
+        // AC4: `fun f(a, b) { a + b }` called with f(1, "x") is type error
+        let result = check(
+            r#"fun f(a, b) { return a + b; } f(1, "x");"#
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ac7_object_type_inferred() {
+        // AC7: `{x: 1, y: "a"}` has type `{x: int, y: string}`
+        assert!(check(r#"let obj: {x: int, y: string} = {x: 1, y: "a"};"#).is_ok());
+    }
+
+    #[test]
+    fn test_ac8_array_type_inferred() {
+        // AC8: `[1, 2, 3]` has type `array<int>`
+        assert!(check("let arr: array<int> = [1, 2, 3];").is_ok());
+    }
+
+    #[test]
+    fn test_binary_ops_type_check() {
+        // Arithmetic requires same numeric types
+        assert!(check("let x = 1 + 2;").is_ok());
+        assert!(check("let x = 1.0 + 2.0;").is_ok());
+        assert!(check(r#"let x = "a" + "b";"#).is_ok());
+
+        // Comparison returns bool
+        assert!(check("let x: bool = 1 < 2;").is_ok());
+        assert!(check("let x: bool = 1 == 2;").is_ok());
+
+        // Logical operators
+        assert!(check("let x: bool = true && false;").is_ok());
+        assert!(check("let x: bool = true || false;").is_ok());
+    }
+
+    #[test]
+    fn test_if_condition_must_be_bool() {
+        assert!(check("if true { let x = 1; }").is_ok());
+        let result = check("if 1 { let x = 1; }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_while_condition_must_be_bool() {
+        assert!(check("while false { let x = 1; }").is_ok());
+        let result = check("while 1 { let x = 1; }");
+        assert!(result.is_err());
+    }
 }
