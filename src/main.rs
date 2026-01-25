@@ -92,6 +92,18 @@ enum Commands {
         /// Print GC statistics
         #[arg(long)]
         gc_stats: bool,
+
+        /// Dump AST to stderr, or to a file with --dump-ast=path
+        #[arg(long, value_name = "FILE", num_args = 0..=1)]
+        dump_ast: Option<Option<PathBuf>>,
+
+        /// Dump resolved program to stderr, or to a file with --dump-resolved=path
+        #[arg(long, value_name = "FILE", num_args = 0..=1)]
+        dump_resolved: Option<Option<PathBuf>>,
+
+        /// Dump bytecode to stderr, or to a file with --dump-bytecode=path
+        #[arg(long, value_name = "FILE", num_args = 0..=1)]
+        dump_bytecode: Option<Option<PathBuf>>,
     },
     /// Start the language server
     Lsp,
@@ -125,6 +137,9 @@ fn main() -> ExitCode {
             trace_jit,
             gc_mode,
             gc_stats,
+            dump_ast,
+            dump_resolved,
+            dump_bytecode,
         } => {
             let path = match file {
                 Some(p) => p,
@@ -150,7 +165,13 @@ fn main() -> ExitCode {
                 gc_stats,
             };
 
-            if let Err(e) = run_file(&path, &config) {
+            let dump_opts = compiler::DumpOptions {
+                dump_ast,
+                dump_resolved,
+                dump_bytecode,
+            };
+
+            if let Err(e) = run_file(&path, &config, &dump_opts) {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }
@@ -193,7 +214,11 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_file(path: &PathBuf, config: &RuntimeConfig) -> Result<(), String> {
-    // Use the module-aware run_file for import support
-    compiler::run_file_with_config(path, config)
+fn run_file(
+    path: &PathBuf,
+    config: &RuntimeConfig,
+    dump_opts: &compiler::DumpOptions,
+) -> Result<(), String> {
+    // Use the module-aware run_file with dump support
+    compiler::run_file_with_dump(path, config, dump_opts)
 }
