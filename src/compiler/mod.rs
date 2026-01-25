@@ -12,6 +12,7 @@ pub use lexer::Lexer;
 pub use module::ModuleLoader;
 pub use parser::Parser;
 pub use resolver::Resolver;
+pub use typechecker::TypeChecker;
 
 use crate::vm::VM;
 use crate::{JitMode, RuntimeConfig};
@@ -26,6 +27,12 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
     // Parsing
     let mut parser = Parser::new(filename, tokens);
     let program = parser.parse()?;
+
+    // Type checking
+    let mut typechecker = TypeChecker::new(filename);
+    typechecker.check_program(&program).map_err(|errors| {
+        format_type_errors(filename, &errors)
+    })?;
 
     // Name resolution
     let mut resolver = Resolver::new(filename);
@@ -56,6 +63,12 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     let program = loader.load_with_imports(path)?;
 
     let filename = path.to_string_lossy().to_string();
+
+    // Type checking
+    let mut typechecker = TypeChecker::new(&filename);
+    typechecker.check_program(&program).map_err(|errors| {
+        format_type_errors(&filename, &errors)
+    })?;
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -93,4 +106,44 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     }
 
     Ok(())
+}
+
+/// Type check a file without running it.
+pub fn check_file(path: &Path) -> Result<(), String> {
+    let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut loader = ModuleLoader::new(root_dir);
+
+    // Load main file with all imports
+    let program = loader.load_with_imports(path)?;
+
+    let filename = path.to_string_lossy().to_string();
+
+    // Type checking only
+    let mut typechecker = TypeChecker::new(&filename);
+    typechecker.check_program(&program).map_err(|errors| {
+        format_type_errors(&filename, &errors)
+    })?;
+
+    Ok(())
+}
+
+/// Format type errors for display.
+fn format_type_errors(filename: &str, errors: &[typechecker::TypeError]) -> String {
+    let mut output = String::new();
+
+    for error in errors {
+        output.push_str(&format!(
+            "error: type error: {}\n  --> {}:{}:{}\n",
+            error.message, filename, error.span.line, error.span.column
+        ));
+
+        if let (Some(expected), Some(found)) = (&error.expected, &error.found) {
+            output.push_str(&format!(
+                "   = expected `{}`, found `{}`\n",
+                expected, found
+            ));
+        }
+    }
+
+    output
 }

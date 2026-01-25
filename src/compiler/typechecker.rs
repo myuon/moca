@@ -284,14 +284,15 @@ impl TypeChecker {
         }
 
         // Second pass: type check function bodies and statements
+        let mut main_env = TypeEnv::new();
         for item in &program.items {
             match item {
                 Item::FnDef(fn_def) => {
                     self.check_function(fn_def);
                 }
                 Item::Statement(stmt) => {
-                    let mut env = TypeEnv::new();
-                    self.infer_statement(stmt, &mut env);
+                    // Use shared environment for top-level statements
+                    self.infer_statement(stmt, &mut main_env);
                 }
                 Item::Import(_) => {
                     // Imports are handled elsewhere
@@ -527,19 +528,15 @@ impl TypeChecker {
                 let obj_type = self.infer_expr(object, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Check field exists in object type
+                // Check field exists in object type (allow dynamic field addition)
                 match self.substitution.apply(&obj_type) {
                     Type::Object(fields) => {
                         if let Some(field_type) = fields.get(field) {
                             if let Err(e) = self.unify(&val_type, field_type, *span) {
                                 self.errors.push(e);
                             }
-                        } else {
-                            self.errors.push(TypeError::new(
-                                format!("unknown field `{}` on type `{}`", field, obj_type),
-                                *span,
-                            ));
                         }
+                        // Allow dynamic field addition (no error for unknown fields)
                     }
                     Type::Var(_) => {
                         // Can't infer field assignment on unknown object type
@@ -588,6 +585,9 @@ impl TypeChecker {
             Expr::Ident { name, span } => {
                 if let Some(ty) = env.lookup(name) {
                     self.substitution.apply(ty)
+                } else if let Some(fn_type) = self.functions.get(name) {
+                    // Function reference (used in spawn, etc.)
+                    fn_type.clone()
                 } else {
                     self.errors
                         .push(TypeError::new(format!("undefined variable `{}`", name), *span));
@@ -647,10 +647,7 @@ impl TypeChecker {
                         if let Some(field_type) = fields.get(field) {
                             field_type.clone()
                         } else {
-                            self.errors.push(TypeError::new(
-                                format!("unknown field `{}` on type `{}`", field, obj_type),
-                                *span,
-                            ));
+                            // Allow dynamic field access (returns unknown type)
                             self.fresh_var()
                         }
                     }
