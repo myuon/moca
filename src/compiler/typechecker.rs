@@ -6,10 +6,20 @@
 //! - Unification algorithm
 //! - Type inference for expressions and statements
 
-use crate::compiler::ast::{BinaryOp, Block, Expr, FnDef, Item, Program, Statement, UnaryOp};
+use crate::compiler::ast::{BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef, UnaryOp};
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
 use std::collections::{BTreeMap, HashMap};
+
+/// Information about a struct definition.
+#[derive(Debug, Clone)]
+pub struct StructInfo {
+    pub name: String,
+    /// Fields in declaration order: (name, type)
+    pub fields: Vec<(String, Type)>,
+    /// Methods from impl blocks: method_name -> function type
+    pub methods: HashMap<String, Type>,
+}
 
 /// A type error with location information.
 #[derive(Debug, Clone)]
@@ -160,6 +170,8 @@ pub struct TypeChecker {
     errors: Vec<TypeError>,
     /// Function signatures (name -> type)
     functions: HashMap<String, Type>,
+    /// Struct definitions (name -> struct info)
+    structs: HashMap<String, StructInfo>,
     /// Substitution accumulated during inference
     substitution: Substitution,
 }
@@ -171,6 +183,7 @@ impl TypeChecker {
             next_var_id: 0,
             errors: Vec::new(),
             functions: HashMap::new(),
+            structs: HashMap::new(),
             substitution: Substitution::new(),
         }
     }
@@ -180,6 +193,55 @@ impl TypeChecker {
         let id = self.next_var_id;
         self.next_var_id += 1;
         Type::Var(id)
+    }
+
+    /// Convert a type annotation to a Type, resolving struct names.
+    fn resolve_type_annotation(&self, ann: &TypeAnnotation, span: Span) -> Result<Type, TypeError> {
+        match ann {
+            TypeAnnotation::Named(name) => {
+                // First try primitive types
+                match name.as_str() {
+                    "int" => Ok(Type::Int),
+                    "float" => Ok(Type::Float),
+                    "bool" => Ok(Type::Bool),
+                    "string" => Ok(Type::String),
+                    "nil" => Ok(Type::Nil),
+                    _ => {
+                        // Try to find a struct with this name
+                        if let Some(info) = self.structs.get(name) {
+                            Ok(Type::Struct {
+                                name: info.name.clone(),
+                                fields: info.fields.clone(),
+                            })
+                        } else {
+                            Err(TypeError::new(format!("unknown type: {}", name), span))
+                        }
+                    }
+                }
+            }
+            TypeAnnotation::Array(elem) => {
+                let elem_type = self.resolve_type_annotation(elem, span)?;
+                Ok(Type::array(elem_type))
+            }
+            TypeAnnotation::Object(fields) => {
+                let mut type_fields = BTreeMap::new();
+                for (name, ann) in fields {
+                    type_fields.insert(name.clone(), self.resolve_type_annotation(ann, span)?);
+                }
+                Ok(Type::Object(type_fields))
+            }
+            TypeAnnotation::Nullable(inner) => {
+                let inner_type = self.resolve_type_annotation(inner, span)?;
+                Ok(Type::nullable(inner_type))
+            }
+            TypeAnnotation::Function { params, ret } => {
+                let param_types: Result<Vec<_>, _> = params
+                    .iter()
+                    .map(|p| self.resolve_type_annotation(p, span))
+                    .collect();
+                Ok(Type::function(param_types?, self.resolve_type_annotation(ret, span)?))
+            }
+        }
     }
 
     /// Unify two types, returning a substitution that makes them equal.
@@ -307,15 +369,28 @@ impl TypeChecker {
 
     /// Type check a program.
     pub fn check_program(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
-        // First pass: collect function signatures
+        // First pass: collect struct definitions
         for item in &program.items {
-            if let Item::FnDef(fn_def) = item {
-                let fn_type = self.infer_function_signature(fn_def);
-                self.functions.insert(fn_def.name.clone(), fn_type);
+            if let Item::StructDef(struct_def) = item {
+                self.register_struct(struct_def);
             }
         }
 
-        // Second pass: type check function bodies and statements
+        // Second pass: collect function signatures and impl block methods
+        for item in &program.items {
+            match item {
+                Item::FnDef(fn_def) => {
+                    let fn_type = self.infer_function_signature(fn_def);
+                    self.functions.insert(fn_def.name.clone(), fn_type);
+                }
+                Item::ImplBlock(impl_block) => {
+                    self.register_impl_methods(impl_block);
+                }
+                _ => {}
+            }
+        }
+
+        // Third pass: type check function bodies and statements
         let mut main_env = TypeEnv::new();
         for item in &program.items {
             match item {
@@ -323,10 +398,10 @@ impl TypeChecker {
                     self.check_function(fn_def);
                 }
                 Item::StructDef(_struct_def) => {
-                    // TODO: Register and type check struct definitions
+                    // Already registered in first pass
                 }
-                Item::ImplBlock(_impl_block) => {
-                    // TODO: Type check impl block methods
+                Item::ImplBlock(impl_block) => {
+                    self.check_impl_block(impl_block);
                 }
                 Item::Statement(stmt) => {
                     // Use shared environment for top-level statements
@@ -355,7 +430,11 @@ impl TypeChecker {
             .iter()
             .map(|p| {
                 if let Some(ann) = &p.type_annotation {
-                    ann.to_type().unwrap_or_else(|_| self.fresh_var())
+                    self.resolve_type_annotation(ann, p.span)
+                        .unwrap_or_else(|e| {
+                            self.errors.push(e);
+                            self.fresh_var()
+                        })
                 } else {
                     self.fresh_var()
                 }
@@ -363,7 +442,11 @@ impl TypeChecker {
             .collect();
 
         let ret_type = if let Some(ann) = &fn_def.return_type {
-            ann.to_type().unwrap_or_else(|_| self.fresh_var())
+            self.resolve_type_annotation(ann, fn_def.span)
+                .unwrap_or_else(|e| {
+                    self.errors.push(e);
+                    self.fresh_var()
+                })
         } else {
             self.fresh_var()
         };
@@ -396,6 +479,126 @@ impl TypeChecker {
         }
     }
 
+    /// Register a struct definition.
+    fn register_struct(&mut self, struct_def: &StructDef) {
+        let mut fields = Vec::new();
+        for field in &struct_def.fields {
+            match field.type_annotation.to_type() {
+                Ok(ty) => fields.push((field.name.clone(), ty)),
+                Err(msg) => {
+                    self.errors.push(TypeError::new(msg, field.span));
+                    fields.push((field.name.clone(), self.fresh_var()));
+                }
+            }
+        }
+
+        let info = StructInfo {
+            name: struct_def.name.clone(),
+            fields,
+            methods: HashMap::new(),
+        };
+        self.structs.insert(struct_def.name.clone(), info);
+    }
+
+    /// Register methods from an impl block.
+    fn register_impl_methods(&mut self, impl_block: &ImplBlock) {
+        let struct_name = &impl_block.struct_name;
+
+        // Check if struct exists
+        if !self.structs.contains_key(struct_name) {
+            self.errors.push(TypeError::new(
+                format!("impl for undefined struct `{}`", struct_name),
+                impl_block.span,
+            ));
+            return;
+        }
+
+        for method in &impl_block.methods {
+            // Infer method signature (skip 'self' parameter in type)
+            let param_types: Vec<Type> = method
+                .params
+                .iter()
+                .filter(|p| p.name != "self")
+                .map(|p| {
+                    if let Some(ann) = &p.type_annotation {
+                        self.resolve_type_annotation(ann, p.span)
+                            .unwrap_or_else(|e| {
+                                self.errors.push(e);
+                                self.fresh_var()
+                            })
+                    } else {
+                        self.fresh_var()
+                    }
+                })
+                .collect();
+
+            let ret_type = if let Some(ann) = &method.return_type {
+                self.resolve_type_annotation(ann, method.span)
+                    .unwrap_or_else(|e| {
+                        self.errors.push(e);
+                        self.fresh_var()
+                    })
+            } else {
+                self.fresh_var()
+            };
+
+            let fn_type = Type::function(param_types, ret_type);
+
+            // Add method to struct's method table
+            if let Some(struct_info) = self.structs.get_mut(struct_name) {
+                struct_info.methods.insert(method.name.clone(), fn_type);
+            }
+        }
+    }
+
+    /// Type check an impl block.
+    fn check_impl_block(&mut self, impl_block: &ImplBlock) {
+        let struct_name = &impl_block.struct_name;
+
+        // Get struct type for 'self'
+        let self_type = if let Some(info) = self.structs.get(struct_name) {
+            Type::Struct {
+                name: info.name.clone(),
+                fields: info.fields.clone(),
+            }
+        } else {
+            return; // Error already reported in register_impl_methods
+        };
+
+        for method in &impl_block.methods {
+            let mut env = TypeEnv::new();
+
+            // Get method signature from struct info
+            let method_type = self.structs
+                .get(struct_name)
+                .and_then(|info| info.methods.get(&method.name))
+                .cloned();
+
+            let (param_types, expected_ret) = match method_type {
+                Some(Type::Function { params, ret }) => (params, *ret),
+                _ => continue,
+            };
+
+            // Bind 'self' parameter
+            let mut param_iter = param_types.iter();
+            for param in &method.params {
+                if param.name == "self" {
+                    env.bind("self".to_string(), self_type.clone());
+                } else if let Some(param_type) = param_iter.next() {
+                    env.bind(param.name.clone(), param_type.clone());
+                }
+            }
+
+            // Infer body type
+            let body_type = self.infer_block(&method.body, &mut env);
+
+            // Unify return type
+            if let Err(e) = self.unify(&body_type, &expected_ret, method.span) {
+                self.errors.push(e);
+            }
+        }
+    }
+
     /// Infer the type of a block (returns the type of the last expression).
     fn infer_block(&mut self, block: &Block, env: &mut TypeEnv) -> Type {
         env.enter_scope();
@@ -422,15 +625,15 @@ impl TypeChecker {
                 let init_type = self.infer_expr(init, env);
 
                 if let Some(ann) = type_annotation {
-                    match ann.to_type() {
+                    match self.resolve_type_annotation(ann, *span) {
                         Ok(declared_type) => {
                             if let Err(e) = self.unify(&init_type, &declared_type, *span) {
                                 self.errors.push(e);
                             }
                             env.bind(name.clone(), declared_type);
                         }
-                        Err(msg) => {
-                            self.errors.push(TypeError::new(msg, *span));
+                        Err(e) => {
+                            self.errors.push(e);
                             env.bind(name.clone(), init_type);
                         }
                     }
@@ -566,7 +769,7 @@ impl TypeChecker {
                 let obj_type = self.infer_expr(object, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Check field exists in object type (allow dynamic field addition)
+                // Check field exists and type matches
                 match self.substitution.apply(&obj_type) {
                     Type::Object(fields) => {
                         if let Some(field_type) = fields.get(field) {
@@ -576,12 +779,31 @@ impl TypeChecker {
                         }
                         // Allow dynamic field addition (no error for unknown fields)
                     }
+                    Type::Struct { name, fields } => {
+                        // Look up field in struct definition
+                        let mut found = false;
+                        for (field_name, field_type) in &fields {
+                            if field_name == field {
+                                if let Err(e) = self.unify(&val_type, field_type, *span) {
+                                    self.errors.push(e);
+                                }
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            self.errors.push(TypeError::new(
+                                format!("struct `{}` has no field `{}`", name, field),
+                                *span,
+                            ));
+                        }
+                    }
                     Type::Var(_) => {
                         // Can't infer field assignment on unknown object type
                     }
                     _ => {
                         self.errors.push(TypeError::new(
-                            format!("expected object, found `{}`", obj_type),
+                            format!("expected object or struct, found `{}`", obj_type),
                             *span,
                         ));
                     }
@@ -689,13 +911,26 @@ impl TypeChecker {
                             self.fresh_var()
                         }
                     }
+                    Type::Struct { name, fields } => {
+                        // Look up field in struct definition
+                        for (field_name, field_type) in &fields {
+                            if field_name == field {
+                                return field_type.clone();
+                            }
+                        }
+                        self.errors.push(TypeError::new(
+                            format!("struct `{}` has no field `{}`", name, field),
+                            *span,
+                        ));
+                        self.fresh_var()
+                    }
                     Type::Var(_) => {
                         // Can't infer field access on unknown object type
                         self.fresh_var()
                     }
                     _ => {
                         self.errors.push(TypeError::new(
-                            format!("expected object, found `{}`", obj_type),
+                            format!("expected object or struct, found `{}`", obj_type),
                             *span,
                         ));
                         self.fresh_var()
@@ -877,12 +1112,66 @@ impl TypeChecker {
             }
 
             Expr::StructLiteral { name, fields, span } => {
-                // TODO: Implement struct literal type checking
-                // For now, return a type variable
-                for (_, expr) in fields {
-                    self.infer_expr(expr, env);
+                // Look up struct definition
+                let struct_info = match self.structs.get(name) {
+                    Some(info) => info.clone(),
+                    None => {
+                        self.errors.push(TypeError::new(
+                            format!("undefined struct `{}`", name),
+                            *span,
+                        ));
+                        // Still infer field types to find nested errors
+                        for (_, expr) in fields {
+                            self.infer_expr(expr, env);
+                        }
+                        return self.fresh_var();
+                    }
+                };
+
+                // Check that all required fields are provided
+                let provided_fields: HashMap<&str, &Expr> = fields
+                    .iter()
+                    .map(|(n, e)| (n.as_str(), e))
+                    .collect();
+
+                for (field_name, expected_type) in &struct_info.fields {
+                    match provided_fields.get(field_name.as_str()) {
+                        Some(expr) => {
+                            let actual_type = self.infer_expr(expr, env);
+                            if let Err(e) = self.unify(&actual_type, expected_type, expr.span()) {
+                                self.errors.push(e);
+                            }
+                        }
+                        None => {
+                            self.errors.push(TypeError::new(
+                                format!("missing field `{}` in struct `{}`", field_name, name),
+                                *span,
+                            ));
+                        }
+                    }
                 }
-                self.fresh_var()
+
+                // Check for extra fields not in the struct definition
+                let struct_field_names: std::collections::HashSet<&str> = struct_info
+                    .fields
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+
+                for (field_name, expr) in fields {
+                    if !struct_field_names.contains(field_name.as_str()) {
+                        self.errors.push(TypeError::new(
+                            format!("unknown field `{}` in struct `{}`", field_name, name),
+                            expr.span(),
+                        ));
+                        self.infer_expr(expr, env);
+                    }
+                }
+
+                Type::Struct {
+                    name: name.clone(),
+                    fields: struct_info.fields.clone(),
+                }
             }
 
             Expr::MethodCall {
@@ -891,12 +1180,81 @@ impl TypeChecker {
                 args,
                 span,
             } => {
-                // TODO: Implement method call type checking
                 let obj_type = self.infer_expr(object, env);
-                for arg in args {
-                    self.infer_expr(arg, env);
+                let resolved_obj_type = self.substitution.apply(&obj_type);
+
+                // Get struct name from object type
+                let struct_name = match &resolved_obj_type {
+                    Type::Struct { name, .. } => name.clone(),
+                    Type::Var(_) => {
+                        // Can't determine struct type yet
+                        for arg in args {
+                            self.infer_expr(arg, env);
+                        }
+                        return self.fresh_var();
+                    }
+                    _ => {
+                        self.errors.push(TypeError::new(
+                            format!("cannot call method `{}` on type `{}`", method, resolved_obj_type),
+                            *span,
+                        ));
+                        for arg in args {
+                            self.infer_expr(arg, env);
+                        }
+                        return self.fresh_var();
+                    }
+                };
+
+                // Look up method in struct's method table
+                let method_type = self.structs
+                    .get(&struct_name)
+                    .and_then(|info| info.methods.get(method))
+                    .cloned();
+
+                match method_type {
+                    Some(Type::Function { params, ret }) => {
+                        // Check argument count
+                        if args.len() != params.len() {
+                            self.errors.push(TypeError::new(
+                                format!(
+                                    "method `{}` expects {} arguments, got {}",
+                                    method,
+                                    params.len(),
+                                    args.len()
+                                ),
+                                *span,
+                            ));
+                            return self.substitution.apply(&ret);
+                        }
+
+                        // Type check arguments
+                        for (arg, param_type) in args.iter().zip(params.iter()) {
+                            let arg_type = self.infer_expr(arg, env);
+                            if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                                self.errors.push(e);
+                            }
+                        }
+
+                        self.substitution.apply(&ret)
+                    }
+                    Some(_) => {
+                        self.errors.push(TypeError::new(
+                            format!("`{}` is not a method", method),
+                            *span,
+                        ));
+                        self.fresh_var()
+                    }
+                    None => {
+                        self.errors.push(TypeError::new(
+                            format!("undefined method `{}` on struct `{}`", method, struct_name),
+                            *span,
+                        ));
+                        for arg in args {
+                            self.infer_expr(arg, env);
+                        }
+                        self.fresh_var()
+                    }
                 }
-                self.fresh_var()
             }
         }
     }
@@ -1183,6 +1541,178 @@ mod tests {
     fn test_while_condition_must_be_bool() {
         assert!(check("while false { let x = 1; }").is_ok());
         let result = check("while 1 { let x = 1; }");
+        assert!(result.is_err());
+    }
+
+    // Struct type checking tests
+
+    #[test]
+    fn test_struct_definition() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_struct_literal() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1, y: 2 };
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_struct_literal_wrong_field_type() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: "hello", y: 2 };
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_struct_literal_missing_field() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1 };
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_struct_literal_unknown_field() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1, y: 2, z: 3 };
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_struct_field_access() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1, y: 2 };
+            let x: int = p.x;
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_struct_field_access_unknown_field() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1, y: 2 };
+            let z = p.z;
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_struct_type_annotation() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+            let p: Point = Point { x: 1, y: 2 };
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_struct_type_annotation_mismatch() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            struct Other { a: int }
+            let p: Point = Other { a: 1 };
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_struct_nullable_field() {
+        assert!(check(r#"
+            struct User { name: string, age: int? }
+            let u = User { name: "Alice", age: nil };
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_impl_block_method() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+            impl Point {
+                fun sum(self) -> int {
+                    return self.x + self.y;
+                }
+            }
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_method_call() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+            impl Point {
+                fun sum(self) -> int {
+                    return self.x + self.y;
+                }
+            }
+            let p = Point { x: 1, y: 2 };
+            let s: int = p.sum();
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_method_call_with_args() {
+        assert!(check(r#"
+            struct Point { x: int, y: int }
+            impl Point {
+                fun scale(self, factor: int) -> int {
+                    return (self.x + self.y) * factor;
+                }
+            }
+            let p = Point { x: 1, y: 2 };
+            let s: int = p.scale(3);
+        "#).is_ok());
+    }
+
+    #[test]
+    fn test_method_call_wrong_arg_type() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            impl Point {
+                fun scale(self, factor: int) -> int {
+                    return (self.x + self.y) * factor;
+                }
+            }
+            let p = Point { x: 1, y: 2 };
+            let s = p.scale("hello");
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_undefined_struct() {
+        let result = check(r#"
+            let p = Unknown { x: 1 };
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_undefined_method() {
+        let result = check(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1, y: 2 };
+            p.unknown_method();
+        "#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_impl_for_undefined_struct() {
+        let result = check(r#"
+            impl Unknown {
+                fun foo(self) { }
+            }
+        "#);
         assert!(result.is_err());
     }
 }
