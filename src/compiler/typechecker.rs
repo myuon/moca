@@ -75,6 +75,10 @@ impl Substitution {
                 params: params.iter().map(|p| self.apply(p)).collect(),
                 ret: Box::new(self.apply(ret)),
             },
+            Type::Struct { name, fields } => Type::Struct {
+                name: name.clone(),
+                fields: fields.iter().map(|(n, t)| (n.clone(), self.apply(t))).collect(),
+            },
             // Primitive types are unchanged
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => ty.clone(),
         }
@@ -265,6 +269,34 @@ impl TypeChecker {
                 }
                 let s = self.unify(r1, r2, span)?;
                 result = result.compose(&s);
+                Ok(result)
+            }
+
+            // Struct types - nominal typing: names must match exactly
+            (
+                Type::Struct {
+                    name: n1,
+                    fields: f1,
+                },
+                Type::Struct {
+                    name: n2,
+                    fields: f2,
+                },
+            ) => {
+                if n1 != n2 {
+                    return Err(TypeError::mismatch(t1.clone(), t2.clone(), span));
+                }
+                if f1.len() != f2.len() {
+                    return Err(TypeError::mismatch(t1.clone(), t2.clone(), span));
+                }
+                let mut result = Substitution::new();
+                for ((name1, ty1), (name2, ty2)) in f1.iter().zip(f2.iter()) {
+                    if name1 != name2 {
+                        return Err(TypeError::mismatch(t1.clone(), t2.clone(), span));
+                    }
+                    let s = self.unify(ty1, ty2, span)?;
+                    result = result.compose(&s);
+                }
                 Ok(result)
             }
 

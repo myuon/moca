@@ -34,6 +34,13 @@ pub enum Type {
         params: Vec<Type>,
         ret: Box<Type>,
     },
+    /// Struct type: a named type with fixed fields in declaration order.
+    /// Unlike Object, structs use nominal typing (name must match).
+    Struct {
+        name: std::string::String,
+        /// Fields in declaration order (name, type)
+        fields: Vec<(std::string::String, Type)>,
+    },
     /// Type variable for inference (unresolved type).
     /// These are resolved during unification in Algorithm W.
     Var(TypeVarId),
@@ -76,6 +83,7 @@ impl Type {
             Type::Array(elem) => elem.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
             Type::Object(fields) => fields.values().any(|t| t.has_type_vars()),
+            Type::Struct { fields, .. } => fields.iter().any(|(_, t)| t.has_type_vars()),
             Type::Function { params, ret } => {
                 params.iter().any(|t| t.has_type_vars()) || ret.has_type_vars()
             }
@@ -101,6 +109,11 @@ impl Type {
             Type::Nullable(inner) => inner.collect_type_vars(vars),
             Type::Object(fields) => {
                 for t in fields.values() {
+                    t.collect_type_vars(vars);
+                }
+            }
+            Type::Struct { fields, .. } => {
+                for (_, t) in fields {
                     t.collect_type_vars(vars);
                 }
             }
@@ -146,6 +159,7 @@ impl fmt::Display for Type {
                 }
                 write!(f, ") -> {}", ret)
             }
+            Type::Struct { name, .. } => write!(f, "{}", name),
             Type::Var(id) => write!(f, "?T{}", id),
         }
     }
