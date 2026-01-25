@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 
 use crate::vm::{Chunk, Function, Heap, Op, Value};
 use crate::vm::ic::InlineCacheTable;
@@ -1318,12 +1317,11 @@ impl VM {
             self.stack.push(Value::Ptr(error_ref));
 
             // Jump to the handler
-            if let Some(frame) = self.frames.last_mut() {
-                if frame.func_index == try_frame.func_index {
+            if let Some(frame) = self.frames.last_mut()
+                && frame.func_index == try_frame.func_index {
                     frame.pc = try_frame.handler_pc;
                     return Ok(true);
                 }
-            }
         }
 
         // No handler found

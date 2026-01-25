@@ -6,6 +6,9 @@
 //! - Unification algorithm
 //! - Type inference for expressions and statements
 
+// TypeError contains detailed error information, hence it's large
+#![allow(clippy::result_large_err)]
+
 use crate::compiler::ast::{BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef, UnaryOp};
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
@@ -259,11 +262,10 @@ impl TypeChecker {
 
             // Type variable unification
             (Type::Var(id), other) | (other, Type::Var(id)) => {
-                if let Type::Var(other_id) = other {
-                    if id == other_id {
+                if let Type::Var(other_id) = other
+                    && id == other_id {
                         return Ok(Substitution::new());
                     }
-                }
                 // Occurs check: prevent infinite types
                 if other.free_type_vars().contains(id) {
                     return Err(TypeError::new(
@@ -645,11 +647,10 @@ impl TypeChecker {
 
             Statement::Assign { name, value, span } => {
                 let value_type = self.infer_expr(value, env);
-                if let Some(var_type) = env.lookup(name).cloned() {
-                    if let Err(e) = self.unify(&value_type, &var_type, *span) {
+                if let Some(var_type) = env.lookup(name).cloned()
+                    && let Err(e) = self.unify(&value_type, &var_type, *span) {
                         self.errors.push(e);
                     }
-                }
                 Type::Nil
             }
 
@@ -725,7 +726,7 @@ impl TypeChecker {
                 Type::Nil
             }
 
-            Statement::Return { value, span } => {
+            Statement::Return { value, span: _ } => {
                 if let Some(expr) = value {
                     self.infer_expr(expr, env)
                 } else {
@@ -772,11 +773,10 @@ impl TypeChecker {
                 // Check field exists and type matches
                 match self.substitution.apply(&obj_type) {
                     Type::Object(fields) => {
-                        if let Some(field_type) = fields.get(field) {
-                            if let Err(e) = self.unify(&val_type, field_type, *span) {
+                        if let Some(field_type) = fields.get(field)
+                            && let Err(e) = self.unify(&val_type, field_type, *span) {
                                 self.errors.push(e);
                             }
-                        }
                         // Allow dynamic field addition (no error for unknown fields)
                     }
                     Type::Struct { name, fields } => {
@@ -961,7 +961,7 @@ impl TypeChecker {
                 match op {
                     UnaryOp::Neg => {
                         // Negation works on int or float
-                        let result = self.fresh_var();
+                        let _result = self.fresh_var();
                         // Try to unify with int first
                         if self.unify(&operand_type, &Type::Int, *span).is_ok() {
                             Type::Int
@@ -1046,15 +1046,12 @@ impl TypeChecker {
 
                     BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                         // Only numeric types
-                        if self.unify(&left_type, &Type::Int, *span).is_ok()
-                            && self.unify(&right_type, &Type::Int, *span).is_ok()
-                        {
-                            // OK
-                        } else if self.unify(&left_type, &Type::Float, *span).is_ok()
-                            && self.unify(&right_type, &Type::Float, *span).is_ok()
-                        {
-                            // OK
-                        } else {
+                        let is_int_comparison = self.unify(&left_type, &Type::Int, *span).is_ok()
+                            && self.unify(&right_type, &Type::Int, *span).is_ok();
+                        let is_float_comparison = self.unify(&left_type, &Type::Float, *span).is_ok()
+                            && self.unify(&right_type, &Type::Float, *span).is_ok();
+
+                        if !is_int_comparison && !is_float_comparison {
                             self.errors.push(TypeError::new(
                                 format!(
                                     "cannot compare `{}` and `{}`",

@@ -917,11 +917,10 @@ impl<'a> Parser<'a> {
         }
 
         // Check for `{ ident :` pattern
-        if let Some(token) = self.tokens.get(self.current + 1) {
-            if matches!(&token.kind, TokenKind::Ident(_)) {
+        if let Some(token) = self.tokens.get(self.current + 1)
+            && matches!(&token.kind, TokenKind::Ident(_)) {
                 return self.check_ahead(&TokenKind::Colon, 2);
             }
-        }
 
         false
     }

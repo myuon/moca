@@ -1,7 +1,7 @@
-/// Code buffer for building JIT code.
-///
-/// This module provides a buffer for incrementally building machine code
-/// before copying it to executable memory.
+//! Code buffer for building JIT code.
+//!
+//! This module provides a buffer for incrementally building machine code
+//! before copying it to executable memory.
 
 use super::memory::{ExecutableMemory, MemoryError};
 
@@ -126,7 +126,7 @@ impl CodeBuffer {
                 ReferenceSize::AArch64Branch => {
                     // AArch64 branch encoding: offset is in instructions (4-byte units)
                     let rel_offset = ((*target as i64) - (offset as i64)) / 4;
-                    if rel_offset < -(1 << 25) || rel_offset >= (1 << 25) {
+                    if !(-(1 << 25)..(1 << 25)).contains(&rel_offset) {
                         return Err(format!("branch offset out of range for label: {}", label));
                     }
                     // Branch instruction: bits 25:0 are the offset

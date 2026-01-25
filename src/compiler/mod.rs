@@ -1,3 +1,6 @@
+// Some functions and fields are defined for future use
+#![allow(dead_code)]
+
 pub mod ast;
 mod codegen;
 pub mod dump;

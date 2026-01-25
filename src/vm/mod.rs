@@ -1,6 +1,10 @@
+// Some fields are stored for future use
+#![allow(dead_code)]
+
 mod value;
 mod ops;
 mod heap;
+#[allow(clippy::module_inception)]
 mod vm;
 pub mod debug;
 pub mod ic;
@@ -9,12 +13,9 @@ pub mod threads;
 
 pub use value::Value;
 pub use ops::Op;
-pub use heap::{GcRef, Heap, HeapObject, MicaArray, MicaObject, MicaString, ObjectType};
+pub use heap::{Heap, HeapObject, ObjectType};
 pub use vm::VM;
-pub use debug::{DebugInfo, FunctionDebugInfo, LineTable, LocalVarInfo};
-pub use ic::{InlineCache, InlineCacheTable, CacheState};
-pub use concurrent_gc::{ConcurrentGc, GcPhase, GcStats};
-pub use threads::{channel, value_channel, Channel, Receiver, Sender, ThreadHandle, ThreadSpawner};
+pub use debug::{DebugInfo, FunctionDebugInfo};
 
 /// A compiled function.
 #[derive(Debug, Clone)]

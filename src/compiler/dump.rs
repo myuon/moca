@@ -2,11 +2,9 @@
 //!
 //! This module provides human-readable output for debugging the compiler pipeline.
 
-use std::fmt::Write;
 
 use crate::compiler::ast::{
-    BinaryOp, Block, Expr, FnDef, ImplBlock, Import, Item, Param, Program, Statement, StructDef,
-    StructField, UnaryOp,
+    BinaryOp, Block, Expr, FnDef, ImplBlock, Import, Item, Param, Program, Statement, StructDef, UnaryOp,
 };
 use crate::compiler::resolver::{
     ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct,
@@ -57,10 +55,10 @@ impl<'a> AstPrinter<'a> {
         self.write_indent();
         match item {
             Item::Import(import) => self.print_import(import, prefix),
-            Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, &child_prefix),
-            Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, &child_prefix),
-            Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, &child_prefix),
-            Item::Statement(stmt) => self.print_statement(stmt, prefix, &child_prefix),
+            Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, child_prefix),
+            Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, child_prefix),
+            Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, child_prefix),
+            Item::Statement(stmt) => self.print_statement(stmt, prefix, child_prefix),
         }
     }
 
@@ -658,7 +656,7 @@ impl ResolvedProgramPrinter {
             } else {
                 format!("{}│   ", func_child_prefix)
             };
-            self.write_indent_with(&func_child_prefix);
+            self.write_indent_with(func_child_prefix);
             self.print_statement(stmt, stmt_prefix, &stmt_child_prefix);
         }
         self.indent -= 1;

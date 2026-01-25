@@ -279,8 +279,8 @@ impl<'a> Lexer<'a> {
             // Look ahead to see if it's followed by a digit
             let mut chars = self.chars.clone();
             chars.next(); // consume '.'
-            if let Some((_, ch)) = chars.peek() {
-                if ch.is_ascii_digit() {
+            if let Some((_, ch)) = chars.peek()
+                && ch.is_ascii_digit() {
                     is_float = true;
                     self.advance(); // consume '.'
                     while let Some((_, ch)) = self.peek() {
@@ -291,7 +291,6 @@ impl<'a> Lexer<'a> {
                         }
                     }
                 }
-            }
         }
 
         let end = self.peek().map(|(i, _)| i).unwrap_or(self.source.len());

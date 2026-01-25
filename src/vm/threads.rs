@@ -1,9 +1,12 @@
-/// Thread support for mica VM.
-///
-/// This module provides OS thread support with:
-/// - Thread spawning with independent VM instances
-/// - Join handles for waiting on thread completion
-/// - Channel-based communication between threads
+//! Thread support for mica VM.
+//!
+//! This module provides OS thread support with:
+//! - Thread spawning with independent VM instances
+//! - Join handles for waiting on thread completion
+//! - Channel-based communication between threads
+
+// Thread support is not yet integrated, allow dead code
+#![allow(dead_code)]
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

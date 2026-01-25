@@ -165,7 +165,7 @@ impl Codegen {
                 value,
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
-                if let Some(idx) = self.get_field_index(&field) {
+                if let Some(idx) = self.get_field_index(field) {
                     // Known struct field - use array index assignment
                     self.compile_expr(object, ops)?;
                     ops.push(Op::PushInt(idx as i64));
@@ -578,7 +578,7 @@ impl Codegen {
                 }
                 ops.push(Op::AllocArray(fields.len()));
             }
-            ResolvedExpr::MethodCall { object, method, args } => {
+            ResolvedExpr::MethodCall { object, method: _, args } => {
                 // TODO: Implement proper method dispatch
                 // For now, compile as a function call with the method name
                 // Push object (self) first, then args

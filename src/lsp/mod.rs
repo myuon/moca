@@ -70,11 +70,10 @@ impl MicaLanguageServer {
 
         // Try resolving
         let mut resolver = Resolver::new(filename);
-        if let Err(e) = resolver.resolve(program) {
-            if let Some(diag) = parse_error_to_diagnostic(&e) {
+        if let Err(e) = resolver.resolve(program)
+            && let Some(diag) = parse_error_to_diagnostic(&e) {
                 diagnostics.push(diag);
             }
-        }
 
         diagnostics
     }
@@ -91,11 +90,11 @@ fn parse_error_to_diagnostic(error: &str) -> Option<Diagnostic> {
         .unwrap_or(error);
 
     // Try to extract location from second line
-    if let Some(location_line) = lines.get(1) {
-        if let Some(loc) = location_line.strip_prefix("  --> ") {
+    if let Some(location_line) = lines.get(1)
+        && let Some(loc) = location_line.strip_prefix("  --> ") {
             let parts: Vec<&str> = loc.split(':').collect();
-            if parts.len() >= 3 {
-                if let (Ok(line), Ok(col)) = (
+            if parts.len() >= 3
+                && let (Ok(line), Ok(col)) = (
                     parts[parts.len() - 2].parse::<u32>(),
                     parts[parts.len() - 1].parse::<u32>(),
                 ) {
@@ -112,9 +111,7 @@ fn parse_error_to_diagnostic(error: &str) -> Option<Diagnostic> {
                         ..Default::default()
                     });
                 }
-            }
         }
-    }
 
     // Fallback: return diagnostic at start of file
     Some(Diagnostic {
@@ -226,9 +223,7 @@ impl LanguageServer for MicaLanguageServer {
             "true", "false", "nil", "try", "catch", "throw", "import",
         ];
 
-        let builtins = vec![
-            "print", "len", "push", "pop", "type_of", "to_string", "parse_int",
-        ];
+        let builtins = ["print", "len", "push", "pop", "type_of", "to_string", "parse_int"];
 
         let mut items: Vec<CompletionItem> = keywords
             .iter()

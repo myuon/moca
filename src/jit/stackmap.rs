@@ -1,7 +1,7 @@
-/// Stack maps for precise GC in JIT-compiled code.
-///
-/// Stack maps track which stack slots contain references at each safepoint
-/// in the generated code, allowing the GC to accurately trace roots.
+//! Stack maps for precise GC in JIT-compiled code.
+//!
+//! Stack maps track which stack slots contain references at each safepoint
+//! in the generated code, allowing the GC to accurately trace roots.
 
 use std::collections::HashMap;
 

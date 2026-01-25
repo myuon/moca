@@ -1,4 +1,7 @@
-/// Debug information for mapping bytecode to source code.
+//! Debug information for mapping bytecode to source code.
+
+// Debug info structures are defined but not fully used yet
+#![allow(dead_code)]
 
 /// A line table entry mapping a bytecode offset to a source location.
 #[derive(Debug, Clone)]

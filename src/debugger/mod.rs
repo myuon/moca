@@ -1,5 +1,8 @@
+// Some fields are stored for future use
+#![allow(dead_code)]
+
 use std::collections::HashSet;
-use std::io::{self, Stdout};
+use std::io::{self};
 use std::path::Path;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -8,7 +11,7 @@ use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
-use crate::compiler::{Lexer, ModuleLoader, Parser, Resolver, Codegen};
+use crate::compiler::{ModuleLoader, Resolver, Codegen};
 use crate::vm::{Chunk, Op, Value, Heap};
 
 /// Debugger state.
@@ -110,7 +113,7 @@ impl Debugger {
     fn current_line(&self) -> usize {
         // Simple heuristic: use PC as line offset from start
         // In a real implementation, we'd use the line table
-        1.min(self.source_lines.len()).max(1)
+        (self.pc + 1).min(self.source_lines.len()).max(1)
     }
 
     /// Execute one instruction.
@@ -138,7 +141,7 @@ impl Debugger {
             Op::PushNil => self.stack.push(Value::Nil),
             Op::Pop => { self.stack.pop(); }
             Op::LoadLocal(slot) => {
-                let val = self.locals[*slot].clone();
+                let val = self.locals[*slot];
                 self.stack.push(val);
             }
             Op::StoreLocal(slot) => {
@@ -157,7 +160,7 @@ impl Debugger {
             }
             Op::Print => {
                 if let Some(val) = self.stack.last() {
-                    self.output.push(format!("{}", self.format_value(val)));
+                    self.output.push(self.format_value(val).to_string());
                 }
                 self.stack.pop();
             }
@@ -171,12 +174,11 @@ impl Debugger {
                 return; // Don't increment PC
             }
             Op::JmpIfFalse(target) => {
-                if let Some(val) = self.stack.pop() {
-                    if !self.is_truthy(&val) {
+                if let Some(val) = self.stack.pop()
+                    && !self.is_truthy(&val) {
                         self.pc = *target;
                         return;
                     }
-                }
             }
             _ => {
                 // Other ops not fully implemented for debugger
@@ -245,7 +247,7 @@ impl Debugger {
 
     /// Process a command.
     fn process_command(&mut self, cmd: &str) {
-        let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             return;
         }
@@ -330,8 +332,8 @@ impl Debugger {
         while self.running {
             terminal.draw(|frame| self.ui(frame))?;
 
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            if let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Enter => {
                             let cmd = self.input.clone();
@@ -350,7 +352,6 @@ impl Debugger {
                         _ => {}
                     }
                 }
-            }
         }
 
         disable_raw_mode()?;

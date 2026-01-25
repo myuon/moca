@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod compiler;
@@ -215,7 +215,7 @@ fn main() -> ExitCode {
 }
 
 fn run_file(
-    path: &PathBuf,
+    path: &Path,
     config: &RuntimeConfig,
     dump_opts: &compiler::DumpOptions,
 ) -> Result<(), String> {

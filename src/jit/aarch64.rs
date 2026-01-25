@@ -1,7 +1,7 @@
-/// AArch64 instruction encoding for JIT compilation.
-///
-/// This module provides functions for encoding AArch64 instructions
-/// as machine code bytes.
+//! AArch64 instruction encoding for JIT compilation.
+//!
+//! This module provides functions for encoding AArch64 instructions
+//! as machine code bytes.
 
 use super::codebuf::CodeBuffer;
 

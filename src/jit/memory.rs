@@ -1,7 +1,7 @@
-/// Executable memory management using mmap.
-///
-/// This module provides a safe abstraction over OS-level memory mapping
-/// for allocating memory that can be written to and then executed.
+//! Executable memory management using mmap.
+//!
+//! This module provides a safe abstraction over OS-level memory mapping
+//! for allocating memory that can be written to and then executed.
 
 use std::ptr::NonNull;
 

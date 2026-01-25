@@ -1,7 +1,7 @@
-/// JIT compiler for mica bytecode.
-///
-/// This module implements a baseline JIT compiler that translates mica bytecode
-/// to AArch64 machine code using a template-based approach.
+//! JIT compiler for mica bytecode.
+//!
+//! This module implements a baseline JIT compiler that translates mica bytecode
+//! to AArch64 machine code using a template-based approach.
 
 use super::aarch64::{AArch64Assembler, Cond, Reg};
 use super::codebuf::CodeBuffer;

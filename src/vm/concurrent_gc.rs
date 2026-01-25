@@ -1,14 +1,17 @@
-/// Concurrent garbage collection support.
-///
-/// This module implements a concurrent mark-sweep GC with write barriers.
-/// The GC uses a snapshot-at-the-beginning (SATB) write barrier to ensure
-/// correctness during concurrent marking.
+//! Concurrent garbage collection support.
+//!
+//! This module implements a concurrent mark-sweep GC with write barriers.
+//! The GC uses a snapshot-at-the-beginning (SATB) write barrier to ensure
+//! correctness during concurrent marking.
+
+// Concurrent GC is not yet integrated, allow dead code
+#![allow(dead_code)]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
-use super::heap::{GcRef, HeapObject};
+use super::heap::GcRef;
 use super::Value;
 
 /// GC phase states.
@@ -182,12 +185,12 @@ impl ConcurrentGc {
         self.stats.concurrent_mark_us += start.elapsed().as_micros() as u64;
 
         // Check if there's more work
-        let has_more = {
+        
+
+        {
             let gray_list = self.gray_list.lock().unwrap();
             !gray_list.is_empty()
-        };
-
-        has_more
+        }
     }
 
     /// Process SATB buffer entries during remark.

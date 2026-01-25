@@ -252,7 +252,7 @@ impl<'a> Resolver<'a> {
                     impl_block.span,
                 )
             })?;
-            let struct_index = struct_info.index;
+            let _struct_index = struct_info.index;
 
             for method in &impl_block.methods {
                 // Create a unique function name for the method: StructName::method_name
