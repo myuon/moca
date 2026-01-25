@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod compiler;
+mod package;
 mod vm;
 
 #[derive(Parser)]
@@ -15,10 +16,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Initialize a new mica project
+    Init {
+        /// Project name (defaults to directory name)
+        name: Option<String>,
+    },
     /// Run a mica source file
     Run {
-        /// The source file to run
-        file: PathBuf,
+        /// The source file to run (defaults to pkg.toml entry if in a project)
+        file: Option<PathBuf>,
     },
 }
 
@@ -26,8 +32,30 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Init { name } => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if let Err(e) = package::init_project(&cwd, name.as_deref()) {
+                eprintln!("{}", e);
+                return ExitCode::FAILURE;
+            }
+        }
         Commands::Run { file } => {
-            if let Err(e) = run_file(&file) {
+            let path = match file {
+                Some(p) => p,
+                None => {
+                    // Try to find pkg.toml and use entry point
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    match package::PackageManifest::load(&cwd) {
+                        Ok(manifest) => cwd.join(&manifest.package.entry),
+                        Err(_) => {
+                            eprintln!("error: no file specified and no pkg.toml found");
+                            eprintln!("usage: mica run <file> or run from a mica project directory");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            };
+            if let Err(e) = run_file(&path) {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }
