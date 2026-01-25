@@ -220,6 +220,183 @@ impl<'a> X86_64Assembler<'a> {
         }
     }
 
+    // ==================== Arithmetic Operations ====================
+
+    /// ADD r64, r64
+    pub fn add_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x01); // ADD r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
+    /// ADD r64, imm32 (sign-extended)
+    pub fn add_ri32(&mut self, dst: Reg, imm: i32) {
+        self.emit_rex_w_single(dst);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x83); // ADD r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, 0, dst.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x81); // ADD r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, 0, dst.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// SUB r64, r64
+    pub fn sub_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x29); // SUB r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
+    /// SUB r64, imm32 (sign-extended)
+    pub fn sub_ri32(&mut self, dst: Reg, imm: i32) {
+        self.emit_rex_w_single(dst);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x83); // SUB r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, 5, dst.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x81); // SUB r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, 5, dst.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// IMUL r64, r64 (signed multiply, result in first operand)
+    pub fn imul_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(dst, src);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0xAF); // IMUL r64, r/m64
+        self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
+    }
+
+    /// IMUL r64, r64, imm32 (signed multiply with immediate)
+    pub fn imul_rri32(&mut self, dst: Reg, src: Reg, imm: i32) {
+        self.emit_rex_w(dst, src);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x6B); // IMUL r64, r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x69); // IMUL r64, r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// IDIV r64 (signed divide RDX:RAX by r64, quotient in RAX, remainder in RDX)
+    pub fn idiv(&mut self, src: Reg) {
+        self.emit_rex_w_single(src);
+        self.buf.emit_u8(0xF7); // IDIV r/m64
+        self.buf.emit_u8(Self::modrm(0b11, 7, src.code()));
+    }
+
+    /// CQO (sign-extend RAX into RDX:RAX, needed before IDIV)
+    pub fn cqo(&mut self) {
+        self.buf.emit_u8(0x48); // REX.W
+        self.buf.emit_u8(0x99); // CQO
+    }
+
+    /// CMP r64, r64
+    pub fn cmp_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x39); // CMP r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
+    /// CMP r64, imm32 (sign-extended)
+    pub fn cmp_ri32(&mut self, dst: Reg, imm: i32) {
+        self.emit_rex_w_single(dst);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x83); // CMP r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, 7, dst.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x81); // CMP r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, 7, dst.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// AND r64, r64
+    pub fn and_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x21); // AND r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
+    /// AND r64, imm32 (sign-extended)
+    pub fn and_ri32(&mut self, dst: Reg, imm: i32) {
+        self.emit_rex_w_single(dst);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x83); // AND r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, 4, dst.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x81); // AND r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, 4, dst.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// OR r64, r64
+    pub fn or_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x09); // OR r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
+    /// OR r64, imm32 (sign-extended)
+    pub fn or_ri32(&mut self, dst: Reg, imm: i32) {
+        self.emit_rex_w_single(dst);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x83); // OR r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, 1, dst.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x81); // OR r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, 1, dst.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// XOR r64, r64
+    pub fn xor_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x31); // XOR r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
+    /// XOR r64, imm32 (sign-extended)
+    pub fn xor_ri32(&mut self, dst: Reg, imm: i32) {
+        self.emit_rex_w_single(dst);
+        if (-128..=127).contains(&imm) {
+            self.buf.emit_u8(0x83); // XOR r/m64, imm8
+            self.buf.emit_u8(Self::modrm(0b11, 6, dst.code()));
+            self.buf.emit_u8(imm as u8);
+        } else {
+            self.buf.emit_u8(0x81); // XOR r/m64, imm32
+            self.buf.emit_u8(Self::modrm(0b11, 6, dst.code()));
+            self.buf.emit_u32(imm as u32);
+        }
+    }
+
+    /// NEG r64 (two's complement negation)
+    pub fn neg(&mut self, dst: Reg) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xF7); // NEG r/m64
+        self.buf.emit_u8(Self::modrm(0b11, 3, dst.code()));
+    }
+
+    /// TEST r64, r64 (bitwise AND, set flags, discard result)
+    pub fn test_rr(&mut self, dst: Reg, src: Reg) {
+        self.emit_rex_w(src, dst);
+        self.buf.emit_u8(0x85); // TEST r/m64, r64
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
+
     // ==================== Stack Operations ====================
 
     /// PUSH r64
@@ -354,5 +531,155 @@ mod tests {
 
         // MOV [RBX], RAX = 48 89 03
         assert_eq!(buf.code(), &[0x48, 0x89, 0x03]);
+    }
+
+    #[test]
+    fn test_add_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.add_rr(Reg::Rax, Reg::Rbx);
+
+        // ADD RAX, RBX = 48 01 D8
+        assert_eq!(buf.code(), &[0x48, 0x01, 0xD8]);
+    }
+
+    #[test]
+    fn test_add_ri32_imm8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.add_ri32(Reg::Rax, 16);
+
+        // ADD RAX, 16 = 48 83 C0 10
+        assert_eq!(buf.code(), &[0x48, 0x83, 0xC0, 0x10]);
+    }
+
+    #[test]
+    fn test_add_ri32_imm32() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.add_ri32(Reg::Rax, 256);
+
+        // ADD RAX, 256 = 48 81 C0 00 01 00 00
+        assert_eq!(buf.code(), &[0x48, 0x81, 0xC0, 0x00, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_sub_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.sub_rr(Reg::Rax, Reg::Rbx);
+
+        // SUB RAX, RBX = 48 29 D8
+        assert_eq!(buf.code(), &[0x48, 0x29, 0xD8]);
+    }
+
+    #[test]
+    fn test_sub_ri32_imm8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.sub_ri32(Reg::Rsp, 32);
+
+        // SUB RSP, 32 = 48 83 EC 20
+        assert_eq!(buf.code(), &[0x48, 0x83, 0xEC, 0x20]);
+    }
+
+    #[test]
+    fn test_imul_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.imul_rr(Reg::Rax, Reg::Rbx);
+
+        // IMUL RAX, RBX = 48 0F AF C3
+        assert_eq!(buf.code(), &[0x48, 0x0F, 0xAF, 0xC3]);
+    }
+
+    #[test]
+    fn test_idiv() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.idiv(Reg::Rcx);
+
+        // IDIV RCX = 48 F7 F9
+        assert_eq!(buf.code(), &[0x48, 0xF7, 0xF9]);
+    }
+
+    #[test]
+    fn test_cqo() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.cqo();
+
+        // CQO = 48 99
+        assert_eq!(buf.code(), &[0x48, 0x99]);
+    }
+
+    #[test]
+    fn test_cmp_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.cmp_rr(Reg::Rax, Reg::Rbx);
+
+        // CMP RAX, RBX = 48 39 D8
+        assert_eq!(buf.code(), &[0x48, 0x39, 0xD8]);
+    }
+
+    #[test]
+    fn test_cmp_ri32_imm8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.cmp_ri32(Reg::Rax, 0);
+
+        // CMP RAX, 0 = 48 83 F8 00
+        assert_eq!(buf.code(), &[0x48, 0x83, 0xF8, 0x00]);
+    }
+
+    #[test]
+    fn test_and_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.and_rr(Reg::Rax, Reg::Rbx);
+
+        // AND RAX, RBX = 48 21 D8
+        assert_eq!(buf.code(), &[0x48, 0x21, 0xD8]);
+    }
+
+    #[test]
+    fn test_or_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.or_rr(Reg::Rax, Reg::Rbx);
+
+        // OR RAX, RBX = 48 09 D8
+        assert_eq!(buf.code(), &[0x48, 0x09, 0xD8]);
+    }
+
+    #[test]
+    fn test_xor_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.xor_rr(Reg::Rax, Reg::Rax);
+
+        // XOR RAX, RAX = 48 31 C0
+        assert_eq!(buf.code(), &[0x48, 0x31, 0xC0]);
+    }
+
+    #[test]
+    fn test_neg() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.neg(Reg::Rax);
+
+        // NEG RAX = 48 F7 D8
+        assert_eq!(buf.code(), &[0x48, 0xF7, 0xD8]);
+    }
+
+    #[test]
+    fn test_test_rr() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.test_rr(Reg::Rax, Reg::Rax);
+
+        // TEST RAX, RAX = 48 85 C0
+        assert_eq!(buf.code(), &[0x48, 0x85, 0xC0]);
     }
 }
