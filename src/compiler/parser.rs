@@ -33,6 +33,10 @@ impl<'a> Parser<'a> {
             Ok(Item::Import(self.import_stmt()?))
         } else if self.check(&TokenKind::Fun) {
             Ok(Item::FnDef(self.fn_def()?))
+        } else if self.check(&TokenKind::Struct) {
+            Ok(Item::StructDef(self.struct_def()?))
+        } else if self.check(&TokenKind::Impl) {
+            Ok(Item::ImplBlock(self.impl_block()?))
         } else {
             Ok(Item::Statement(self.statement()?))
         }
@@ -95,6 +99,64 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            span,
+        })
+    }
+
+    /// Parse a struct definition: `struct Point { x: int, y: int }`
+    fn struct_def(&mut self) -> Result<StructDef, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Struct)?;
+
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut fields = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            fields.push(self.struct_field()?);
+            while self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break; // Allow trailing comma
+                }
+                fields.push(self.struct_field()?);
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(StructDef { name, fields, span })
+    }
+
+    /// Parse a struct field: `name: Type`
+    fn struct_field(&mut self) -> Result<StructField, String> {
+        let span = self.current_span();
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        let type_annotation = self.parse_type_annotation()?;
+
+        Ok(StructField {
+            name,
+            type_annotation,
+            span,
+        })
+    }
+
+    /// Parse an impl block: `impl Point { fn methods... }`
+    fn impl_block(&mut self) -> Result<ImplBlock, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Impl)?;
+
+        let struct_name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            methods.push(self.fn_def()?);
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(ImplBlock {
+            struct_name,
+            methods,
             span,
         })
     }
@@ -1233,6 +1295,74 @@ mod tests {
                 );
             }
             _ => panic!("expected let statement"),
+        }
+    }
+
+    // Struct tests
+
+    #[test]
+    fn test_struct_definition() {
+        let program = parse("struct Point { x: int, y: int }").unwrap();
+        match &program.items[0] {
+            Item::StructDef(StructDef { name, fields, .. }) => {
+                assert_eq!(name, "Point");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name, "x");
+                assert_eq!(fields[1].name, "y");
+            }
+            _ => panic!("expected struct definition"),
+        }
+    }
+
+    #[test]
+    fn test_struct_with_trailing_comma() {
+        let program = parse("struct Point { x: int, y: int, }").unwrap();
+        match &program.items[0] {
+            Item::StructDef(StructDef { fields, .. }) => {
+                assert_eq!(fields.len(), 2);
+            }
+            _ => panic!("expected struct definition"),
+        }
+    }
+
+    #[test]
+    fn test_struct_with_nullable_field() {
+        let program = parse("struct Node { value: int, next: Node? }").unwrap();
+        match &program.items[0] {
+            Item::StructDef(StructDef { name, fields, .. }) => {
+                assert_eq!(name, "Node");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[1].name, "next");
+                assert_eq!(fields[1].type_annotation.to_string(), "Node?");
+            }
+            _ => panic!("expected struct definition"),
+        }
+    }
+
+    #[test]
+    fn test_impl_block() {
+        let program = parse("impl Point { fun get_x(self) -> int { return 0; } }").unwrap();
+        match &program.items[0] {
+            Item::ImplBlock(ImplBlock { struct_name, methods, .. }) => {
+                assert_eq!(struct_name, "Point");
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name, "get_x");
+            }
+            _ => panic!("expected impl block"),
+        }
+    }
+
+    #[test]
+    fn test_impl_with_self_method() {
+        let program = parse("impl Rectangle { fun area(self) -> int { return self.width * self.height; } }").unwrap();
+        match &program.items[0] {
+            Item::ImplBlock(ImplBlock { methods, .. }) => {
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name, "area");
+                assert_eq!(methods[0].params.len(), 1);
+                assert_eq!(methods[0].params[0].name, "self");
+            }
+            _ => panic!("expected impl block"),
         }
     }
 }
