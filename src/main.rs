@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod compiler;
+mod lsp;
 mod package;
 mod vm;
 
@@ -26,6 +27,8 @@ enum Commands {
         /// The source file to run (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
     },
+    /// Start the language server
+    Lsp,
 }
 
 fn main() -> ExitCode {
@@ -59,6 +62,10 @@ fn main() -> ExitCode {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }
+        }
+        Commands::Lsp => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(lsp::run_server());
         }
     }
 
