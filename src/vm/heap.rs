@@ -37,6 +37,8 @@ pub struct MicaArray {
 pub struct MicaObject {
     pub header: ObjectHeader,
     pub fields: HashMap<String, Value>,
+    /// Shape ID for inline caching (objects with same fields have same shape)
+    pub shape_id: u32,
 }
 
 /// A heap object can be any of the heap-allocated types.
@@ -146,6 +148,10 @@ pub struct Heap {
     free_list: Vec<usize>,
     bytes_allocated: usize,
     gc_threshold: usize,
+    /// Counter for generating unique shape IDs
+    next_shape_id: u32,
+    /// Cache of shape signatures to shape IDs
+    shape_cache: HashMap<Vec<String>, u32>,
 }
 
 impl Heap {
@@ -155,6 +161,23 @@ impl Heap {
             free_list: Vec::new(),
             bytes_allocated: 0,
             gc_threshold: 1024 * 1024, // 1MB initial threshold
+            next_shape_id: 1,
+            shape_cache: HashMap::new(),
+        }
+    }
+
+    /// Compute or retrieve a shape ID for a given set of field names.
+    fn get_shape_id(&mut self, field_names: &[String]) -> u32 {
+        let mut sorted_names: Vec<String> = field_names.to_vec();
+        sorted_names.sort();
+
+        if let Some(&id) = self.shape_cache.get(&sorted_names) {
+            id
+        } else {
+            let id = self.next_shape_id;
+            self.next_shape_id += 1;
+            self.shape_cache.insert(sorted_names, id);
+            id
         }
     }
 
@@ -194,12 +217,17 @@ impl Heap {
             + fields.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
         self.bytes_allocated += size;
 
+        // Compute shape ID based on field names
+        let field_names: Vec<String> = fields.keys().cloned().collect();
+        let shape_id = self.get_shape_id(&field_names);
+
         let obj = HeapObject::Object(MicaObject {
             header: ObjectHeader {
                 obj_type: ObjectType::Object,
                 marked: false,
             },
             fields,
+            shape_id,
         });
         self.alloc_object(obj)
     }

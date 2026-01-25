@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::vm::{Chunk, Function, Heap, Op, Value};
+use crate::vm::ic::InlineCacheTable;
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -32,6 +33,10 @@ pub struct VM {
     frames: Vec<Frame>,
     heap: Heap,
     try_frames: Vec<TryFrame>,
+    /// Inline cache tables for functions (index matches Chunk::functions)
+    ic_tables: Vec<InlineCacheTable>,
+    /// Inline cache table for main function
+    main_ic: InlineCacheTable,
 }
 
 impl VM {
@@ -41,7 +46,18 @@ impl VM {
             frames: Vec::with_capacity(64),
             heap: Heap::new(),
             try_frames: Vec::new(),
+            ic_tables: Vec::new(),
+            main_ic: InlineCacheTable::new(),
         }
+    }
+
+    /// Initialize IC tables for a chunk (call before run_with_ic).
+    pub fn init_ic_tables(&mut self, chunk: &Chunk) {
+        self.ic_tables.clear();
+        for _ in &chunk.functions {
+            self.ic_tables.push(InlineCacheTable::new());
+        }
+        self.main_ic = InlineCacheTable::new();
     }
 
     /// Run with quickening enabled - specializes instructions based on observed types.
