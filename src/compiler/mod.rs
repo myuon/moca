@@ -1,6 +1,6 @@
-mod ast;
+pub mod ast;
 mod codegen;
-mod lexer;
+pub mod lexer;
 mod module;
 mod parser;
 mod resolver;

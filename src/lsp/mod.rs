@@ -5,7 +5,11 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use crate::compiler::ast::Program;
 use crate::compiler::{Lexer, Parser, Resolver};
+
+mod symbols;
+use symbols::SymbolTable;
 
 /// The mica language server backend.
 pub struct MicaLanguageServer {
@@ -20,6 +24,19 @@ impl MicaLanguageServer {
             client,
             documents: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Parse a document and return the AST (if successful).
+    fn parse_document(&self, uri: &Url, source: &str) -> Option<Program> {
+        let filename = uri.path();
+
+        // Try lexing
+        let mut lexer = Lexer::new(filename, source);
+        let tokens = lexer.scan_tokens().ok()?;
+
+        // Try parsing
+        let mut parser = Parser::new(filename, tokens);
+        parser.parse().ok()
     }
 
     /// Analyze a document and return diagnostics.
@@ -194,12 +211,13 @@ impl LanguageServer for MicaLanguageServer {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
-        let _position = params.text_document_position.position;
 
-        let docs = self.documents.read().unwrap();
-        let _source = match docs.get(uri) {
-            Some(s) => s.clone(),
-            None => return Ok(None),
+        let source = {
+            let docs = self.documents.read().unwrap();
+            match docs.get(uri) {
+                Some(s) => s.clone(),
+                None => return Ok(None),
+            }
         };
 
         // Basic keyword completion
@@ -227,20 +245,137 @@ impl LanguageServer for MicaLanguageServer {
             ..Default::default()
         }));
 
+        // Add symbols from the document
+        if let Some(program) = self.parse_document(uri, &source) {
+            let symbols = SymbolTable::from_program(&program);
+            for (name, defs) in &symbols.definitions {
+                if let Some(def) = defs.first() {
+                    let kind = match def.kind {
+                        symbols::SymbolKind::Function => CompletionItemKind::FUNCTION,
+                        symbols::SymbolKind::Variable => CompletionItemKind::VARIABLE,
+                        symbols::SymbolKind::Parameter => CompletionItemKind::VARIABLE,
+                    };
+                    items.push(CompletionItem {
+                        label: name.clone(),
+                        kind: Some(kind),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
         Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn goto_definition(
         &self,
-        _params: GotoDefinitionParams,
+        params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        // TODO: Implement proper definition lookup
-        Ok(None)
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let source = {
+            let docs = self.documents.read().unwrap();
+            match docs.get(uri) {
+                Some(s) => s.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        // Parse the document
+        let program = match self.parse_document(uri, &source) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // Build symbol table
+        let symbols = SymbolTable::from_program(&program);
+
+        // Find symbol at cursor position (convert to 1-based)
+        let line = position.line + 1;
+        let column = position.character + 1;
+
+        let symbol_name = match symbols.find_at_position(line, column) {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+
+        // Find definition
+        let def = match symbols.get_definition(symbol_name) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        // Convert span to LSP position (0-based)
+        let def_line = (def.def_span.line.saturating_sub(1)) as u32;
+        let def_col = (def.def_span.column.saturating_sub(1)) as u32;
+
+        let location = Location {
+            uri: uri.clone(),
+            range: Range {
+                start: Position {
+                    line: def_line,
+                    character: def_col,
+                },
+                end: Position {
+                    line: def_line,
+                    character: def_col + def.name.len() as u32,
+                },
+            },
+        };
+
+        Ok(Some(GotoDefinitionResponse::Scalar(location)))
     }
 
-    async fn hover(&self, _params: HoverParams) -> Result<Option<Hover>> {
-        // TODO: Implement proper hover info
-        Ok(None)
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let source = {
+            let docs = self.documents.read().unwrap();
+            match docs.get(uri) {
+                Some(s) => s.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        // Parse the document
+        let program = match self.parse_document(uri, &source) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // Build symbol table
+        let symbols = SymbolTable::from_program(&program);
+
+        // Find symbol at cursor position (convert to 1-based)
+        let line = position.line + 1;
+        let column = position.character + 1;
+
+        let symbol_name = match symbols.find_at_position(line, column) {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+
+        // Find definition to get kind
+        let kind_str = match symbols.get_definition(symbol_name) {
+            Some(def) => match def.kind {
+                symbols::SymbolKind::Function => "function",
+                symbols::SymbolKind::Variable => "variable",
+                symbols::SymbolKind::Parameter => "parameter",
+            },
+            None => "symbol",
+        };
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!("**{}** `{}`", kind_str, symbol_name),
+        });
+
+        Ok(Some(Hover {
+            contents,
+            range: None,
+        }))
     }
 }
 
