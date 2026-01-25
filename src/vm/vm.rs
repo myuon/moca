@@ -5,7 +5,7 @@ use crate::vm::ic::InlineCacheTable;
 use crate::vm::threads::{Channel, ThreadSpawner};
 use crate::vm::{Chunk, Function, Heap, Op, Value};
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler::{CompiledCode, JitCompiler};
 
 /// A call frame for the VM.
@@ -62,8 +62,8 @@ pub struct VM {
     thread_spawner: ThreadSpawner,
     /// Channels for inter-thread communication (id -> channel)
     channels: Vec<Arc<Channel<Value>>>,
-    /// JIT compiled functions (only on AArch64)
-    #[cfg(target_arch = "aarch64")]
+    /// JIT compiled functions (only on AArch64 with jit feature)
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
@@ -84,7 +84,7 @@ impl VM {
             gc_stats: VmGcStats::default(),
             thread_spawner: ThreadSpawner::new(),
             channels: Vec::new(),
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(all(target_arch = "aarch64", feature = "jit"))]
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
         }
@@ -136,8 +136,8 @@ impl VM {
         false
     }
 
-    /// Compile a function to native code (AArch64 only).
-    #[cfg(target_arch = "aarch64")]
+    /// Compile a function to native code (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
         if self.jit_functions.contains_key(&func_index) {
             return; // Already compiled
@@ -164,8 +164,8 @@ impl VM {
         }
     }
 
-    /// Check if a function has been JIT compiled (AArch64 only).
-    #[cfg(target_arch = "aarch64")]
+    /// Check if a function has been JIT compiled (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn is_jit_compiled(&self, func_index: usize) -> bool {
         self.jit_functions.contains_key(&func_index)
     }
@@ -1129,17 +1129,17 @@ impl VM {
 
                 // Check if this function is hot
                 if self.should_jit_compile(*func_idx, &func_name) {
-                    // Compile the function on AArch64
-                    #[cfg(target_arch = "aarch64")]
+                    // Compile the function on AArch64 with jit feature enabled
+                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
                     {
                         let func_clone = func.clone();
                         self.jit_compile_function(&func_clone, *func_idx);
                     }
 
-                    // On non-AArch64 platforms, just log that compilation would happen
-                    #[cfg(not(target_arch = "aarch64"))]
+                    // On non-AArch64 platforms or without jit feature, just log that compilation would happen
+                    #[cfg(not(all(target_arch = "aarch64", feature = "jit")))]
                     if self.trace_jit {
-                        eprintln!("[JIT] Would compile '{}' (not on AArch64)", func_name);
+                        eprintln!("[JIT] Would compile '{}' (JIT not available)", func_name);
                         self.jit_compile_count += 1;
                     }
                 }
