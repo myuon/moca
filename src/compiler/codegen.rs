@@ -1,5 +1,7 @@
 use crate::compiler::ast::{BinaryOp, UnaryOp};
-use crate::compiler::resolver::{ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct};
+use crate::compiler::resolver::{
+    ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct,
+};
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
 use std::collections::HashMap;
 
@@ -139,7 +141,11 @@ impl Codegen {
         })
     }
 
-    fn compile_statement(&mut self, stmt: &ResolvedStatement, ops: &mut Vec<Op>) -> Result<(), String> {
+    fn compile_statement(
+        &mut self,
+        stmt: &ResolvedStatement,
+        ops: &mut Vec<Op>,
+    ) -> Result<(), String> {
         match stmt {
             ResolvedStatement::Let { slot, init } => {
                 self.compile_expr(init, ops)?;
@@ -543,7 +549,9 @@ impl Codegen {
                     }
                     "send" => {
                         if args.len() != 2 {
-                            return Err("send takes exactly 2 arguments (channel_id, value)".to_string());
+                            return Err(
+                                "send takes exactly 2 arguments (channel_id, value)".to_string()
+                            );
                         }
                         self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
@@ -571,14 +579,21 @@ impl Codegen {
             ResolvedExpr::SpawnFunc { func_index } => {
                 ops.push(Op::ThreadSpawn(*func_index));
             }
-            ResolvedExpr::StructLiteral { struct_index: _, fields } => {
+            ResolvedExpr::StructLiteral {
+                struct_index: _,
+                fields,
+            } => {
                 // Compile struct as an array (tuple) with field values in declaration order
                 for value in fields {
                     self.compile_expr(value, ops)?;
                 }
                 ops.push(Op::AllocArray(fields.len()));
             }
-            ResolvedExpr::MethodCall { object, method: _, args } => {
+            ResolvedExpr::MethodCall {
+                object,
+                method: _,
+                args,
+            } => {
                 // TODO: Implement proper method dispatch
                 // For now, compile as a function call with the method name
                 // Push object (self) first, then args

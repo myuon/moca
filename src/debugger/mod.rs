@@ -5,14 +5,16 @@ use std::collections::HashSet;
 use std::io::{self};
 use std::path::Path;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
-use crate::compiler::{ModuleLoader, Resolver, Codegen};
-use crate::vm::{Chunk, Op, Value, Heap};
+use crate::compiler::{Codegen, ModuleLoader, Resolver};
+use crate::vm::{Chunk, Heap, Op, Value};
 
 /// Debugger state.
 pub struct Debugger {
@@ -60,8 +62,8 @@ impl Debugger {
     /// Create a new debugger for a source file.
     pub fn new(path: &Path) -> Result<Self, String> {
         // Read source
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read file: {}", e))?;
+        let source =
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read file: {}", e))?;
         let source_lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
 
         // Compile
@@ -139,7 +141,9 @@ impl Debugger {
             Op::PushTrue => self.stack.push(Value::Bool(true)),
             Op::PushFalse => self.stack.push(Value::Bool(false)),
             Op::PushNil => self.stack.push(Value::Nil),
-            Op::Pop => { self.stack.pop(); }
+            Op::Pop => {
+                self.stack.pop();
+            }
             Op::LoadLocal(slot) => {
                 let val = self.locals[*slot];
                 self.stack.push(val);
@@ -175,10 +179,11 @@ impl Debugger {
             }
             Op::JmpIfFalse(target) => {
                 if let Some(val) = self.stack.pop()
-                    && !self.is_truthy(&val) {
-                        self.pc = *target;
-                        return;
-                    }
+                    && !self.is_truthy(&val)
+                {
+                    self.pc = *target;
+                    return;
+                }
             }
             _ => {
                 // Other ops not fully implemented for debugger
@@ -275,7 +280,11 @@ impl Debugger {
                 }
             }
             "bl" => {
-                let bps: Vec<String> = self.line_breakpoints.iter().map(|l| l.to_string()).collect();
+                let bps: Vec<String> = self
+                    .line_breakpoints
+                    .iter()
+                    .map(|l| l.to_string())
+                    .collect();
                 self.status = format!("Breakpoints: {}", bps.join(", "));
             }
             "p" => {
@@ -301,7 +310,8 @@ impl Debugger {
                 self.status = format!("Locals: {}", locals_str);
             }
             "bt" | "backtrace" => {
-                let bt: Vec<String> = self.call_stack
+                let bt: Vec<String> = self
+                    .call_stack
                     .iter()
                     .enumerate()
                     .map(|(i, f)| format!("#{} {} (pc:{})", i, f.func_name, f.pc))
@@ -333,25 +343,26 @@ impl Debugger {
             terminal.draw(|frame| self.ui(frame))?;
 
             if let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Enter => {
-                            let cmd = self.input.clone();
-                            self.input.clear();
-                            self.process_command(&cmd);
-                        }
-                        KeyCode::Char(c) => {
-                            self.input.push(c);
-                        }
-                        KeyCode::Backspace => {
-                            self.input.pop();
-                        }
-                        KeyCode::Esc => {
-                            self.running = false;
-                        }
-                        _ => {}
+                && key.kind == KeyEventKind::Press
+            {
+                match key.code {
+                    KeyCode::Enter => {
+                        let cmd = self.input.clone();
+                        self.input.clear();
+                        self.process_command(&cmd);
                     }
+                    KeyCode::Char(c) => {
+                        self.input.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        self.input.pop();
+                    }
+                    KeyCode::Esc => {
+                        self.running = false;
+                    }
+                    _ => {}
                 }
+            }
         }
 
         disable_raw_mode()?;
@@ -363,17 +374,18 @@ impl Debugger {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),      // Source
-                Constraint::Length(6),    // Locals + Stack
-                Constraint::Length(5),    // Output
-                Constraint::Length(3),    // Status
-                Constraint::Length(3),    // Input
+                Constraint::Min(10),   // Source
+                Constraint::Length(6), // Locals + Stack
+                Constraint::Length(5), // Output
+                Constraint::Length(3), // Status
+                Constraint::Length(3), // Input
             ])
             .split(frame.area());
 
         // Source view
         let current_line = self.current_line();
-        let source_items: Vec<ListItem> = self.source_lines
+        let source_items: Vec<ListItem> = self
+            .source_lines
             .iter()
             .enumerate()
             .map(|(i, line)| {
@@ -394,8 +406,8 @@ impl Debugger {
             })
             .collect();
 
-        let source = List::new(source_items)
-            .block(Block::default().title("Source").borders(Borders::ALL));
+        let source =
+            List::new(source_items).block(Block::default().title("Source").borders(Borders::ALL));
         frame.render_widget(source, chunks[0]);
 
         // Locals and stack
@@ -404,7 +416,8 @@ impl Debugger {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(chunks[1]);
 
-        let locals_text: Vec<String> = self.locals
+        let locals_text: Vec<String> = self
+            .locals
             .iter()
             .enumerate()
             .take(8)
@@ -415,7 +428,8 @@ impl Debugger {
             .block(Block::default().title("Locals").borders(Borders::ALL));
         frame.render_widget(locals, info_chunks[0]);
 
-        let stack_text: Vec<String> = self.stack
+        let stack_text: Vec<String> = self
+            .stack
             .iter()
             .rev()
             .take(5)
@@ -426,7 +440,14 @@ impl Debugger {
         frame.render_widget(stack, info_chunks[1]);
 
         // Output
-        let output_text = self.output.iter().rev().take(3).cloned().collect::<Vec<_>>().join("\n");
+        let output_text = self
+            .output
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         let output = Paragraph::new(output_text)
             .block(Block::default().title("Output").borders(Borders::ALL));
         frame.render_widget(output, chunks[2]);

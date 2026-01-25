@@ -104,10 +104,7 @@ impl SymbolTable {
                     kind: SymbolKind::Variable,
                     def_span: *span,
                 };
-                self.definitions
-                    .entry(name.clone())
-                    .or_default()
-                    .push(info);
+                self.definitions.entry(name.clone()).or_default().push(info);
 
                 self.collect_expr(init);
             }
@@ -160,10 +157,7 @@ impl SymbolTable {
                     kind: SymbolKind::Variable,
                     def_span: *span,
                 };
-                self.definitions
-                    .entry(var.clone())
-                    .or_default()
-                    .push(info);
+                self.definitions.entry(var.clone()).or_default().push(info);
 
                 self.collect_expr(iterable);
                 self.collect_block(body);

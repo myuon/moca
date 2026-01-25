@@ -10,9 +10,8 @@
 // JIT is not yet integrated into the main VM, allow dead code
 #![allow(dead_code)]
 
-mod memory;
-mod codebuf;
 pub mod aarch64;
+mod codebuf;
 pub mod compiler;
+mod memory;
 pub mod stackmap;
-

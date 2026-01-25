@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::vm::{Chunk, Function, Heap, Op, Value};
 use crate::vm::ic::InlineCacheTable;
 use crate::vm::threads::{Channel, ThreadSpawner};
+use crate::vm::{Chunk, Function, Heap, Op, Value};
 
 #[cfg(target_arch = "aarch64")]
 use crate::jit::compiler::{CompiledCode, JitCompiler};
@@ -125,7 +125,10 @@ impl VM {
 
         if self.call_counts[func_index] == self.jit_threshold {
             if self.trace_jit {
-                eprintln!("[JIT] Hot function detected: {} (calls: {})", func_name, self.jit_threshold);
+                eprintln!(
+                    "[JIT] Hot function detected: {} (calls: {})",
+                    func_name, self.jit_threshold
+                );
             }
             return true;
         }
@@ -144,7 +147,11 @@ impl VM {
         match compiler.compile(func) {
             Ok(compiled) => {
                 if self.trace_jit {
-                    eprintln!("[JIT] Compiled function '{}' ({} bytes)", func.name, compiled.memory.len());
+                    eprintln!(
+                        "[JIT] Compiled function '{}' ({} bytes)",
+                        func.name,
+                        compiled.memory.len()
+                    );
                 }
                 self.jit_functions.insert(func_index, compiled);
                 self.jit_compile_count += 1;
@@ -524,7 +531,9 @@ impl VM {
             }
             Op::ArrayLen => {
                 let val = self.stack.pop().ok_or("stack underflow")?;
-                let r = val.as_ptr().ok_or("runtime error: expected array or string")?;
+                let r = val
+                    .as_ptr()
+                    .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
                 let len = if let Some(arr) = obj.as_array() {
@@ -560,7 +569,10 @@ impl VM {
                 let arr = self.stack.pop().ok_or("stack underflow")?;
                 let r = arr.as_ptr().ok_or("runtime error: expected array")?;
 
-                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let obj = self
+                    .heap
+                    .get_mut(r)
+                    .ok_or("runtime error: invalid reference")?;
                 let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
 
                 if index < 0 || index as usize >= arr.elements.len() {
@@ -578,7 +590,10 @@ impl VM {
                 let arr = self.stack.pop().ok_or("stack underflow")?;
                 let r = arr.as_ptr().ok_or("runtime error: expected array")?;
 
-                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let obj = self
+                    .heap
+                    .get_mut(r)
+                    .ok_or("runtime error: invalid reference")?;
                 let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
                 arr.elements.push(value);
             }
@@ -586,10 +601,16 @@ impl VM {
                 let arr = self.stack.pop().ok_or("stack underflow")?;
                 let r = arr.as_ptr().ok_or("runtime error: expected array")?;
 
-                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let obj = self
+                    .heap
+                    .get_mut(r)
+                    .ok_or("runtime error: invalid reference")?;
                 let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
 
-                let value = arr.elements.pop().ok_or("runtime error: cannot pop from empty array")?;
+                let value = arr
+                    .elements
+                    .pop()
+                    .ok_or("runtime error: cannot pop from empty array")?;
                 self.stack.push(value);
             }
             Op::AllocObject(n) => {
@@ -599,8 +620,13 @@ impl VM {
                     let key = self.stack.pop().ok_or("stack underflow")?;
 
                     // Key should be a string
-                    let key_ref = key.as_ptr().ok_or("runtime error: object key must be a string")?;
-                    let key_obj = self.heap.get(key_ref).ok_or("runtime error: invalid reference")?;
+                    let key_ref = key
+                        .as_ptr()
+                        .ok_or("runtime error: object key must be a string")?;
+                    let key_obj = self
+                        .heap
+                        .get(key_ref)
+                        .ok_or("runtime error: invalid reference")?;
                     let key_str = key_obj
                         .as_string()
                         .ok_or("runtime error: object key must be a string")?;
@@ -616,7 +642,9 @@ impl VM {
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
                 let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let obj = heap_obj.as_object().ok_or("runtime error: expected object")?;
+                let obj = heap_obj
+                    .as_object()
+                    .ok_or("runtime error: expected object")?;
 
                 let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Nil);
                 self.stack.push(value);
@@ -628,8 +656,13 @@ impl VM {
 
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
-                let heap_obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
-                let obj = heap_obj.as_object_mut().ok_or("runtime error: expected object")?;
+                let heap_obj = self
+                    .heap
+                    .get_mut(r)
+                    .ok_or("runtime error: invalid reference")?;
+                let obj = heap_obj
+                    .as_object_mut()
+                    .ok_or("runtime error: expected object")?;
 
                 obj.fields.insert(field_name, value);
             }
@@ -681,9 +714,13 @@ impl VM {
             }
             Op::ParseInt => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
-                let r = value.as_ptr().ok_or("runtime error: parse_int expects string")?;
+                let r = value
+                    .as_ptr()
+                    .ok_or("runtime error: parse_int expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let s = obj.as_string().ok_or("runtime error: parse_int expects string")?;
+                let s = obj
+                    .as_string()
+                    .ok_or("runtime error: parse_int expects string")?;
                 let n: i64 = s
                     .value
                     .trim()
@@ -885,7 +922,9 @@ impl VM {
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
                 let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let obj = heap_obj.as_object().ok_or("runtime error: expected object")?;
+                let obj = heap_obj
+                    .as_object()
+                    .ok_or("runtime error: expected object")?;
 
                 let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Nil);
                 self.stack.push(value);
@@ -897,8 +936,13 @@ impl VM {
 
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
-                let heap_obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
-                let obj = heap_obj.as_object_mut().ok_or("runtime error: expected object")?;
+                let heap_obj = self
+                    .heap
+                    .get_mut(r)
+                    .ok_or("runtime error: invalid reference")?;
+                let obj = heap_obj
+                    .as_object_mut()
+                    .ok_or("runtime error: expected object")?;
 
                 obj.fields.insert(field_name, value);
             }
@@ -948,23 +992,31 @@ impl VM {
                 self.channels.push(channel);
 
                 // Create an array with [id, id] (sender and receiver share the channel)
-                let arr = self.heap.alloc_array(vec![Value::Int(id as i64), Value::Int(id as i64)]);
+                let arr = self
+                    .heap
+                    .alloc_array(vec![Value::Int(id as i64), Value::Int(id as i64)]);
                 self.stack.push(Value::Ptr(arr));
             }
             Op::ChannelSend => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let channel_id = self.pop_int()? as usize;
 
-                let channel = self.channels.get(channel_id)
+                let channel = self
+                    .channels
+                    .get(channel_id)
                     .ok_or_else(|| format!("runtime error: channel {} not found", channel_id))?
                     .clone();
 
-                channel.send(value).map_err(|_| "runtime error: channel closed")?;
+                channel
+                    .send(value)
+                    .map_err(|_| "runtime error: channel closed")?;
             }
             Op::ChannelRecv => {
                 let channel_id = self.pop_int()? as usize;
 
-                let channel = self.channels.get(channel_id)
+                let channel = self
+                    .channels
+                    .get(channel_id)
                     .ok_or_else(|| format!("runtime error: channel {} not found", channel_id))?
                     .clone();
 
@@ -997,9 +1049,7 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => {
-                        (Value::Int(av + bv), Some(Op::AddInt))
-                    }
+                    (Value::Int(av), Value::Int(bv)) => (Value::Int(av + bv), Some(Op::AddInt)),
                     (Value::Float(av), Value::Float(bv)) => {
                         (Value::Float(av + bv), Some(Op::AddFloat))
                     }
@@ -1020,9 +1070,7 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => {
-                        (Value::Int(av - bv), Some(Op::SubInt))
-                    }
+                    (Value::Int(av), Value::Int(bv)) => (Value::Int(av - bv), Some(Op::SubInt)),
                     (Value::Float(av), Value::Float(bv)) => {
                         (Value::Float(av - bv), Some(Op::SubFloat))
                     }
@@ -1042,9 +1090,7 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => {
-                        (Value::Int(av * bv), Some(Op::MulInt))
-                    }
+                    (Value::Int(av), Value::Int(bv)) => (Value::Int(av * bv), Some(Op::MulInt)),
                     (Value::Float(av), Value::Float(bv)) => {
                         (Value::Float(av * bv), Some(Op::MulFloat))
                     }
@@ -1064,9 +1110,7 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => {
-                        (Value::Bool(av < bv), Some(Op::LtInt))
-                    }
+                    (Value::Int(av), Value::Int(bv)) => (Value::Bool(av < bv), Some(Op::LtInt)),
                     _ => (Value::Bool(self.compare(&a, &b)? < 0), None),
                 };
 
@@ -1274,7 +1318,10 @@ impl VM {
             Value::Bool(b) => Ok(b.to_string()),
             Value::Nil => Ok("nil".to_string()),
             Value::Ptr(r) => {
-                let obj = self.heap.get(*r).ok_or("runtime error: invalid reference")?;
+                let obj = self
+                    .heap
+                    .get(*r)
+                    .ok_or("runtime error: invalid reference")?;
                 match obj {
                     super::HeapObject::String(s) => Ok(s.value.clone()),
                     super::HeapObject::Array(a) => {
@@ -1318,10 +1365,11 @@ impl VM {
 
             // Jump to the handler
             if let Some(frame) = self.frames.last_mut()
-                && frame.func_index == try_frame.func_index {
-                    frame.pc = try_frame.handler_pc;
-                    return Ok(true);
-                }
+                && frame.func_index == try_frame.func_index
+            {
+                frame.pc = try_frame.handler_pc;
+                return Ok(true);
+            }
         }
 
         // No handler found
@@ -1432,12 +1480,7 @@ mod tests {
 
     #[test]
     fn test_locals() {
-        let stack = run_code(vec![
-            Op::PushInt(42),
-            Op::StoreLocal(0),
-            Op::LoadLocal(0),
-        ])
-        .unwrap();
+        let stack = run_code(vec![Op::PushInt(42), Op::StoreLocal(0), Op::LoadLocal(0)]).unwrap();
         assert_eq!(stack, vec![Value::Int(42), Value::Int(42)]);
     }
 

@@ -234,7 +234,10 @@ impl<'a> Resolver<'a> {
 
         // Register top-level functions
         for fn_def in &func_defs {
-            let index = func_defs.iter().position(|f| f.name == fn_def.name).unwrap();
+            let index = func_defs
+                .iter()
+                .position(|f| f.name == fn_def.name)
+                .unwrap();
             if self.functions.contains_key(&fn_def.name) {
                 return Err(self.error(
                     &format!("function '{}' already defined", fn_def.name),
@@ -261,7 +264,10 @@ impl<'a> Resolver<'a> {
 
                 if self.functions.contains_key(&func_name) {
                     return Err(self.error(
-                        &format!("method '{}' already defined for struct '{}'", method.name, impl_block.struct_name),
+                        &format!(
+                            "method '{}' already defined for struct '{}'",
+                            method.name, impl_block.struct_name
+                        ),
                         method.span,
                     ));
                 }
@@ -375,9 +381,9 @@ impl<'a> Resolver<'a> {
                 Ok(ResolvedStatement::Let { slot, init })
             }
             Statement::Assign { name, value, span } => {
-                let (slot, mutable) = scope.lookup(&name).ok_or_else(|| {
-                    self.error(&format!("undefined variable '{}'", name), span)
-                })?;
+                let (slot, mutable) = scope
+                    .lookup(&name)
+                    .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
 
                 if !mutable {
                     return Err(self.error(
@@ -472,7 +478,10 @@ impl<'a> Resolver<'a> {
                 })
             }
             Statement::ForIn {
-                var, iterable, body, ..
+                var,
+                iterable,
+                body,
+                ..
             } => {
                 let iterable = self.resolve_expr(iterable, scope)?;
 
@@ -527,9 +536,9 @@ impl<'a> Resolver<'a> {
             Expr::Str { value, .. } => Ok(ResolvedExpr::Str(value)),
             Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
             Expr::Ident { name, span } => {
-                let (slot, _) = scope.lookup(&name).ok_or_else(|| {
-                    self.error(&format!("undefined variable '{}'", name), span)
-                })?;
+                let (slot, _) = scope
+                    .lookup(&name)
+                    .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
                 Ok(ResolvedExpr::Local(slot))
             }
             Expr::Array { elements, .. } => {
@@ -586,15 +595,24 @@ impl<'a> Resolver<'a> {
                 // Special handling for spawn - it takes a function name, not a value
                 if callee == "spawn" {
                     if args.len() != 1 {
-                        return Err(self.error("spawn takes exactly 1 argument (function name)", span));
+                        return Err(
+                            self.error("spawn takes exactly 1 argument (function name)", span)
+                        );
                     }
 
                     // Check if the argument is an identifier referring to a function
-                    if let Expr::Ident { name, span: arg_span } = &args[0] {
+                    if let Expr::Ident {
+                        name,
+                        span: arg_span,
+                    } = &args[0]
+                    {
                         if let Some(&func_index) = self.functions.get(name) {
                             return Ok(ResolvedExpr::SpawnFunc { func_index });
                         } else {
-                            return Err(self.error(&format!("spawn: '{}' is not a function", name), *arg_span));
+                            return Err(self.error(
+                                &format!("spawn: '{}' is not a function", name),
+                                *arg_span,
+                            ));
                         }
                     } else {
                         return Err(self.error("spawn requires a function name", span));
@@ -626,9 +644,10 @@ impl<'a> Resolver<'a> {
             }
             Expr::StructLiteral { name, fields, span } => {
                 // Look up struct definition
-                let struct_info = self.structs.get(&name).ok_or_else(|| {
-                    self.error(&format!("undefined struct '{}'", name), span)
-                })?;
+                let struct_info = self
+                    .structs
+                    .get(&name)
+                    .ok_or_else(|| self.error(&format!("undefined struct '{}'", name), span))?;
                 let struct_index = struct_info.index;
                 let struct_fields = struct_info.fields.clone();
 
@@ -639,7 +658,10 @@ impl<'a> Resolver<'a> {
                 let mut resolved_fields = Vec::new();
                 for field_name in &struct_fields {
                     let expr = field_map.remove(field_name).ok_or_else(|| {
-                        self.error(&format!("missing field '{}' in struct '{}'", field_name, name), span)
+                        self.error(
+                            &format!("missing field '{}' in struct '{}'", field_name, name),
+                            span,
+                        )
                     })?;
                     resolved_fields.push(self.resolve_expr(expr, scope)?);
                 }
@@ -704,7 +726,10 @@ impl Scope {
     fn declare(&mut self, name: String, mutable: bool) -> usize {
         let slot = self.locals_count;
         self.locals_count += 1;
-        self.locals.last_mut().unwrap().insert(name, (slot, mutable));
+        self.locals
+            .last_mut()
+            .unwrap()
+            .insert(name, (slot, mutable));
         slot
     }
 

@@ -9,7 +9,9 @@
 // TypeError contains detailed error information, hence it's large
 #![allow(clippy::result_large_err)]
 
-use crate::compiler::ast::{BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef, UnaryOp};
+use crate::compiler::ast::{
+    BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef, UnaryOp,
+};
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
 use std::collections::{BTreeMap, HashMap};
@@ -90,7 +92,10 @@ impl Substitution {
             },
             Type::Struct { name, fields } => Type::Struct {
                 name: name.clone(),
-                fields: fields.iter().map(|(n, t)| (n.clone(), self.apply(t))).collect(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.apply(t)))
+                    .collect(),
             },
             // Primitive types are unchanged
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => ty.clone(),
@@ -242,7 +247,10 @@ impl TypeChecker {
                     .iter()
                     .map(|p| self.resolve_type_annotation(p, span))
                     .collect();
-                Ok(Type::function(param_types?, self.resolve_type_annotation(ret, span)?))
+                Ok(Type::function(
+                    param_types?,
+                    self.resolve_type_annotation(ret, span)?,
+                ))
             }
         }
     }
@@ -263,9 +271,10 @@ impl TypeChecker {
             // Type variable unification
             (Type::Var(id), other) | (other, Type::Var(id)) => {
                 if let Type::Var(other_id) = other
-                    && id == other_id {
-                        return Ok(Substitution::new());
-                    }
+                    && id == other_id
+                {
+                    return Ok(Substitution::new());
+                }
                 // Occurs check: prevent infinite types
                 if other.free_type_vars().contains(id) {
                     return Err(TypeError::new(
@@ -571,7 +580,8 @@ impl TypeChecker {
             let mut env = TypeEnv::new();
 
             // Get method signature from struct info
-            let method_type = self.structs
+            let method_type = self
+                .structs
                 .get(struct_name)
                 .and_then(|info| info.methods.get(&method.name))
                 .cloned();
@@ -648,9 +658,10 @@ impl TypeChecker {
             Statement::Assign { name, value, span } => {
                 let value_type = self.infer_expr(value, env);
                 if let Some(var_type) = env.lookup(name).cloned()
-                    && let Err(e) = self.unify(&value_type, &var_type, *span) {
-                        self.errors.push(e);
-                    }
+                    && let Err(e) = self.unify(&value_type, &var_type, *span)
+                {
+                    self.errors.push(e);
+                }
                 Type::Nil
             }
 
@@ -774,9 +785,10 @@ impl TypeChecker {
                 match self.substitution.apply(&obj_type) {
                     Type::Object(fields) => {
                         if let Some(field_type) = fields.get(field)
-                            && let Err(e) = self.unify(&val_type, field_type, *span) {
-                                self.errors.push(e);
-                            }
+                            && let Err(e) = self.unify(&val_type, field_type, *span)
+                        {
+                            self.errors.push(e);
+                        }
                         // Allow dynamic field addition (no error for unknown fields)
                     }
                     Type::Struct { name, fields } => {
@@ -849,8 +861,10 @@ impl TypeChecker {
                     // Function reference (used in spawn, etc.)
                     fn_type.clone()
                 } else {
-                    self.errors
-                        .push(TypeError::new(format!("undefined variable `{}`", name), *span));
+                    self.errors.push(TypeError::new(
+                        format!("undefined variable `{}`", name),
+                        *span,
+                    ));
                     self.fresh_var()
                 }
             }
@@ -879,7 +893,11 @@ impl TypeChecker {
                 Type::Object(type_fields)
             }
 
-            Expr::Index { object, index, span } => {
+            Expr::Index {
+                object,
+                index,
+                span,
+            } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
 
@@ -916,7 +934,11 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Field { object, field, span } => {
+            Expr::Field {
+                object,
+                field,
+                span,
+            } => {
                 let obj_type = self.infer_expr(object, env);
 
                 match self.substitution.apply(&obj_type) {
@@ -1048,15 +1070,13 @@ impl TypeChecker {
                         // Only numeric types
                         let is_int_comparison = self.unify(&left_type, &Type::Int, *span).is_ok()
                             && self.unify(&right_type, &Type::Int, *span).is_ok();
-                        let is_float_comparison = self.unify(&left_type, &Type::Float, *span).is_ok()
-                            && self.unify(&right_type, &Type::Float, *span).is_ok();
+                        let is_float_comparison =
+                            self.unify(&left_type, &Type::Float, *span).is_ok()
+                                && self.unify(&right_type, &Type::Float, *span).is_ok();
 
                         if !is_int_comparison && !is_float_comparison {
                             self.errors.push(TypeError::new(
-                                format!(
-                                    "cannot compare `{}` and `{}`",
-                                    left_type, right_type
-                                ),
+                                format!("cannot compare `{}` and `{}`", left_type, right_type),
                                 *span,
                             ));
                         }
@@ -1143,10 +1163,8 @@ impl TypeChecker {
                 };
 
                 // Check that all required fields are provided
-                let provided_fields: HashMap<&str, &Expr> = fields
-                    .iter()
-                    .map(|(n, e)| (n.as_str(), e))
-                    .collect();
+                let provided_fields: HashMap<&str, &Expr> =
+                    fields.iter().map(|(n, e)| (n.as_str(), e)).collect();
 
                 for (field_name, expected_type) in &struct_info.fields {
                     match provided_fields.get(field_name.as_str()) {
@@ -1166,11 +1184,8 @@ impl TypeChecker {
                 }
 
                 // Check for extra fields not in the struct definition
-                let struct_field_names: std::collections::HashSet<&str> = struct_info
-                    .fields
-                    .iter()
-                    .map(|(n, _)| n.as_str())
-                    .collect();
+                let struct_field_names: std::collections::HashSet<&str> =
+                    struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
 
                 for (field_name, expr) in fields {
                     if !struct_field_names.contains(field_name.as_str()) {
@@ -1209,7 +1224,10 @@ impl TypeChecker {
                     }
                     _ => {
                         self.errors.push(TypeError::new(
-                            format!("cannot call method `{}` on type `{}`", method, resolved_obj_type),
+                            format!(
+                                "cannot call method `{}` on type `{}`",
+                                method, resolved_obj_type
+                            ),
                             *span,
                         ));
                         for arg in args {
@@ -1220,7 +1238,8 @@ impl TypeChecker {
                 };
 
                 // Look up method in struct's method table
-                let method_type = self.structs
+                let method_type = self
+                    .structs
                     .get(&struct_name)
                     .and_then(|info| info.methods.get(method))
                     .cloned();
@@ -1291,10 +1310,8 @@ impl TypeChecker {
             }
             "len" => {
                 if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        "len expects 1 argument",
-                        span,
-                    ));
+                    self.errors
+                        .push(TypeError::new("len expects 1 argument", span));
                     return Some(Type::Int);
                 }
                 let arg_type = self.infer_expr(&args[0], env);
@@ -1313,10 +1330,8 @@ impl TypeChecker {
             }
             "push" => {
                 if args.len() != 2 {
-                    self.errors.push(TypeError::new(
-                        "push expects 2 arguments",
-                        span,
-                    ));
+                    self.errors
+                        .push(TypeError::new("push expects 2 arguments", span));
                     return Some(Type::Nil);
                 }
                 let arr_type = self.infer_expr(&args[0], env);
@@ -1334,10 +1349,8 @@ impl TypeChecker {
             }
             "pop" => {
                 if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        "pop expects 1 argument",
-                        span,
-                    ));
+                    self.errors
+                        .push(TypeError::new("pop expects 1 argument", span));
                     return Some(self.fresh_var());
                 }
                 let arr_type = self.infer_expr(&args[0], env);
@@ -1350,10 +1363,8 @@ impl TypeChecker {
             }
             "type_of" => {
                 if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        "type_of expects 1 argument",
-                        span,
-                    ));
+                    self.errors
+                        .push(TypeError::new("type_of expects 1 argument", span));
                 }
                 for arg in args {
                     self.infer_expr(arg, env);
@@ -1362,10 +1373,8 @@ impl TypeChecker {
             }
             "to_string" => {
                 if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        "to_string expects 1 argument",
-                        span,
-                    ));
+                    self.errors
+                        .push(TypeError::new("to_string expects 1 argument", span));
                 }
                 for arg in args {
                     self.infer_expr(arg, env);
@@ -1374,10 +1383,8 @@ impl TypeChecker {
             }
             "parse_int" => {
                 if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        "parse_int expects 1 argument",
-                        span,
-                    ));
+                    self.errors
+                        .push(TypeError::new("parse_int expects 1 argument", span));
                     return Some(Type::Int);
                 }
                 let arg_type = self.infer_expr(&args[0], env);
@@ -1462,16 +1469,12 @@ mod tests {
 
     #[test]
     fn test_function_inference() {
-        assert!(check(
-            "fun add(a, b) { return a + b; } let r = add(1, 2);"
-        ).is_ok());
+        assert!(check("fun add(a, b) { return a + b; } let r = add(1, 2);").is_ok());
     }
 
     #[test]
     fn test_function_with_types() {
-        assert!(check(
-            "fun add(a: int, b: int) -> int { return a + b; }"
-        ).is_ok());
+        assert!(check("fun add(a: int, b: int) -> int { return a + b; }").is_ok());
     }
 
     #[test]
@@ -1502,17 +1505,13 @@ mod tests {
     #[test]
     fn test_ac3_function_inference() {
         // AC3: `fun f(a, b) { a + b }` called with f(1, 2) infers int
-        assert!(check(
-            "fun f(a, b) { return a + b; } let r: int = f(1, 2);"
-        ).is_ok());
+        assert!(check("fun f(a, b) { return a + b; } let r: int = f(1, 2);").is_ok());
     }
 
     #[test]
     fn test_ac4_function_arg_mismatch() {
         // AC4: `fun f(a, b) { a + b }` called with f(1, "x") is type error
-        let result = check(
-            r#"fun f(a, b) { return a + b; } f(1, "x");"#
-        );
+        let result = check(r#"fun f(a, b) { return a + b; } f(1, "x");"#);
         assert!(result.is_err());
     }
 
@@ -1562,106 +1561,148 @@ mod tests {
 
     #[test]
     fn test_struct_definition() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_struct_literal() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1, y: 2 };
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_struct_literal_wrong_field_type() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: "hello", y: 2 };
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_struct_literal_missing_field() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1 };
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_struct_literal_unknown_field() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1, y: 2, z: 3 };
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_struct_field_access() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1, y: 2 };
             let x: int = p.x;
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_struct_field_access_unknown_field() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1, y: 2 };
             let z = p.z;
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_struct_type_annotation() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
             let p: Point = Point { x: 1, y: 2 };
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_struct_type_annotation_mismatch() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             struct Other { a: int }
             let p: Point = Other { a: 1 };
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_struct_nullable_field() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct User { name: string, age: int? }
             let u = User { name: "Alice", age: nil };
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_impl_block_method() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
             impl Point {
                 fun sum(self) -> int {
                     return self.x + self.y;
                 }
             }
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_method_call() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
             impl Point {
                 fun sum(self) -> int {
@@ -1670,12 +1711,17 @@ mod tests {
             }
             let p = Point { x: 1, y: 2 };
             let s: int = p.sum();
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_method_call_with_args() {
-        assert!(check(r#"
+        assert!(
+            check(
+                r#"
             struct Point { x: int, y: int }
             impl Point {
                 fun scale(self, factor: int) -> int {
@@ -1684,12 +1730,16 @@ mod tests {
             }
             let p = Point { x: 1, y: 2 };
             let s: int = p.scale(3);
-        "#).is_ok());
+        "#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn test_method_call_wrong_arg_type() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             impl Point {
                 fun scale(self, factor: int) -> int {
@@ -1698,35 +1748,42 @@ mod tests {
             }
             let p = Point { x: 1, y: 2 };
             let s = p.scale("hello");
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_undefined_struct() {
-        let result = check(r#"
+        let result = check(
+            r#"
             let p = Unknown { x: 1 };
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_undefined_method() {
-        let result = check(r#"
+        let result = check(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1, y: 2 };
             p.unknown_method();
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_impl_for_undefined_struct() {
-        let result = check(r#"
+        let result = check(
+            r#"
             impl Unknown {
                 fun foo(self) { }
             }
-        "#);
+        "#,
+        );
         assert!(result.is_err());
     }
 }

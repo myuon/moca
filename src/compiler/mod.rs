@@ -59,9 +59,9 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
 
     // Type checking
     let mut typechecker = TypeChecker::new(filename);
-    typechecker.check_program(&program).map_err(|errors| {
-        format_type_errors(filename, &errors)
-    })?;
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(filename, &errors))?;
 
     // Name resolution
     let mut resolver = Resolver::new(filename);
@@ -95,9 +95,9 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Type checking
     let mut typechecker = TypeChecker::new(&filename);
-    typechecker.check_program(&program).map_err(|errors| {
-        format_type_errors(&filename, &errors)
-    })?;
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -109,7 +109,10 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Log JIT settings if tracing is enabled
     if config.trace_jit {
-        eprintln!("[JIT] Mode: {:?}, Threshold: {}", config.jit_mode, config.jit_threshold);
+        eprintln!(
+            "[JIT] Mode: {:?}, Threshold: {}",
+            config.jit_mode, config.jit_threshold
+        );
     }
 
     // Execution with runtime configuration
@@ -130,8 +133,10 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     // Print GC stats if requested
     if config.gc_stats {
         let stats = vm.gc_stats();
-        eprintln!("[GC] Collections: {}, Total pause: {}us, Max pause: {}us",
-            stats.cycles, stats.total_pause_us, stats.max_pause_us);
+        eprintln!(
+            "[GC] Collections: {}, Total pause: {}us, Max pause: {}us",
+            stats.cycles, stats.total_pause_us, stats.max_pause_us
+        );
     }
 
     Ok(())
@@ -159,9 +164,9 @@ pub fn run_file_with_dump(
 
     // Type checking
     let mut typechecker = TypeChecker::new(&filename);
-    typechecker.check_program(&program).map_err(|errors| {
-        format_type_errors(&filename, &errors)
-    })?;
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -185,7 +190,10 @@ pub fn run_file_with_dump(
 
     // Log JIT settings if tracing is enabled
     if config.trace_jit {
-        eprintln!("[JIT] Mode: {:?}, Threshold: {}", config.jit_mode, config.jit_threshold);
+        eprintln!(
+            "[JIT] Mode: {:?}, Threshold: {}",
+            config.jit_mode, config.jit_threshold
+        );
     }
 
     // Execution with runtime configuration
@@ -206,8 +214,10 @@ pub fn run_file_with_dump(
     // Print GC stats if requested
     if config.gc_stats {
         let stats = vm.gc_stats();
-        eprintln!("[GC] Collections: {}, Total pause: {}us, Max pause: {}us",
-            stats.cycles, stats.total_pause_us, stats.max_pause_us);
+        eprintln!(
+            "[GC] Collections: {}, Total pause: {}us, Max pause: {}us",
+            stats.cycles, stats.total_pause_us, stats.max_pause_us
+        );
     }
 
     Ok(())
@@ -245,9 +255,9 @@ pub fn check_file(path: &Path) -> Result<(), String> {
 
     // Type checking only
     let mut typechecker = TypeChecker::new(&filename);
-    typechecker.check_program(&program).map_err(|errors| {
-        format_type_errors(&filename, &errors)
-    })?;
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     Ok(())
 }

@@ -71,9 +71,10 @@ impl MicaLanguageServer {
         // Try resolving
         let mut resolver = Resolver::new(filename);
         if let Err(e) = resolver.resolve(program)
-            && let Some(diag) = parse_error_to_diagnostic(&e) {
-                diagnostics.push(diag);
-            }
+            && let Some(diag) = parse_error_to_diagnostic(&e)
+        {
+            diagnostics.push(diag);
+        }
 
         diagnostics
     }
@@ -91,33 +92,47 @@ fn parse_error_to_diagnostic(error: &str) -> Option<Diagnostic> {
 
     // Try to extract location from second line
     if let Some(location_line) = lines.get(1)
-        && let Some(loc) = location_line.strip_prefix("  --> ") {
-            let parts: Vec<&str> = loc.split(':').collect();
-            if parts.len() >= 3
-                && let (Ok(line), Ok(col)) = (
-                    parts[parts.len() - 2].parse::<u32>(),
-                    parts[parts.len() - 1].parse::<u32>(),
-                ) {
-                    let line = line.saturating_sub(1);
-                    let col = col.saturating_sub(1);
-                    return Some(Diagnostic {
-                        range: Range {
-                            start: Position { line, character: col },
-                            end: Position { line, character: col + 1 },
-                        },
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        source: Some("mica".to_string()),
-                        message: message.to_string(),
-                        ..Default::default()
-                    });
-                }
+        && let Some(loc) = location_line.strip_prefix("  --> ")
+    {
+        let parts: Vec<&str> = loc.split(':').collect();
+        if parts.len() >= 3
+            && let (Ok(line), Ok(col)) = (
+                parts[parts.len() - 2].parse::<u32>(),
+                parts[parts.len() - 1].parse::<u32>(),
+            )
+        {
+            let line = line.saturating_sub(1);
+            let col = col.saturating_sub(1);
+            return Some(Diagnostic {
+                range: Range {
+                    start: Position {
+                        line,
+                        character: col,
+                    },
+                    end: Position {
+                        line,
+                        character: col + 1,
+                    },
+                },
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("mica".to_string()),
+                message: message.to_string(),
+                ..Default::default()
+            });
         }
+    }
 
     // Fallback: return diagnostic at start of file
     Some(Diagnostic {
         range: Range {
-            start: Position { line: 0, character: 0 },
-            end: Position { line: 0, character: 1 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 1,
+            },
         },
         severity: Some(DiagnosticSeverity::ERROR),
         source: Some("mica".to_string()),
@@ -219,11 +234,19 @@ impl LanguageServer for MicaLanguageServer {
 
         // Basic keyword completion
         let keywords = vec![
-            "let", "var", "fun", "if", "else", "while", "for", "in", "return",
-            "true", "false", "nil", "try", "catch", "throw", "import",
+            "let", "var", "fun", "if", "else", "while", "for", "in", "return", "true", "false",
+            "nil", "try", "catch", "throw", "import",
         ];
 
-        let builtins = ["print", "len", "push", "pop", "type_of", "to_string", "parse_int"];
+        let builtins = [
+            "print",
+            "len",
+            "push",
+            "pop",
+            "type_of",
+            "to_string",
+            "parse_int",
+        ];
 
         let mut items: Vec<CompletionItem> = keywords
             .iter()

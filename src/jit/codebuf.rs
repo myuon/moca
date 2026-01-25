@@ -110,7 +110,9 @@ impl CodeBuffer {
     /// Returns an error if any label is undefined.
     pub fn patch_forward_refs(&mut self) -> Result<(), String> {
         for (offset, label, size) in self.forward_refs.drain(..) {
-            let target = self.labels.get(&label)
+            let target = self
+                .labels
+                .get(&label)
                 .ok_or_else(|| format!("undefined label: {}", label))?;
 
             match size {
@@ -147,7 +149,8 @@ impl CodeBuffer {
     /// Finalize the code buffer and copy to executable memory.
     pub fn finalize(mut self) -> Result<ExecutableMemory, MemoryError> {
         // Patch forward references
-        self.patch_forward_refs().map_err(|_| MemoryError::InvalidSize)?;
+        self.patch_forward_refs()
+            .map_err(|_| MemoryError::InvalidSize)?;
 
         // Allocate executable memory
         let mut mem = ExecutableMemory::new(self.code.len())?;

@@ -121,7 +121,9 @@ impl ModuleLoader {
         };
 
         // Collect imports
-        let imports: Vec<_> = main_program.items.iter()
+        let imports: Vec<_> = main_program
+            .items
+            .iter()
             .filter_map(|item| {
                 if let Item::Import(import) = item {
                     Some(import.clone())
@@ -246,20 +248,28 @@ mod tests {
         fs::write(
             temp.join("src/main.mica"),
             "import utils;\nlet x = helper();\nprint(x);",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Create utils module
-        fs::write(
-            temp.join("src/utils.mica"),
-            "fun helper() { return 42; }",
-        ).unwrap();
+        fs::write(temp.join("src/utils.mica"), "fun helper() { return 42; }").unwrap();
 
         let mut loader = ModuleLoader::new(temp.clone());
-        let program = loader.load_with_imports(&temp.join("src/main.mica")).unwrap();
+        let program = loader
+            .load_with_imports(&temp.join("src/main.mica"))
+            .unwrap();
 
         // Should have: helper function + 2 statements from main
-        let fn_count = program.items.iter().filter(|i| matches!(i, Item::FnDef(_))).count();
-        let stmt_count = program.items.iter().filter(|i| matches!(i, Item::Statement(_))).count();
+        let fn_count = program
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::FnDef(_)))
+            .count();
+        let stmt_count = program
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Statement(_)))
+            .count();
 
         assert_eq!(fn_count, 1);
         assert_eq!(stmt_count, 2);

@@ -1,21 +1,21 @@
 // Some fields are stored for future use
 #![allow(dead_code)]
 
-mod value;
-mod ops;
+pub mod concurrent_gc;
+pub mod debug;
 mod heap;
+pub mod ic;
+mod ops;
+pub mod threads;
+mod value;
 #[allow(clippy::module_inception)]
 mod vm;
-pub mod debug;
-pub mod ic;
-pub mod concurrent_gc;
-pub mod threads;
 
-pub use value::Value;
-pub use ops::Op;
-pub use heap::{Heap, HeapObject, ObjectType};
-pub use vm::VM;
 pub use debug::{DebugInfo, FunctionDebugInfo};
+pub use heap::{Heap, HeapObject, ObjectType};
+pub use ops::Op;
+pub use value::Value;
+pub use vm::VM;
 
 /// A compiled function.
 #[derive(Debug, Clone)]

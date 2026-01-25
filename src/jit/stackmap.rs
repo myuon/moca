@@ -273,7 +273,7 @@ mod tests {
 
         // Simulate: push int, push ref, store local 0
         builder.push(false); // int
-        builder.push(true);  // ref
+        builder.push(true); // ref
         builder.set_local(0, true);
 
         builder.record_safepoint(10, 3);

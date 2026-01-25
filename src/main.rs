@@ -150,7 +150,9 @@ fn main() -> ExitCode {
                         Ok(manifest) => cwd.join(&manifest.package.entry),
                         Err(_) => {
                             eprintln!("error: no file specified and no pkg.toml found");
-                            eprintln!("usage: mica run <file> or run from a mica project directory");
+                            eprintln!(
+                                "usage: mica run <file> or run from a mica project directory"
+                            );
                             return ExitCode::FAILURE;
                         }
                     }
@@ -196,7 +198,9 @@ fn main() -> ExitCode {
                         Ok(manifest) => cwd.join(&manifest.package.entry),
                         Err(_) => {
                             eprintln!("error: no file specified and no pkg.toml found");
-                            eprintln!("usage: mica check <file> or run from a mica project directory");
+                            eprintln!(
+                                "usage: mica check <file> or run from a mica project directory"
+                            );
                             return ExitCode::FAILURE;
                         }
                     }

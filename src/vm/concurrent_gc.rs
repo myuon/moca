@@ -8,11 +8,11 @@
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::heap::GcRef;
 use super::Value;
+use super::heap::GcRef;
 
 /// GC phase states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +143,10 @@ impl ConcurrentGc {
         }
 
         self.stats.initial_mark_us += start.elapsed().as_micros() as u64;
-        self.stats.max_pause_us = self.stats.max_pause_us.max(start.elapsed().as_micros() as u64);
+        self.stats.max_pause_us = self
+            .stats
+            .max_pause_us
+            .max(start.elapsed().as_micros() as u64);
 
         self.phase = GcPhase::ConcurrentMark;
         root_refs
@@ -185,7 +188,6 @@ impl ConcurrentGc {
         self.stats.concurrent_mark_us += start.elapsed().as_micros() as u64;
 
         // Check if there's more work
-        
 
         {
             let gray_list = self.gray_list.lock().unwrap();
@@ -226,7 +228,10 @@ impl ConcurrentGc {
         self.process_satb_buffer(mark_fn);
 
         self.stats.remark_us += start.elapsed().as_micros() as u64;
-        self.stats.max_pause_us = self.stats.max_pause_us.max(start.elapsed().as_micros() as u64);
+        self.stats.max_pause_us = self
+            .stats
+            .max_pause_us
+            .max(start.elapsed().as_micros() as u64);
 
         self.marking.store(false, Ordering::Release);
         self.phase = GcPhase::ConcurrentSweep;
@@ -322,18 +327,24 @@ mod tests {
 
         // Process with a mock mark function
         let mut marked = Vec::new();
-        let has_more = gc.mark_step(|r| {
-            marked.push(r);
-            vec![] // No children
-        }, 2);
+        let has_more = gc.mark_step(
+            |r| {
+                marked.push(r);
+                vec![] // No children
+            },
+            2,
+        );
 
         assert_eq!(marked.len(), 2);
         assert!(has_more); // One more object remaining
 
-        let has_more = gc.mark_step(|r| {
-            marked.push(r);
-            vec![]
-        }, 10);
+        let has_more = gc.mark_step(
+            |r| {
+                marked.push(r);
+                vec![]
+            },
+            10,
+        );
 
         assert_eq!(marked.len(), 3);
         assert!(!has_more); // No more work
