@@ -40,7 +40,7 @@ impl ModuleLoader {
             // Relative import: resolve from the importing file's directory
             let base_dir = from_file.parent().unwrap_or(Path::new("."));
             let module_name = import.path.join("/");
-            let module_path = base_dir.join(format!("{}.mica", module_name));
+            let module_path = base_dir.join(format!("{}.mc", module_name));
 
             if module_path.exists() {
                 Ok(module_path)
@@ -60,9 +60,9 @@ impl ModuleLoader {
     /// Resolve an absolute import path.
     fn resolve_absolute_import(&self, path: &[String]) -> Result<PathBuf, String> {
         // Convert module path to file path
-        // import utils.http -> utils/http.mica or utils/http/mod.mica
-        let file_path = format!("{}.mica", path.join("/"));
-        let mod_path = format!("{}/mod.mica", path.join("/"));
+        // import utils.http -> utils/http.mc or utils/http/mod.mc
+        let file_path = format!("{}.mc", path.join("/"));
+        let mod_path = format!("{}/mod.mc", path.join("/"));
 
         for search_path in &self.search_paths {
             // Try direct file
@@ -71,7 +71,7 @@ impl ModuleLoader {
                 return Ok(full_path);
             }
 
-            // Try mod.mica in directory
+            // Try mod.mc in directory
             let full_mod_path = search_path.join(&mod_path);
             if full_mod_path.exists() {
                 return Ok(full_mod_path);
@@ -186,14 +186,14 @@ mod tests {
 
     #[test]
     fn test_resolve_absolute_import() {
-        let temp = temp_dir().join("mica_module_test");
+        let temp = temp_dir().join("moca_module_test");
         if temp.exists() {
             fs::remove_dir_all(&temp).unwrap();
         }
         fs::create_dir_all(&temp.join("src")).unwrap();
 
         // Create a module file
-        fs::write(temp.join("src/utils.mica"), "fun helper() { return 42; }").unwrap();
+        fs::write(temp.join("src/utils.mc"), "fun helper() { return 42; }").unwrap();
 
         let loader = ModuleLoader::new(temp.clone());
 
@@ -203,23 +203,23 @@ mod tests {
             span: crate::compiler::lexer::Span { line: 1, column: 1 },
         };
 
-        let result = loader.resolve_import(&import, &temp.join("src/main.mica"));
+        let result = loader.resolve_import(&import, &temp.join("src/main.mc"));
         assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("utils.mica"));
+        assert!(result.unwrap().ends_with("utils.mc"));
 
         fs::remove_dir_all(&temp).ok();
     }
 
     #[test]
     fn test_resolve_relative_import() {
-        let temp = temp_dir().join("mica_module_test_rel");
+        let temp = temp_dir().join("moca_module_test_rel");
         if temp.exists() {
             fs::remove_dir_all(&temp).unwrap();
         }
         fs::create_dir_all(&temp.join("src")).unwrap();
 
         // Create a relative module file
-        fs::write(temp.join("src/local.mica"), "fun local_fn() { return 1; }").unwrap();
+        fs::write(temp.join("src/local.mc"), "fun local_fn() { return 1; }").unwrap();
 
         let loader = ModuleLoader::new(temp.clone());
 
@@ -229,16 +229,16 @@ mod tests {
             span: crate::compiler::lexer::Span { line: 1, column: 1 },
         };
 
-        let result = loader.resolve_import(&import, &temp.join("src/main.mica"));
+        let result = loader.resolve_import(&import, &temp.join("src/main.mc"));
         assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("local.mica"));
+        assert!(result.unwrap().ends_with("local.mc"));
 
         fs::remove_dir_all(&temp).ok();
     }
 
     #[test]
     fn test_load_with_imports() {
-        let temp = temp_dir().join("mica_module_test_load");
+        let temp = temp_dir().join("moca_module_test_load");
         if temp.exists() {
             fs::remove_dir_all(&temp).unwrap();
         }
@@ -246,17 +246,17 @@ mod tests {
 
         // Create main file with import
         fs::write(
-            temp.join("src/main.mica"),
+            temp.join("src/main.mc"),
             "import utils;\nlet x = helper();\nprint(x);",
         )
         .unwrap();
 
         // Create utils module
-        fs::write(temp.join("src/utils.mica"), "fun helper() { return 42; }").unwrap();
+        fs::write(temp.join("src/utils.mc"), "fun helper() { return 42; }").unwrap();
 
         let mut loader = ModuleLoader::new(temp.clone());
         let program = loader
-            .load_with_imports(&temp.join("src/main.mica"))
+            .load_with_imports(&temp.join("src/main.mc"))
             .unwrap();
 
         // Should have: helper function + 2 statements from main

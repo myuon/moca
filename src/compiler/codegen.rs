@@ -625,11 +625,11 @@ mod tests {
     use crate::compiler::resolver::Resolver;
 
     fn compile(source: &str) -> Result<Chunk, String> {
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens()?;
-        let mut parser = Parser::new("test.mica", tokens);
+        let mut parser = Parser::new("test.mc", tokens);
         let program = parser.parse()?;
-        let mut resolver = Resolver::new("test.mica");
+        let mut resolver = Resolver::new("test.mc");
         let resolved = resolver.resolve(program)?;
         let mut codegen = Codegen::new();
         codegen.compile(resolved)

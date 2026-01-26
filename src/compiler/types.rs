@@ -1,4 +1,4 @@
-//! Type definitions for the mica type system.
+//! Type definitions for the moca type system.
 //!
 //! This module defines the core type representations used for
 //! Hindley-Milner type inference (Algorithm W).
@@ -9,7 +9,7 @@ use std::fmt;
 /// A unique identifier for type variables during inference.
 pub type TypeVarId = u32;
 
-/// Core type representation for the mica type system.
+/// Core type representation for the moca type system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     /// Integer type: `int`

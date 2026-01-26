@@ -1,6 +1,6 @@
 # Snapshot Testing
 
-mica のスナップショットテストは、`.mica`ファイルとその期待出力を外部ファイルで管理する仕組みです。
+moca のスナップショットテストは、`.mc`ファイルとその期待出力を外部ファイルで管理する仕組みです。
 
 ## ディレクトリ構造
 
@@ -19,7 +19,7 @@ tests/snapshots/
 
 ```
 tests/snapshots/basic/
-├── arithmetic.mica      # テスト対象のソースコード
+├── arithmetic.mc        # テスト対象のソースコード
 ├── arithmetic.stdout    # 期待される標準出力（完全一致）
 ├── arithmetic.stderr    # 期待される標準エラー（部分一致、省略可）
 └── arithmetic.exitcode  # 期待される終了コード（省略時は0）
@@ -27,13 +27,13 @@ tests/snapshots/basic/
 
 ### 複数ファイルテスト
 
-ディレクトリに`main.mica`を配置すると、複数ファイルのテストとして認識されます。
+ディレクトリに`main.mc`を配置すると、複数ファイルのテストとして認識されます。
 
 ```
 tests/snapshots/modules/
 ├── relative_import/          # テストディレクトリ
-│   ├── main.mica            # エントリポイント
-│   └── helper.mica          # インポートされるモジュール
+│   ├── main.mc              # エントリポイント
+│   └── helper.mc            # インポートされるモジュール
 └── relative_import.stdout   # 期待出力（ディレクトリと同名）
 ```
 
@@ -43,7 +43,7 @@ tests/snapshots/modules/
 
 ```
 tests/snapshots/ffi/
-├── dump_bytecode.mica
+├── dump_bytecode.mc
 ├── dump_bytecode.args    # 内容: --dump-bytecode
 ├── dump_bytecode.stdout
 └── dump_bytecode.stderr
@@ -61,26 +61,26 @@ tests/snapshots/ffi/
 
 ### 基本テストの追加
 
-1. `tests/snapshots/basic/`に`.mica`ファイルを作成
+1. `tests/snapshots/basic/`に`.mc`ファイルを作成
 2. 同名の`.stdout`ファイルに期待出力を記述
 3. `cargo test snapshot_basic`で実行
 
 ```bash
 # 例: 新しいテスト "my_test" を追加
-echo 'print(1 + 2);' > tests/snapshots/basic/my_test.mica
+echo 'print(1 + 2);' > tests/snapshots/basic/my_test.mc
 echo '3' > tests/snapshots/basic/my_test.stdout
 cargo test snapshot_basic
 ```
 
 ### エラーテストの追加
 
-1. `tests/snapshots/errors/`に`.mica`ファイルを作成
+1. `tests/snapshots/errors/`に`.mc`ファイルを作成
 2. `.stderr`に期待されるエラーメッセージの一部を記述
 3. `.exitcode`に`1`を記述
 
 ```bash
 # 例: ゼロ除算エラーのテスト
-echo 'print(1 / 0);' > tests/snapshots/errors/div_zero.mica
+echo 'print(1 / 0);' > tests/snapshots/errors/div_zero.mc
 echo 'division by zero' > tests/snapshots/errors/div_zero.stderr
 echo '1' > tests/snapshots/errors/div_zero.exitcode
 ```

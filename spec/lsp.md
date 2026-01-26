@@ -3,13 +3,13 @@ title: LSP Specification
 description: Language Server Protocol による IDE 統合機能の仕様。診断、補完、定義ジャンプ、ホバー情報などをサポート。
 ---
 
-# Mica LSP Specification
+# Moca LSP Specification
 
-This document defines the Language Server Protocol support for the Mica language.
+This document defines the Language Server Protocol support for the Moca language.
 
 ## Overview
 
-The Mica LSP server provides IDE integration features including:
+The Moca LSP server provides IDE integration features including:
 - Real-time diagnostics
 - Code completion
 - Go to definition
@@ -21,7 +21,7 @@ The Mica LSP server provides IDE integration features including:
 ## Starting the Server
 
 ```bash
-mica lsp
+moca lsp
 ```
 
 The server communicates via stdin/stdout using the LSP protocol.
@@ -46,7 +46,7 @@ Diagnostics are published automatically when files are opened or modified.
 
 ```
 error[E001]: undefined variable 'foo'
-  --> src/main.mica:10:5
+  --> src/main.mc:10:5
    |
 10 |     print(foo);
    |           ^^^ not found in this scope
@@ -100,7 +100,7 @@ Find all usages of:
 
 ## Formatting
 
-Format code according to Mica style guidelines:
+Format code according to Moca style guidelines:
 - 4-space indentation
 - Consistent brace placement
 - Appropriate whitespace
@@ -126,20 +126,20 @@ diagnostics_delay_ms = 300
 
 ### VS Code
 
-Install the Mica extension or configure manually:
+Install the Moca extension or configure manually:
 
 ```json
 {
-  "mica.server.path": "mica",
-  "mica.server.args": ["lsp"]
+  "moca.server.path": "moca",
+  "moca.server.args": ["lsp"]
 }
 ```
 
 ### Neovim (with nvim-lspconfig)
 
 ```lua
-require('lspconfig').mica.setup({
-  cmd = { 'mica', 'lsp' },
-  filetypes = { 'mica' },
+require('lspconfig').moca.setup({
+  cmd = { 'moca', 'lsp' },
+  filetypes = { 'moca' },
 })
 ```

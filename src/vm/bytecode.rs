@@ -1,7 +1,7 @@
-//! Bytecode serialization/deserialization for mica.
+//! Bytecode serialization/deserialization for moca.
 //!
 //! Binary format:
-//! - Magic: "MICA" (4 bytes)
+//! - Magic: "MOCA" (4 bytes)
 //! - Version: u32 (little-endian)
 //! - String pool: length + strings
 //! - Functions: count + function data
@@ -12,8 +12,8 @@ use super::{Chunk, Function, Op};
 use super::stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
 use std::io::{self, Read, Write};
 
-/// Magic bytes for mica bytecode files
-pub const MAGIC: &[u8; 4] = b"MICA";
+/// Magic bytes for moca bytecode files
+pub const MAGIC: &[u8; 4] = b"MOCA";
 
 /// Current bytecode format version
 pub const VERSION: u32 = 1;
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_version() {
-        let data = b"MICA\xFF\x00\x00\x00";
+        let data = b"MOCA\xFF\x00\x00\x00";
         let result = deserialize(data);
         assert!(matches!(result, Err(BytecodeError::UnsupportedVersion(255))));
     }

@@ -1,5 +1,5 @@
 [package]
-name = "mica"
+name = "moca"
 version = "0.1.0"
 edition = "2024"
 
@@ -29,10 +29,10 @@ criterion = "0.5"
 cbindgen = "0.28"
 
 [lib]
-name = "mica"
+name = "moca"
 path = "src/lib.rs"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
-name = "mica"
+name = "moca"
 path = "src/main.rs"

@@ -20,21 +20,21 @@ pub struct ObjectHeader {
 
 /// A heap-allocated string.
 #[derive(Debug)]
-pub struct MicaString {
+pub struct MocaString {
     pub header: ObjectHeader,
     pub value: String,
 }
 
 /// A heap-allocated array.
 #[derive(Debug)]
-pub struct MicaArray {
+pub struct MocaArray {
     pub header: ObjectHeader,
     pub elements: Vec<Value>,
 }
 
 /// A heap-allocated object (key-value map).
 #[derive(Debug)]
-pub struct MicaObject {
+pub struct MocaObject {
     pub header: ObjectHeader,
     pub fields: HashMap<String, Value>,
     /// Shape ID for inline caching (objects with same fields have same shape)
@@ -43,9 +43,9 @@ pub struct MicaObject {
 
 /// A heap object can be any of the heap-allocated types.
 pub enum HeapObject {
-    String(MicaString),
-    Array(MicaArray),
-    Object(MicaObject),
+    String(MocaString),
+    Array(MocaArray),
+    Object(MocaObject),
 }
 
 impl HeapObject {
@@ -73,35 +73,35 @@ impl HeapObject {
         }
     }
 
-    pub fn as_string(&self) -> Option<&MicaString> {
+    pub fn as_string(&self) -> Option<&MocaString> {
         match self {
             HeapObject::String(s) => Some(s),
             _ => None,
         }
     }
 
-    pub fn as_array(&self) -> Option<&MicaArray> {
+    pub fn as_array(&self) -> Option<&MocaArray> {
         match self {
             HeapObject::Array(a) => Some(a),
             _ => None,
         }
     }
 
-    pub fn as_array_mut(&mut self) -> Option<&mut MicaArray> {
+    pub fn as_array_mut(&mut self) -> Option<&mut MocaArray> {
         match self {
             HeapObject::Array(a) => Some(a),
             _ => None,
         }
     }
 
-    pub fn as_object(&self) -> Option<&MicaObject> {
+    pub fn as_object(&self) -> Option<&MocaObject> {
         match self {
             HeapObject::Object(o) => Some(o),
             _ => None,
         }
     }
 
-    pub fn as_object_mut(&mut self) -> Option<&mut MicaObject> {
+    pub fn as_object_mut(&mut self) -> Option<&mut MocaObject> {
         match self {
             HeapObject::Object(o) => Some(o),
             _ => None,
@@ -175,10 +175,10 @@ impl Heap {
 
     /// Allocate a new string on the heap.
     pub fn alloc_string(&mut self, value: String) -> GcRef {
-        let size = std::mem::size_of::<MicaString>() + value.len();
+        let size = std::mem::size_of::<MocaString>() + value.len();
         self.bytes_allocated += size;
 
-        let obj = HeapObject::String(MicaString {
+        let obj = HeapObject::String(MocaString {
             header: ObjectHeader {
                 obj_type: ObjectType::String,
                 marked: false,
@@ -190,10 +190,10 @@ impl Heap {
 
     /// Allocate a new array on the heap.
     pub fn alloc_array(&mut self, elements: Vec<Value>) -> GcRef {
-        let size = std::mem::size_of::<MicaArray>() + elements.len() * std::mem::size_of::<Value>();
+        let size = std::mem::size_of::<MocaArray>() + elements.len() * std::mem::size_of::<Value>();
         self.bytes_allocated += size;
 
-        let obj = HeapObject::Array(MicaArray {
+        let obj = HeapObject::Array(MocaArray {
             header: ObjectHeader {
                 obj_type: ObjectType::Array,
                 marked: false,
@@ -205,7 +205,7 @@ impl Heap {
 
     /// Allocate a new object on the heap.
     pub fn alloc_object_map(&mut self, fields: HashMap<String, Value>) -> GcRef {
-        let size = std::mem::size_of::<MicaObject>()
+        let size = std::mem::size_of::<MocaObject>()
             + fields.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
         self.bytes_allocated += size;
 
@@ -213,7 +213,7 @@ impl Heap {
         let field_names: Vec<String> = fields.keys().cloned().collect();
         let shape_id = self.get_shape_id(&field_names);
 
-        let obj = HeapObject::Object(MicaObject {
+        let obj = HeapObject::Object(MocaObject {
             header: ObjectHeader {
                 obj_type: ObjectType::Object,
                 marked: false,
@@ -291,13 +291,13 @@ impl Heap {
         self.bytes_allocated = 0;
         for o in self.objects.iter().flatten() {
             self.bytes_allocated += match o {
-                HeapObject::String(s) => std::mem::size_of::<MicaString>() + s.value.len(),
+                HeapObject::String(s) => std::mem::size_of::<MocaString>() + s.value.len(),
                 HeapObject::Array(a) => {
-                    std::mem::size_of::<MicaArray>()
+                    std::mem::size_of::<MocaArray>()
                         + a.elements.len() * std::mem::size_of::<Value>()
                 }
                 HeapObject::Object(o) => {
-                    std::mem::size_of::<MicaObject>()
+                    std::mem::size_of::<MocaObject>()
                         + o.fields.len()
                             * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
                 }

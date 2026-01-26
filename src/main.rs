@@ -50,7 +50,7 @@ impl From<GcModeArg> for GcMode {
 }
 
 #[derive(Parser)]
-#[command(name = "mica")]
+#[command(name = "moca")]
 #[command(about = "A minimal programming language", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -59,12 +59,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new mica project
+    /// Initialize a new moca project
     Init {
         /// Project name (defaults to directory name)
         name: Option<String>,
     },
-    /// Run a mica source file
+    /// Run a moca source file
     Run {
         /// The source file to run (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
@@ -103,12 +103,12 @@ enum Commands {
     },
     /// Start the language server
     Lsp,
-    /// Debug a mica source file with TUI debugger
+    /// Debug a moca source file with TUI debugger
     Debug {
         /// The source file to debug
         file: PathBuf,
     },
-    /// Type check a mica source file without running it
+    /// Type check a moca source file without running it
     Check {
         /// The source file to check (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
@@ -147,7 +147,7 @@ fn main() -> ExitCode {
                         Err(_) => {
                             eprintln!("error: no file specified and no pkg.toml found");
                             eprintln!(
-                                "usage: mica run <file> or run from a mica project directory"
+                                "usage: moca run <file> or run from a moca project directory"
                             );
                             return ExitCode::FAILURE;
                         }
@@ -195,7 +195,7 @@ fn main() -> ExitCode {
                         Err(_) => {
                             eprintln!("error: no file specified and no pkg.toml found");
                             eprintln!(
-                                "usage: mica check <file> or run from a mica project directory"
+                                "usage: moca check <file> or run from a moca project directory"
                             );
                             return ExitCode::FAILURE;
                         }

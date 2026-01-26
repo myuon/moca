@@ -1424,11 +1424,11 @@ mod tests {
     use crate::compiler::parser::Parser;
 
     fn check(source: &str) -> Result<(), Vec<TypeError>> {
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
-        let mut parser = Parser::new("test.mica", tokens);
+        let mut parser = Parser::new("test.mc", tokens);
         let program = parser.parse().unwrap();
-        let mut checker = TypeChecker::new("test.mica");
+        let mut checker = TypeChecker::new("test.mc");
         checker.check_program(&program)
     }
 

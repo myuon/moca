@@ -1,6 +1,6 @@
-//! JIT compiler for mica bytecode.
+//! JIT compiler for moca bytecode.
 //!
-//! This module implements a baseline JIT compiler that translates mica bytecode
+//! This module implements a baseline JIT compiler that translates moca bytecode
 //! to native machine code using a template-based approach.
 
 #[cfg(target_arch = "aarch64")]
@@ -24,9 +24,9 @@ pub mod value_tags {
     pub const TAG_PTR: u64 = 4;
 }
 
-/// Register conventions for mica JIT on AArch64.
+/// Register conventions for moca JIT on AArch64.
 ///
-/// Following AArch64 calling convention with mica-specific assignments:
+/// Following AArch64 calling convention with moca-specific assignments:
 /// - x19: VM context pointer (callee-saved)
 /// - x20: Value stack pointer (callee-saved)
 /// - x21: Locals base pointer (callee-saved)
@@ -82,7 +82,7 @@ impl CompiledCode {
     }
 }
 
-/// JIT compiler for mica functions.
+/// JIT compiler for moca functions.
 #[cfg(target_arch = "aarch64")]
 pub struct JitCompiler {
     buf: CodeBuffer,
@@ -174,7 +174,7 @@ impl JitCompiler {
         // mov x29, sp
         asm.add_imm(Reg::Fp, Reg::Sp, 0);
 
-        // Initialize mica registers from arguments
+        // Initialize moca registers from arguments
         // x0 = VM context, x1 = value stack, x2 = locals base
         asm.mov(regs::VM_CTX, Reg::X0);
         asm.mov(regs::VSTACK, Reg::X1);

@@ -2,9 +2,9 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-/// Run a .mica file with the mica CLI and return (stdout, stderr, exit_code)
-fn run_mica_file(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -> (String, String, i32) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mica"));
+/// Run a .mc file with the moca CLI and return (stdout, stderr, exit_code)
+fn run_moca_file(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -> (String, String, i32) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_moca"));
     cmd.arg("run");
     cmd.arg(path);
     // Extra args come after the file (CLI expects: run FILE [OPTIONS])
@@ -16,7 +16,7 @@ fn run_mica_file(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -
         cmd.current_dir(dir);
     }
 
-    let output = cmd.output().expect("failed to execute mica");
+    let output = cmd.output().expect("failed to execute moca");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -41,17 +41,17 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
         .collect();
 
     // Determine if this is a directory-based test or file-based test
-    let (mica_path, working_dir, base_path) = if test_path.is_dir() {
-        // Directory-based test: look for main.mica as entry point
-        let main_mica = test_path.join("main.mica");
-        if !main_mica.exists() {
+    let (moca_path, working_dir, base_path) = if test_path.is_dir() {
+        // Directory-based test: look for main.mc as entry point
+        let main_moca = test_path.join("main.mc");
+        if !main_moca.exists() {
             panic!(
-                "Directory test {:?} must contain main.mica",
+                "Directory test {:?} must contain main.mc",
                 test_path
             );
         }
         // Expected output files are at the directory level (e.g., testdir.stdout)
-        (main_mica, Some(test_path), test_path.to_path_buf())
+        (main_moca, Some(test_path), test_path.to_path_buf())
     } else {
         // File-based test
         (test_path.to_path_buf(), None, test_path.with_extension(""))
@@ -72,7 +72,7 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
 
     let extra_args_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
     let (actual_stdout, actual_stderr, actual_exitcode) =
-        run_mica_file(&mica_path, &extra_args_refs, working_dir);
+        run_moca_file(&moca_path, &extra_args_refs, working_dir);
 
     // Check stdout (exact match)
     let stdout_path = base_path.with_extension("stdout");
@@ -82,7 +82,7 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
         assert_eq!(
             actual_stdout, expected_stdout,
             "stdout mismatch for {:?}\n--- expected ---\n{}\n--- actual ---\n{}",
-            mica_path, expected_stdout, actual_stdout
+            moca_path, expected_stdout, actual_stdout
         );
     }
 
@@ -94,7 +94,7 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
         assert!(
             actual_stderr.contains(&expected_stderr),
             "stderr mismatch for {:?}\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
-            mica_path, expected_stderr, actual_stderr
+            moca_path, expected_stderr, actual_stderr
         );
     }
 
@@ -118,7 +118,7 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
 }
 
 /// Discover and run all tests in a directory
-/// Supports both file-based tests (.mica files) and directory-based tests (subdirectories with main.mica)
+/// Supports both file-based tests (.mc files) and directory-based tests (subdirectories with main.mc)
 fn run_snapshot_dir(dir: &str) {
     let dir_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -134,12 +134,12 @@ fn run_snapshot_dir(dir: &str) {
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
-            // Include .mica files
-            if path.extension().map_or(false, |ext| ext == "mica") {
+            // Include .mc files
+            if path.extension().map_or(false, |ext| ext == "mc") {
                 return true;
             }
-            // Include directories that contain main.mica (multi-file tests)
-            if path.is_dir() && path.join("main.mica").exists() {
+            // Include directories that contain main.mc (multi-file tests)
+            if path.is_dir() && path.join("main.mc").exists() {
                 return true;
             }
             false

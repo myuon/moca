@@ -4,7 +4,7 @@ use std::path::PathBuf;
 fn main() {
     // Generate C header using cbindgen
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let output_path = PathBuf::from(&crate_dir).join("include").join("mica.h");
+    let output_path = PathBuf::from(&crate_dir).join("include").join("moca.h");
 
     // Create include directory if it doesn't exist
     std::fs::create_dir_all(PathBuf::from(&crate_dir).join("include")).ok();

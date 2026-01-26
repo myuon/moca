@@ -1,11 +1,11 @@
 ---
 title: Language Specification
-description: Mica プログラミング言語の構文とセマンティクス。型システム、制御フロー、並行処理、例外処理を定義。
+description: Moca プログラミング言語の構文とセマンティクス。型システム、制御フロー、並行処理、例外処理を定義。
 ---
 
-# Mica Language Specification
+# Moca Language Specification
 
-This document defines the syntax and semantics of the Mica programming language.
+This document defines the syntax and semantics of the Moca programming language.
 
 ## Types
 

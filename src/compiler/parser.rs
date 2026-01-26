@@ -2,7 +2,7 @@ use crate::compiler::ast::*;
 use crate::compiler::lexer::{Span, Token, TokenKind};
 use crate::compiler::types::TypeAnnotation;
 
-/// A recursive descent parser for mica.
+/// A recursive descent parser for moca.
 pub struct Parser<'a> {
     filename: &'a str,
     tokens: Vec<Token>,
@@ -980,9 +980,9 @@ mod tests {
     use crate::compiler::lexer::Lexer;
 
     fn parse(source: &str) -> Result<Program, String> {
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens()?;
-        let mut parser = Parser::new("test.mica", tokens);
+        let mut parser = Parser::new("test.mc", tokens);
         parser.parse()
     }
 

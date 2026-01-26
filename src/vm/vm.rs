@@ -44,7 +44,7 @@ pub struct VmGcStats {
     pub max_pause_us: u64,
 }
 
-/// The mica virtual machine.
+/// The moca virtual machine.
 pub struct VM {
     stack: Vec<Value>,
     frames: Vec<Frame>,

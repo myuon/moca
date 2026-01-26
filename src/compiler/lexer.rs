@@ -1,4 +1,4 @@
-/// Token kinds for the mica language.
+/// Token kinds for the moca language.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Keywords
@@ -88,7 +88,7 @@ impl Token {
     }
 }
 
-/// The lexer for mica source code.
+/// The lexer for moca source code.
 pub struct Lexer<'a> {
     filename: &'a str,
     source: &'a str,
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn test_simple_tokens() {
         let source = "let x = 42;";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens.len(), 6);
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn test_operators() {
         let source = "+ - * / % == != < <= > >= && || !";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         let expected = vec![
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn test_keywords() {
         let source = "let var fun if else while return true false";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         let expected = vec![
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn test_line_comment() {
         let source = "let x = 1; // this is a comment\nlet y = 2;";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Let);
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn test_function_definition() {
         let source = "fun add(a, b) { return a + b; }";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Fun);
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn test_float_literals() {
         let source = "3.14 0.5 42.0";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Float(3.14));
@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn test_string_literals() {
         let source = r#""hello" "world" "line1\nline2""#;
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Str("hello".to_string()));
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn test_nil_keyword() {
         let source = "let x = nil;";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[3].kind, TokenKind::Nil);
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn test_array_syntax() {
         let source = "[1, 2, 3]";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::LBracket);
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn test_object_syntax() {
         let source = "{ x: 10, y: 20 }";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::LBrace);
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn test_for_in_syntax() {
         let source = "for x in arr { }";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::For);
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn test_try_catch_throw() {
         let source = "try { throw x; } catch e { }";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Try);
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn test_dot_operator() {
         let source = "obj.field";
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Ident("obj".to_string()));
