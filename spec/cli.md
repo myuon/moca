@@ -1,41 +1,41 @@
 ---
 title: CLI Specification
-description: Mica ツールチェーンのコマンドラインインターフェース仕様。プロジェクト操作、依存関係管理、開発ツールのコマンドを定義。
+description: Moca ツールチェーンのコマンドラインインターフェース仕様。プロジェクト操作、依存関係管理、開発ツールのコマンドを定義。
 ---
 
-# Mica CLI Specification
+# Moca CLI Specification
 
-This document defines the command-line interface for the Mica toolchain.
+This document defines the command-line interface for the Moca toolchain.
 
 ## Commands
 
 ### Project Operations
 
 ```bash
-mica init [name]        # Create new project
-mica check              # Type check and static analysis only
-mica build              # Generate bytecode
-mica run [file] [args]  # Execute (uses entry if file omitted)
-mica test               # Run tests
+moca init [name]        # Create new project
+moca check              # Type check and static analysis only
+moca build              # Generate bytecode
+moca run [file] [args]  # Execute (uses entry if file omitted)
+moca test               # Run tests
 ```
 
 ### Dependency Management
 
 ```bash
-mica add <url>[@rev]    # Add dependency
-mica remove <name>      # Remove dependency
-mica update [name]      # Update dependencies (all or specified)
-mica vendor             # Copy dependencies locally
+moca add <url>[@rev]    # Add dependency
+moca remove <name>      # Remove dependency
+moca update [name]      # Update dependencies (all or specified)
+moca vendor             # Copy dependencies locally
 ```
 
 ### Development Tools
 
 ```bash
-mica lsp                # Start LSP server (stdio)
-mica debug [file]       # Start TUI debugger
-mica repl               # Start REPL
-mica fmt [file|dir]     # Format code
-mica clean              # Remove build artifacts
+moca lsp                # Start LSP server (stdio)
+moca debug [file]       # Start TUI debugger
+moca repl               # Start REPL
+moca fmt [file|dir]     # Format code
+moca clean              # Remove build artifacts
 ```
 
 ### Common Options
@@ -98,50 +98,50 @@ error: <message>
 ### Run a Program
 
 ```bash
-mica run hello.mica
+moca run hello.mc
 ```
 
 ### Run with JIT Disabled
 
 ```bash
-mica run --jit=off app.mica
+moca run --jit=off app.mc
 ```
 
 ### Run with JIT Tracing
 
 ```bash
-mica run --trace-jit app.mica
+moca run --trace-jit app.mc
 ```
 
 ### Create New Project
 
 ```bash
-mica init myapp
+moca init myapp
 cd myapp
-mica run
+moca run
 ```
 
 ### Add a Dependency
 
 ```bash
-mica add https://github.com/user/mica-utils@v1.0.0
+moca add https://github.com/user/moca-utils@v1.0.0
 ```
 
 ### Format Code
 
 ```bash
-mica fmt src/
+moca fmt src/
 ```
 
 ### Dump Compiler IR
 
 ```bash
 # AST を stderr に出力
-mica run example.mica --dump-ast
+moca run example.mc --dump-ast
 
 # バイトコードをファイルに出力
-mica run example.mica --dump-bytecode=out.txt
+moca run example.mc --dump-bytecode=out.txt
 
 # 複数同時出力
-mica run example.mica --dump-ast --dump-resolved --dump-bytecode
+moca run example.mc --dump-ast --dump-resolved --dump-bytecode
 ```

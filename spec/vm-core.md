@@ -1,14 +1,14 @@
 ---
-title: micaVM Core Specification
+title: mocaVM Core Specification
 version: 0.1.0
 status: implemented
 ---
 
-# micaVM Core Specification
+# mocaVM Core Specification
 
 ## 1. Overview
 
-micaVM v0仕様に基づくコア機能の定義。
+mocaVM v0仕様に基づくコア機能の定義。
 VM実行、Verifier、GC統合、StackMap生成を含み、Luaライクな軽量・組み込み可能なランタイムの基盤を構成する。
 
 ## 2. Scope

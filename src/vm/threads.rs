@@ -1,4 +1,4 @@
-//! Thread support for mica VM.
+//! Thread support for moca VM.
 //!
 //! This module provides OS thread support with:
 //! - Thread spawning with independent VM instances
@@ -64,7 +64,7 @@ impl ThreadHandle {
     }
 }
 
-/// Thread spawner that creates new threads running mica code.
+/// Thread spawner that creates new threads running moca code.
 pub struct ThreadSpawner {
     /// Active thread handles
     handles: Vec<ThreadHandle>,
@@ -79,7 +79,7 @@ impl ThreadSpawner {
     }
 
     /// Spawn a new thread that runs the given closure.
-    /// The closure should set up a VM and run mica code.
+    /// The closure should set up a VM and run moca code.
     pub fn spawn<F>(&mut self, f: F) -> usize
     where
         F: FnOnce() -> Value + Send + 'static,
@@ -304,12 +304,12 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     (Sender::new(Arc::clone(&ch)), Receiver::new(ch))
 }
 
-/// A channel specialized for mica Values.
+/// A channel specialized for moca Values.
 pub type ValueChannel = Channel<Value>;
 pub type ValueSender = Sender<Value>;
 pub type ValueReceiver = Receiver<Value>;
 
-/// Create a new channel for mica Values.
+/// Create a new channel for moca Values.
 pub fn value_channel() -> (ValueSender, ValueReceiver) {
     channel()
 }

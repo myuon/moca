@@ -1,11 +1,11 @@
 ---
-title: micaVM Specification
+title: mocaVM Specification
 version: 0.1.0
 ---
 
-# micaVM Specification
+# mocaVM Specification
 
-This directory contains the technical specifications for micaVM, the mica bytecode virtual machine.
+This directory contains the technical specifications for mocaVM, the moca bytecode virtual machine.
 
 ## Documents
 
@@ -22,7 +22,7 @@ This directory contains the technical specifications for micaVM, the mica byteco
 │                     Host Application (C/C++)                 │
 ├─────────────────────────────────────────────────────────────┤
 │                        C FFI Layer                           │
-│   mica_vm_new(), mica_call(), mica_push_*(), mica_to_*()    │
+│   moca_vm_new(), moca_call(), moca_push_*(), moca_to_*()    │
 ├─────────────────────────────────────────────────────────────┤
 │                        Rust Core                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
@@ -57,19 +57,19 @@ Value = I64(i64) | F64(f64) | Bool(bool) | Ref(GcRef) | Null
 ### C API Example
 
 ```c
-#include <mica.h>
+#include <moca.h>
 
 int main() {
-    mica_vm *vm = mica_vm_new();
+    moca_vm *vm = moca_vm_new();
 
-    mica_load_file(vm, "program.micac");
+    moca_load_file(vm, "program.mocac");
 
-    mica_push_i64(vm, 42);
-    mica_call(vm, "process", 1);
+    moca_push_i64(vm, 42);
+    moca_call(vm, "process", 1);
 
-    int64_t result = mica_to_i64(vm, -1);
+    int64_t result = moca_to_i64(vm, -1);
 
-    mica_vm_free(vm);
+    moca_vm_free(vm);
     return 0;
 }
 ```
@@ -78,7 +78,7 @@ int main() {
 
 | Path | Description |
 |------|-------------|
-| `include/mica.h` | Generated C header |
+| `include/moca.h` | Generated C header |
 | `src/ffi/` | FFI implementation |
 | `src/vm/` | VM core implementation |
 | `src/vm/bytecode.rs` | Bytecode serialization |

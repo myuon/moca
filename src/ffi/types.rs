@@ -7,10 +7,10 @@ use std::ffi::c_char;
 
 /// Result codes for FFI operations.
 ///
-/// These map to the `mica_result` enum in C.
+/// These map to the `moca_result` enum in C.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MicaResult {
+pub enum MocaResult {
     /// Operation succeeded
     Ok = 0,
     /// Runtime error during execution
@@ -27,21 +27,21 @@ pub enum MicaResult {
     ErrorNotFound = 6,
 }
 
-impl MicaResult {
+impl MocaResult {
     pub fn is_ok(self) -> bool {
-        self == MicaResult::Ok
+        self == MocaResult::Ok
     }
 
     pub fn is_err(self) -> bool {
-        self != MicaResult::Ok
+        self != MocaResult::Ok
     }
 }
 
-impl From<Result<(), String>> for MicaResult {
+impl From<Result<(), String>> for MocaResult {
     fn from(result: Result<(), String>) -> Self {
         match result {
-            Ok(()) => MicaResult::Ok,
-            Err(_) => MicaResult::ErrorRuntime,
+            Ok(()) => MocaResult::Ok,
+            Err(_) => MocaResult::ErrorRuntime,
         }
     }
 }
@@ -49,37 +49,37 @@ impl From<Result<(), String>> for MicaResult {
 /// Error callback function type.
 ///
 /// Called when an error occurs, with the error message and user data.
-pub type MicaErrorFn = Option<unsafe extern "C" fn(message: *const c_char, userdata: *mut std::ffi::c_void)>;
+pub type MocaErrorFn = Option<unsafe extern "C" fn(message: *const c_char, userdata: *mut std::ffi::c_void)>;
 
 /// Host function type.
 ///
-/// A C function that can be registered and called from mica code.
+/// A C function that can be registered and called from moca code.
 /// The function receives the VM instance and should:
-/// 1. Read arguments from the stack using `mica_to_*` functions
+/// 1. Read arguments from the stack using `moca_to_*` functions
 /// 2. Perform the operation
-/// 3. Push the result using `mica_push_*` functions
-/// 4. Return `MICA_OK` or an error code
-pub type MicaCFunc = unsafe extern "C" fn(vm: *mut MicaVm) -> MicaResult;
+/// 3. Push the result using `moca_push_*` functions
+/// 4. Return `MOCA_OK` or an error code
+pub type MocaCFunc = unsafe extern "C" fn(vm: *mut MocaVm) -> MocaResult;
 
 /// Opaque VM instance type.
 ///
 /// This is the main entry point for the FFI. All operations require
-/// a valid `MicaVm` pointer created by `mica_vm_new()`.
+/// a valid `MocaVm` pointer created by `moca_vm_new()`.
 #[repr(C)]
-pub struct MicaVm {
+pub struct MocaVm {
     _private: [u8; 0],
 }
 
 /// Internal VM wrapper that holds the actual Rust VM and FFI state.
 pub(crate) struct VmWrapper {
-    /// The actual mica VM
+    /// The actual moca VM
     pub vm: crate::vm::VM,
     /// Loaded chunk (if any)
     pub chunk: Option<crate::vm::Chunk>,
     /// Last error message (as CString for FFI compatibility)
     pub last_error: Option<std::ffi::CString>,
     /// Error callback
-    pub error_callback: MicaErrorFn,
+    pub error_callback: MocaErrorFn,
     /// Error callback userdata
     pub error_userdata: *mut std::ffi::c_void,
     /// Registered host functions
@@ -92,7 +92,7 @@ pub(crate) struct VmWrapper {
 
 /// A registered host function.
 pub(crate) struct HostFunction {
-    pub func: MicaCFunc,
+    pub func: MocaCFunc,
     pub arity: usize,
 }
 
@@ -143,10 +143,10 @@ mod tests {
 
     #[test]
     fn test_result_codes() {
-        assert!(MicaResult::Ok.is_ok());
-        assert!(!MicaResult::Ok.is_err());
-        assert!(!MicaResult::ErrorRuntime.is_ok());
-        assert!(MicaResult::ErrorRuntime.is_err());
+        assert!(MocaResult::Ok.is_ok());
+        assert!(!MocaResult::Ok.is_err());
+        assert!(!MocaResult::ErrorRuntime.is_ok());
+        assert!(MocaResult::ErrorRuntime.is_err());
     }
 
     #[test]

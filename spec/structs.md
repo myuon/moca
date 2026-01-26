@@ -2,13 +2,13 @@
 
 ## Overview
 
-Add struct declarations to mica, providing a structured data type with fixed fields. Unlike dynamic objects, structs have a known set of fields at compile time, enabling optimizations where property names can be discarded and values represented as data tuples.
+Add struct declarations to moca, providing a structured data type with fixed fields. Unlike dynamic objects, structs have a known set of fields at compile time, enabling optimizations where property names can be discarded and values represented as data tuples.
 
 ## Syntax
 
 ### Struct Declaration
 
-```mica
+```mc
 struct Point {
     x: int,
     y: int,
@@ -25,7 +25,7 @@ struct Person {
 
 Object literal style with struct name prefix:
 
-```mica
+```mc
 let p = Point { x: 10, y: 20 };
 let person = Person { name: "Alice", age: 30, email: nil };
 ```
@@ -34,7 +34,7 @@ All fields must be provided (no default values).
 
 ### Field Access
 
-```mica
+```mc
 let x = p.x;
 let name = person.name;
 ```
@@ -43,14 +43,14 @@ let name = person.name;
 
 All fields are mutable:
 
-```mica
+```mc
 p.x = 100;
 person.age = 31;
 ```
 
 ### Methods (impl blocks)
 
-```mica
+```mc
 struct Rectangle {
     width: int,
     height: int,
@@ -78,13 +78,13 @@ rect.scale(2);
 
 Structs introduce a new named type:
 
-```mica
+```mc
 let p: Point = Point { x: 1, y: 2 };
 ```
 
 Struct types are nominal (not structural). Two structs with identical fields are different types:
 
-```mica
+```mc
 struct Vec2 { x: int, y: int }
 struct Point { x: int, y: int }
 
@@ -96,7 +96,7 @@ let p: Point = v;  // ERROR: type mismatch
 
 Fields can have nullable types:
 
-```mica
+```mc
 struct Node {
     value: int,
     next: Node?,  // Forward reference allowed
@@ -111,7 +111,7 @@ Fields are stored in declaration order. This enables tuple-like value representa
 
 Struct comparison (`==`, `!=`) is **not allowed**. Users must implement their own comparison logic:
 
-```mica
+```mc
 let p1 = Point { x: 1, y: 2 };
 let p2 = Point { x: 1, y: 2 };
 

@@ -22,7 +22,7 @@ pub struct PackageInfo {
 }
 
 fn default_entry() -> String {
-    "src/main.mica".to_string()
+    "src/main.mc".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,7 +43,7 @@ impl PackageManifest {
             package: PackageInfo {
                 name: name.to_string(),
                 version: "0.1.0".to_string(),
-                entry: "src/main.mica".to_string(),
+                entry: "src/main.mc".to_string(),
             },
             dependencies: HashMap::new(),
             dev_dependencies: HashMap::new(),
@@ -67,7 +67,7 @@ impl PackageManifest {
     }
 }
 
-/// Initialize a new mica project
+/// Initialize a new moca project
 pub fn init_project(dir: &Path, name: Option<&str>) -> Result<(), String> {
     // Determine project name
     let project_name = name
@@ -89,17 +89,17 @@ pub fn init_project(dir: &Path, name: Option<&str>) -> Result<(), String> {
     let manifest = PackageManifest::new(&project_name);
     manifest.save(dir)?;
 
-    // Create src/main.mica with hello world
-    let main_mica = src_dir.join("main.mica");
-    if !main_mica.exists() {
-        let content = r#"// Welcome to mica!
+    // Create src/main.mc with hello world
+    let main_moca = src_dir.join("main.mc");
+    if !main_moca.exists() {
+        let content = r#"// Welcome to moca!
 print("Hello, world!");
 "#;
-        fs::write(&main_mica, content).map_err(|e| format!("failed to write main.mica: {}", e))?;
+        fs::write(&main_moca, content).map_err(|e| format!("failed to write main.mc: {}", e))?;
     }
 
     println!(
-        "Created new mica project '{}' in {}",
+        "Created new moca project '{}' in {}",
         project_name,
         dir.display()
     );
@@ -116,7 +116,7 @@ mod tests {
         let manifest = PackageManifest::new("testproject");
         assert_eq!(manifest.package.name, "testproject");
         assert_eq!(manifest.package.version, "0.1.0");
-        assert_eq!(manifest.package.entry, "src/main.mica");
+        assert_eq!(manifest.package.entry, "src/main.mc");
     }
 
     #[test]
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_init_project() {
-        let temp = temp_dir().join("mica_test_init");
+        let temp = temp_dir().join("moca_test_init");
         if temp.exists() {
             fs::remove_dir_all(&temp).unwrap();
         }
@@ -138,7 +138,7 @@ mod tests {
         init_project(&temp, Some("mytest")).unwrap();
 
         assert!(temp.join("pkg.toml").exists());
-        assert!(temp.join("src/main.mica").exists());
+        assert!(temp.join("src/main.mc").exists());
 
         let manifest = PackageManifest::load(&temp).unwrap();
         assert_eq!(manifest.package.name, "mytest");

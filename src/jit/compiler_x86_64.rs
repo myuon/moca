@@ -1,6 +1,6 @@
-//! JIT compiler for mica bytecode on x86-64.
+//! JIT compiler for moca bytecode on x86-64.
 //!
-//! This module implements a baseline JIT compiler that translates mica bytecode
+//! This module implements a baseline JIT compiler that translates moca bytecode
 //! to x86-64 machine code using a template-based approach.
 
 use super::codebuf::CodeBuffer;
@@ -19,9 +19,9 @@ pub mod value_tags {
     pub const TAG_PTR: u64 = 4;
 }
 
-/// Register conventions for mica JIT on x86-64.
+/// Register conventions for moca JIT on x86-64.
 ///
-/// Following System V AMD64 ABI with mica-specific assignments:
+/// Following System V AMD64 ABI with moca-specific assignments:
 /// - R12: VM context pointer (callee-saved)
 /// - R13: Value stack pointer (callee-saved)
 /// - R14: Locals base pointer (callee-saved)
@@ -73,7 +73,7 @@ impl CompiledCode {
     }
 }
 
-/// JIT compiler for mica functions on x86-64.
+/// JIT compiler for moca functions on x86-64.
 pub struct JitCompiler {
     buf: CodeBuffer,
     /// Labels for jump targets (bytecode pc -> native offset)
@@ -160,7 +160,7 @@ impl JitCompiler {
         asm.push(Reg::R14);
         asm.push(Reg::R15);
 
-        // Initialize mica registers from arguments (System V AMD64 ABI)
+        // Initialize moca registers from arguments (System V AMD64 ABI)
         // RDI = VM context, RSI = value stack, RDX = locals base
         asm.mov_rr(regs::VM_CTX, Reg::Rdi);
         asm.mov_rr(regs::VSTACK, Reg::Rsi);

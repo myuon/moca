@@ -11,14 +11,14 @@ use crate::compiler::{Lexer, Parser, Resolver};
 mod symbols;
 use symbols::SymbolTable;
 
-/// The mica language server backend.
-pub struct MicaLanguageServer {
+/// The moca language server backend.
+pub struct MocaLanguageServer {
     client: Client,
     /// Document cache: URI -> source text
     documents: RwLock<HashMap<Url, String>>,
 }
 
-impl MicaLanguageServer {
+impl MocaLanguageServer {
     pub fn new(client: Client) -> Self {
         Self {
             client,
@@ -115,7 +115,7 @@ fn parse_error_to_diagnostic(error: &str) -> Option<Diagnostic> {
                     },
                 },
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("mica".to_string()),
+                source: Some("moca".to_string()),
                 message: message.to_string(),
                 ..Default::default()
             });
@@ -135,14 +135,14 @@ fn parse_error_to_diagnostic(error: &str) -> Option<Diagnostic> {
             },
         },
         severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("mica".to_string()),
+        source: Some("moca".to_string()),
         message: message.to_string(),
         ..Default::default()
     })
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for MicaLanguageServer {
+impl LanguageServer for MocaLanguageServer {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -159,7 +159,7 @@ impl LanguageServer for MicaLanguageServer {
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
-                name: "mica-lsp".to_string(),
+                name: "moca-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
         })
@@ -167,7 +167,7 @@ impl LanguageServer for MicaLanguageServer {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "mica language server initialized")
+            .log_message(MessageType::INFO, "moca language server initialized")
             .await;
     }
 
@@ -402,6 +402,6 @@ pub async fn run_server() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(MicaLanguageServer::new);
+    let (service, socket) = LspService::new(MocaLanguageServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }

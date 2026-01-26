@@ -3,7 +3,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::collapsible_if)]
 
-use super::types::{MicaVm, VmWrapper};
+use super::types::{MocaVm, VmWrapper};
 use super::vm_ffi::get_wrapper;
 use std::ffi::c_char;
 
@@ -14,13 +14,13 @@ use std::ffi::c_char;
 ///
 /// # Example (C)
 /// ```c
-/// mica_result res = mica_call(vm, "func", 0);
-/// if (res != MICA_OK) {
-///     printf("Error: %s\n", mica_get_error(vm));
+/// moca_result res = moca_call(vm, "func", 0);
+/// if (res != MOCA_OK) {
+///     printf("Error: %s\n", moca_get_error(vm));
 /// }
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_get_error(vm: *const MicaVm) -> *const c_char {
+pub unsafe extern "C" fn moca_get_error(vm: *const MocaVm) -> *const c_char {
     if let Some(wrapper) = get_wrapper(vm) {
         if let Some(ref error) = wrapper.last_error {
             // Return pointer to the error string
@@ -34,10 +34,10 @@ pub unsafe extern "C" fn mica_get_error(vm: *const MicaVm) -> *const c_char {
 
 /// Clear the last error.
 ///
-/// After calling this, `mica_get_error` will return NULL until
+/// After calling this, `moca_get_error` will return NULL until
 /// another error occurs.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_clear_error(vm: *mut MicaVm) {
+pub unsafe extern "C" fn moca_clear_error(vm: *mut MocaVm) {
     if vm.is_null() {
         return;
     }
@@ -49,7 +49,7 @@ pub unsafe extern "C" fn mica_clear_error(vm: *mut MicaVm) {
 ///
 /// Returns true if an error is set, false otherwise.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_has_error(vm: *const MicaVm) -> bool {
+pub unsafe extern "C" fn moca_has_error(vm: *const MocaVm) -> bool {
     if let Some(wrapper) = get_wrapper(vm) {
         return wrapper.last_error.is_some();
     }
@@ -59,46 +59,46 @@ pub unsafe extern "C" fn mica_has_error(vm: *const MicaVm) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ffi::vm_ffi::{get_wrapper_mut, mica_vm_free, mica_vm_new};
+    use crate::ffi::vm_ffi::{get_wrapper_mut, moca_vm_free, moca_vm_new};
     use std::ffi::CStr;
 
     #[test]
     fn test_get_error() {
         unsafe {
-            let vm = mica_vm_new();
+            let vm = moca_vm_new();
 
             // No error initially
-            assert!(mica_get_error(vm).is_null());
-            assert!(!mica_has_error(vm));
+            assert!(moca_get_error(vm).is_null());
+            assert!(!moca_has_error(vm));
 
             // Set an error
             let wrapper = get_wrapper_mut(vm).unwrap();
             wrapper.set_error("test error message");
 
             // Check error
-            assert!(mica_has_error(vm));
-            let error = mica_get_error(vm);
+            assert!(moca_has_error(vm));
+            let error = moca_get_error(vm);
             assert!(!error.is_null());
 
             let error_str = CStr::from_ptr(error).to_str().unwrap();
             assert_eq!(error_str, "test error message");
 
             // Clear error
-            mica_clear_error(vm);
-            assert!(!mica_has_error(vm));
-            assert!(mica_get_error(vm).is_null());
+            moca_clear_error(vm);
+            assert!(!moca_has_error(vm));
+            assert!(moca_get_error(vm).is_null());
 
-            mica_vm_free(vm);
+            moca_vm_free(vm);
         }
     }
 
     #[test]
     fn test_error_null_vm() {
         unsafe {
-            assert!(mica_get_error(std::ptr::null()).is_null());
-            assert!(!mica_has_error(std::ptr::null()));
+            assert!(moca_get_error(std::ptr::null()).is_null());
+            assert!(!moca_has_error(std::ptr::null()));
             // Should not crash
-            mica_clear_error(std::ptr::null_mut());
+            moca_clear_error(std::ptr::null_mut());
         }
     }
 }

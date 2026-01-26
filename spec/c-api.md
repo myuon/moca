@@ -1,14 +1,14 @@
 ---
-title: micaVM C API Specification
+title: mocaVM C API Specification
 version: 0.1.0
 status: implemented
 ---
 
-# micaVM C API Specification
+# mocaVM C API Specification
 
 ## 1. Overview
 
-micaVMのC言語APIを定義。ホストアプリケーションからVMを組み込み利用可能にする。
+mocaVMのC言語APIを定義。ホストアプリケーションからVMを組み込み利用可能にする。
 Luaライクな軽量組み込みランタイムとして、C/C++アプリケーションへの統合を実現する。
 
 ## 2. Scope
@@ -16,7 +16,7 @@ Luaライクな軽量組み込みランタイムとして、C/C++アプリケー
 ### In Scope
 - VM lifecycle (create, free)
 - Stack operations (push, pop, type checks)
-- Function calls (mica functions, host functions)
+- Function calls (moca functions, host functions)
 - Bytecode loading/saving
 - Error handling
 - Globals API
@@ -33,33 +33,33 @@ Luaライクな軽量組み込みランタイムとして、C/C++アプリケー
 ### 3.1 Embedding Flow
 
 ```c
-#include <mica.h>
+#include <moca.h>
 
 int main() {
     // 1. Create VM instance
-    mica_vm *vm = mica_vm_new();
+    moca_vm *vm = moca_vm_new();
 
     // 2. Load bytecode
-    mica_result res = mica_load_chunk(vm, bytecode, bytecode_len);
-    if (res != MICA_RESULT_OK) {
-        printf("Load error: %s\n", mica_get_error(vm));
-        mica_vm_free(vm);
+    moca_result res = moca_load_chunk(vm, bytecode, bytecode_len);
+    if (res != MOCA_RESULT_OK) {
+        printf("Load error: %s\n", moca_get_error(vm));
+        moca_vm_free(vm);
         return 1;
     }
 
     // 3. Call function
-    mica_push_i64(vm, 42);  // argument
-    res = mica_call(vm, "my_function", 1);  // 1 argument
-    if (res != MICA_RESULT_OK) {
-        printf("Call error: %s\n", mica_get_error(vm));
+    moca_push_i64(vm, 42);  // argument
+    res = moca_call(vm, "my_function", 1);  // 1 argument
+    if (res != MOCA_RESULT_OK) {
+        printf("Call error: %s\n", moca_get_error(vm));
     }
 
     // 4. Get result
-    int64_t result = mica_to_i64(vm, -1);
-    mica_pop(vm, 1);
+    int64_t result = moca_to_i64(vm, -1);
+    moca_pop(vm, 1);
 
     // 5. Cleanup
-    mica_vm_free(vm);
+    moca_vm_free(vm);
     return 0;
 }
 ```
@@ -68,16 +68,16 @@ int main() {
 
 ```c
 // Host function: int add(int a, int b)
-mica_result host_add(mica_vm *vm) {
-    int64_t a = mica_to_i64(vm, 0);
-    int64_t b = mica_to_i64(vm, 1);
-    mica_pop(vm, 2);
-    mica_push_i64(vm, a + b);
-    return MICA_RESULT_OK;
+moca_result host_add(moca_vm *vm) {
+    int64_t a = moca_to_i64(vm, 0);
+    int64_t b = moca_to_i64(vm, 1);
+    moca_pop(vm, 2);
+    moca_push_i64(vm, a + b);
+    return MOCA_RESULT_OK;
 }
 
 // Registration
-mica_register_function(vm, "add", host_add, 2);
+moca_register_function(vm, "add", host_add, 2);
 ```
 
 ## 4. API Reference
@@ -86,136 +86,136 @@ mica_register_function(vm, "add", host_add, 2);
 
 ```c
 typedef enum {
-    MICA_RESULT_OK = 0,
-    MICA_RESULT_ERROR_RUNTIME = 1,      // Runtime error
-    MICA_RESULT_ERROR_TYPE = 2,         // Type mismatch
-    MICA_RESULT_ERROR_VERIFY = 3,       // Bytecode verification failed
-    MICA_RESULT_ERROR_MEMORY = 4,       // Out of memory
-    MICA_RESULT_ERROR_INVALID_ARG = 5,  // Invalid argument
-    MICA_RESULT_ERROR_NOT_FOUND = 6,    // Function/global not found
-} MicaResult;
+    MOCA_RESULT_OK = 0,
+    MOCA_RESULT_ERROR_RUNTIME = 1,      // Runtime error
+    MOCA_RESULT_ERROR_TYPE = 2,         // Type mismatch
+    MOCA_RESULT_ERROR_VERIFY = 3,       // Bytecode verification failed
+    MOCA_RESULT_ERROR_MEMORY = 4,       // Out of memory
+    MOCA_RESULT_ERROR_INVALID_ARG = 5,  // Invalid argument
+    MOCA_RESULT_ERROR_NOT_FOUND = 6,    // Function/global not found
+} MocaResult;
 ```
 
 ### 4.2 Opaque Types
 
 ```c
-typedef struct MicaVm MicaVm;  // VM instance (opaque)
+typedef struct MocaVm MocaVm;  // VM instance (opaque)
 ```
 
 ### 4.3 VM Lifecycle
 
 ```c
 // Create new VM instance
-MicaVm *mica_vm_new(void);
+MocaVm *moca_vm_new(void);
 
 // Free VM instance
-void mica_vm_free(MicaVm *vm);
+void moca_vm_free(MocaVm *vm);
 
 // Configuration
-void mica_set_memory_limit(MicaVm *vm, size_t bytes);
-void mica_set_error_callback(MicaVm *vm, MicaErrorFn callback, void *userdata);
+void moca_set_memory_limit(MocaVm *vm, size_t bytes);
+void moca_set_error_callback(MocaVm *vm, MocaErrorFn callback, void *userdata);
 
 // Check if bytecode is loaded
-bool mica_has_chunk(MicaVm *vm);
+bool moca_has_chunk(MocaVm *vm);
 ```
 
 ### 4.4 Bytecode Loading
 
 ```c
 // Load from memory
-MicaResult mica_load_chunk(MicaVm *vm, const uint8_t *data, size_t len);
+MocaResult moca_load_chunk(MocaVm *vm, const uint8_t *data, size_t len);
 
 // Load from file
-MicaResult mica_load_file(MicaVm *vm, const char *path);
+MocaResult moca_load_file(MocaVm *vm, const char *path);
 
 // Save to file
-MicaResult mica_save_file(MicaVm *vm, const char *path);
+MocaResult moca_save_file(MocaVm *vm, const char *path);
 ```
 
 ### 4.5 Stack Operations
 
 ```c
 // Push values
-void mica_push_null(MicaVm *vm);
-void mica_push_bool(MicaVm *vm, bool value);
-void mica_push_i64(MicaVm *vm, int64_t value);
-void mica_push_f64(MicaVm *vm, double value);
-void mica_push_string(MicaVm *vm, const char *str, size_t len);
+void moca_push_null(MocaVm *vm);
+void moca_push_bool(MocaVm *vm, bool value);
+void moca_push_i64(MocaVm *vm, int64_t value);
+void moca_push_f64(MocaVm *vm, double value);
+void moca_push_string(MocaVm *vm, const char *str, size_t len);
 
 // Type checking (index: positive = from bottom, negative = from top)
-bool mica_is_null(MicaVm *vm, int32_t index);
-bool mica_is_bool(MicaVm *vm, int32_t index);
-bool mica_is_i64(MicaVm *vm, int32_t index);
-bool mica_is_f64(MicaVm *vm, int32_t index);
-bool mica_is_string(MicaVm *vm, int32_t index);
-bool mica_is_ref(MicaVm *vm, int32_t index);
+bool moca_is_null(MocaVm *vm, int32_t index);
+bool moca_is_bool(MocaVm *vm, int32_t index);
+bool moca_is_i64(MocaVm *vm, int32_t index);
+bool moca_is_f64(MocaVm *vm, int32_t index);
+bool moca_is_string(MocaVm *vm, int32_t index);
+bool moca_is_ref(MocaVm *vm, int32_t index);
 
 // Get values
-bool mica_to_bool(MicaVm *vm, int32_t index);
-int64_t mica_to_i64(MicaVm *vm, int32_t index);
-double mica_to_f64(MicaVm *vm, int32_t index);
-const char *mica_to_string(MicaVm *vm, int32_t index, size_t *len);
+bool moca_to_bool(MocaVm *vm, int32_t index);
+int64_t moca_to_i64(MocaVm *vm, int32_t index);
+double moca_to_f64(MocaVm *vm, int32_t index);
+const char *moca_to_string(MocaVm *vm, int32_t index, size_t *len);
 
 // Stack manipulation
-void mica_pop(MicaVm *vm, int32_t count);
-int32_t mica_get_top(MicaVm *vm);
-void mica_set_top(MicaVm *vm, int32_t index);
+void moca_pop(MocaVm *vm, int32_t count);
+int32_t moca_get_top(MocaVm *vm);
+void moca_set_top(MocaVm *vm, int32_t index);
 ```
 
 ### 4.6 Function Calls
 
 ```c
-// Call mica function by name
-MicaResult mica_call(MicaVm *vm, const char *func_name, int32_t nargs);
+// Call moca function by name
+MocaResult moca_call(MocaVm *vm, const char *func_name, int32_t nargs);
 
 // Protected call (catches errors)
-MicaResult mica_pcall(MicaVm *vm, const char *func_name, int32_t nargs);
+MocaResult moca_pcall(MocaVm *vm, const char *func_name, int32_t nargs);
 ```
 
 ### 4.7 Host Function Registration
 
 ```c
 // Host function signature
-typedef MicaResult (*MicaCFunc)(MicaVm *vm);
+typedef MocaResult (*MocaCFunc)(MocaVm *vm);
 
 // Register host function
-MicaResult mica_register_function(MicaVm *vm, const char *name,
-                                   MicaCFunc func, int32_t arity);
+MocaResult moca_register_function(MocaVm *vm, const char *name,
+                                   MocaCFunc func, int32_t arity);
 ```
 
 ### 4.8 Globals
 
 ```c
 // Set global (pops value from stack)
-MicaResult mica_set_global(MicaVm *vm, const char *name);
+MocaResult moca_set_global(MocaVm *vm, const char *name);
 
 // Get global (pushes value to stack)
-MicaResult mica_get_global(MicaVm *vm, const char *name);
+MocaResult moca_get_global(MocaVm *vm, const char *name);
 ```
 
 ### 4.9 Error Handling
 
 ```c
 // Get last error message
-const char *mica_get_error(const MicaVm *vm);
+const char *moca_get_error(const MocaVm *vm);
 
 // Check if error is pending
-bool mica_has_error(const MicaVm *vm);
+bool moca_has_error(const MocaVm *vm);
 
 // Clear error
-void mica_clear_error(MicaVm *vm);
+void moca_clear_error(MocaVm *vm);
 
 // Error callback type
-typedef void (*MicaErrorFn)(const char *message, void *userdata);
+typedef void (*MocaErrorFn)(const char *message, void *userdata);
 ```
 
 ### 4.10 Version Info
 
 ```c
-const char *mica_version(void);      // e.g., "0.1.0"
-uint32_t mica_version_major(void);
-uint32_t mica_version_minor(void);
-uint32_t mica_version_patch(void);
+const char *moca_version(void);      // e.g., "0.1.0"
+uint32_t moca_version_major(void);
+uint32_t moca_version_minor(void);
+uint32_t moca_version_patch(void);
 ```
 
 ## 5. Memory Model
@@ -224,12 +224,12 @@ uint32_t mica_version_patch(void);
 
 1. **VM owns all heap objects**: Strings, arrays, objects allocated by VM
 2. **Host gets handles**: Stack indices (read-only access)
-3. **String lifetime**: `mica_to_string()` returns pointer valid until next GC or stack modification
+3. **String lifetime**: `moca_to_string()` returns pointer valid until next GC or stack modification
 4. **No host allocation**: Host cannot directly create VM objects (must use push APIs)
 
 ### 5.2 GC Integration
 
-- GC may run at any safepoint during `mica_call`/`mica_pcall`
+- GC may run at any safepoint during `moca_call`/`moca_pcall`
 - Stack values are GC roots
 - Host must not hold raw pointers across calls
 
@@ -238,7 +238,7 @@ uint32_t mica_version_patch(void);
 ### 6.1 Header
 
 ```
-Magic: "MICA" (4 bytes)
+Magic: "MOCA" (4 bytes)
 Version: u32 (format version = 1)
 ```
 
@@ -279,7 +279,7 @@ Version: u32 (format version = 1)
 
 ```toml
 [lib]
-name = "mica"
+name = "moca"
 path = "src/lib.rs"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
@@ -294,16 +294,16 @@ cbindgen = "0.28"
 cargo build --release
 
 # Outputs:
-# target/release/libmica.so   (shared library)
-# target/release/libmica.a    (static library)
-# include/mica.h              (C header)
+# target/release/libmoca.so   (shared library)
+# target/release/libmoca.a    (static library)
+# include/moca.h              (C header)
 ```
 
 ### 7.3 Linking C Programs
 
 ```bash
 # Compile and link
-gcc -o myapp myapp.c -L./target/release -lmica -Wl,-rpath,./target/release
+gcc -o myapp myapp.c -L./target/release -lmoca -Wl,-rpath,./target/release
 ```
 
 ## 8. Implementation Files
@@ -311,14 +311,14 @@ gcc -o myapp myapp.c -L./target/release -lmica -Wl,-rpath,./target/release
 | File | Description |
 |------|-------------|
 | `src/ffi/mod.rs` | FFI module entry, version info |
-| `src/ffi/types.rs` | FFI types (MicaResult, MicaVm, VmWrapper) |
+| `src/ffi/types.rs` | FFI types (MocaResult, MocaVm, VmWrapper) |
 | `src/ffi/vm_ffi.rs` | VM lifecycle functions |
 | `src/ffi/stack.rs` | Stack operations |
 | `src/ffi/call.rs` | Function calls, host functions, globals |
 | `src/ffi/error.rs` | Error handling |
 | `src/ffi/load.rs` | Bytecode loading |
 | `src/vm/bytecode.rs` | Bytecode serialization |
-| `include/mica.h` | Generated C header |
+| `include/moca.h` | Generated C header |
 | `tests/c/test_ffi.c` | C test suite |
 | `tests/c/Makefile` | C test build |
 

@@ -1,11 +1,11 @@
-# Makefile for mica C FFI tests
+# Makefile for moca C FFI tests
 
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g
-LDFLAGS = -L../../target/release -lmica -Wl,-rpath,../../target/release -lpthread -ldl -lm
+LDFLAGS = -L../../target/release -lmoca -Wl,-rpath,../../target/release -lpthread -ldl -lm
 
 # For debug builds
-LDFLAGS_DEBUG = -L../../target/debug -lmica -Wl,-rpath,../../target/debug -lpthread -ldl -lm
+LDFLAGS_DEBUG = -L../../target/debug -lmoca -Wl,-rpath,../../target/debug -lpthread -ldl -lm
 
 INCLUDES = -I../../include
 
@@ -23,10 +23,10 @@ build-lib:
 build-lib-debug:
 	cd ../.. && cargo build
 
-test_ffi: test_ffi.c ../../include/mica.h
+test_ffi: test_ffi.c ../../include/moca.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 
-test_ffi_debug: test_ffi.c ../../include/mica.h
+test_ffi_debug: test_ffi.c ../../include/moca.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS_DEBUG)
 
 test: all

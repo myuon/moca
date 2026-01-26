@@ -3,13 +3,13 @@ title: JIT Specification
 description: JIT コンパイルと実行時最適化機能の仕様。Tier 0 インタプリタと Tier 1 ベースライン JIT の2段階実行モデル。
 ---
 
-# Mica JIT Specification
+# Moca JIT Specification
 
 This document defines the JIT compilation and runtime optimization features.
 
 ## Overview
 
-Mica uses a tiered execution model:
+Moca uses a tiered execution model:
 1. **Tier 0**: Bytecode Interpreter with Quickening
 2. **Tier 1**: Baseline JIT (AArch64, x86-64)
 
@@ -156,7 +156,7 @@ x30     : Link register (LR)
 sp      : Stack pointer
 ```
 
-### Mica JIT Register Usage
+### Moca JIT Register Usage
 
 ```
 x19     : VM state pointer
@@ -251,7 +251,7 @@ no_barrier:
 ### Example Output with --trace-jit
 
 ```
-$ mica run --trace-jit app.mica
+$ moca run --trace-jit app.mc
 [JIT] Compiling: sum (1000 calls)
 [JIT] Generated 256 bytes of native code
 [JIT] Compiling: compute (1000 calls)
@@ -283,7 +283,7 @@ r10-r11 : Caller-saved temporaries
 r12-r15 : Callee-saved
 ```
 
-### Mica JIT Register Usage (x86-64)
+### Moca JIT Register Usage (x86-64)
 
 ```
 r12     : VM state pointer

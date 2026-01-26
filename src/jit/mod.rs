@@ -1,4 +1,4 @@
-//! JIT compilation infrastructure for mica.
+//! JIT compilation infrastructure for moca.
 //!
 //! This module provides the foundation for Just-In-Time compilation:
 //! - Executable memory allocation

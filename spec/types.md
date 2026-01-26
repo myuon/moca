@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-- micaを静的型付き言語にする
+- mocaを静的型付き言語にする
 - Hindley-Milner型推論により、型注釈を省略しても型安全性を保証する
 - 型情報を持つIRを設計し、将来のJIT最適化の基盤とする
 
@@ -17,13 +17,13 @@
 
 ## 3. Target Users
 
-- mica言語の利用者: 型注釈なしでも型安全なコードを書きたい
-- mica言語の開発者: 型情報を活用した最適化を実装したい
+- moca言語の利用者: 型注釈なしでも型安全なコードを書きたい
+- moca言語の開発者: 型情報を活用した最適化を実装したい
 
 ## 4. Core User Flow
 
 1. ユーザーがソースコードを書く（型注釈あり/なし混在可）
-2. `mica run file.mica` または `mica check file.mica` を実行
+2. `moca run file.mc` または `moca check file.mc` を実行
 3. 型推論が走り、全ての式・変数に型が付与される
 4. 型エラーがあれば、エラー位置と理由を表示して終了（実行しない）
 5. 型エラーがなければ、型付きIRからバイトコード生成→実行
@@ -31,7 +31,7 @@
 ## 5. Inputs & Outputs
 
 ### Inputs
-- mica ソースコード（`.mica` ファイル）
+- moca ソースコード（`.mc` ファイル）
 - 型注釈（オプション）: `let x: int = 1`, `fun f(a: int) -> string`
 
 ### Outputs
@@ -119,7 +119,7 @@ let name: string? = nil;
 ### エラーメッセージ形式
 ```
 error[E001]: type mismatch
-  --> file.mica:10:5
+  --> file.mc:10:5
    |
 10 |     let x: int = "hello";
    |                  ^^^^^^^ expected `int`, found `string`
@@ -140,7 +140,7 @@ error[E001]: type mismatch
 7. `{x: 1, y: "a"}` の型が `{x: int, y: string}` になる
 8. `[1, 2, 3]` の型が `array<int>` になる
 9. `[1, "a"]` が型エラーになる（要素型不一致）
-10. `mica check file.mica` で型チェックのみ実行できる
+10. `moca check file.mc` で型チェックのみ実行できる
 
 ## 10. Test Plan
 
@@ -150,7 +150,7 @@ Given: 型注釈なしの算術関数
   fun add(a, b) { a + b }
   let result = add(1, 2);
 
-When: mica check を実行
+When: moca check を実行
 
 Then: エラーなしで終了
   - a, b は int と推論
@@ -165,7 +165,7 @@ Given: 型不一致のコード
   }
   greet(123);
 
-When: mica check を実行
+When: moca check を実行
 
 Then: コンパイルエラー
   - エラー位置: greet(123) の 123
@@ -178,7 +178,7 @@ Given: nullable型を使ったコード
   let x: int? = nil;
   let y: int = x;  // エラー: int? を int に代入
 
-When: mica check を実行
+When: moca check を実行
 
 Then: コンパイルエラー
   - エラー内容: expected `int`, found `int?`

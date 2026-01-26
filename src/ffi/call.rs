@@ -2,11 +2,11 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use super::types::{HostFunction, MicaCFunc, MicaResult, MicaVm};
+use super::types::{HostFunction, MocaCFunc, MocaResult, MocaVm};
 use super::vm_ffi::get_wrapper_mut;
 use std::ffi::{c_char, CStr};
 
-/// Call a mica function by name.
+/// Call a moca function by name.
 ///
 /// Arguments must be pushed onto the stack before calling.
 /// The result will be on the stack after a successful call.
@@ -17,29 +17,29 @@ use std::ffi::{c_char, CStr};
 /// - `nargs`: Number of arguments on the stack
 ///
 /// # Returns
-/// - `MICA_OK` on success
-/// - `MICA_ERROR_NOT_FOUND` if function not found
-/// - `MICA_ERROR_RUNTIME` on execution error
+/// - `MOCA_OK` on success
+/// - `MOCA_ERROR_NOT_FOUND` if function not found
+/// - `MOCA_ERROR_RUNTIME` on execution error
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_call(
-    vm: *mut MicaVm,
+pub unsafe extern "C" fn moca_call(
+    vm: *mut MocaVm,
     func_name: *const c_char,
     nargs: i32,
-) -> MicaResult {
+) -> MocaResult {
     let Some(wrapper) = get_wrapper_mut(vm) else {
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     };
 
     if func_name.is_null() {
         wrapper.set_error("Function name is null");
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     }
 
     let name = match CStr::from_ptr(func_name).to_str() {
         Ok(s) => s,
         Err(_) => {
             wrapper.set_error("Invalid UTF-8 in function name");
-            return MicaResult::ErrorInvalidArg;
+            return MocaResult::ErrorInvalidArg;
         }
     };
 
@@ -50,7 +50,7 @@ pub unsafe extern "C" fn mica_call(
                 "Function '{}' expects {} arguments, got {}",
                 name, host_fn.arity, nargs
             ));
-            return MicaResult::ErrorInvalidArg;
+            return MocaResult::ErrorInvalidArg;
         }
 
         // Call host function
@@ -58,10 +58,10 @@ pub unsafe extern "C" fn mica_call(
         return func(vm);
     }
 
-    // Look for mica function in chunk
+    // Look for moca function in chunk
     let Some(chunk) = &wrapper.chunk else {
         wrapper.set_error("No bytecode loaded");
-        return MicaResult::ErrorNotFound;
+        return MocaResult::ErrorNotFound;
     };
 
     // Find function by name
@@ -79,33 +79,33 @@ pub unsafe extern "C" fn mica_call(
 
     let Some(_func_idx) = func_idx else {
         wrapper.set_error(format!("Function '{}' not found", name));
-        return MicaResult::ErrorNotFound;
+        return MocaResult::ErrorNotFound;
     };
 
     // TODO: Implement actual function call
     // This requires transferring values from ffi_stack to VM stack,
     // executing the function, and transferring result back
     wrapper.set_error("Function calls not yet implemented");
-    MicaResult::ErrorRuntime
+    MocaResult::ErrorRuntime
 }
 
 /// Protected call - catches errors instead of aborting.
 ///
-/// Same as `mica_call`, but errors are caught and returned as a result code
+/// Same as `moca_call`, but errors are caught and returned as a result code
 /// instead of propagating.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_pcall(
-    vm: *mut MicaVm,
+pub unsafe extern "C" fn moca_pcall(
+    vm: *mut MocaVm,
     func_name: *const c_char,
     nargs: i32,
-) -> MicaResult {
+) -> MocaResult {
     // For now, pcall is the same as call since we already return error codes
-    mica_call(vm, func_name, nargs)
+    moca_call(vm, func_name, nargs)
 }
 
 /// Register a host function.
 ///
-/// The function can then be called from mica code.
+/// The function can then be called from moca code.
 ///
 /// # Arguments
 /// - `vm`: Valid VM instance
@@ -113,26 +113,26 @@ pub unsafe extern "C" fn mica_pcall(
 /// - `func`: Function pointer
 /// - `arity`: Number of arguments the function expects
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_register_function(
-    vm: *mut MicaVm,
+pub unsafe extern "C" fn moca_register_function(
+    vm: *mut MocaVm,
     name: *const c_char,
-    func: MicaCFunc,
+    func: MocaCFunc,
     arity: i32,
-) -> MicaResult {
+) -> MocaResult {
     let Some(wrapper) = get_wrapper_mut(vm) else {
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     };
 
     if name.is_null() {
         wrapper.set_error("Function name is null");
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     }
 
     let name_str = match CStr::from_ptr(name).to_str() {
         Ok(s) => s.to_string(),
         Err(_) => {
             wrapper.set_error("Invalid UTF-8 in function name");
-            return MicaResult::ErrorInvalidArg;
+            return MocaResult::ErrorInvalidArg;
         }
     };
 
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn mica_register_function(
         },
     );
 
-    MicaResult::Ok
+    MocaResult::Ok
 }
 
 /// Set a global variable.
@@ -155,23 +155,23 @@ pub unsafe extern "C" fn mica_register_function(
 /// - `vm`: Valid VM instance
 /// - `name`: Global variable name (null-terminated)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_set_global(
-    vm: *mut MicaVm,
+pub unsafe extern "C" fn moca_set_global(
+    vm: *mut MocaVm,
     name: *const c_char,
-) -> MicaResult {
+) -> MocaResult {
     let Some(wrapper) = get_wrapper_mut(vm) else {
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     };
 
     if name.is_null() {
         wrapper.set_error("Global name is null");
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     }
 
     // Pop value from FFI stack
     let Some(value) = wrapper.ffi_stack.pop() else {
         wrapper.set_error("Stack is empty");
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     };
 
     // Convert name to Rust string
@@ -179,14 +179,14 @@ pub unsafe extern "C" fn mica_set_global(
         Ok(s) => s.to_string(),
         Err(_) => {
             wrapper.set_error("Invalid UTF-8 in global name");
-            return MicaResult::ErrorInvalidArg;
+            return MocaResult::ErrorInvalidArg;
         }
     };
 
     // Store the global
     wrapper.globals.insert(name_str, value);
     wrapper.clear_error();
-    MicaResult::Ok
+    MocaResult::Ok
 }
 
 /// Get a global variable.
@@ -197,17 +197,17 @@ pub unsafe extern "C" fn mica_set_global(
 /// - `vm`: Valid VM instance
 /// - `name`: Global variable name (null-terminated)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mica_get_global(
-    vm: *mut MicaVm,
+pub unsafe extern "C" fn moca_get_global(
+    vm: *mut MocaVm,
     name: *const c_char,
-) -> MicaResult {
+) -> MocaResult {
     let Some(wrapper) = get_wrapper_mut(vm) else {
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     };
 
     if name.is_null() {
         wrapper.set_error("Global name is null");
-        return MicaResult::ErrorInvalidArg;
+        return MocaResult::ErrorInvalidArg;
     }
 
     // Convert name to Rust string
@@ -215,72 +215,72 @@ pub unsafe extern "C" fn mica_get_global(
         Ok(s) => s,
         Err(_) => {
             wrapper.set_error("Invalid UTF-8 in global name");
-            return MicaResult::ErrorInvalidArg;
+            return MocaResult::ErrorInvalidArg;
         }
     };
 
     // Look up the global
     let Some(value) = wrapper.globals.get(name_str).cloned() else {
         wrapper.set_error(format!("Global '{}' not found", name_str));
-        return MicaResult::ErrorNotFound;
+        return MocaResult::ErrorNotFound;
     };
 
     // Push onto FFI stack
     wrapper.ffi_stack.push(value);
     wrapper.clear_error();
-    MicaResult::Ok
+    MocaResult::Ok
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ffi::stack::*;
-    use crate::ffi::vm_ffi::{mica_vm_free, mica_vm_new};
+    use crate::ffi::vm_ffi::{moca_vm_free, moca_vm_new};
     use std::ffi::CString;
 
     #[test]
     fn test_register_host_function() {
-        unsafe extern "C" fn add_fn(vm: *mut MicaVm) -> MicaResult {
+        unsafe extern "C" fn add_fn(vm: *mut MocaVm) -> MocaResult {
             unsafe {
-                let a = mica_to_i64(vm, 0);
-                let b = mica_to_i64(vm, 1);
-                mica_pop(vm, 2);
-                mica_push_i64(vm, a + b);
-                MicaResult::Ok
+                let a = moca_to_i64(vm, 0);
+                let b = moca_to_i64(vm, 1);
+                moca_pop(vm, 2);
+                moca_push_i64(vm, a + b);
+                MocaResult::Ok
             }
         }
 
         unsafe {
-            let vm = mica_vm_new();
+            let vm = moca_vm_new();
             let name = CString::new("add").unwrap();
 
-            let result = mica_register_function(vm, name.as_ptr(), add_fn, 2);
-            assert_eq!(result, MicaResult::Ok);
+            let result = moca_register_function(vm, name.as_ptr(), add_fn, 2);
+            assert_eq!(result, MocaResult::Ok);
 
             // Push arguments and call
-            mica_push_i64(vm, 10);
-            mica_push_i64(vm, 20);
+            moca_push_i64(vm, 10);
+            moca_push_i64(vm, 20);
 
-            let result = mica_call(vm, name.as_ptr(), 2);
-            assert_eq!(result, MicaResult::Ok);
+            let result = moca_call(vm, name.as_ptr(), 2);
+            assert_eq!(result, MocaResult::Ok);
 
             // Check result
-            assert_eq!(mica_to_i64(vm, -1), 30);
+            assert_eq!(moca_to_i64(vm, -1), 30);
 
-            mica_vm_free(vm);
+            moca_vm_free(vm);
         }
     }
 
     #[test]
     fn test_call_not_found() {
         unsafe {
-            let vm = mica_vm_new();
+            let vm = moca_vm_new();
             let name = CString::new("nonexistent").unwrap();
 
-            let result = mica_call(vm, name.as_ptr(), 0);
-            assert_eq!(result, MicaResult::ErrorNotFound);
+            let result = moca_call(vm, name.as_ptr(), 0);
+            assert_eq!(result, MocaResult::ErrorNotFound);
 
-            mica_vm_free(vm);
+            moca_vm_free(vm);
         }
     }
 }

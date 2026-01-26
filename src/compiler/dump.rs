@@ -1392,15 +1392,15 @@ mod tests {
     use crate::compiler::resolver::Resolver;
 
     fn parse(source: &str) -> Program {
-        let mut lexer = Lexer::new("test.mica", source);
+        let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
-        let mut parser = Parser::new("test.mica", tokens);
+        let mut parser = Parser::new("test.mc", tokens);
         parser.parse().unwrap()
     }
 
     fn resolve(source: &str) -> ResolvedProgram {
         let program = parse(source);
-        let mut resolver = Resolver::new("test.mica");
+        let mut resolver = Resolver::new("test.mc");
         resolver.resolve(program).unwrap()
     }
 
@@ -1486,7 +1486,7 @@ mod tests {
     fn compile(source: &str) -> Chunk {
         use crate::compiler::{Codegen, Resolver};
         let program = parse(source);
-        let mut resolver = Resolver::new("test.mica");
+        let mut resolver = Resolver::new("test.mc");
         let resolved = resolver.resolve(program).unwrap();
         let mut codegen = Codegen::new();
         codegen.compile(resolved).unwrap()

@@ -1,16 +1,16 @@
 use std::process::Command;
 
-fn run_mica(source: &str) -> (String, String, bool) {
+fn run_moca(source: &str) -> (String, String, bool) {
     // Use a unique temp file per test to avoid conflicts in parallel runs
     let temp_dir = std::env::temp_dir();
     let unique_id = std::thread::current().id();
-    let temp_file = temp_dir.join(format!("mica_test_{:?}.mica", unique_id));
+    let temp_file = temp_dir.join(format!("moca_test_{:?}.mc", unique_id));
     std::fs::write(&temp_file, source).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_mica"))
+    let output = Command::new(env!("CARGO_BIN_EXE_moca"))
         .args(["run", temp_file.to_str().unwrap()])
         .output()
-        .expect("failed to execute mica");
+        .expect("failed to execute moca");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -22,13 +22,13 @@ fn run_mica(source: &str) -> (String, String, bool) {
 }
 
 fn assert_success(source: &str) -> String {
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(success, "program should succeed, stderr:\n{}", stderr);
     stdout
 }
 
 fn assert_failure(source: &str) -> String {
-    let (_, stderr, success) = run_mica(source);
+    let (_, stderr, success) = run_moca(source);
     assert!(!success, "program should fail");
     stderr
 }
@@ -398,20 +398,20 @@ print(t);
 
 // ===== v3 Feature Tests: JIT and GC =====
 
-fn run_mica_with_args(source: &str, args: &[&str]) -> (String, String, bool) {
+fn run_moca_with_args(source: &str, args: &[&str]) -> (String, String, bool) {
     let temp_dir = std::env::temp_dir();
     let unique_id = std::thread::current().id();
-    let temp_file = temp_dir.join(format!("mica_test_{:?}.mica", unique_id));
+    let temp_file = temp_dir.join(format!("moca_test_{:?}.mc", unique_id));
     std::fs::write(&temp_file, source).unwrap();
 
     let mut cmd_args = vec!["run"];
     cmd_args.extend(args);
     cmd_args.push(temp_file.to_str().unwrap());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_mica"))
+    let output = Command::new(env!("CARGO_BIN_EXE_moca"))
         .args(&cmd_args)
         .output()
-        .expect("failed to execute mica");
+        .expect("failed to execute moca");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -438,7 +438,7 @@ fun sum(n) {
 
 print(sum(100));
 "#;
-    let (stdout, _stderr, success) = run_mica_with_args(source, &["--jit=off"]);
+    let (stdout, _stderr, success) = run_moca_with_args(source, &["--jit=off"]);
     assert!(success, "JIT=off mode should work");
     assert_eq!(stdout.trim(), "4950");
 }
@@ -459,7 +459,7 @@ while i < 10 {
 print("done");
 "#;
     let (stdout, stderr, success) =
-        run_mica_with_args(source, &["--trace-jit", "--jit-threshold=5"]);
+        run_moca_with_args(source, &["--trace-jit", "--jit-threshold=5"]);
     assert!(success, "trace-jit should work");
     assert_eq!(stdout.trim(), "done");
     // Should contain JIT trace information
@@ -493,7 +493,7 @@ while j < 20 {
 print(total);
 "#;
     let (stdout, stderr, success) =
-        run_mica_with_args(source, &["--trace-jit", "--jit-threshold=10"]);
+        run_moca_with_args(source, &["--trace-jit", "--jit-threshold=10"]);
     assert!(success, "hot function detection should work");
     assert_eq!(stdout.trim(), "200");
     // Should detect hot function
@@ -527,11 +527,11 @@ while k < 50 {
 print(total);
 "#;
     // Run with JIT off
-    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    let (stdout_off, _, success_off) = run_moca_with_args(source, &["--jit=off"]);
     assert!(success_off, "JIT off should succeed");
 
     // Run with JIT on (low threshold to ensure JIT is used)
-    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    let (stdout_on, _, success_on) = run_moca_with_args(source, &["--jit=on", "--jit-threshold=5"]);
     assert!(success_on, "JIT on should succeed");
 
     // Results must match
@@ -572,10 +572,10 @@ while j < 20 {
 }
 print(result);
 "#;
-    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    let (stdout_off, _, success_off) = run_moca_with_args(source, &["--jit=off"]);
     assert!(success_off, "JIT off should succeed");
 
-    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    let (stdout_on, _, success_on) = run_moca_with_args(source, &["--jit=on", "--jit-threshold=5"]);
     assert!(success_on, "JIT on should succeed");
 
     assert_eq!(
@@ -605,10 +605,10 @@ while i < 100 {
 }
 print(sum);
 "#;
-    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    let (stdout_off, _, success_off) = run_moca_with_args(source, &["--jit=off"]);
     assert!(success_off, "JIT off should succeed");
 
-    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    let (stdout_on, _, success_on) = run_moca_with_args(source, &["--jit=on", "--jit-threshold=5"]);
     assert!(success_on, "JIT on should succeed");
 
     assert_eq!(
@@ -644,10 +644,10 @@ while j < 30 {
 }
 print(total);
 "#;
-    let (stdout_off, _, success_off) = run_mica_with_args(source, &["--jit=off"]);
+    let (stdout_off, _, success_off) = run_moca_with_args(source, &["--jit=off"]);
     assert!(success_off, "JIT off should succeed");
 
-    let (stdout_on, _, success_on) = run_mica_with_args(source, &["--jit=on", "--jit-threshold=5"]);
+    let (stdout_on, _, success_on) = run_moca_with_args(source, &["--jit=on", "--jit-threshold=5"]);
     assert!(success_on, "JIT on should succeed");
 
     assert_eq!(
@@ -672,7 +672,7 @@ fun allocate_arrays() {
 allocate_arrays();
 print("done");
 "#;
-    let (stdout, stderr, success) = run_mica_with_args(source, &["--gc-stats"]);
+    let (stdout, stderr, success) = run_moca_with_args(source, &["--gc-stats"]);
     assert!(success, "gc-stats should work");
     assert_eq!(stdout.trim(), "done");
     // Should contain GC statistics
@@ -700,7 +700,7 @@ fun sum_to(n) {
 print(sum_to(100));
 print(sum_to(1000));
 "#;
-    let (stdout, _, success) = run_mica_with_args(source, &["--jit=on"]);
+    let (stdout, _, success) = run_moca_with_args(source, &["--jit=on"]);
     assert!(success, "quickening should work");
     let lines: Vec<&str> = stdout.trim().lines().collect();
     assert_eq!(lines[0], "5050");
@@ -719,7 +719,7 @@ while i < 100 {
 }
 print(len(arr));
 "#;
-    let (stdout, _, success) = run_mica_with_args(source, &["--gc-mode=concurrent"]);
+    let (stdout, _, success) = run_moca_with_args(source, &["--gc-mode=concurrent"]);
     assert!(success, "concurrent GC mode should work");
     assert_eq!(stdout.trim(), "100");
 }
@@ -744,7 +744,7 @@ let handle = spawn(worker);
 let result = join(handle);
 print(result);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(success, "thread spawn/join should work, stderr: {}", stderr);
     assert_eq!(stdout.trim(), "4950");
 }
@@ -767,7 +767,7 @@ let b = recv(receiver_id);
 print(a);
 print(b);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(success, "channel send/recv should work, stderr: {}", stderr);
     assert_eq!(stdout, "42\n100\n");
 }
@@ -790,7 +790,7 @@ let handle = spawn(worker);
 let result = join(handle);
 print(result);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(
         success,
         "thread with computation should work, stderr: {}",
@@ -813,7 +813,7 @@ struct Point {
 let p = Point { x: 10, y: 20 };
 print(p);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(success, "struct creation should work, stderr: {}", stderr);
     // Struct is compiled as an array [x_value, y_value]
     assert_eq!(stdout.trim(), "[10, 20]");
@@ -832,7 +832,7 @@ let p = Point { x: 5, y: 15 };
 print(p[0]);
 print(p[1]);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(
         success,
         "struct field access should work, stderr: {}",
@@ -863,7 +863,7 @@ let p1 = make_point(3, 7);
 let result = sum_point(p1);
 print(result);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(
         success,
         "struct in function should work, stderr: {}",
@@ -888,7 +888,7 @@ print(u1[1]);
 print(u2[0]);
 print(u2[1]);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(
         success,
         "struct with nullable field should work, stderr: {}",
@@ -917,7 +917,7 @@ print(p[0]);
 print(r[0]);
 print(r[1]);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(success, "multiple structs should work, stderr: {}", stderr);
     assert_eq!(stdout, "1\n10\n20\n");
 }
@@ -935,7 +935,7 @@ let p = Point { x: 10, y: 20 };
 print(p.x);
 print(p.y);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(
         success,
         "struct field access with dot syntax should work, stderr: {}",
@@ -957,7 +957,7 @@ print(c.value);
 c.value = 42;
 print(c.value);
 "#;
-    let (stdout, stderr, success) = run_mica(source);
+    let (stdout, stderr, success) = run_moca(source);
     assert!(
         success,
         "struct field mutation should work, stderr: {}",
@@ -970,20 +970,20 @@ print(c.value);
 // Dump Options Tests
 // ============================================================================
 
-/// Run mica with file path first, then additional args (for dump options)
-fn run_mica_with_trailing_args(source: &str, args: &[&str]) -> (String, String, bool) {
+/// Run moca with file path first, then additional args (for dump options)
+fn run_moca_with_trailing_args(source: &str, args: &[&str]) -> (String, String, bool) {
     let temp_dir = std::env::temp_dir();
     let unique_id = std::thread::current().id();
-    let temp_file = temp_dir.join(format!("mica_test_{:?}.mica", unique_id));
+    let temp_file = temp_dir.join(format!("moca_test_{:?}.mc", unique_id));
     std::fs::write(&temp_file, source).unwrap();
 
     let mut cmd_args = vec!["run", temp_file.to_str().unwrap()];
     cmd_args.extend(args);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_mica"))
+    let output = Command::new(env!("CARGO_BIN_EXE_moca"))
         .args(&cmd_args)
         .output()
-        .expect("failed to execute mica");
+        .expect("failed to execute moca");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -1001,7 +1001,7 @@ fn test_dump_ast() {
 let x = 1 + 2;
 print(x);
 "#;
-    let (stdout, stderr, success) = run_mica_with_trailing_args(source, &["--dump-ast"]);
+    let (stdout, stderr, success) = run_moca_with_trailing_args(source, &["--dump-ast"]);
     assert!(
         success,
         "program should succeed with --dump-ast, stderr: {}",
@@ -1032,7 +1032,7 @@ let x = 42;
 print(x);
 "#;
     let (stdout, stderr, success) =
-        run_mica_with_trailing_args(source, &["--dump-ast", "--dump-bytecode"]);
+        run_moca_with_trailing_args(source, &["--dump-ast", "--dump-bytecode"]);
     assert!(success, "program should succeed with multiple dump options");
     // Check both dumps are present in stderr
     assert!(
@@ -1060,9 +1060,9 @@ print(x);
 "#;
     let temp_dir = std::env::temp_dir();
     let unique_id = std::thread::current().id();
-    let dump_file = temp_dir.join(format!("mica_dump_{:?}.txt", unique_id));
+    let dump_file = temp_dir.join(format!("moca_dump_{:?}.txt", unique_id));
 
-    let (stdout, stderr, success) = run_mica_with_trailing_args(
+    let (stdout, stderr, success) = run_moca_with_trailing_args(
         source,
         &[&format!("--dump-bytecode={}", dump_file.to_str().unwrap())],
     );

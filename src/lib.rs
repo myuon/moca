@@ -1,6 +1,6 @@
-//! Mica - A minimal programming language
+//! Moca - A minimal programming language
 //!
-//! This library provides the mica virtual machine and compiler.
+//! This library provides the moca virtual machine and compiler.
 //! For C/C++ embedding, use the FFI module functions.
 
 pub mod compiler;

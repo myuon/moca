@@ -5,10 +5,10 @@ use std::io::Write;
 use std::process::Command;
 use std::time::Duration;
 
-/// Run mica with the given source code and CLI args, return execution time
-fn run_mica_timed(source: &str, args: &[&str]) -> Duration {
+/// Run moca with the given source code and CLI args, return execution time
+fn run_moca_timed(source: &str, args: &[&str]) -> Duration {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("mica_bench_{}.mica", std::process::id()));
+    let temp_file = temp_dir.join(format!("moca_bench_{}.mc", std::process::id()));
     std::fs::write(&temp_file, source).unwrap();
 
     let start = std::time::Instant::now();
@@ -17,10 +17,10 @@ fn run_mica_timed(source: &str, args: &[&str]) -> Duration {
     cmd_args.extend(args);
     cmd_args.push(temp_file.to_str().unwrap());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_mica"))
+    let output = Command::new(env!("CARGO_BIN_EXE_moca"))
         .args(&cmd_args)
         .output()
-        .expect("failed to execute mica");
+        .expect("failed to execute moca");
 
     let elapsed = start.elapsed();
 
@@ -157,28 +157,28 @@ fn bench_interpreter_vs_quickening(c: &mut Criterion) {
     // Sum loop benchmark
     let source = sum_loop_source(10000);
     group.bench_function("sum_loop_interpreter", |b| {
-        b.iter(|| run_mica_timed(black_box(&source), &["--jit=off"]))
+        b.iter(|| run_moca_timed(black_box(&source), &["--jit=off"]))
     });
     group.bench_function("sum_loop_quickening", |b| {
-        b.iter(|| run_mica_timed(black_box(&source), &["--jit=on"]))
+        b.iter(|| run_moca_timed(black_box(&source), &["--jit=on"]))
     });
 
     // Nested loop benchmark
     let source = nested_loop_source(100);
     group.bench_function("nested_loop_interpreter", |b| {
-        b.iter(|| run_mica_timed(black_box(&source), &["--jit=off"]))
+        b.iter(|| run_moca_timed(black_box(&source), &["--jit=off"]))
     });
     group.bench_function("nested_loop_quickening", |b| {
-        b.iter(|| run_mica_timed(black_box(&source), &["--jit=on"]))
+        b.iter(|| run_moca_timed(black_box(&source), &["--jit=on"]))
     });
 
     // Hot function benchmark (many calls to same function)
     let source = hot_function_source(1000, 100);
     group.bench_function("hot_function_interpreter", |b| {
-        b.iter(|| run_mica_timed(black_box(&source), &["--jit=off"]))
+        b.iter(|| run_moca_timed(black_box(&source), &["--jit=off"]))
     });
     group.bench_function("hot_function_quickening", |b| {
-        b.iter(|| run_mica_timed(black_box(&source), &["--jit=on", "--jit-threshold=100"]))
+        b.iter(|| run_moca_timed(black_box(&source), &["--jit=on", "--jit-threshold=100"]))
     });
 
     group.finish();
@@ -191,10 +191,10 @@ fn bench_fibonacci(c: &mut Criterion) {
     for n in [15, 20, 25] {
         let source = fibonacci_source(n);
         group.bench_with_input(BenchmarkId::new("interpreter", n), &source, |b, s| {
-            b.iter(|| run_mica_timed(black_box(s), &["--jit=off"]))
+            b.iter(|| run_moca_timed(black_box(s), &["--jit=off"]))
         });
         group.bench_with_input(BenchmarkId::new("quickening", n), &source, |b, s| {
-            b.iter(|| run_mica_timed(black_box(s), &["--jit=on"]))
+            b.iter(|| run_moca_timed(black_box(s), &["--jit=on"]))
         });
     }
 
@@ -208,10 +208,10 @@ fn bench_array_operations(c: &mut Criterion) {
     for n in [100, 500, 1000] {
         let source = array_bench_source(n);
         group.bench_with_input(BenchmarkId::new("interpreter", n), &source, |b, s| {
-            b.iter(|| run_mica_timed(black_box(s), &["--jit=off"]))
+            b.iter(|| run_moca_timed(black_box(s), &["--jit=off"]))
         });
         group.bench_with_input(BenchmarkId::new("quickening", n), &source, |b, s| {
-            b.iter(|| run_mica_timed(black_box(s), &["--jit=on"]))
+            b.iter(|| run_moca_timed(black_box(s), &["--jit=on"]))
         });
     }
 

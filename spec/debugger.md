@@ -3,13 +3,13 @@ title: Debugger Specification
 description: TUI デバッガーの仕様。ブレークポイント、ステップ実行、変数検査、コールスタック確認機能を提供。
 ---
 
-# Mica Debugger Specification
+# Moca Debugger Specification
 
-This document defines the TUI debugger for the Mica language.
+This document defines the TUI debugger for the Moca language.
 
 ## Overview
 
-The Mica debugger provides:
+The Moca debugger provides:
 - Breakpoint management
 - Step execution
 - Variable inspection
@@ -18,7 +18,7 @@ The Mica debugger provides:
 ## Starting the Debugger
 
 ```bash
-mica debug [file]
+moca debug [file]
 ```
 
 ## Commands
@@ -42,7 +42,7 @@ mica debug [file]
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ src/main.mica                                           │
+│ src/main.mc                                             │
 ├─────────────────────────────────────────────────────────┤
 │   8 │ fn main() {                                       │
 │   9 │     let x = 10;                                   │
@@ -51,7 +51,7 @@ mica debug [file]
 │  12 │ }                                                 │
 ├─────────────────────────────────────────────────────────┤
 │ Locals              │ Call Stack                        │
-│ x = 10              │ #0 main (main.mica:10)            │
+│ x = 10              │ #0 main (main.mc:10)              │
 │ y = <uninitialized> │                                   │
 ├─────────────────────────────────────────────────────────┤
 │ (debug) _                                               │
@@ -109,15 +109,15 @@ struct LocalVarInfo {
 ## Example Session
 
 ```
-$ mica debug example.mica
+$ moca debug example.mc
 
-Loading example.mica...
+Loading example.mc...
 (debug) b add
-Breakpoint 1 set at add (example.mica:1)
+Breakpoint 1 set at add (example.mc:1)
 
 (debug) c
 Running...
-Hit breakpoint 1 at add (example.mica:1)
+Hit breakpoint 1 at add (example.mc:1)
 
 (debug) p a
 a = 3
@@ -130,11 +130,11 @@ a = 3
 b = 4
 
 (debug) bt
-#0  add (example.mica:2)
-#1  main (example.mica:6)
+#0  add (example.mc:2)
+#1  main (example.mc:6)
 
 (debug) n
-Stepped to example.mica:2
+Stepped to example.mc:2
 
 (debug) c
 Output: 7
@@ -160,8 +160,8 @@ Watch 1: a + b = 7
 Set breakpoints that only trigger when a condition is true:
 
 ```
-(debug) b example.mica:10 if i == 5
-Conditional breakpoint 2 set at example.mica:10 (when i == 5)
+(debug) b example.mc:10 if i == 5
+Conditional breakpoint 2 set at example.mc:10 (when i == 5)
 ```
 
 ## Expression Evaluation
