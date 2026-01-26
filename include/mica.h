@@ -93,6 +93,11 @@
 #define TAG_PTR 4
 
 /**
+ * Current bytecode format version
+ */
+#define VERSION 1
+
+/**
  * Result codes for FFI operations.
  *
  * These map to the `mica_result` enum in C.
@@ -592,6 +597,66 @@ void mica_clear_error(MicaVm *vm)
  */
 
 bool mica_has_error(const MicaVm *vm)
+;
+
+/**
+ * Load bytecode from memory.
+ *
+ * This parses and validates the bytecode, making it ready for execution.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance
+ * - `data`: Pointer to bytecode data
+ * - `len`: Length of bytecode data in bytes
+ *
+ * # Returns
+ * - `MICA_OK` on success
+ * - `MICA_ERROR_INVALID_ARG` if data is NULL
+ * - `MICA_ERROR_VERIFY` if bytecode is invalid
+ */
+
+MicaResult mica_load_chunk(MicaVm *vm,
+                           const uint8_t *data,
+                           uintptr_t len)
+;
+
+/**
+ * Load bytecode from a file.
+ *
+ * This reads the file, parses the bytecode, and validates it.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance
+ * - `path`: Path to bytecode file (null-terminated)
+ *
+ * # Returns
+ * - `MICA_OK` on success
+ * - `MICA_ERROR_INVALID_ARG` if path is NULL
+ * - `MICA_ERROR_NOT_FOUND` if file cannot be read
+ * - `MICA_ERROR_VERIFY` if bytecode is invalid
+ */
+
+MicaResult mica_load_file(MicaVm *vm,
+                          const char *path)
+;
+
+/**
+ * Save bytecode to a file.
+ *
+ * This serializes the currently loaded chunk to a file.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance with a loaded chunk
+ * - `path`: Path to output file (null-terminated)
+ *
+ * # Returns
+ * - `MICA_OK` on success
+ * - `MICA_ERROR_INVALID_ARG` if no chunk is loaded or path is NULL
+ * - `MICA_ERROR_RUNTIME` if file cannot be written
+ */
+
+MicaResult mica_save_file(MicaVm *vm,
+                          const char *path)
 ;
 
 #endif  /* MICA_H */

@@ -86,6 +86,8 @@ pub(crate) struct VmWrapper {
     pub host_functions: std::collections::HashMap<String, HostFunction>,
     /// FFI stack for passing values between host and VM
     pub ffi_stack: Vec<crate::vm::Value>,
+    /// Global variables accessible via FFI
+    pub globals: std::collections::HashMap<String, crate::vm::Value>,
 }
 
 /// A registered host function.
@@ -104,6 +106,7 @@ impl VmWrapper {
             error_userdata: std::ptr::null_mut(),
             host_functions: std::collections::HashMap::new(),
             ffi_stack: Vec::with_capacity(64),
+            globals: std::collections::HashMap::new(),
         }
     }
 

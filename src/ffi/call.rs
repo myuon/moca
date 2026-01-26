@@ -168,9 +168,25 @@ pub unsafe extern "C" fn mica_set_global(
         return MicaResult::ErrorInvalidArg;
     }
 
-    // TODO: Implement globals storage
-    wrapper.set_error("Globals not yet implemented");
-    MicaResult::ErrorRuntime
+    // Pop value from FFI stack
+    let Some(value) = wrapper.ffi_stack.pop() else {
+        wrapper.set_error("Stack is empty");
+        return MicaResult::ErrorInvalidArg;
+    };
+
+    // Convert name to Rust string
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            wrapper.set_error("Invalid UTF-8 in global name");
+            return MicaResult::ErrorInvalidArg;
+        }
+    };
+
+    // Store the global
+    wrapper.globals.insert(name_str, value);
+    wrapper.clear_error();
+    MicaResult::Ok
 }
 
 /// Get a global variable.
@@ -194,9 +210,25 @@ pub unsafe extern "C" fn mica_get_global(
         return MicaResult::ErrorInvalidArg;
     }
 
-    // TODO: Implement globals storage
-    wrapper.set_error("Globals not yet implemented");
-    MicaResult::ErrorNotFound
+    // Convert name to Rust string
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            wrapper.set_error("Invalid UTF-8 in global name");
+            return MicaResult::ErrorInvalidArg;
+        }
+    };
+
+    // Look up the global
+    let Some(value) = wrapper.globals.get(name_str).cloned() else {
+        wrapper.set_error(format!("Global '{}' not found", name_str));
+        return MicaResult::ErrorNotFound;
+    };
+
+    // Push onto FFI stack
+    wrapper.ffi_stack.push(value);
+    wrapper.clear_error();
+    MicaResult::Ok
 }
 
 #[cfg(test)]

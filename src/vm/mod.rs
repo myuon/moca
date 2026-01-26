@@ -1,6 +1,7 @@
 // Some fields are stored for future use
 #![allow(dead_code)]
 
+pub mod bytecode;
 pub mod concurrent_gc;
 pub mod debug;
 mod heap;

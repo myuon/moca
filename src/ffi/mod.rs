@@ -15,6 +15,7 @@ mod vm_ffi;
 mod stack;
 mod call;
 mod error;
+mod load;
 
 // Re-export all FFI types and functions for public use
 #[allow(unused_imports)]
@@ -27,6 +28,8 @@ pub use stack::*;
 pub use call::*;
 #[allow(unused_imports)]
 pub use error::*;
+#[allow(unused_imports)]
+pub use load::*;
 
 /// Version information
 pub const MICA_VERSION_MAJOR: u32 = 0;
