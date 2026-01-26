@@ -33,6 +33,8 @@ pub enum VerifyError {
     EmptyFunction,
     /// Function does not end with Ret
     MissingReturn,
+    /// Missing StackMap entry at safepoint
+    MissingStackMap { pc: usize },
 }
 
 impl std::fmt::Display for VerifyError {
@@ -67,6 +69,9 @@ impl std::fmt::Display for VerifyError {
             }
             VerifyError::MissingReturn => {
                 write!(f, "function does not end with Ret")
+            }
+            VerifyError::MissingStackMap { pc } => {
+                write!(f, "missing StackMap entry at safepoint pc={}", pc)
             }
         }
     }
@@ -123,6 +128,30 @@ impl Verifier {
 
         // Verify stack heights
         self.verify_stack_heights(func, &cfg)?;
+
+        // Verify StackMap if present
+        if let Some(ref stackmap) = func.stackmap {
+            self.verify_stackmap(func, stackmap)?;
+        }
+
+        Ok(())
+    }
+
+    /// Verify StackMap entries exist at all safepoints
+    pub fn verify_stackmap(
+        &self,
+        func: &Function,
+        stackmap: &super::stackmap::FunctionStackMap,
+    ) -> Result<(), VerifyError> {
+        use super::stackmap::is_safepoint;
+
+        for (pc, op) in func.code.iter().enumerate() {
+            if is_safepoint(op, pc) {
+                if !stackmap.has_safepoint(pc as u32) {
+                    return Err(VerifyError::MissingStackMap { pc });
+                }
+            }
+        }
 
         Ok(())
     }
@@ -495,6 +524,55 @@ mod tests {
             Op::PushNull,       // 3
             Op::Ret,            // 4
         ]);
+        assert!(verifier.verify_function(&func).is_ok());
+    }
+
+    #[test]
+    fn test_stackmap_verification_missing() {
+        use crate::vm::stackmap::{FunctionStackMap, StackMapEntry};
+
+        let verifier = Verifier::new();
+        let mut func = Function {
+            name: "test".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(1),
+                Op::Call(0, 0),  // safepoint at pc=1
+                Op::Ret,
+            ],
+            stackmap: Some(FunctionStackMap::new()), // Empty stackmap
+        };
+
+        // Should fail because Call is a safepoint but no StackMap entry exists
+        let result = verifier.verify_function(&func);
+        assert!(matches!(result, Err(VerifyError::MissingStackMap { pc: 1 })));
+
+        // Add StackMap entry for the safepoint
+        let mut stackmap = FunctionStackMap::new();
+        stackmap.add_entry(StackMapEntry::new(1, 1)); // pc=1, stack_height=1
+        func.stackmap = Some(stackmap);
+
+        // Should pass now
+        assert!(verifier.verify_function(&func).is_ok());
+    }
+
+    #[test]
+    fn test_no_stackmap_skips_verification() {
+        let verifier = Verifier::new();
+        let func = Function {
+            name: "test".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(1),
+                Op::Call(0, 0),  // safepoint, but no stackmap
+                Op::Ret,
+            ],
+            stackmap: None, // No stackmap, verification skipped
+        };
+
+        // Should pass because stackmap is None
         assert!(verifier.verify_function(&func).is_ok());
     }
 }
