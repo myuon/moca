@@ -1123,6 +1123,7 @@ impl VM {
                             Op::Call(func_index, 0), // Call the target function (must be 0-arity)
                             Op::Ret,                 // Return the result
                         ],
+                        stackmap: None,
                     };
 
                     let thread_chunk = Chunk {
@@ -1581,6 +1582,7 @@ mod tests {
                 arity: 0,
                 locals_count: 0,
                 code: ops,
+                stackmap: None,
             },
             strings: vec![],
             debug: None,
@@ -1599,6 +1601,7 @@ mod tests {
                 arity: 0,
                 locals_count: 0,
                 code: ops,
+                stackmap: None,
             },
             strings,
             debug: None,

@@ -388,6 +388,7 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code,
+            stackmap: None,
         }
     }
 

@@ -104,6 +104,7 @@ impl Codegen {
             arity: 0,
             locals_count: 0, // TODO: track main locals
             code: main_ops,
+            stackmap: None, // TODO: generate StackMap
         };
 
         let debug = if self.emit_debug {
@@ -138,6 +139,7 @@ impl Codegen {
             arity: func.params.len(),
             locals_count: func.locals_count,
             code: ops,
+            stackmap: None, // TODO: generate StackMap
         })
     }
 
