@@ -1,29 +1,36 @@
-# Phase 2: C ABI / Embed Mode Specification
+---
+title: micaVM C API Specification
+version: 0.1.0
+status: implemented
+---
 
-> Status: **Implemented**
+# micaVM C API Specification
 
-## 1. Goal
+## 1. Overview
 
-BCVM v0のC言語APIを設計・実装し、ホストアプリケーションからVMを組み込み利用可能にする。
+micaVMのC言語APIを定義。ホストアプリケーションからVMを組み込み利用可能にする。
 Luaライクな軽量組み込みランタイムとして、C/C++アプリケーションへの統合を実現する。
 
-## 2. Non-Goals
+## 2. Scope
 
-- **Moving GC**: v0では非対応
-- **Direct host memory access**: VMが全オブジェクトを所有（ホストは不透明ハンドル経由）
-- **Async/await support**: 同期APIのみ
-- **Hot reloading**: バイトコード差し替えは再初期化が必要
-- **Thread-safe API**: 単一スレッドからの呼び出しを前提（マルチスレッド対応はv1以降）
+### In Scope
+- VM lifecycle (create, free)
+- Stack operations (push, pop, type checks)
+- Function calls (mica functions, host functions)
+- Bytecode loading/saving
+- Error handling
+- Globals API
 
-## 3. Target Users
+### Out of Scope
+- Moving GC (v1以降)
+- Direct host memory access (VMが全オブジェクトを所有)
+- Async/await support (同期APIのみ)
+- Hot reloading (バイトコード差し替えは再初期化が必要)
+- Thread-safe API (単一スレッドからの呼び出しを前提)
 
-- C/C++アプリケーション開発者（ゲームエンジン、エディタ等）
-- Python/Node.js等からFFI経由で利用するユーザー（将来的なバインディング生成対応）
-- 組み込みシステム開発者（軽量スクリプト実行環境として）
+## 3. Basic Usage
 
-## 4. Core User Flow
-
-### 4.1 Basic Embedding Flow
+### 3.1 Embedding Flow
 
 ```c
 #include <mica.h>
@@ -57,7 +64,7 @@ int main() {
 }
 ```
 
-### 4.2 Host Function Registration
+### 3.2 Host Function Registration
 
 ```c
 // Host function: int add(int a, int b)
@@ -73,31 +80,9 @@ mica_result host_add(mica_vm *vm) {
 mica_register_function(vm, "add", host_add, 2);
 ```
 
-## 5. Inputs & Outputs
+## 4. API Reference
 
-### Inputs
-- **Bytecode**: シリアライズされたChunk（バイナリ形式）
-- **Host functions**: C関数ポインタ + メタデータ
-- **Values**: push API経由のI64/F64/Bool/String/Null
-
-### Outputs
-- **Result codes**: `MICA_RESULT_OK`, `MICA_RESULT_ERROR_*`
-- **Error messages**: `mica_get_error()` 経由
-- **Values**: to_*/pop API経由
-
-## 6. Tech Stack
-
-- **言語**: Rust (core) + C (public API)
-- **FFI**: `#[unsafe(no_mangle)]` + `extern "C"`
-- **Header生成**: cbindgen (自動生成)
-- **ビルド成果物**:
-  - `libmica.a` (static library)
-  - `libmica.so` / `libmica.dylib` (shared library)
-  - `include/mica.h` (public header)
-
-## 7. API Reference
-
-### 7.1 Result Codes
+### 4.1 Result Codes
 
 ```c
 typedef enum {
@@ -111,13 +96,13 @@ typedef enum {
 } MicaResult;
 ```
 
-### 7.2 Opaque Types
+### 4.2 Opaque Types
 
 ```c
 typedef struct MicaVm MicaVm;  // VM instance (opaque)
 ```
 
-### 7.3 VM Lifecycle
+### 4.3 VM Lifecycle
 
 ```c
 // Create new VM instance
@@ -134,7 +119,7 @@ void mica_set_error_callback(MicaVm *vm, MicaErrorFn callback, void *userdata);
 bool mica_has_chunk(MicaVm *vm);
 ```
 
-### 7.4 Bytecode Loading
+### 4.4 Bytecode Loading
 
 ```c
 // Load from memory
@@ -147,7 +132,7 @@ MicaResult mica_load_file(MicaVm *vm, const char *path);
 MicaResult mica_save_file(MicaVm *vm, const char *path);
 ```
 
-### 7.5 Stack Operations
+### 4.5 Stack Operations
 
 ```c
 // Push values
@@ -177,7 +162,7 @@ int32_t mica_get_top(MicaVm *vm);
 void mica_set_top(MicaVm *vm, int32_t index);
 ```
 
-### 7.6 Function Calls
+### 4.6 Function Calls
 
 ```c
 // Call mica function by name
@@ -187,7 +172,7 @@ MicaResult mica_call(MicaVm *vm, const char *func_name, int32_t nargs);
 MicaResult mica_pcall(MicaVm *vm, const char *func_name, int32_t nargs);
 ```
 
-### 7.7 Host Function Registration
+### 4.7 Host Function Registration
 
 ```c
 // Host function signature
@@ -198,7 +183,7 @@ MicaResult mica_register_function(MicaVm *vm, const char *name,
                                    MicaCFunc func, int32_t arity);
 ```
 
-### 7.8 Globals
+### 4.8 Globals
 
 ```c
 // Set global (pops value from stack)
@@ -208,7 +193,7 @@ MicaResult mica_set_global(MicaVm *vm, const char *name);
 MicaResult mica_get_global(MicaVm *vm, const char *name);
 ```
 
-### 7.9 Error Handling
+### 4.9 Error Handling
 
 ```c
 // Get last error message
@@ -224,7 +209,7 @@ void mica_clear_error(MicaVm *vm);
 typedef void (*MicaErrorFn)(const char *message, void *userdata);
 ```
 
-### 7.10 Version Info
+### 4.10 Version Info
 
 ```c
 const char *mica_version(void);      // e.g., "0.1.0"
@@ -233,31 +218,31 @@ uint32_t mica_version_minor(void);
 uint32_t mica_version_patch(void);
 ```
 
-## 8. Memory Model
+## 5. Memory Model
 
-### 8.1 Ownership Rules
+### 5.1 Ownership Rules
 
 1. **VM owns all heap objects**: Strings, arrays, objects allocated by VM
 2. **Host gets handles**: Stack indices (read-only access)
 3. **String lifetime**: `mica_to_string()` returns pointer valid until next GC or stack modification
 4. **No host allocation**: Host cannot directly create VM objects (must use push APIs)
 
-### 8.2 GC Integration
+### 5.2 GC Integration
 
 - GC may run at any safepoint during `mica_call`/`mica_pcall`
 - Stack values are GC roots
 - Host must not hold raw pointers across calls
 
-## 9. Bytecode Serialization Format
+## 6. Bytecode Serialization Format
 
-### 9.1 Header
+### 6.1 Header
 
 ```
 Magic: "MICA" (4 bytes)
 Version: u32 (format version = 1)
 ```
 
-### 9.2 Layout
+### 6.2 Layout
 
 ```
 [Header]
@@ -288,22 +273,40 @@ Version: u32 (format version = 1)
 [Has Debug Info]: u8 (0 = no)
 ```
 
-## 10. Acceptance Criteria
+## 7. Build Configuration
 
-| # | Criteria | Status |
-|---|----------|--------|
-| 1 | `mica.h` ヘッダーが生成され、全パブリックAPIが宣言されている | ✅ |
-| 2 | `mica_vm_new()` / `mica_vm_free()` でVMの生成・破棄ができる | ✅ |
-| 3 | `mica_load_chunk()` でバイトコードをロードできる | ✅ |
-| 4 | Stack操作API（push/pop/is_*/to_*）が動作する | ✅ |
-| 5 | `mica_call()` でmica関数を呼び出し、結果を取得できる | ✅ |
-| 6 | `mica_register_function()` でホスト関数を登録・呼び出しできる | ✅ |
-| 7 | エラー発生時に `mica_get_error()` でメッセージを取得できる | ✅ |
-| 8 | バイトコードシリアライズ/デシリアライズが動作する | ✅ |
-| 9 | C言語のテストプログラムが正常に動作する | ✅ |
-| 10 | 静的ライブラリと共有ライブラリがビルドできる | ✅ |
+### 7.1 Cargo.toml
 
-## 11. Implementation Files
+```toml
+[lib]
+name = "mica"
+path = "src/lib.rs"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[build-dependencies]
+cbindgen = "0.28"
+```
+
+### 7.2 Building
+
+```bash
+# Build release library
+cargo build --release
+
+# Outputs:
+# target/release/libmica.so   (shared library)
+# target/release/libmica.a    (static library)
+# include/mica.h              (C header)
+```
+
+### 7.3 Linking C Programs
+
+```bash
+# Compile and link
+gcc -o myapp myapp.c -L./target/release -lmica -Wl,-rpath,./target/release
+```
+
+## 8. Implementation Files
 
 | File | Description |
 |------|-------------|
@@ -319,40 +322,7 @@ Version: u32 (format version = 1)
 | `tests/c/test_ffi.c` | C test suite |
 | `tests/c/Makefile` | C test build |
 
-## 12. Build Configuration
-
-### Cargo.toml
-
-```toml
-[lib]
-name = "mica"
-path = "src/lib.rs"
-crate-type = ["cdylib", "staticlib", "rlib"]
-
-[build-dependencies]
-cbindgen = "0.28"
-```
-
-### Building
-
-```bash
-# Build release library
-cargo build --release
-
-# Outputs:
-# target/release/libmica.so   (shared library)
-# target/release/libmica.a    (static library)
-# include/mica.h              (C header)
-```
-
-### Linking C Programs
-
-```bash
-# Compile and link
-gcc -o myapp myapp.c -L./target/release -lmica -Wl,-rpath,./target/release
-```
-
-## 13. Test Suite
+## 9. Test Suite
 
 ### Running C Tests
 
