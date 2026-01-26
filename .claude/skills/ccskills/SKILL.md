@@ -1,5 +1,5 @@
 ---
-name: cc-custom
+name: ccskills
 description: Claude Codeのカスタマイズを支援。「Claude Codeをカスタマイズしたい」「こういう挙動にしたい」「自動で〇〇したい」などのリクエストに対応し、適切な設定ファイルを作成・配置する。
 argument-hint: [カスタマイズ内容 | update <section> | sync]
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch
@@ -12,17 +12,17 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch
 ## 呼び出し方
 
 ```
-/cc-custom                          # カスタマイズ支援（対話）
-/cc-custom ファイル保存時に自動lint    # 引数付きで呼び出し
-/cc-custom update <section>         # リファレンスの特定セクションを更新
-/cc-custom sync                     # GitHubから最新版を同期
+/ccskills                          # カスタマイズ支援（対話）
+/ccskills ファイル保存時に自動lint    # 引数付きで呼び出し
+/ccskills update <section>         # リファレンスの特定セクションを更新
+/ccskills sync                     # GitHubから最新版を同期
 ```
 
 ---
 
 ## サブコマンド
 
-### `/cc-custom update <section>`
+### `/ccskills update <section>`
 
 reference.mdの指定セクションを公式ドキュメントから更新する。
 
@@ -45,14 +45,14 @@ reference.mdの指定セクションを公式ドキュメントから更新す�
 3. 「最終更新」日付を現在日に更新
 4. 変更内容のサマリーを報告
 
-### `/cc-custom sync`
+### `/ccskills sync`
 
-GitHubリポジトリ https://github.com/myuon/cc-custom から.claudeディレクトリを同期する。
+GitHubリポジトリ https://github.com/myuon/ccskills から.claudeディレクトリを同期する。
 
 **手順**:
 ```bash
 # 1. リモート追加（初回のみ、既にあればスキップ）
-git remote add cccustom-upstream https://github.com/myuon/cc-custom.git 2>/dev/null || true
+git remote add cccustom-upstream https://github.com/myuon/ccskills.git 2>/dev/null || true
 
 # 2. フェッチ
 git fetch cccustom-upstream
