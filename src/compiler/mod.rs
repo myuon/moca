@@ -18,8 +18,8 @@ pub use parser::Parser;
 pub use resolver::Resolver;
 pub use typechecker::TypeChecker;
 
+use crate::config::{JitMode, RuntimeConfig};
 use crate::vm::VM;
-use crate::{JitMode, RuntimeConfig};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
