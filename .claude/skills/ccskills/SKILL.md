@@ -52,13 +52,13 @@ GitHubリポジトリ https://github.com/myuon/ccskills から.claudeディレ�
 **手順**:
 ```bash
 # 1. リモート追加（初回のみ、既にあればスキップ）
-git remote add cccustom-upstream https://github.com/myuon/ccskills.git 2>/dev/null || true
+git remote add ccskills-upstream https://github.com/myuon/ccskills.git 2>/dev/null || true
 
 # 2. フェッチ
-git fetch cccustom-upstream
+git fetch ccskills-upstream
 
 # 3. .claude ディレクトリを上書き
-git checkout cccustom-upstream/main -- .claude
+git checkout ccskills-upstream/main -- .claude
 
 # 4. 結果確認
 git status --short .claude
