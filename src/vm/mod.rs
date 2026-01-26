@@ -8,6 +8,7 @@ pub mod ic;
 mod ops;
 pub mod threads;
 mod value;
+pub mod verifier;
 #[allow(clippy::module_inception)]
 mod vm;
 
@@ -15,6 +16,7 @@ pub use debug::{DebugInfo, FunctionDebugInfo};
 pub use heap::{Heap, HeapObject, ObjectType};
 pub use ops::Op;
 pub use value::Value;
+pub use verifier::{VerifyError, Verifier};
 pub use vm::VM;
 
 /// A compiled function.
