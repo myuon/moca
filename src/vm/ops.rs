@@ -1,20 +1,36 @@
-/// Bytecode operations for the mica VM.
+/// Bytecode operations for the BCVM v0.
+///
+/// v0 Core Instructions:
+/// - Constants & Locals: PushInt, PushFloat, PushTrue, PushFalse, PushNull, PushString, GetL, SetL
+/// - Stack: Pop, Dup
+/// - Arithmetic: Add, Sub, Mul, Div (generic), AddI64, SubI64, MulI64, DivI64, AddF64, SubF64, MulF64, DivF64
+/// - Comparison: Eq, Lt (generic), LtI64, LtF64
+/// - Control: Jmp, JmpIfTrue, JmpIfFalse
+/// - Calls: Call, Ret
+/// - Heap: New, GetF, SetF
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
-    // Stack operations - constants
-    PushInt(i64),
-    PushFloat(f64),
-    PushTrue,
-    PushFalse,
-    PushNil,
-    PushString(usize), // Index into string constants pool
-    Pop,
+    // ========================================
+    // v0 Core: Constants & Stack
+    // ========================================
+    PushInt(i64),      // CONST (i64)
+    PushFloat(f64),    // CONST (f64)
+    PushTrue,          // CONST (bool true)
+    PushFalse,         // CONST (bool false)
+    PushNull,          // CONST (null) - renamed from PushNil
+    PushString(usize), // CONST (string index)
+    Pop,               // POP: Discard top of stack
+    Dup,               // DUP: Duplicate top of stack (v0 new)
 
-    // Local variables
-    LoadLocal(usize),
-    StoreLocal(usize),
+    // ========================================
+    // v0 Core: Local Variables
+    // ========================================
+    GetL(usize),   // GETL: Push local (renamed from LoadLocal)
+    SetL(usize),   // SETL: Store local with write barrier (renamed from StoreLocal)
 
-    // Arithmetic (works on int and float)
+    // ========================================
+    // v0 Core: Arithmetic (generic)
+    // ========================================
     Add,
     Sub,
     Mul,
@@ -22,84 +38,111 @@ pub enum Op {
     Mod,
     Neg,
 
-    // Quickened arithmetic (specialized for known types)
-    AddInt,   // int + int -> int
-    AddFloat, // float + float -> float
-    SubInt,   // int - int -> int
-    SubFloat, // float - float -> float
-    MulInt,   // int * int -> int
-    MulFloat, // float * float -> float
-    DivInt,   // int / int -> int
-    DivFloat, // float / float -> float
+    // v0 Core: Typed arithmetic (I64)
+    AddI64,   // ADD_I64: i64 + i64 -> i64 (renamed from AddInt)
+    SubI64,   // SUB_I64: i64 - i64 -> i64 (renamed from SubInt)
+    MulI64,   // MUL_I64: i64 * i64 -> i64 (renamed from MulInt)
+    DivI64,   // DIV_I64: i64 / i64 -> i64 (renamed from DivInt)
 
-    // Comparison
-    Eq,
+    // v0 Extension: Typed arithmetic (F64)
+    AddF64,   // ADD_F64: f64 + f64 -> f64 (renamed from AddFloat)
+    SubF64,   // SUB_F64: f64 - f64 -> f64 (renamed from SubFloat)
+    MulF64,   // MUL_F64: f64 * f64 -> f64 (renamed from MulFloat)
+    DivF64,   // DIV_F64: f64 / f64 -> f64 (renamed from DivFloat)
+
+    // ========================================
+    // v0 Core: Comparison
+    // ========================================
+    Eq,  // EQ: same-type equality
     Ne,
     Lt,
     Le,
     Gt,
     Ge,
 
-    // Quickened comparison
-    LtInt, // int < int
-    LeInt, // int <= int
-    GtInt, // int > int
-    GeInt, // int >= int
+    // v0 Core: Typed comparison
+    LtI64, // LT_I64: i64 < i64 (renamed from LtInt)
+    LeI64, // (renamed from LeInt)
+    GtI64, // (renamed from GtInt)
+    GeI64, // (renamed from GeInt)
 
+    // v0 Extension: F64 comparison
+    LtF64, // LT_F64: f64 < f64 (v0 new)
+
+    // ========================================
     // Logical
+    // ========================================
     Not,
 
-    // Control flow
-    Jmp(usize),
-    JmpIfFalse(usize),
-    JmpIfTrue(usize),
+    // ========================================
+    // v0 Core: Control Flow
+    // ========================================
+    Jmp(usize),        // JMP: Unconditional jump
+    JmpIfFalse(usize), // JMP_IF_FALSE
+    JmpIfTrue(usize),  // JMP_IF_TRUE
 
-    // Functions
-    Call(usize, usize), // (func_index, argc)
-    Ret,
+    // ========================================
+    // v0 Core: Functions
+    // ========================================
+    Call(usize, usize), // CALL: (func_index, argc) -> -argc + 1
+    Ret,                // RET: Return (stack height must be 1)
 
-    // Array operations
+    // ========================================
+    // v0 Core: Heap & Objects
+    // ========================================
+    New(usize),   // NEW: Allocate object (renamed from AllocObject)
+    GetF(usize),  // GETF: Get field by string index (renamed from GetField)
+    SetF(usize),  // SETF: Set field with write barrier (renamed from SetField)
+
+    // Quickened field access (with cached offset) - extension
+    GetFCached(usize, u16), // (field_name_idx, cached_offset)
+    SetFCached(usize, u16), // (field_name_idx, cached_offset)
+
+    // ========================================
+    // Extension: Array operations (not in v0 core)
+    // ========================================
     AllocArray(usize), // Allocate array with n elements from stack
     ArrayLen,
-    ArrayGet,  // stack: [array, index] -> [value]
-    ArraySet,  // stack: [array, index, value] -> []
-    ArrayPush, // stack: [array, value] -> []
-    ArrayPop,  // stack: [array] -> [value]
+    ArrayGet,    // stack: [array, index] -> [value]
+    ArraySet,    // stack: [array, index, value] -> []
+    ArrayPush,   // stack: [array, value] -> []
+    ArrayPop,    // stack: [array] -> [value]
+    ArrayGetInt, // Quickened: Array access with int index
 
-    // Quickened array access (with int index)
-    ArrayGetInt, // Array access with int index (no type check)
-
-    // Object operations
-    AllocObject(usize), // Allocate object with n field pairs from stack
-    GetField(usize),    // Get field by string constant index
-    SetField(usize),    // Set field by string constant index
-
-    // Quickened field access (with cached offset)
-    GetFieldCached(usize, u16), // (field_name_idx, cached_offset)
-    SetFieldCached(usize, u16), // (field_name_idx, cached_offset)
-
-    // String operations
+    // ========================================
+    // Extension: String operations (not in v0 core)
+    // ========================================
     StringLen,
     StringConcat,
 
-    // Type operations
+    // ========================================
+    // Extension: Type operations
+    // ========================================
     TypeOf,   // Push type name as string
     ToString, // Convert any value to string
     ParseInt, // Parse string to int
 
-    // Exception handling
+    // ========================================
+    // Extension: Exception handling (not in v0 core)
+    // ========================================
     Throw,
     TryBegin(usize), // Jump target for catch handler
     TryEnd,
 
-    // Builtins
+    // ========================================
+    // Extension: Builtins
+    // ========================================
     Print,
 
-    // GC hint
+    // ========================================
+    // Extension: GC hint
+    // ========================================
     GcHint(usize), // Hint about upcoming allocation size
 
-    // Thread operations
-    ThreadSpawn(usize), // Spawn thread with function at given index, push handle
+    // ========================================
+    // Extension: Thread operations (not in v0 core)
+    // ========================================
+    ThreadSpawn(usize), // Spawn thread with function at given index
     ChannelCreate,      // Create channel, push [sender, receiver] array
     ChannelSend,        // stack: [channel_id, value] -> []
     ChannelRecv,        // stack: [channel_id] -> [value]

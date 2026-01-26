@@ -140,15 +140,15 @@ impl Debugger {
             Op::PushFloat(v) => self.stack.push(Value::F64(*v)),
             Op::PushTrue => self.stack.push(Value::Bool(true)),
             Op::PushFalse => self.stack.push(Value::Bool(false)),
-            Op::PushNil => self.stack.push(Value::Null),
+            Op::PushNull => self.stack.push(Value::Null),
             Op::Pop => {
                 self.stack.pop();
             }
-            Op::LoadLocal(slot) => {
+            Op::GetL(slot) => {
                 let val = self.locals[*slot];
                 self.stack.push(val);
             }
-            Op::StoreLocal(slot) => {
+            Op::SetL(slot) => {
                 if let Some(val) = self.stack.pop() {
                     self.locals[*slot] = val;
                 }

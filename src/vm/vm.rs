@@ -496,7 +496,7 @@ impl VM {
             Op::PushFalse => {
                 self.stack.push(Value::Bool(false));
             }
-            Op::PushNil => {
+            Op::PushNull => {
                 self.stack.push(Value::Null);
             }
             Op::PushString(idx) => {
@@ -507,13 +507,17 @@ impl VM {
             Op::Pop => {
                 self.stack.pop();
             }
-            Op::LoadLocal(slot) => {
+            Op::Dup => {
+                let value = self.stack.last().copied().ok_or("stack underflow")?;
+                self.stack.push(value);
+            }
+            Op::GetL(slot) => {
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;
                 let value = self.stack.get(index).copied().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
-            Op::StoreLocal(slot) => {
+            Op::SetL(slot) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;
@@ -754,7 +758,7 @@ impl VM {
                     .ok_or("runtime error: cannot pop from empty array")?;
                 self.stack.push(value);
             }
-            Op::AllocObject(n) => {
+            Op::New(n) => {
                 let mut fields = HashMap::new();
                 for _ in 0..n {
                     let value = self.stack.pop().ok_or("stack underflow")?;
@@ -776,7 +780,7 @@ impl VM {
                 let r = self.heap.alloc_object_map(fields);
                 self.stack.push(Value::Ref(r));
             }
-            Op::GetField(str_idx) => {
+            Op::GetF(str_idx) => {
                 let obj = self.stack.pop().ok_or("stack underflow")?;
                 let r = obj.as_ref().ok_or("runtime error: expected object")?;
 
@@ -790,7 +794,7 @@ impl VM {
                 let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
-            Op::SetField(str_idx) => {
+            Op::SetF(str_idx) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let obj = self.stack.pop().ok_or("stack underflow")?;
                 let r = obj.as_ref().ok_or("runtime error: expected object")?;
@@ -901,7 +905,7 @@ impl VM {
             }
 
             // Quickened arithmetic operations (specialized for known types)
-            Op::AddInt => {
+            Op::AddI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 // Fast path: both are ints (no type check needed after quickening)
@@ -913,7 +917,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::AddFloat => {
+            Op::AddF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::F64(a), Value::F64(b)) = (a, b) {
@@ -923,7 +927,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::SubInt => {
+            Op::SubI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
@@ -933,7 +937,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::SubFloat => {
+            Op::SubF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::F64(a), Value::F64(b)) = (a, b) {
@@ -943,7 +947,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::MulInt => {
+            Op::MulI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
@@ -953,7 +957,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::MulFloat => {
+            Op::MulF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::F64(a), Value::F64(b)) = (a, b) {
@@ -963,7 +967,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::DivInt => {
+            Op::DivI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
@@ -976,7 +980,7 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            Op::DivFloat => {
+            Op::DivF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::F64(a), Value::F64(b)) = (a, b) {
@@ -991,7 +995,7 @@ impl VM {
             }
 
             // Quickened comparison operations
-            Op::LtInt => {
+            Op::LtI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
@@ -1001,7 +1005,7 @@ impl VM {
                     self.stack.push(Value::Bool(result));
                 }
             }
-            Op::LeInt => {
+            Op::LeI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
@@ -1011,7 +1015,7 @@ impl VM {
                     self.stack.push(Value::Bool(result));
                 }
             }
-            Op::GtInt => {
+            Op::GtI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
@@ -1021,13 +1025,25 @@ impl VM {
                     self.stack.push(Value::Bool(result));
                 }
             }
-            Op::GeInt => {
+            Op::GeI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 if let (Value::I64(a), Value::I64(b)) = (a, b) {
                     self.stack.push(Value::Bool(a >= b));
                 } else {
                     let result = self.compare(&a, &b)? >= 0;
+                    self.stack.push(Value::Bool(result));
+                }
+            }
+
+            // v0 Extension: F64 comparison
+            Op::LtF64 => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::F64(a), Value::F64(b)) = (a, b) {
+                    self.stack.push(Value::Bool(a < b));
+                } else {
+                    let result = self.compare(&a, &b)? < 0;
                     self.stack.push(Value::Bool(result));
                 }
             }
@@ -1054,7 +1070,7 @@ impl VM {
             }
 
             // Quickened field access (with cached offset - for future IC)
-            Op::GetFieldCached(str_idx, _cached_offset) => {
+            Op::GetFCached(str_idx, _cached_offset) => {
                 // For now, fall back to regular GetField
                 // Once IC is fully implemented, we'll use cached_offset
                 let obj = self.stack.pop().ok_or("stack underflow")?;
@@ -1070,7 +1086,7 @@ impl VM {
                 let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
-            Op::SetFieldCached(str_idx, _cached_offset) => {
+            Op::SetFCached(str_idx, _cached_offset) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let obj = self.stack.pop().ok_or("stack underflow")?;
                 let r = obj.as_ref().ok_or("runtime error: expected object")?;
@@ -1190,9 +1206,9 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av + bv), Some(Op::AddInt)),
+                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av + bv), Some(Op::AddI64)),
                     (Value::F64(av), Value::F64(bv)) => {
-                        (Value::F64(av + bv), Some(Op::AddFloat))
+                        (Value::F64(av + bv), Some(Op::AddF64))
                     }
                     _ => (self.add(a, b)?, None),
                 };
@@ -1211,9 +1227,9 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av - bv), Some(Op::SubInt)),
+                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av - bv), Some(Op::SubI64)),
                     (Value::F64(av), Value::F64(bv)) => {
-                        (Value::F64(av - bv), Some(Op::SubFloat))
+                        (Value::F64(av - bv), Some(Op::SubF64))
                     }
                     _ => (self.sub(a, b)?, None),
                 };
@@ -1231,9 +1247,9 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av * bv), Some(Op::MulInt)),
+                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av * bv), Some(Op::MulI64)),
                     (Value::F64(av), Value::F64(bv)) => {
-                        (Value::F64(av * bv), Some(Op::MulFloat))
+                        (Value::F64(av * bv), Some(Op::MulF64))
                     }
                     _ => (self.mul(a, b)?, None),
                 };
@@ -1251,7 +1267,7 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::I64(av), Value::I64(bv)) => (Value::Bool(av < bv), Some(Op::LtInt)),
+                    (Value::I64(av), Value::I64(bv)) => (Value::Bool(av < bv), Some(Op::LtI64)),
                     _ => (Value::Bool(self.compare(&a, &b)? < 0), None),
                 };
 
@@ -1607,7 +1623,7 @@ mod tests {
 
     #[test]
     fn test_push_nil() {
-        let stack = run_code(vec![Op::PushNil]).unwrap();
+        let stack = run_code(vec![Op::PushNull]).unwrap();
         assert_eq!(stack, vec![Value::Null]);
     }
 
@@ -1638,7 +1654,7 @@ mod tests {
 
     #[test]
     fn test_locals() {
-        let stack = run_code(vec![Op::PushInt(42), Op::StoreLocal(0), Op::LoadLocal(0)]).unwrap();
+        let stack = run_code(vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0)]).unwrap();
         assert_eq!(stack, vec![Value::I64(42), Value::I64(42)]);
     }
 

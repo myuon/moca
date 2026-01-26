@@ -212,21 +212,21 @@ impl JitCompiler {
             Op::PushFloat(f) => self.emit_push_float(*f),
             Op::PushTrue => self.emit_push_bool(true),
             Op::PushFalse => self.emit_push_bool(false),
-            Op::PushNil => self.emit_push_nil(),
+            Op::PushNull => self.emit_push_nil(),
             Op::Pop => self.emit_pop(),
 
-            Op::LoadLocal(idx) => self.emit_load_local(*idx),
-            Op::StoreLocal(idx) => self.emit_store_local(*idx),
+            Op::GetL(idx) => self.emit_load_local(*idx),
+            Op::SetL(idx) => self.emit_store_local(*idx),
 
-            Op::Add | Op::AddInt => self.emit_add_int(),
-            Op::Sub | Op::SubInt => self.emit_sub_int(),
-            Op::Mul | Op::MulInt => self.emit_mul_int(),
-            Op::Div | Op::DivInt => self.emit_div_int(),
+            Op::Add | Op::AddI64 => self.emit_add_int(),
+            Op::Sub | Op::SubI64 => self.emit_sub_int(),
+            Op::Mul | Op::MulI64 => self.emit_mul_int(),
+            Op::Div | Op::DivI64 => self.emit_div_int(),
 
-            Op::Lt | Op::LtInt => self.emit_cmp_int(Cond::Lt),
-            Op::Le | Op::LeInt => self.emit_cmp_int(Cond::Le),
-            Op::Gt | Op::GtInt => self.emit_cmp_int(Cond::Gt),
-            Op::Ge | Op::GeInt => self.emit_cmp_int(Cond::Ge),
+            Op::Lt | Op::LtI64 => self.emit_cmp_int(Cond::Lt),
+            Op::Le | Op::LeI64 => self.emit_cmp_int(Cond::Le),
+            Op::Gt | Op::GtI64 => self.emit_cmp_int(Cond::Gt),
+            Op::Ge | Op::GeI64 => self.emit_cmp_int(Cond::Ge),
             Op::Eq => self.emit_eq(),
             Op::Ne => self.emit_ne(),
 
@@ -697,8 +697,8 @@ mod tests {
             locals_count: 1,
             code: vec![
                 Op::PushInt(42),
-                Op::StoreLocal(0),
-                Op::LoadLocal(0),
+                Op::SetL(0),
+                Op::GetL(0),
                 Op::Ret,
             ],
         };
@@ -716,7 +716,7 @@ mod tests {
             name: "add".to_string(),
             arity: 0,
             locals_count: 0,
-            code: vec![Op::PushInt(10), Op::PushInt(20), Op::AddInt, Op::Ret],
+            code: vec![Op::PushInt(10), Op::PushInt(20), Op::AddI64, Op::Ret],
         };
 
         let compiler = JitCompiler::new();
@@ -732,15 +732,15 @@ mod tests {
             locals_count: 1,
             code: vec![
                 Op::PushInt(0),    // 0: push 0
-                Op::StoreLocal(0), // 1: i = 0
-                Op::LoadLocal(0),  // 2: push i (loop start)
+                Op::SetL(0), // 1: i = 0
+                Op::GetL(0),  // 2: push i (loop start)
                 Op::PushInt(10),   // 3: push 10
-                Op::LtInt,         // 4: i < 10
+                Op::LtI64,         // 4: i < 10
                 Op::JmpIfFalse(9), // 5: if false, exit
-                Op::LoadLocal(0),  // 6: push i
+                Op::GetL(0),  // 6: push i
                 Op::PushInt(1),    // 7: push 1
-                Op::AddInt,        // 8: i + 1
-                Op::StoreLocal(0), // 9: i = i + 1  (target of JmpIfFalse)
+                Op::AddI64,        // 8: i + 1
+                Op::SetL(0), // 9: i = i + 1  (target of JmpIfFalse)
                 Op::Jmp(2),        // 10: goto loop start
                 Op::Ret,           // 11: return
             ],
