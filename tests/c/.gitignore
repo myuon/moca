@@ -1,0 +1,4 @@
+# Compiled test binaries
+test_ffi
+test_ffi_debug
+*.o

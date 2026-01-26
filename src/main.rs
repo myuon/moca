@@ -3,53 +3,48 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod compiler;
+mod config;
 mod debugger;
+mod ffi;
 #[cfg(feature = "jit")]
 mod jit;
 mod lsp;
 mod package;
 mod vm;
 
-/// JIT compilation mode
+use config::{GcMode, JitMode, RuntimeConfig};
+
+// Wrapper types for clap ValueEnum support
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
-pub enum JitMode {
-    /// JIT disabled, interpreter only
+pub enum JitModeArg {
     Off,
-    /// JIT enabled (compile hot functions)
     On,
-    /// Automatic: JIT enabled if supported on this platform
     #[default]
     Auto,
 }
 
-/// GC mode
+impl From<JitModeArg> for JitMode {
+    fn from(arg: JitModeArg) -> Self {
+        match arg {
+            JitModeArg::Off => JitMode::Off,
+            JitModeArg::On => JitMode::On,
+            JitModeArg::Auto => JitMode::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
-pub enum GcMode {
-    /// Stop-the-world GC
+pub enum GcModeArg {
     #[default]
     Stw,
-    /// Concurrent GC (reduced pause times)
     Concurrent,
 }
 
-/// Runtime configuration for the VM
-#[derive(Debug, Clone)]
-pub struct RuntimeConfig {
-    pub jit_mode: JitMode,
-    pub jit_threshold: u32,
-    pub trace_jit: bool,
-    pub gc_mode: GcMode,
-    pub gc_stats: bool,
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            jit_mode: JitMode::Auto,
-            jit_threshold: 1000,
-            trace_jit: false,
-            gc_mode: GcMode::Stw,
-            gc_stats: false,
+impl From<GcModeArg> for GcMode {
+    fn from(arg: GcModeArg) -> Self {
+        match arg {
+            GcModeArg::Stw => GcMode::Stw,
+            GcModeArg::Concurrent => GcMode::Concurrent,
         }
     }
 }
@@ -76,7 +71,7 @@ enum Commands {
 
         /// JIT compilation mode (off, on, auto)
         #[arg(long, value_enum, default_value = "auto")]
-        jit: JitMode,
+        jit: JitModeArg,
 
         /// JIT compilation threshold (number of calls before JIT)
         #[arg(long, default_value = "1000")]
@@ -88,7 +83,7 @@ enum Commands {
 
         /// GC mode (stw, concurrent)
         #[arg(long, value_enum, default_value = "stw")]
-        gc_mode: GcMode,
+        gc_mode: GcModeArg,
 
         /// Print GC statistics
         #[arg(long)]
@@ -161,10 +156,10 @@ fn main() -> ExitCode {
             };
 
             let config = RuntimeConfig {
-                jit_mode: jit,
+                jit_mode: jit.into(),
                 jit_threshold,
                 trace_jit,
-                gc_mode,
+                gc_mode: gc_mode.into(),
                 gc_stats,
             };
 

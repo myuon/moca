@@ -96,7 +96,7 @@ impl Codegen {
             self.compile_statement(&stmt, &mut main_ops)?;
         }
         // End of main
-        main_ops.push(Op::PushNil); // Return value for main
+        main_ops.push(Op::PushNull); // Return value for main
         main_ops.push(Op::Ret);
 
         let main_func = Function {
@@ -104,6 +104,7 @@ impl Codegen {
             arity: 0,
             locals_count: 0, // TODO: track main locals
             code: main_ops,
+            stackmap: None, // TODO: generate StackMap
         };
 
         let debug = if self.emit_debug {
@@ -129,7 +130,7 @@ impl Codegen {
 
         // Implicit return nil
         if !matches!(ops.last(), Some(Op::Ret)) {
-            ops.push(Op::PushNil);
+            ops.push(Op::PushNull);
             ops.push(Op::Ret);
         }
 
@@ -138,6 +139,7 @@ impl Codegen {
             arity: func.params.len(),
             locals_count: func.locals_count,
             code: ops,
+            stackmap: None, // TODO: generate StackMap
         })
     }
 
@@ -149,11 +151,11 @@ impl Codegen {
         match stmt {
             ResolvedStatement::Let { slot, init } => {
                 self.compile_expr(init, ops)?;
-                ops.push(Op::StoreLocal(*slot));
+                ops.push(Op::SetL(*slot));
             }
             ResolvedStatement::Assign { slot, value } => {
                 self.compile_expr(value, ops)?;
-                ops.push(Op::StoreLocal(*slot));
+                ops.push(Op::SetL(*slot));
             }
             ResolvedStatement::IndexAssign {
                 object,
@@ -182,7 +184,7 @@ impl Codegen {
                     self.compile_expr(object, ops)?;
                     self.compile_expr(value, ops)?;
                     let field_idx = self.add_string(field.clone());
-                    ops.push(Op::SetField(field_idx));
+                    ops.push(Op::SetF(field_idx));
                 }
             }
             ResolvedStatement::If {
@@ -264,17 +266,17 @@ impl Codegen {
 
                 // Store array
                 self.compile_expr(iterable, ops)?;
-                ops.push(Op::StoreLocal(arr_slot));
+                ops.push(Op::SetL(arr_slot));
 
                 // Initialize index to 0
                 ops.push(Op::PushInt(0));
-                ops.push(Op::StoreLocal(idx_slot));
+                ops.push(Op::SetL(idx_slot));
 
                 let loop_start = ops.len();
 
                 // Check: idx < arr.len()
-                ops.push(Op::LoadLocal(idx_slot));
-                ops.push(Op::LoadLocal(arr_slot));
+                ops.push(Op::GetL(idx_slot));
+                ops.push(Op::GetL(arr_slot));
                 ops.push(Op::ArrayLen);
                 ops.push(Op::Lt);
 
@@ -282,10 +284,10 @@ impl Codegen {
                 ops.push(Op::JmpIfFalse(0)); // Placeholder
 
                 // x = arr[idx]
-                ops.push(Op::LoadLocal(arr_slot));
-                ops.push(Op::LoadLocal(idx_slot));
+                ops.push(Op::GetL(arr_slot));
+                ops.push(Op::GetL(idx_slot));
                 ops.push(Op::ArrayGet);
-                ops.push(Op::StoreLocal(var_slot));
+                ops.push(Op::SetL(var_slot));
 
                 // Body
                 for stmt in body {
@@ -293,10 +295,10 @@ impl Codegen {
                 }
 
                 // idx = idx + 1
-                ops.push(Op::LoadLocal(idx_slot));
+                ops.push(Op::GetL(idx_slot));
                 ops.push(Op::PushInt(1));
                 ops.push(Op::Add);
-                ops.push(Op::StoreLocal(idx_slot));
+                ops.push(Op::SetL(idx_slot));
 
                 // Jump back to loop start
                 ops.push(Op::Jmp(loop_start));
@@ -309,7 +311,7 @@ impl Codegen {
                 if let Some(value) = value {
                     self.compile_expr(value, ops)?;
                 } else {
-                    ops.push(Op::PushNil); // Return nil for void
+                    ops.push(Op::PushNull); // Return nil for void
                 }
                 ops.push(Op::Ret);
             }
@@ -341,7 +343,7 @@ impl Codegen {
                 ops[try_begin_idx] = Op::TryBegin(catch_start);
 
                 // Exception value is on stack, store to catch variable slot
-                ops.push(Op::StoreLocal(*catch_slot));
+                ops.push(Op::SetL(*catch_slot));
 
                 // Compile catch block
                 for stmt in catch_block {
@@ -381,10 +383,10 @@ impl Codegen {
                 ops.push(Op::PushString(idx));
             }
             ResolvedExpr::Nil => {
-                ops.push(Op::PushNil);
+                ops.push(Op::PushNull);
             }
             ResolvedExpr::Local(slot) => {
-                ops.push(Op::LoadLocal(*slot));
+                ops.push(Op::GetL(*slot));
             }
             ResolvedExpr::Array { elements } => {
                 // Push all elements, then allocate array
@@ -400,7 +402,7 @@ impl Codegen {
                     ops.push(Op::PushString(name_idx));
                     self.compile_expr(value, ops)?;
                 }
-                ops.push(Op::AllocObject(fields.len()));
+                ops.push(Op::New(fields.len()));
             }
             ResolvedExpr::Index { object, index } => {
                 self.compile_expr(object, ops)?;
@@ -417,7 +419,7 @@ impl Codegen {
                 } else {
                     // Regular object field access
                     let field_idx = self.add_string(field.clone());
-                    ops.push(Op::GetField(field_idx));
+                    ops.push(Op::GetF(field_idx));
                 }
             }
             ResolvedExpr::Unary { op, operand } => {
@@ -506,7 +508,7 @@ impl Codegen {
                         self.compile_expr(&args[1], ops)?;
                         ops.push(Op::ArrayPush);
                         // push returns nil
-                        ops.push(Op::PushNil);
+                        ops.push(Op::PushNull);
                     }
                     "pop" => {
                         if args.len() != 1 {
@@ -557,7 +559,7 @@ impl Codegen {
                         self.compile_expr(&args[1], ops)?;
                         ops.push(Op::ChannelSend);
                         // send returns nil
-                        ops.push(Op::PushNil);
+                        ops.push(Op::PushNull);
                     }
                     "recv" => {
                         if args.len() != 1 {
@@ -607,7 +609,7 @@ impl Codegen {
                 for _ in 0..args.len() {
                     ops.push(Op::Pop);
                 }
-                ops.push(Op::PushNil);
+                ops.push(Op::PushNull);
             }
         }
 

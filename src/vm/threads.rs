@@ -325,28 +325,28 @@ mod tests {
         let id = spawner.spawn(|| {
             // Simulate some work
             std::thread::sleep(std::time::Duration::from_millis(10));
-            Value::Int(42)
+            Value::I64(42)
         });
 
         let result = spawner.join(id).unwrap();
-        assert_eq!(result, Value::Int(42));
+        assert_eq!(result, Value::I64(42));
     }
 
     #[test]
     fn test_multiple_threads() {
         let mut spawner = ThreadSpawner::new();
 
-        let id1 = spawner.spawn(|| Value::Int(1));
-        let id2 = spawner.spawn(|| Value::Int(2));
-        let id3 = spawner.spawn(|| Value::Int(3));
+        let id1 = spawner.spawn(|| Value::I64(1));
+        let id2 = spawner.spawn(|| Value::I64(2));
+        let id3 = spawner.spawn(|| Value::I64(3));
 
         let r1 = spawner.join(id1).unwrap();
         let r2 = spawner.join(id2).unwrap();
         let r3 = spawner.join(id3).unwrap();
 
-        assert_eq!(r1, Value::Int(1));
-        assert_eq!(r2, Value::Int(2));
-        assert_eq!(r3, Value::Int(3));
+        assert_eq!(r1, Value::I64(1));
+        assert_eq!(r2, Value::I64(2));
+        assert_eq!(r3, Value::I64(3));
     }
 
     #[test]
@@ -429,13 +429,13 @@ mod tests {
     fn test_value_channel() {
         let (tx, rx) = value_channel();
 
-        tx.send(Value::Int(42)).unwrap();
+        tx.send(Value::I64(42)).unwrap();
         tx.send(Value::Bool(true)).unwrap();
-        tx.send(Value::Nil).unwrap();
+        tx.send(Value::Null).unwrap();
 
-        assert_eq!(rx.recv(), Some(Value::Int(42)));
+        assert_eq!(rx.recv(), Some(Value::I64(42)));
         assert_eq!(rx.recv(), Some(Value::Bool(true)));
-        assert_eq!(rx.recv(), Some(Value::Nil));
+        assert_eq!(rx.recv(), Some(Value::Null));
     }
 
     #[test]

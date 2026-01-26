@@ -1214,7 +1214,7 @@ impl<'a> Disassembler<'a> {
             Op::PushFloat(v) => self.output.push_str(&format!("PushFloat {}", v)),
             Op::PushTrue => self.output.push_str("PushTrue"),
             Op::PushFalse => self.output.push_str("PushFalse"),
-            Op::PushNil => self.output.push_str("PushNil"),
+            Op::PushNull => self.output.push_str("PushNil"),
             Op::PushString(idx) => {
                 let s = self
                     .chunk
@@ -1227,10 +1227,11 @@ impl<'a> Disassembler<'a> {
                     .push_str(&format!("PushString {} ; \"{}\"", idx, escaped));
             }
             Op::Pop => self.output.push_str("Pop"),
+            Op::Dup => self.output.push_str("Dup"),
 
             // Local variables
-            Op::LoadLocal(slot) => self.output.push_str(&format!("LoadLocal {}", slot)),
-            Op::StoreLocal(slot) => self.output.push_str(&format!("StoreLocal {}", slot)),
+            Op::GetL(slot) => self.output.push_str(&format!("GetL {}", slot)),
+            Op::SetL(slot) => self.output.push_str(&format!("SetL {}", slot)),
 
             // Arithmetic
             Op::Add => self.output.push_str("Add"),
@@ -1241,14 +1242,14 @@ impl<'a> Disassembler<'a> {
             Op::Neg => self.output.push_str("Neg"),
 
             // Quickened arithmetic
-            Op::AddInt => self.output.push_str("AddInt"),
-            Op::AddFloat => self.output.push_str("AddFloat"),
-            Op::SubInt => self.output.push_str("SubInt"),
-            Op::SubFloat => self.output.push_str("SubFloat"),
-            Op::MulInt => self.output.push_str("MulInt"),
-            Op::MulFloat => self.output.push_str("MulFloat"),
-            Op::DivInt => self.output.push_str("DivInt"),
-            Op::DivFloat => self.output.push_str("DivFloat"),
+            Op::AddI64 => self.output.push_str("AddInt"),
+            Op::AddF64 => self.output.push_str("AddFloat"),
+            Op::SubI64 => self.output.push_str("SubInt"),
+            Op::SubF64 => self.output.push_str("SubFloat"),
+            Op::MulI64 => self.output.push_str("MulInt"),
+            Op::MulF64 => self.output.push_str("MulFloat"),
+            Op::DivI64 => self.output.push_str("DivInt"),
+            Op::DivF64 => self.output.push_str("DivFloat"),
 
             // Comparison
             Op::Eq => self.output.push_str("Eq"),
@@ -1259,10 +1260,11 @@ impl<'a> Disassembler<'a> {
             Op::Ge => self.output.push_str("Ge"),
 
             // Quickened comparison
-            Op::LtInt => self.output.push_str("LtInt"),
-            Op::LeInt => self.output.push_str("LeInt"),
-            Op::GtInt => self.output.push_str("GtInt"),
-            Op::GeInt => self.output.push_str("GeInt"),
+            Op::LtI64 => self.output.push_str("LtI64"),
+            Op::LeI64 => self.output.push_str("LeI64"),
+            Op::GtI64 => self.output.push_str("GtI64"),
+            Op::GeI64 => self.output.push_str("GeI64"),
+            Op::LtF64 => self.output.push_str("LtF64"),
 
             // Logical
             Op::Not => self.output.push_str("Not"),
@@ -1295,8 +1297,8 @@ impl<'a> Disassembler<'a> {
             Op::ArrayGetInt => self.output.push_str("ArrayGetInt"),
 
             // Object operations
-            Op::AllocObject(n) => self.output.push_str(&format!("AllocObject {}", n)),
-            Op::GetField(idx) => {
+            Op::New(n) => self.output.push_str(&format!("AllocObject {}", n)),
+            Op::GetF(idx) => {
                 let field = self
                     .chunk
                     .strings
@@ -1306,7 +1308,7 @@ impl<'a> Disassembler<'a> {
                 self.output
                     .push_str(&format!("GetField {} ; .{}", idx, field));
             }
-            Op::SetField(idx) => {
+            Op::SetF(idx) => {
                 let field = self
                     .chunk
                     .strings
@@ -1316,7 +1318,7 @@ impl<'a> Disassembler<'a> {
                 self.output
                     .push_str(&format!("SetField {} ; .{}", idx, field));
             }
-            Op::GetFieldCached(idx, cache) => {
+            Op::GetFCached(idx, cache) => {
                 let field = self
                     .chunk
                     .strings
@@ -1326,7 +1328,7 @@ impl<'a> Disassembler<'a> {
                 self.output
                     .push_str(&format!("GetFieldCached {}, {} ; .{}", idx, cache, field));
             }
-            Op::SetFieldCached(idx, cache) => {
+            Op::SetFCached(idx, cache) => {
                 let field = self
                     .chunk
                     .strings
@@ -1496,8 +1498,8 @@ mod tests {
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Main =="));
         assert!(output.contains("PushInt 42"));
-        assert!(output.contains("StoreLocal"));
-        assert!(output.contains("LoadLocal"));
+        assert!(output.contains("SetL"));   // renamed from StoreLocal
+        assert!(output.contains("GetL"));   // renamed from LoadLocal
         assert!(output.contains("Print"));
     }
 
@@ -1506,8 +1508,8 @@ mod tests {
         let chunk = compile("fun add(a, b) { return a + b; } print(add(1, 2));");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Function[0]: add"));
-        assert!(output.contains("LoadLocal 0"));
-        assert!(output.contains("LoadLocal 1"));
+        assert!(output.contains("GetL 0"));  // renamed from LoadLocal
+        assert!(output.contains("GetL 1"));  // renamed from LoadLocal
         assert!(output.contains("Add"));
         assert!(output.contains("Ret"));
         assert!(output.contains("Call 0, 2 ; add"));

@@ -112,8 +112,8 @@ impl HeapObject {
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
             HeapObject::String(_) => vec![],
-            HeapObject::Array(arr) => arr.elements.iter().filter_map(|v| v.as_ptr()).collect(),
-            HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ptr()).collect(),
+            HeapObject::Array(arr) => arr.elements.iter().filter_map(|v| v.as_ref()).collect(),
+            HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ref()).collect(),
         }
     }
 }
@@ -258,7 +258,7 @@ impl Heap {
     /// Mark phase: mark all reachable objects.
     pub fn mark(&mut self, roots: &[Value]) {
         // Collect all root references
-        let mut worklist: Vec<GcRef> = roots.iter().filter_map(|v| v.as_ptr()).collect();
+        let mut worklist: Vec<GcRef> = roots.iter().filter_map(|v| v.as_ref()).collect();
 
         // Mark and trace
         while let Some(r) = worklist.pop() {
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_alloc_array() {
         let mut heap = Heap::new();
-        let r = heap.alloc_array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let r = heap.alloc_array(vec![Value::I64(1), Value::I64(2), Value::I64(3)]);
         let obj = heap.get(r).unwrap();
         assert_eq!(obj.as_array().unwrap().elements.len(), 3);
     }
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(heap.object_count(), 2);
 
         // Only r2 is in roots
-        heap.collect(&[Value::Ptr(r2)]);
+        heap.collect(&[Value::Ref(r2)]);
 
         assert_eq!(heap.object_count(), 1);
         assert!(heap.get(r2).is_some());
@@ -371,12 +371,12 @@ mod tests {
         let str_ref = heap.alloc_string("inside array".to_string());
 
         // Create an array containing the string
-        let arr_ref = heap.alloc_array(vec![Value::Ptr(str_ref)]);
+        let arr_ref = heap.alloc_array(vec![Value::Ref(str_ref)]);
 
         assert_eq!(heap.object_count(), 2);
 
         // Only array is in roots, but string should be kept via tracing
-        heap.collect(&[Value::Ptr(arr_ref)]);
+        heap.collect(&[Value::Ref(arr_ref)]);
 
         assert_eq!(heap.object_count(), 2);
         assert!(heap.get(str_ref).is_some());

@@ -110,6 +110,16 @@ impl VM {
         &self.gc_stats
     }
 
+    /// Get immutable reference to the heap.
+    pub fn heap(&self) -> &Heap {
+        &self.heap
+    }
+
+    /// Get mutable reference to the heap.
+    pub fn heap_mut(&mut self) -> &mut Heap {
+        &mut self.heap
+    }
+
     /// Initialize IC tables for a chunk (call before run_with_ic).
     pub fn init_ic_tables(&mut self, chunk: &Chunk) {
         self.ic_tables.clear();
@@ -432,7 +442,7 @@ impl VM {
             stack_base: 0,
         });
 
-        let mut result = Value::Nil;
+        let mut result = Value::Null;
 
         loop {
             // Check if GC should run
@@ -461,13 +471,13 @@ impl VM {
                 Ok(ControlFlow::Return) => {
                     if self.frames.is_empty() {
                         // Main returned - capture the return value from stack
-                        result = self.stack.pop().unwrap_or(Value::Nil);
+                        result = self.stack.pop().unwrap_or(Value::Null);
                         break;
                     }
                 }
                 Ok(ControlFlow::Exit) => {
                     // Capture the return value before exiting
-                    result = self.stack.pop().unwrap_or(Value::Nil);
+                    result = self.stack.pop().unwrap_or(Value::Null);
                     break;
                 }
                 Err(e) => {
@@ -485,10 +495,10 @@ impl VM {
     fn execute_op(&mut self, op: Op, chunk: &Chunk) -> Result<ControlFlow, String> {
         match op {
             Op::PushInt(n) => {
-                self.stack.push(Value::Int(n));
+                self.stack.push(Value::I64(n));
             }
             Op::PushFloat(f) => {
-                self.stack.push(Value::Float(f));
+                self.stack.push(Value::F64(f));
             }
             Op::PushTrue => {
                 self.stack.push(Value::Bool(true));
@@ -496,32 +506,40 @@ impl VM {
             Op::PushFalse => {
                 self.stack.push(Value::Bool(false));
             }
-            Op::PushNil => {
-                self.stack.push(Value::Nil);
+            Op::PushNull => {
+                self.stack.push(Value::Null);
             }
             Op::PushString(idx) => {
                 let s = chunk.strings.get(idx).cloned().unwrap_or_default();
                 let r = self.heap.alloc_string(s);
-                self.stack.push(Value::Ptr(r));
+                self.stack.push(Value::Ref(r));
             }
             Op::Pop => {
                 self.stack.pop();
             }
-            Op::LoadLocal(slot) => {
-                let frame = self.frames.last().unwrap();
-                let index = frame.stack_base + slot;
-                let value = self.stack.get(index).copied().unwrap_or(Value::Nil);
+            Op::Dup => {
+                let value = self.stack.last().copied().ok_or("stack underflow")?;
                 self.stack.push(value);
             }
-            Op::StoreLocal(slot) => {
+            Op::GetL(slot) => {
+                let frame = self.frames.last().unwrap();
+                let index = frame.stack_base + slot;
+                let value = self.stack.get(index).copied().unwrap_or(Value::Null);
+                self.stack.push(value);
+            }
+            Op::SetL(slot) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;
 
                 // Ensure stack is large enough
                 while self.stack.len() <= index {
-                    self.stack.push(Value::Nil);
+                    self.stack.push(Value::Null);
                 }
+
+                // Write barrier: capture old value before overwriting
+                let old_value = self.stack[index];
+                self.write_barrier(old_value);
 
                 self.stack[index] = value;
             }
@@ -555,13 +573,13 @@ impl VM {
                 if b == 0 {
                     return Err("runtime error: division by zero".to_string());
                 }
-                self.stack.push(Value::Int(a % b));
+                self.stack.push(Value::I64(a % b));
             }
             Op::Neg => {
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = match a {
-                    Value::Int(n) => Value::Int(-n),
-                    Value::Float(f) => Value::Float(-f),
+                    Value::I64(n) => Value::I64(-n),
+                    Value::F64(f) => Value::F64(-f),
                     _ => return Err("runtime error: cannot negate non-numeric value".to_string()),
                 };
                 self.stack.push(result);
@@ -643,7 +661,7 @@ impl VM {
                 });
             }
             Op::Ret => {
-                let return_value = self.stack.pop().unwrap_or(Value::Nil);
+                let return_value = self.stack.pop().unwrap_or(Value::Null);
 
                 let frame = self.frames.pop().unwrap();
 
@@ -668,12 +686,12 @@ impl VM {
                 }
                 elements.reverse();
                 let r = self.heap.alloc_array(elements);
-                self.stack.push(Value::Ptr(r));
+                self.stack.push(Value::Ref(r));
             }
             Op::ArrayLen => {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val
-                    .as_ptr()
+                    .as_ref()
                     .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
@@ -684,12 +702,12 @@ impl VM {
                 } else {
                     return Err("runtime error: len expects array or string".to_string());
                 };
-                self.stack.push(Value::Int(len));
+                self.stack.push(Value::I64(len));
             }
             Op::ArrayGet => {
                 let index = self.pop_int()?;
                 let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+                let r = arr.as_ref().ok_or("runtime error: expected array")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let arr = obj.as_array().ok_or("runtime error: expected array")?;
 
@@ -708,7 +726,7 @@ impl VM {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let index = self.pop_int()?;
                 let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+                let r = arr.as_ref().ok_or("runtime error: expected array")?;
 
                 let obj = self
                     .heap
@@ -729,7 +747,7 @@ impl VM {
             Op::ArrayPush => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+                let r = arr.as_ref().ok_or("runtime error: expected array")?;
 
                 let obj = self
                     .heap
@@ -740,7 +758,7 @@ impl VM {
             }
             Op::ArrayPop => {
                 let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ptr().ok_or("runtime error: expected array")?;
+                let r = arr.as_ref().ok_or("runtime error: expected array")?;
 
                 let obj = self
                     .heap
@@ -754,7 +772,7 @@ impl VM {
                     .ok_or("runtime error: cannot pop from empty array")?;
                 self.stack.push(value);
             }
-            Op::AllocObject(n) => {
+            Op::New(n) => {
                 let mut fields = HashMap::new();
                 for _ in 0..n {
                     let value = self.stack.pop().ok_or("stack underflow")?;
@@ -762,7 +780,7 @@ impl VM {
 
                     // Key should be a string
                     let key_ref = key
-                        .as_ptr()
+                        .as_ref()
                         .ok_or("runtime error: object key must be a string")?;
                     let key_obj = self
                         .heap
@@ -774,11 +792,11 @@ impl VM {
                     fields.insert(key_str.value.clone(), value);
                 }
                 let r = self.heap.alloc_object_map(fields);
-                self.stack.push(Value::Ptr(r));
+                self.stack.push(Value::Ref(r));
             }
-            Op::GetField(str_idx) => {
+            Op::GetF(str_idx) => {
                 let obj = self.stack.pop().ok_or("stack underflow")?;
-                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+                let r = obj.as_ref().ok_or("runtime error: expected object")?;
 
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
@@ -787,16 +805,30 @@ impl VM {
                     .as_object()
                     .ok_or("runtime error: expected object")?;
 
-                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Nil);
+                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
-            Op::SetField(str_idx) => {
+            Op::SetF(str_idx) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let obj = self.stack.pop().ok_or("stack underflow")?;
-                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+                let r = obj.as_ref().ok_or("runtime error: expected object")?;
 
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
+                // Write barrier: get old value first (immutable borrow)
+                let old_value = {
+                    let heap_obj = self
+                        .heap
+                        .get(r)
+                        .ok_or("runtime error: invalid reference")?;
+                    let obj = heap_obj
+                        .as_object()
+                        .ok_or("runtime error: expected object")?;
+                    obj.fields.get(&field_name).copied().unwrap_or(Value::Null)
+                };
+                self.write_barrier(old_value);
+
+                // Now do the mutable update
                 let heap_obj = self
                     .heap
                     .get_mut(r)
@@ -809,10 +841,10 @@ impl VM {
             }
             Op::StringLen => {
                 let s = self.stack.pop().ok_or("stack underflow")?;
-                let r = s.as_ptr().ok_or("runtime error: expected string")?;
+                let r = s.as_ref().ok_or("runtime error: expected string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let s = obj.as_string().ok_or("runtime error: expected string")?;
-                self.stack.push(Value::Int(s.value.chars().count() as i64));
+                self.stack.push(Value::I64(s.value.chars().count() as i64));
             }
             Op::StringConcat => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
@@ -823,16 +855,16 @@ impl VM {
 
                 let result = format!("{}{}", a_str, b_str);
                 let r = self.heap.alloc_string(result);
-                self.stack.push(Value::Ptr(r));
+                self.stack.push(Value::Ref(r));
             }
             Op::TypeOf => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let type_name = match &value {
-                    Value::Int(_) => "int",
-                    Value::Float(_) => "float",
+                    Value::I64(_) => "int",
+                    Value::F64(_) => "float",
                     Value::Bool(_) => "bool",
-                    Value::Nil => "nil",
-                    Value::Ptr(r) => {
+                    Value::Null => "nil",
+                    Value::Ref(r) => {
                         if let Some(obj) = self.heap.get(*r) {
                             match obj.obj_type() {
                                 super::ObjectType::String => "string",
@@ -845,18 +877,18 @@ impl VM {
                     }
                 };
                 let r = self.heap.alloc_string(type_name.to_string());
-                self.stack.push(Value::Ptr(r));
+                self.stack.push(Value::Ref(r));
             }
             Op::ToString => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
                 let r = self.heap.alloc_string(s);
-                self.stack.push(Value::Ptr(r));
+                self.stack.push(Value::Ref(r));
             }
             Op::ParseInt => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let r = value
-                    .as_ptr()
+                    .as_ref()
                     .ok_or("runtime error: parse_int expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let s = obj
@@ -867,7 +899,7 @@ impl VM {
                     .trim()
                     .parse()
                     .map_err(|_| format!("runtime error: cannot parse '{}' as int", s.value))?;
-                self.stack.push(Value::Int(n));
+                self.stack.push(Value::I64(n));
             }
             Op::Throw => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -901,89 +933,89 @@ impl VM {
             }
 
             // Quickened arithmetic operations (specialized for known types)
-            Op::AddInt => {
+            Op::AddI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 // Fast path: both are ints (no type check needed after quickening)
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
-                    self.stack.push(Value::Int(a + b));
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
+                    self.stack.push(Value::I64(a + b));
                 } else {
                     // Fallback if types changed
                     let result = self.add(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::AddFloat => {
+            Op::AddF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Float(a), Value::Float(b)) = (a, b) {
-                    self.stack.push(Value::Float(a + b));
+                if let (Value::F64(a), Value::F64(b)) = (a, b) {
+                    self.stack.push(Value::F64(a + b));
                 } else {
                     let result = self.add(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::SubInt => {
+            Op::SubI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
-                    self.stack.push(Value::Int(a - b));
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
+                    self.stack.push(Value::I64(a - b));
                 } else {
                     let result = self.sub(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::SubFloat => {
+            Op::SubF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Float(a), Value::Float(b)) = (a, b) {
-                    self.stack.push(Value::Float(a - b));
+                if let (Value::F64(a), Value::F64(b)) = (a, b) {
+                    self.stack.push(Value::F64(a - b));
                 } else {
                     let result = self.sub(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::MulInt => {
+            Op::MulI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
-                    self.stack.push(Value::Int(a * b));
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
+                    self.stack.push(Value::I64(a * b));
                 } else {
                     let result = self.mul(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::MulFloat => {
+            Op::MulF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Float(a), Value::Float(b)) = (a, b) {
-                    self.stack.push(Value::Float(a * b));
+                if let (Value::F64(a), Value::F64(b)) = (a, b) {
+                    self.stack.push(Value::F64(a * b));
                 } else {
                     let result = self.mul(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::DivInt => {
+            Op::DivI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
                     if b == 0 {
                         return Err("runtime error: division by zero".to_string());
                     }
-                    self.stack.push(Value::Int(a / b));
+                    self.stack.push(Value::I64(a / b));
                 } else {
                     let result = self.div(a, b)?;
                     self.stack.push(result);
                 }
             }
-            Op::DivFloat => {
+            Op::DivF64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Float(a), Value::Float(b)) = (a, b) {
+                if let (Value::F64(a), Value::F64(b)) = (a, b) {
                     if b == 0.0 {
                         return Err("runtime error: division by zero".to_string());
                     }
-                    self.stack.push(Value::Float(a / b));
+                    self.stack.push(Value::F64(a / b));
                 } else {
                     let result = self.div(a, b)?;
                     self.stack.push(result);
@@ -991,43 +1023,55 @@ impl VM {
             }
 
             // Quickened comparison operations
-            Op::LtInt => {
+            Op::LtI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
                     self.stack.push(Value::Bool(a < b));
                 } else {
                     let result = self.compare(&a, &b)? < 0;
                     self.stack.push(Value::Bool(result));
                 }
             }
-            Op::LeInt => {
+            Op::LeI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
                     self.stack.push(Value::Bool(a <= b));
                 } else {
                     let result = self.compare(&a, &b)? <= 0;
                     self.stack.push(Value::Bool(result));
                 }
             }
-            Op::GtInt => {
+            Op::GtI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
                     self.stack.push(Value::Bool(a > b));
                 } else {
                     let result = self.compare(&a, &b)? > 0;
                     self.stack.push(Value::Bool(result));
                 }
             }
-            Op::GeInt => {
+            Op::GeI64 => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Int(a), Value::Int(b)) = (a, b) {
+                if let (Value::I64(a), Value::I64(b)) = (a, b) {
                     self.stack.push(Value::Bool(a >= b));
                 } else {
                     let result = self.compare(&a, &b)? >= 0;
+                    self.stack.push(Value::Bool(result));
+                }
+            }
+
+            // v0 Extension: F64 comparison
+            Op::LtF64 => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                if let (Value::F64(a), Value::F64(b)) = (a, b) {
+                    self.stack.push(Value::Bool(a < b));
+                } else {
+                    let result = self.compare(&a, &b)? < 0;
                     self.stack.push(Value::Bool(result));
                 }
             }
@@ -1036,7 +1080,7 @@ impl VM {
             Op::ArrayGetInt => {
                 let index = self.stack.pop().ok_or("stack underflow")?;
                 let arr = self.stack.pop().ok_or("stack underflow")?;
-                if let (Value::Ptr(r), Value::Int(index)) = (arr, index) {
+                if let (Value::Ref(r), Value::I64(index)) = (arr, index) {
                     let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                     let arr = obj.as_array().ok_or("runtime error: expected array")?;
                     if index < 0 || index as usize >= arr.elements.len() {
@@ -1054,11 +1098,11 @@ impl VM {
             }
 
             // Quickened field access (with cached offset - for future IC)
-            Op::GetFieldCached(str_idx, _cached_offset) => {
+            Op::GetFCached(str_idx, _cached_offset) => {
                 // For now, fall back to regular GetField
                 // Once IC is fully implemented, we'll use cached_offset
                 let obj = self.stack.pop().ok_or("stack underflow")?;
-                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+                let r = obj.as_ref().ok_or("runtime error: expected object")?;
 
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
@@ -1067,13 +1111,13 @@ impl VM {
                     .as_object()
                     .ok_or("runtime error: expected object")?;
 
-                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Nil);
+                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
-            Op::SetFieldCached(str_idx, _cached_offset) => {
+            Op::SetFCached(str_idx, _cached_offset) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let obj = self.stack.pop().ok_or("stack underflow")?;
-                let r = obj.as_ptr().ok_or("runtime error: expected object")?;
+                let r = obj.as_ref().ok_or("runtime error: expected object")?;
 
                 let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
 
@@ -1107,6 +1151,7 @@ impl VM {
                             Op::Call(func_index, 0), // Call the target function (must be 0-arity)
                             Op::Ret,                 // Return the result
                         ],
+                        stackmap: None,
                     };
 
                     let thread_chunk = Chunk {
@@ -1118,12 +1163,12 @@ impl VM {
 
                     match vm.run_and_get_result(&thread_chunk) {
                         Ok(result) => result,
-                        Err(_e) => Value::Nil,
+                        Err(_e) => Value::Null,
                     }
                 });
 
                 // Push the thread handle ID as the result
-                self.stack.push(Value::Int(thread_id as i64));
+                self.stack.push(Value::I64(thread_id as i64));
             }
             Op::ChannelCreate => {
                 // Create a new channel and return [sender_id, receiver_id]
@@ -1135,8 +1180,8 @@ impl VM {
                 // Create an array with [id, id] (sender and receiver share the channel)
                 let arr = self
                     .heap
-                    .alloc_array(vec![Value::Int(id as i64), Value::Int(id as i64)]);
-                self.stack.push(Value::Ptr(arr));
+                    .alloc_array(vec![Value::I64(id as i64), Value::I64(id as i64)]);
+                self.stack.push(Value::Ref(arr));
             }
             Op::ChannelSend => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -1161,7 +1206,7 @@ impl VM {
                     .ok_or_else(|| format!("runtime error: channel {} not found", channel_id))?
                     .clone();
 
-                let value = channel.recv().unwrap_or(Value::Nil);
+                let value = channel.recv().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
             Op::ThreadJoin => {
@@ -1190,9 +1235,9 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => (Value::Int(av + bv), Some(Op::AddInt)),
-                    (Value::Float(av), Value::Float(bv)) => {
-                        (Value::Float(av + bv), Some(Op::AddFloat))
+                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av + bv), Some(Op::AddI64)),
+                    (Value::F64(av), Value::F64(bv)) => {
+                        (Value::F64(av + bv), Some(Op::AddF64))
                     }
                     _ => (self.add(a, b)?, None),
                 };
@@ -1211,9 +1256,9 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => (Value::Int(av - bv), Some(Op::SubInt)),
-                    (Value::Float(av), Value::Float(bv)) => {
-                        (Value::Float(av - bv), Some(Op::SubFloat))
+                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av - bv), Some(Op::SubI64)),
+                    (Value::F64(av), Value::F64(bv)) => {
+                        (Value::F64(av - bv), Some(Op::SubF64))
                     }
                     _ => (self.sub(a, b)?, None),
                 };
@@ -1231,9 +1276,9 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => (Value::Int(av * bv), Some(Op::MulInt)),
-                    (Value::Float(av), Value::Float(bv)) => {
-                        (Value::Float(av * bv), Some(Op::MulFloat))
+                    (Value::I64(av), Value::I64(bv)) => (Value::I64(av * bv), Some(Op::MulI64)),
+                    (Value::F64(av), Value::F64(bv)) => {
+                        (Value::F64(av * bv), Some(Op::MulF64))
                     }
                     _ => (self.mul(a, b)?, None),
                 };
@@ -1251,7 +1296,7 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
 
                 let (result, quickened_op) = match (&a, &b) {
-                    (Value::Int(av), Value::Int(bv)) => (Value::Bool(av < bv), Some(Op::LtInt)),
+                    (Value::I64(av), Value::I64(bv)) => (Value::Bool(av < bv), Some(Op::LtI64)),
                     _ => (Value::Bool(self.compare(&a, &b)? < 0), None),
                 };
 
@@ -1346,11 +1391,11 @@ impl VM {
 
     fn add(&mut self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
-            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
-            (Value::Ptr(a), Value::Ptr(b)) => {
+            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a + b)),
+            (Value::F64(a), Value::F64(b)) => Ok(Value::F64(a + b)),
+            (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 + b)),
+            (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a + b as f64)),
+            (Value::Ref(a), Value::Ref(b)) => {
                 // String concatenation
                 let a_obj = self.heap.get(a).ok_or("runtime error: invalid reference")?;
                 let b_obj = self.heap.get(b).ok_or("runtime error: invalid reference")?;
@@ -1358,7 +1403,7 @@ impl VM {
                 if let (Some(a_str), Some(b_str)) = (a_obj.as_string(), b_obj.as_string()) {
                     let result = format!("{}{}", a_str.value, b_str.value);
                     let r = self.heap.alloc_string(result);
-                    return Ok(Value::Ptr(r));
+                    return Ok(Value::Ref(r));
                 }
 
                 Err("runtime error: cannot add these types".to_string())
@@ -1369,49 +1414,49 @@ impl VM {
 
     fn sub(&self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
-            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - b as f64)),
+            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a - b)),
+            (Value::F64(a), Value::F64(b)) => Ok(Value::F64(a - b)),
+            (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 - b)),
+            (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a - b as f64)),
             _ => Err("runtime error: cannot subtract these types".to_string()),
         }
     }
 
     fn mul(&self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
-            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
+            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a * b)),
+            (Value::F64(a), Value::F64(b)) => Ok(Value::F64(a * b)),
+            (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 * b)),
+            (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a * b as f64)),
             _ => Err("runtime error: cannot multiply these types".to_string()),
         }
     }
 
     fn div(&self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::Int(a), Value::Int(b)) => {
+            (Value::I64(a), Value::I64(b)) => {
                 if b == 0 {
                     return Err("runtime error: division by zero".to_string());
                 }
-                Ok(Value::Int(a / b))
+                Ok(Value::I64(a / b))
             }
-            (Value::Float(a), Value::Float(b)) => {
+            (Value::F64(a), Value::F64(b)) => {
                 if b == 0.0 {
                     return Err("runtime error: division by zero".to_string());
                 }
-                Ok(Value::Float(a / b))
+                Ok(Value::F64(a / b))
             }
-            (Value::Int(a), Value::Float(b)) => {
+            (Value::I64(a), Value::F64(b)) => {
                 if b == 0.0 {
                     return Err("runtime error: division by zero".to_string());
                 }
-                Ok(Value::Float(a as f64 / b))
+                Ok(Value::F64(a as f64 / b))
             }
-            (Value::Float(a), Value::Int(b)) => {
+            (Value::F64(a), Value::I64(b)) => {
                 if b == 0 {
                     return Err("runtime error: division by zero".to_string());
                 }
-                Ok(Value::Float(a / b as f64))
+                Ok(Value::F64(a / b as f64))
             }
             _ => Err("runtime error: cannot divide these types".to_string()),
         }
@@ -1419,15 +1464,15 @@ impl VM {
 
     fn compare(&self, a: &Value, b: &Value) -> Result<i32, String> {
         match (a, b) {
-            (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b) as i32),
-            (Value::Float(a), Value::Float(b)) => {
+            (Value::I64(a), Value::I64(b)) => Ok(a.cmp(b) as i32),
+            (Value::F64(a), Value::F64(b)) => {
                 Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0))
             }
-            (Value::Int(a), Value::Float(b)) => {
+            (Value::I64(a), Value::F64(b)) => {
                 let a = *a as f64;
                 Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0))
             }
-            (Value::Float(a), Value::Int(b)) => {
+            (Value::F64(a), Value::I64(b)) => {
                 let b = *b as f64;
                 Ok(a.partial_cmp(&b).map(|o| o as i32).unwrap_or(0))
             }
@@ -1437,13 +1482,13 @@ impl VM {
 
     fn values_equal(&self, a: &Value, b: &Value) -> bool {
         match (a, b) {
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
-            (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
-            (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
+            (Value::I64(a), Value::I64(b)) => a == b,
+            (Value::F64(a), Value::F64(b)) => a == b,
+            (Value::I64(a), Value::F64(b)) => (*a as f64) == *b,
+            (Value::F64(a), Value::I64(b)) => *a == (*b as f64),
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Nil, Value::Nil) => true,
-            (Value::Ptr(a_ref), Value::Ptr(b_ref)) => {
+            (Value::Null, Value::Null) => true,
+            (Value::Ref(a_ref), Value::Ref(b_ref)) => {
                 // Compare by content for strings
                 let a_obj = self.heap.get(*a_ref);
                 let b_obj = self.heap.get(*b_ref);
@@ -1465,8 +1510,8 @@ impl VM {
 
     fn value_to_string(&self, value: &Value) -> Result<String, String> {
         match value {
-            Value::Int(n) => Ok(n.to_string()),
-            Value::Float(f) => {
+            Value::I64(n) => Ok(n.to_string()),
+            Value::F64(f) => {
                 if f.fract() == 0.0 {
                     Ok(format!("{}.0", f))
                 } else {
@@ -1474,8 +1519,8 @@ impl VM {
                 }
             }
             Value::Bool(b) => Ok(b.to_string()),
-            Value::Nil => Ok("nil".to_string()),
-            Value::Ptr(r) => {
+            Value::Null => Ok("nil".to_string()),
+            Value::Ref(r) => {
                 let obj = self
                     .heap
                     .get(*r)
@@ -1503,7 +1548,7 @@ impl VM {
 
     fn pop_int(&mut self) -> Result<i64, String> {
         let value = self.stack.pop().ok_or("stack underflow")?;
-        value.as_int().ok_or_else(|| "expected integer".to_string())
+        value.as_i64().ok_or_else(|| "expected integer".to_string())
     }
 
     fn handle_exception(&mut self, error: String, _chunk: &Chunk) -> Result<bool, String> {
@@ -1519,7 +1564,7 @@ impl VM {
 
             // Push the error message as a string
             let error_ref = self.heap.alloc_string(error.clone());
-            self.stack.push(Value::Ptr(error_ref));
+            self.stack.push(Value::Ref(error_ref));
 
             // Jump to the handler
             if let Some(frame) = self.frames.last_mut()
@@ -1532,6 +1577,22 @@ impl VM {
 
         // No handler found
         Ok(false)
+    }
+
+    /// Write barrier for GC - called before overwriting a reference.
+    ///
+    /// For stop-the-world GC, this is a no-op. When concurrent GC is enabled,
+    /// this implements the SATB (Snapshot-At-The-Beginning) barrier to ensure
+    /// the old value is not lost during concurrent marking.
+    ///
+    /// This barrier must be called at:
+    /// - SETL: before storing to a local variable
+    /// - SETF: before storing to an object field
+    #[inline]
+    fn write_barrier(&self, _old_value: Value) {
+        // No-op for stop-the-world GC.
+        // When concurrent GC is integrated, this will call:
+        // self.concurrent_gc.write_barrier(old_value);
     }
 
     fn collect_garbage(&mut self) {
@@ -1565,6 +1626,7 @@ mod tests {
                 arity: 0,
                 locals_count: 0,
                 code: ops,
+                stackmap: None,
             },
             strings: vec![],
             debug: None,
@@ -1583,6 +1645,7 @@ mod tests {
                 arity: 0,
                 locals_count: 0,
                 code: ops,
+                stackmap: None,
             },
             strings,
             debug: None,
@@ -1596,31 +1659,31 @@ mod tests {
     #[test]
     fn test_push_int() {
         let stack = run_code(vec![Op::PushInt(42)]).unwrap();
-        assert_eq!(stack, vec![Value::Int(42)]);
+        assert_eq!(stack, vec![Value::I64(42)]);
     }
 
     #[test]
     fn test_push_float() {
         let stack = run_code(vec![Op::PushFloat(3.14)]).unwrap();
-        assert_eq!(stack, vec![Value::Float(3.14)]);
+        assert_eq!(stack, vec![Value::F64(3.14)]);
     }
 
     #[test]
     fn test_push_nil() {
-        let stack = run_code(vec![Op::PushNil]).unwrap();
-        assert_eq!(stack, vec![Value::Nil]);
+        let stack = run_code(vec![Op::PushNull]).unwrap();
+        assert_eq!(stack, vec![Value::Null]);
     }
 
     #[test]
     fn test_add() {
         let stack = run_code(vec![Op::PushInt(1), Op::PushInt(2), Op::Add]).unwrap();
-        assert_eq!(stack, vec![Value::Int(3)]);
+        assert_eq!(stack, vec![Value::I64(3)]);
     }
 
     #[test]
     fn test_add_float() {
         let stack = run_code(vec![Op::PushFloat(1.5), Op::PushFloat(2.5), Op::Add]).unwrap();
-        assert_eq!(stack, vec![Value::Float(4.0)]);
+        assert_eq!(stack, vec![Value::F64(4.0)]);
     }
 
     #[test]
@@ -1638,8 +1701,8 @@ mod tests {
 
     #[test]
     fn test_locals() {
-        let stack = run_code(vec![Op::PushInt(42), Op::StoreLocal(0), Op::LoadLocal(0)]).unwrap();
-        assert_eq!(stack, vec![Value::Int(42), Value::Int(42)]);
+        let stack = run_code(vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0)]).unwrap();
+        assert_eq!(stack, vec![Value::I64(42), Value::I64(42)]);
     }
 
     #[test]
@@ -1653,7 +1716,7 @@ mod tests {
             Op::PushInt(2),
         ])
         .unwrap();
-        assert_eq!(stack, vec![Value::Int(2)]);
+        assert_eq!(stack, vec![Value::I64(2)]);
     }
 
     #[test]
@@ -1667,7 +1730,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(stack.len(), 1);
-        assert_eq!(stack[0], Value::Int(3));
+        assert_eq!(stack[0], Value::I64(3));
     }
 
     #[test]
@@ -1679,6 +1742,81 @@ mod tests {
         .unwrap();
         assert_eq!(stack.len(), 1);
         // The result should be a string pointer
-        assert!(stack[0].is_ptr());
+        assert!(stack[0].is_ref());
+    }
+
+    #[test]
+    fn test_write_barrier_setl() {
+        // Test that SetL correctly calls write barrier when overwriting references.
+        // In stop-the-world GC the barrier is a no-op, but this verifies the code path.
+        //
+        // This test:
+        // 1. Stores an array in local 0
+        // 2. Overwrites local 0 with a new array (triggers write barrier)
+        // 3. Verifies execution completes successfully
+        let result = run_code(vec![
+            // Allocate array and store in local 0
+            Op::PushInt(1),
+            Op::AllocArray(1),
+            Op::SetL(0),
+            // Allocate another array
+            Op::PushInt(2),
+            Op::AllocArray(1),
+            // Overwrite local 0 (triggers write barrier, old value was array ref)
+            Op::SetL(0),
+            // Get local 0 to verify it's still a valid reference
+            Op::GetL(0),
+            Op::ArrayLen, // If we can get length, it's a valid array
+        ]);
+
+        assert!(result.is_ok(), "SetL write barrier test failed: {:?}", result);
+        // The last value should be the array length (1 element)
+        let stack = result.unwrap();
+        assert!(stack.iter().any(|v| *v == Value::I64(1)));
+    }
+
+    #[test]
+    fn test_write_barrier_setf() {
+        // Test that SetF correctly calls write barrier when overwriting object fields.
+        // In stop-the-world GC the barrier is a no-op, but this verifies the code path.
+        //
+        // SetF stack order: [object, value] with value on top
+        // Pop order: value first, then object
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 1,
+                code: vec![
+                    // Create object { x: 1 }
+                    Op::PushString(0), // "x"
+                    Op::PushInt(1),
+                    Op::New(1),
+                    Op::SetL(0),
+                    // Update object.x = 2 (triggers write barrier)
+                    // SetF expects stack: [object, value] (value on top)
+                    Op::GetL(0),       // push object
+                    Op::PushInt(2),    // push value
+                    Op::SetF(0),       // str_idx 0 = "x", stores 2 in object.x
+                    // Get the updated field to verify
+                    Op::GetL(0),
+                    Op::GetF(0),
+                ],
+                stackmap: None,
+            },
+            strings: vec!["x".to_string()],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(result.is_ok(), "SetF write barrier test failed: {:?}", result);
+
+        // The last pushed value should be the updated field value (2)
+        assert!(
+            vm.stack.iter().any(|v| *v == Value::I64(2)),
+            "Expected to find updated value 2 in stack"
+        );
     }
 }

@@ -25,11 +25,11 @@ impl JitValue {
     /// Convert VM Value to JIT representation.
     pub fn from_value(value: &Value) -> Self {
         match value {
-            Value::Int(n) => JitValue {
+            Value::I64(n) => JitValue {
                 tag: tags::TAG_INT,
                 payload: *n as u64,
             },
-            Value::Float(f) => JitValue {
+            Value::F64(f) => JitValue {
                 tag: tags::TAG_FLOAT,
                 payload: f.to_bits(),
             },
@@ -37,11 +37,11 @@ impl JitValue {
                 tag: tags::TAG_BOOL,
                 payload: if *b { 1 } else { 0 },
             },
-            Value::Nil => JitValue {
+            Value::Null => JitValue {
                 tag: tags::TAG_NIL,
                 payload: 0,
             },
-            Value::Ptr(gc_ref) => JitValue {
+            Value::Ref(gc_ref) => JitValue {
                 tag: tags::TAG_PTR,
                 payload: gc_ref.index as u64,
             },
@@ -51,16 +51,16 @@ impl JitValue {
     /// Convert JIT representation back to VM Value.
     pub fn to_value(&self) -> Value {
         match self.tag {
-            tags::TAG_INT => Value::Int(self.payload as i64),
-            tags::TAG_FLOAT => Value::Float(f64::from_bits(self.payload)),
+            tags::TAG_INT => Value::I64(self.payload as i64),
+            tags::TAG_FLOAT => Value::F64(f64::from_bits(self.payload)),
             tags::TAG_BOOL => Value::Bool(self.payload != 0),
-            tags::TAG_NIL => Value::Nil,
+            tags::TAG_NIL => Value::Null,
             tags::TAG_PTR => {
                 // Note: This is a simplified conversion. In a full implementation,
                 // we'd need to properly reconstruct the GcRef.
-                Value::Nil // Placeholder - pointer handling needs more work
+                Value::Null // Placeholder - pointer handling needs more work
             }
-            _ => Value::Nil, // Unknown tag
+            _ => Value::Null, // Unknown tag
         }
     }
 }
@@ -160,23 +160,23 @@ mod tests {
 
     #[test]
     fn test_int_roundtrip() {
-        let value = Value::Int(42);
+        let value = Value::I64(42);
         let jit_val = JitValue::from_value(&value);
         assert_eq!(jit_val.tag, tags::TAG_INT);
         assert_eq!(jit_val.payload, 42);
 
         let back = jit_val.to_value();
-        assert!(matches!(back, Value::Int(42)));
+        assert!(matches!(back, Value::I64(42)));
     }
 
     #[test]
     fn test_float_roundtrip() {
-        let value = Value::Float(3.14);
+        let value = Value::F64(3.14);
         let jit_val = JitValue::from_value(&value);
         assert_eq!(jit_val.tag, tags::TAG_FLOAT);
 
         let back = jit_val.to_value();
-        if let Value::Float(f) = back {
+        if let Value::F64(f) = back {
             assert!((f - 3.14).abs() < 0.0001);
         } else {
             panic!("Expected Float");
@@ -196,11 +196,11 @@ mod tests {
 
     #[test]
     fn test_nil_roundtrip() {
-        let value = Value::Nil;
+        let value = Value::Null;
         let jit_val = JitValue::from_value(&value);
         assert_eq!(jit_val.tag, tags::TAG_NIL);
 
         let back = jit_val.to_value();
-        assert!(matches!(back, Value::Nil));
+        assert!(matches!(back, Value::Null));
     }
 }

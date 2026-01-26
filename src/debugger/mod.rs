@@ -86,7 +86,7 @@ impl Debugger {
             breakpoints: HashSet::new(),
             line_breakpoints: HashSet::new(),
             stack: Vec::new(),
-            locals: vec![Value::Nil; 256], // Pre-allocate locals
+            locals: vec![Value::Null; 256], // Pre-allocate locals
             heap: Heap::new(),
             call_stack: vec![CallFrame {
                 func_name: "__main__".to_string(),
@@ -136,19 +136,19 @@ impl Debugger {
 
         // Execute the operation (simplified VM)
         match &op {
-            Op::PushInt(v) => self.stack.push(Value::Int(*v)),
-            Op::PushFloat(v) => self.stack.push(Value::Float(*v)),
+            Op::PushInt(v) => self.stack.push(Value::I64(*v)),
+            Op::PushFloat(v) => self.stack.push(Value::F64(*v)),
             Op::PushTrue => self.stack.push(Value::Bool(true)),
             Op::PushFalse => self.stack.push(Value::Bool(false)),
-            Op::PushNil => self.stack.push(Value::Nil),
+            Op::PushNull => self.stack.push(Value::Null),
             Op::Pop => {
                 self.stack.pop();
             }
-            Op::LoadLocal(slot) => {
+            Op::GetL(slot) => {
                 let val = self.locals[*slot];
                 self.stack.push(val);
             }
-            Op::StoreLocal(slot) => {
+            Op::SetL(slot) => {
                 if let Some(val) = self.stack.pop() {
                     self.locals[*slot] = val;
                 }
@@ -158,8 +158,8 @@ impl Debugger {
             Op::Mul => self.binary_op(|a, b| a * b),
             Op::Div => self.binary_op(|a, b| if b != 0 { a / b } else { 0 }),
             Op::Neg => {
-                if let Some(Value::Int(v)) = self.stack.pop() {
-                    self.stack.push(Value::Int(-v));
+                if let Some(Value::I64(v)) = self.stack.pop() {
+                    self.stack.push(Value::I64(-v));
                 }
             }
             Op::Print => {
@@ -199,27 +199,27 @@ impl Debugger {
     where
         F: Fn(i64, i64) -> i64,
     {
-        if let (Some(Value::Int(b)), Some(Value::Int(a))) = (self.stack.pop(), self.stack.pop()) {
-            self.stack.push(Value::Int(op(a, b)));
+        if let (Some(Value::I64(b)), Some(Value::I64(a))) = (self.stack.pop(), self.stack.pop()) {
+            self.stack.push(Value::I64(op(a, b)));
         }
     }
 
     fn is_truthy(&self, val: &Value) -> bool {
         match val {
             Value::Bool(b) => *b,
-            Value::Nil => false,
-            Value::Int(0) => false,
+            Value::Null => false,
+            Value::I64(0) => false,
             _ => true,
         }
     }
 
     fn format_value(&self, val: &Value) -> String {
         match val {
-            Value::Nil => "nil".to_string(),
+            Value::Null => "nil".to_string(),
             Value::Bool(b) => b.to_string(),
-            Value::Int(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::Ptr(_) => "<object>".to_string(),
+            Value::I64(i) => i.to_string(),
+            Value::F64(f) => f.to_string(),
+            Value::Ref(_) => "<object>".to_string(),
         }
     }
 
@@ -303,7 +303,7 @@ impl Debugger {
             "locals" => {
                 let mut locals_str = String::new();
                 for (i, val) in self.locals.iter().enumerate().take(8) {
-                    if !matches!(val, Value::Nil) {
+                    if !matches!(val, Value::Null) {
                         locals_str.push_str(&format!("[{}]={} ", i, self.format_value(val)));
                     }
                 }
@@ -421,7 +421,7 @@ impl Debugger {
             .iter()
             .enumerate()
             .take(8)
-            .filter(|(_, v)| !matches!(v, Value::Nil))
+            .filter(|(_, v)| !matches!(v, Value::Null))
             .map(|(i, v)| format!("[{}] = {}", i, self.format_value(v)))
             .collect();
         let locals = Paragraph::new(locals_text.join("\n"))
