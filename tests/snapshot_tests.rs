@@ -3,13 +3,18 @@ use std::path::Path;
 use std::process::Command;
 
 /// Run a .mica file with the mica CLI and return (stdout, stderr, exit_code)
-fn run_mica_file(path: &Path, extra_args: &[&str]) -> (String, String, i32) {
+fn run_mica_file(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -> (String, String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_mica"));
     cmd.arg("run");
+    cmd.arg(path);
+    // Extra args come after the file (CLI expects: run FILE [OPTIONS])
     for arg in extra_args {
         cmd.arg(arg);
     }
-    cmd.arg(path);
+
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
 
     let output = cmd.output().expect("failed to execute mica");
 
@@ -28,12 +33,46 @@ fn get_args_for_dir(dir_name: &str) -> Vec<&'static str> {
     }
 }
 
-/// Run a single snapshot test
-fn run_snapshot_test(mica_path: &Path, dir_name: &str) {
-    let extra_args = get_args_for_dir(dir_name);
-    let (actual_stdout, actual_stderr, actual_exitcode) = run_mica_file(mica_path, &extra_args);
+/// Run a single snapshot test (file-based or directory-based)
+fn run_snapshot_test(test_path: &Path, dir_name: &str) {
+    let mut extra_args: Vec<String> = get_args_for_dir(dir_name)
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
 
-    let base_path = mica_path.with_extension("");
+    // Determine if this is a directory-based test or file-based test
+    let (mica_path, working_dir, base_path) = if test_path.is_dir() {
+        // Directory-based test: look for main.mica as entry point
+        let main_mica = test_path.join("main.mica");
+        if !main_mica.exists() {
+            panic!(
+                "Directory test {:?} must contain main.mica",
+                test_path
+            );
+        }
+        // Expected output files are at the directory level (e.g., testdir.stdout)
+        (main_mica, Some(test_path), test_path.to_path_buf())
+    } else {
+        // File-based test
+        (test_path.to_path_buf(), None, test_path.with_extension(""))
+    };
+
+    // Check for .args file with extra CLI arguments
+    let args_path = base_path.with_extension("args");
+    if args_path.exists() {
+        let args_content = fs::read_to_string(&args_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", args_path, e));
+        for arg in args_content.lines() {
+            let arg = arg.trim();
+            if !arg.is_empty() && !arg.starts_with('#') {
+                extra_args.push(arg.to_string());
+            }
+        }
+    }
+
+    let extra_args_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
+    let (actual_stdout, actual_stderr, actual_exitcode) =
+        run_mica_file(&mica_path, &extra_args_refs, working_dir);
 
     // Check stdout (exact match)
     let stdout_path = base_path.with_extension("stdout");
@@ -74,11 +113,12 @@ fn run_snapshot_test(mica_path: &Path, dir_name: &str) {
     assert_eq!(
         actual_exitcode, expected_exitcode,
         "exit code mismatch for {:?}: expected {}, got {}",
-        mica_path, expected_exitcode, actual_exitcode
+        test_path, expected_exitcode, actual_exitcode
     );
 }
 
-/// Discover and run all .mica files in a directory
+/// Discover and run all tests in a directory
+/// Supports both file-based tests (.mica files) and directory-based tests (subdirectories with main.mica)
 fn run_snapshot_dir(dir: &str) {
     let dir_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -92,7 +132,18 @@ fn run_snapshot_dir(dir: &str) {
     let entries: Vec<_> = fs::read_dir(&dir_path)
         .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", dir_path, e))
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "mica"))
+        .filter(|e| {
+            let path = e.path();
+            // Include .mica files
+            if path.extension().map_or(false, |ext| ext == "mica") {
+                return true;
+            }
+            // Include directories that contain main.mica (multi-file tests)
+            if path.is_dir() && path.join("main.mica").exists() {
+                return true;
+            }
+            false
+        })
         .collect();
 
     for entry in entries {
@@ -114,4 +165,14 @@ fn snapshot_errors() {
 #[test]
 fn snapshot_jit() {
     run_snapshot_dir("jit");
+}
+
+#[test]
+fn snapshot_modules() {
+    run_snapshot_dir("modules");
+}
+
+#[test]
+fn snapshot_ffi() {
+    run_snapshot_dir("ffi");
 }
