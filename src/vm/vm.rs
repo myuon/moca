@@ -110,6 +110,16 @@ impl VM {
         &self.gc_stats
     }
 
+    /// Get immutable reference to the heap.
+    pub fn heap(&self) -> &Heap {
+        &self.heap
+    }
+
+    /// Get mutable reference to the heap.
+    pub fn heap_mut(&mut self) -> &mut Heap {
+        &mut self.heap
+    }
+
     /// Initialize IC tables for a chunk (call before run_with_ic).
     pub fn init_ic_tables(&mut self, chunk: &Chunk) {
         self.ic_tables.clear();
