@@ -110,7 +110,7 @@ impl ConcurrentGc {
         }
 
         // Only care about pointer values
-        if let Some(gc_ref) = old_value.as_ptr() {
+        if let Some(gc_ref) = old_value.as_ref() {
             // Add to SATB buffer for later processing
             if let Ok(mut buffer) = self.satb_buffer.lock() {
                 buffer.push(gc_ref);
@@ -134,7 +134,7 @@ impl ConcurrentGc {
         let start = std::time::Instant::now();
 
         // Collect root references
-        let root_refs: Vec<GcRef> = roots.iter().filter_map(|v| v.as_ptr()).collect();
+        let root_refs: Vec<GcRef> = roots.iter().filter_map(|v| v.as_ref()).collect();
 
         // Add roots to gray list
         {
@@ -278,9 +278,9 @@ mod tests {
         let mut gc = ConcurrentGc::new(true);
 
         let roots = vec![
-            Value::Int(42),
-            Value::Ptr(GcRef { index: 0 }),
-            Value::Ptr(GcRef { index: 1 }),
+            Value::I64(42),
+            Value::Ref(GcRef { index: 0 }),
+            Value::Ref(GcRef { index: 1 }),
         ];
 
         let marked = gc.start_initial_mark(&roots);
@@ -294,7 +294,7 @@ mod tests {
         let mut gc = ConcurrentGc::new(true);
 
         // Before marking, barrier should do nothing
-        gc.write_barrier(Value::Ptr(GcRef { index: 0 }));
+        gc.write_barrier(Value::Ref(GcRef { index: 0 }));
         {
             let buffer = gc.satb_buffer.lock().unwrap();
             assert!(buffer.is_empty());
@@ -304,9 +304,9 @@ mod tests {
         gc.start_initial_mark(&[]);
 
         // Now barrier should record old values
-        gc.write_barrier(Value::Ptr(GcRef { index: 5 }));
-        gc.write_barrier(Value::Int(42)); // Non-pointer, ignored
-        gc.write_barrier(Value::Ptr(GcRef { index: 10 }));
+        gc.write_barrier(Value::Ref(GcRef { index: 5 }));
+        gc.write_barrier(Value::I64(42)); // Non-pointer, ignored
+        gc.write_barrier(Value::Ref(GcRef { index: 10 }));
 
         {
             let buffer = gc.satb_buffer.lock().unwrap();
@@ -355,7 +355,7 @@ mod tests {
         let mut gc = ConcurrentGc::new(true);
 
         // Initial mark
-        gc.start_initial_mark(&[Value::Ptr(GcRef { index: 0 })]);
+        gc.start_initial_mark(&[Value::Ref(GcRef { index: 0 })]);
         assert_eq!(gc.phase(), GcPhase::ConcurrentMark);
 
         // Concurrent mark

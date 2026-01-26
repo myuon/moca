@@ -67,7 +67,7 @@ impl CompiledCode {
         F: Copy,
     {
         unsafe {
-            let ptr = self.memory.as_ptr().add(self.entry_offset);
+            let ptr = self.memory.as_ref().add(self.entry_offset);
             std::mem::transmute_copy(&ptr)
         }
     }
