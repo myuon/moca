@@ -13,6 +13,7 @@ This directory contains the technical specifications for micaVM, the mica byteco
 |----------|-------------|
 | [vm-core.md](vm-core.md) | Value types, instruction set, Verifier, StackMap, GC |
 | [c-api.md](c-api.md) | C API for embedding, bytecode serialization |
+| [testing.md](testing.md) | Snapshot testing infrastructure |
 
 ## Architecture
 
