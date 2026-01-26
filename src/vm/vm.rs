@@ -261,15 +261,54 @@ impl VM {
     }
 
     /// Execute a JIT compiled function (AArch64 with jit feature only).
+    ///
+    /// AArch64 ABI: Arguments passed in x0-x2, return value in x0/x1.
+    /// Function signature: fn(vm_ctx: *mut u8, stack: *mut JitValue, locals: *mut JitValue) -> JitReturn
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn execute_jit_function(
         &mut self,
-        _func_index: usize,
-        _argc: usize,
-        _func: &Function,
+        func_index: usize,
+        argc: usize,
+        func: &Function,
     ) -> Result<Value, String> {
-        // AArch64 JIT execution not yet implemented
-        Err("AArch64 JIT execution not implemented".to_string())
+        let compiled = self.jit_functions.get(&func_index).unwrap();
+
+        // Create JIT context with locals
+        let locals_count = func.locals_count;
+        let mut ctx = JitContext::new(locals_count);
+
+        // Pop arguments from VM stack and push to JIT stack (in reverse order)
+        let args: Vec<Value> = (0..argc)
+            .map(|_| self.stack.pop().unwrap())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        // Set up arguments as locals (arguments are the first locals)
+        for (i, arg) in args.iter().enumerate() {
+            ctx.set_local(i, JitValue::from_value(arg));
+        }
+
+        // Get the function pointer
+        // Signature: fn(vm_ctx: *mut u8, vstack: *mut JitValue, locals: *mut JitValue) -> JitReturn
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
+            unsafe { compiled.entry_point() };
+
+        // Execute the JIT code
+        // SAFETY: The compiled code follows AArch64 calling convention.
+        // vm_ctx is null (not used currently), stack and locals are valid pointers.
+        let result: JitReturn = unsafe { entry(std::ptr::null_mut(), ctx.stack, ctx.locals) };
+
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Executed function '{}', result: tag={}, payload={}",
+                func.name, result.tag, result.payload
+            );
+        }
+
+        // Convert return value to VM Value
+        Ok(result.to_value())
     }
 
     /// Get the number of JIT compilations performed.
