@@ -295,4 +295,120 @@ mod tests {
         assert!(!is_safepoint(&Op::Add, 5));
         assert!(!is_safepoint(&Op::GetL(0), 5));
     }
+
+    // ============================================================
+    // BCVM v0 Specification Compliance Tests
+    // ============================================================
+
+    /// Test: Spec 7.4 - RefBitset supports up to 64 slots
+    #[test]
+    fn test_spec_refbitset_max_slots() {
+        let mut bs = RefBitset::new();
+
+        // Set all 64 bits
+        for i in 0..64 {
+            bs.set(i);
+            assert!(bs.is_set(i), "Bit {} should be set", i);
+        }
+
+        // All 64 bits should be set
+        assert_eq!(bs.count_ones(), 64);
+
+        // Clear all
+        for i in 0..64 {
+            bs.clear(i);
+        }
+        assert_eq!(bs.count_ones(), 0);
+    }
+
+    /// Test: Spec 7.4 - RefBitset boundary conditions
+    #[test]
+    fn test_spec_refbitset_boundary() {
+        let mut bs = RefBitset::new();
+
+        // First and last slots
+        bs.set(0);
+        bs.set(63);
+        assert!(bs.is_set(0));
+        assert!(bs.is_set(63));
+        assert!(!bs.is_set(32)); // Middle should be clear
+
+        // Verify iteration
+        let indices: Vec<usize> = bs.iter_set_indices().collect();
+        assert_eq!(indices, vec![0, 63]);
+    }
+
+    /// Test: Spec 7.4 - StackMapEntry tracks references at safepoint
+    #[test]
+    fn test_spec_stackmap_entry_references() {
+        let mut entry = StackMapEntry::new(10, 5);
+
+        // Mark slots 1 and 3 as references on stack
+        entry.stack_ref_bits.set(1);
+        entry.stack_ref_bits.set(3);
+
+        // Mark local 0 as reference
+        entry.locals_ref_bits.set(0);
+
+        // Verify
+        assert_eq!(entry.pc, 10);
+        assert_eq!(entry.stack_height, 5);
+        assert!(entry.stack_ref_bits.is_set(1));
+        assert!(entry.stack_ref_bits.is_set(3));
+        assert!(!entry.stack_ref_bits.is_set(2));
+        assert!(entry.locals_ref_bits.is_set(0));
+    }
+
+    /// Test: Spec 7.3 - AllocArray is also a safepoint (GC may trigger)
+    #[test]
+    fn test_spec_alloc_array_safepoint() {
+        use super::super::ops::Op;
+
+        // Array allocation can trigger GC
+        assert!(is_safepoint(&Op::AllocArray(10), 5));
+    }
+
+    /// Test: Spec 7.4 - FunctionStackMap lookup by PC
+    #[test]
+    fn test_spec_stackmap_lookup() {
+        let mut fsm = FunctionStackMap::new();
+
+        // Add entries for different safepoints
+        fsm.add_entry(StackMapEntry::new(5, 2));
+        fsm.add_entry(StackMapEntry::new(10, 3));
+        fsm.add_entry(StackMapEntry::new(15, 1));
+
+        // Verify lookups
+        assert!(fsm.get(5).is_some());
+        assert!(fsm.get(10).is_some());
+        assert!(fsm.get(15).is_some());
+
+        // Non-existent entries
+        assert!(fsm.get(0).is_none());
+        assert!(fsm.get(7).is_none());
+        assert!(fsm.get(20).is_none());
+
+        // Verify correct stack heights
+        assert_eq!(fsm.get(5).unwrap().stack_height, 2);
+        assert_eq!(fsm.get(10).unwrap().stack_height, 3);
+        assert_eq!(fsm.get(15).unwrap().stack_height, 1);
+    }
+
+    /// Test: Spec 7.3 - All allocation operations are safepoints
+    #[test]
+    fn test_spec_all_allocation_safepoints() {
+        use super::super::ops::Op;
+
+        // Object allocation (NEW)
+        assert!(is_safepoint(&Op::New(0), 0));
+        assert!(is_safepoint(&Op::New(5), 0));
+
+        // Array allocation
+        assert!(is_safepoint(&Op::AllocArray(0), 0));
+        assert!(is_safepoint(&Op::AllocArray(100), 0));
+
+        // Function call (may allocate)
+        assert!(is_safepoint(&Op::Call(0, 0), 0));
+        assert!(is_safepoint(&Op::Call(5, 3), 0));
+    }
 }

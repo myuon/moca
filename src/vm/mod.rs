@@ -16,8 +16,12 @@ mod vm;
 pub use debug::{DebugInfo, FunctionDebugInfo};
 pub use heap::{Heap, HeapObject, ObjectType};
 pub use ops::Op;
+// StackMap types for precise GC (used by embedders/tools)
+#[allow(unused_imports)]
 pub use stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
 pub use value::Value;
+// Verifier for bytecode validation (used by embedders/tools)
+#[allow(unused_imports)]
 pub use verifier::{VerifyError, Verifier};
 pub use vm::VM;
 

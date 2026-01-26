@@ -226,4 +226,78 @@ mod tests {
         assert!(Value::Null.eq(&Value::Null));
         assert!(!Value::I64(1).eq(&Value::Null));
     }
+
+    // ============================================================
+    // BCVM v0 Specification Compliance Tests
+    // ============================================================
+
+    /// Test: Spec 7.1 - Value enum has exactly 5 variants per spec
+    #[test]
+    fn test_spec_value_variants() {
+        // Test that all 5 spec-defined value types can be created
+        let _i64_val = Value::I64(0);
+        let _f64_val = Value::F64(0.0);
+        let _bool_val = Value::Bool(false);
+        let _null_val = Value::Null;
+        let _ref_val = Value::Ref(GcRef { index: 0 });
+
+        // Verify type predicates
+        assert!(Value::I64(0).is_i64());
+        assert!(Value::F64(0.0).is_f64());
+        assert!(Value::Bool(false).is_bool());
+        assert!(Value::Null.is_null());
+        assert!(Value::Ref(GcRef { index: 0 }).is_ref());
+    }
+
+    /// Test: Spec 7.1 - Type names match spec
+    #[test]
+    fn test_spec_value_type_names() {
+        assert_eq!(Value::I64(0).type_name(), "i64");
+        assert_eq!(Value::F64(0.0).type_name(), "f64");
+        assert_eq!(Value::Bool(true).type_name(), "bool");
+        assert_eq!(Value::Null.type_name(), "null");
+        assert_eq!(Value::Ref(GcRef { index: 0 }).type_name(), "ref");
+    }
+
+    /// Test: Spec - Value is Copy (fits in 64-bit tagged pointer)
+    #[test]
+    fn test_spec_value_is_copy() {
+        let v1 = Value::I64(42);
+        let v2 = v1; // Copy
+        assert_eq!(v1, v2); // v1 is still valid (wasn't moved)
+    }
+
+    /// Test: Spec - I64 is full 64-bit signed integer
+    #[test]
+    fn test_spec_i64_range() {
+        // Min and max values
+        let min = Value::I64(i64::MIN);
+        let max = Value::I64(i64::MAX);
+
+        assert_eq!(min.as_i64(), Some(i64::MIN));
+        assert_eq!(max.as_i64(), Some(i64::MAX));
+    }
+
+    /// Test: Spec - F64 is IEEE 754 double precision
+    #[test]
+    fn test_spec_f64_precision() {
+        // Test floating point precision
+        let pi = Value::F64(std::f64::consts::PI);
+        assert_eq!(pi.as_f64(), Some(std::f64::consts::PI));
+
+        // Special values
+        let inf = Value::F64(f64::INFINITY);
+        let neg_inf = Value::F64(f64::NEG_INFINITY);
+
+        assert_eq!(inf.as_f64(), Some(f64::INFINITY));
+        assert_eq!(neg_inf.as_f64(), Some(f64::NEG_INFINITY));
+    }
+
+    /// Test: Spec - Bool to I64 coercion
+    #[test]
+    fn test_spec_bool_coercion() {
+        // Bool can be coerced to I64
+        assert_eq!(Value::Bool(true).as_i64(), Some(1));
+        assert_eq!(Value::Bool(false).as_i64(), Some(0));
+    }
 }

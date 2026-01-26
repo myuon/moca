@@ -575,4 +575,283 @@ mod tests {
         // Should pass because stackmap is None
         assert!(verifier.verify_function(&func).is_ok());
     }
+
+    // ============================================================
+    // BCVM v0 Specification Compliance Tests
+    // ============================================================
+
+    /// Test: Spec 7.5 - Stack overflow detection
+    #[test]
+    fn test_spec_stack_overflow() {
+        let verifier = Verifier { max_stack: 2 };
+        let func = Function {
+            name: "overflow".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(1),   // height: 1
+                Op::PushInt(2),   // height: 2
+                Op::PushInt(3),   // height: 3 -> OVERFLOW (max is 2)
+                Op::Ret,
+            ],
+            stackmap: None,
+        };
+
+        let result = verifier.verify_function(&func);
+        assert!(result.is_err());
+        match result {
+            Err(VerifyError::StackOverflow { pc, height, max }) => {
+                assert_eq!(pc, 2); // Third instruction
+                assert_eq!(height, 3);
+                assert_eq!(max, 2);
+            }
+            other => panic!("Expected StackOverflow, got {:?}", other),
+        }
+    }
+
+    /// Test: Spec 7.5 - Basic function with return
+    /// (MissingReturn check is not yet implemented in verifier)
+    #[test]
+    fn test_spec_function_with_return() {
+        let verifier = Verifier::new();
+        let func = Function {
+            name: "with_return".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(1),
+                Op::PushInt(2),
+                Op::AddI64,
+                Op::Ret, // Proper return
+            ],
+            stackmap: None,
+        };
+
+        // Should pass verification
+        let result = verifier.verify_function(&func);
+        assert!(result.is_ok());
+    }
+
+    /// Test: Spec 7.5 - Stack heights must match at control flow merge points
+    #[test]
+    fn test_spec_stack_height_at_merge() {
+        let verifier = Verifier::new();
+
+        // if-else with different stack heights at merge point
+        let func = Function {
+            name: "bad_merge".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushTrue,     // 0: height: 1
+                Op::JmpIfFalse(5), // 1: height: 0, jumps to 5
+                Op::PushInt(1),   // 2: height: 1
+                Op::PushInt(2),   // 3: height: 2
+                Op::Jmp(6),       // 4: jumps to 6 with height 2
+                Op::PushInt(3),   // 5: height: 1 (from jump)
+                Op::Ret,          // 6: merge point - heights don't match!
+            ],
+            stackmap: None,
+        };
+
+        let result = verifier.verify_function(&func);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(VerifyError::StackHeightMismatch { .. })));
+    }
+
+    /// Test: Spec 7.5 - Valid control flow with matching heights
+    #[test]
+    fn test_spec_valid_control_flow() {
+        let verifier = Verifier::new();
+
+        // if-else with same stack heights at merge point
+        let func = Function {
+            name: "good_merge".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushTrue,     // 0: height: 1
+                Op::JmpIfFalse(4), // 1: height: 0, jumps to 4
+                Op::PushInt(1),   // 2: height: 1
+                Op::Jmp(5),       // 3: jumps to 5 with height 1
+                Op::PushInt(2),   // 4: height: 1 (from jump)
+                Op::Ret,          // 5: merge point - heights match!
+            ],
+            stackmap: None,
+        };
+
+        let result = verifier.verify_function(&func);
+        assert!(result.is_ok());
+    }
+
+    /// Test: Spec 7.3 - CALL is a safepoint requiring StackMap
+    #[test]
+    fn test_spec_call_safepoint() {
+        use crate::vm::stackmap::{FunctionStackMap, StackMapEntry};
+
+        let mut stackmap = FunctionStackMap::new();
+        // Add entry for the CALL instruction at pc=1
+        stackmap.add_entry(StackMapEntry::new(1, 1));
+
+        let verifier = Verifier::new();
+        let func = Function {
+            name: "with_call".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(0),   // 0: function index
+                Op::Call(0, 0),   // 1: CALL is safepoint
+                Op::Ret,          // 2: return
+            ],
+            stackmap: Some(stackmap),
+        };
+
+        assert!(verifier.verify_function(&func).is_ok());
+    }
+
+    /// Test: Spec 7.3 - NEW is a safepoint requiring StackMap
+    #[test]
+    fn test_spec_new_safepoint() {
+        use crate::vm::stackmap::{FunctionStackMap, StackMapEntry};
+
+        let mut stackmap = FunctionStackMap::new();
+        // Add entry for the NEW instruction at pc=2
+        stackmap.add_entry(StackMapEntry::new(2, 2));
+
+        let verifier = Verifier::new();
+        let func = Function {
+            name: "with_new".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushString(0), // 0: field name
+                Op::PushInt(42),  // 1: field value
+                Op::New(1),       // 2: NEW is safepoint (allocates object)
+                Op::Ret,          // 3: return
+            ],
+            stackmap: Some(stackmap),
+        };
+
+        assert!(verifier.verify_function(&func).is_ok());
+    }
+
+    /// Test: Spec 7.3 - Backward jump is a safepoint
+    #[test]
+    fn test_spec_backward_jump_safepoint() {
+        use crate::vm::stackmap::{FunctionStackMap, StackMapEntry};
+
+        let mut stackmap = FunctionStackMap::new();
+        // Add entry for the backward jump at pc=2
+        stackmap.add_entry(StackMapEntry::new(2, 0));
+
+        let verifier = Verifier::new();
+        let func = Function {
+            name: "loop".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                // Simple infinite loop (for verification purposes)
+                Op::PushTrue,      // 0: height 1
+                Op::JmpIfFalse(3), // 1: height 0, jumps to 3 or falls through
+                Op::Jmp(0),        // 2: backward jump is safepoint, height 0
+                Op::PushInt(0),    // 3: exit point, height 1
+                Op::Ret,           // 4: return
+            ],
+            stackmap: Some(stackmap),
+        };
+
+        assert!(verifier.verify_function(&func).is_ok());
+    }
+
+    /// Test: Spec 7.5 - Jump target must be valid instruction boundary
+    #[test]
+    fn test_spec_jump_to_invalid_pc() {
+        let verifier = Verifier::new();
+        let func = Function {
+            name: "bad_jump".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::Jmp(100),  // Jump to non-existent instruction
+                Op::Ret,
+            ],
+            stackmap: None,
+        };
+
+        let result = verifier.verify_function(&func);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(VerifyError::InvalidJumpTarget { .. })));
+    }
+
+    /// Test: Spec - All typed arithmetic operations have correct stack effects
+    #[test]
+    fn test_spec_typed_arithmetic() {
+        let verifier = Verifier::new();
+
+        // I64 arithmetic
+        let func = Function {
+            name: "i64_arith".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(10),
+                Op::PushInt(5),
+                Op::AddI64,       // 10 + 5 = 15
+                Op::PushInt(3),
+                Op::SubI64,       // 15 - 3 = 12
+                Op::PushInt(2),
+                Op::MulI64,       // 12 * 2 = 24
+                Op::PushInt(4),
+                Op::DivI64,       // 24 / 4 = 6
+                Op::Ret,
+            ],
+            stackmap: None,
+        };
+        assert!(verifier.verify_function(&func).is_ok());
+
+        // F64 arithmetic
+        let func = Function {
+            name: "f64_arith".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushFloat(10.0),
+                Op::PushFloat(5.0),
+                Op::AddF64,
+                Op::PushFloat(3.0),
+                Op::SubF64,
+                Op::PushFloat(2.0),
+                Op::MulF64,
+                Op::PushFloat(4.0),
+                Op::DivF64,
+                Op::Ret,
+            ],
+            stackmap: None,
+        };
+        assert!(verifier.verify_function(&func).is_ok());
+    }
+
+    /// Test: Spec - Comparison operations have correct stack effects
+    #[test]
+    fn test_spec_comparison_ops() {
+        let verifier = Verifier::new();
+
+        let func = Function {
+            name: "compare".to_string(),
+            arity: 0,
+            locals_count: 0,
+            code: vec![
+                Op::PushInt(1),
+                Op::PushInt(2),
+                Op::LtI64,        // 1 < 2 = true
+                Op::PushFloat(1.5),
+                Op::PushFloat(2.5),
+                Op::LtF64,        // 1.5 < 2.5 = true
+                Op::Eq,           // true == true = true
+                Op::Ret,
+            ],
+            stackmap: None,
+        };
+        assert!(verifier.verify_function(&func).is_ok());
+    }
 }
