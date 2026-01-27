@@ -41,12 +41,6 @@ description: Moca プログラミング言語とバイトコード VM のドキ�
 |----------|-------------|
 | [testing.md](testing.md) | スナップショットテストの仕様。.mc ファイルと期待出力を外部ファイルで管理するテストインフラストラクチャ。 |
 
-### Contributing
-
-| Document | Description |
-|----------|-------------|
-| [CONTRIBUTING.md](CONTRIBUTING.md) | ドキュメントの書き方ガイド。frontmatter の形式、構造、スタイルガイドを定義。 |
-
 ## Architecture
 
 ```
@@ -105,3 +99,60 @@ int main() {
     return 0;
 }
 ```
+
+## Writing Guide
+
+新しいドキュメントを追加する際のガイドラインです。
+
+### Frontmatter
+
+すべてのドキュメントには YAML frontmatter を含めてください：
+
+```yaml
+---
+title: Document Title
+description: 1-2文でドキュメントの内容を要約。
+---
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `title` | Yes | ドキュメントのタイトル |
+| `description` | Yes | 1-2文の要約。ファイルを開かなくても内容が分かるようにする |
+
+### Document Structure
+
+```markdown
+# Document Title (h1) - 1つのみ
+
+## Major Section (h2)
+
+### Subsection (h3)
+```
+
+仕様ドキュメントの推奨構造：
+
+1. **Overview** - 機能の概要と目的
+2. **Specification** - 詳細仕様
+3. **Examples** - コード例
+4. **Implementation** - 実装ファイルへの参照
+
+### Code Blocks
+
+言語を明示してシンタックスハイライトを有効にする。Moca コードには `mc` を使用：
+
+````markdown
+```mc
+let x = 42;
+print(x);
+```
+````
+
+### File Naming
+
+- 小文字、ハイフン区切り: `vm-core.md`, `c-api.md`
+- 内容を表す名前: `language.md`, `testing.md`
+
+### Adding Documents
+
+新規ドキュメント追加時は、この README.md の Documents セクションにも追加してください。
