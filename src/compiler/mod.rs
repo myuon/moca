@@ -116,7 +116,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     }
 
     // Execution with runtime configuration
-    let mut vm = VM::new();
+    let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
     vm.set_jit_config(config.jit_threshold, config.trace_jit);
 
     // Use quickening mode for better performance
@@ -197,7 +197,7 @@ pub fn run_file_with_dump(
     }
 
     // Execution with runtime configuration
-    let mut vm = VM::new();
+    let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
     vm.set_jit_config(config.jit_threshold, config.trace_jit);
 
     // Use quickening mode for better performance

@@ -30,6 +30,10 @@ pub struct RuntimeConfig {
     pub trace_jit: bool,
     pub gc_mode: GcMode,
     pub gc_stats: bool,
+    /// Whether GC is enabled (default: true)
+    pub gc_enabled: bool,
+    /// Hard limit on heap size in bytes (None = unlimited)
+    pub heap_limit: Option<usize>,
 }
 
 impl Default for RuntimeConfig {
@@ -40,6 +44,8 @@ impl Default for RuntimeConfig {
             trace_jit: false,
             gc_mode: GcMode::Stw,
             gc_stats: false,
+            gc_enabled: true,
+            heap_limit: None,
         }
     }
 }

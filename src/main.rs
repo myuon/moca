@@ -161,6 +161,7 @@ fn main() -> ExitCode {
                 trace_jit,
                 gc_mode: gc_mode.into(),
                 gc_stats,
+                ..Default::default()
             };
 
             let dump_opts = compiler::DumpOptions {
