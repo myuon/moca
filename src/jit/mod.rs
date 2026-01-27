@@ -16,8 +16,6 @@
 
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
 mod codebuf;
 #[cfg(target_arch = "aarch64")]
 pub mod compiler;
@@ -26,3 +24,5 @@ pub mod compiler_x86_64;
 pub mod marshal;
 mod memory;
 pub mod stackmap;
+#[cfg(target_arch = "x86_64")]
+pub mod x86_64;

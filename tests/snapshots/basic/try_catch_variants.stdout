@@ -1,0 +1,5 @@
+no error
+after no throw
+caught: runtime error: error occurred
+inner catch: runtime error: inner error
+outer catch: runtime error: rethrow

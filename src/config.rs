@@ -28,6 +28,7 @@ pub struct RuntimeConfig {
     pub jit_mode: JitMode,
     pub jit_threshold: u32,
     pub trace_jit: bool,
+    #[allow(dead_code)] // Reserved for future GC configuration
     pub gc_mode: GcMode,
     pub gc_stats: bool,
 }

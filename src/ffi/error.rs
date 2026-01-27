@@ -2,6 +2,7 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::collapsible_if)]
+#![allow(clippy::missing_safety_doc)]
 
 use super::types::{MocaVm, VmWrapper};
 use super::vm_ffi::get_wrapper;

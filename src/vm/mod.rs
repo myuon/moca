@@ -23,7 +23,7 @@ pub use stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
 pub use value::Value;
 // Verifier for bytecode validation (used by embedders/tools)
 #[allow(unused_imports)]
-pub use verifier::{VerifyError, Verifier};
+pub use verifier::{Verifier, VerifyError};
 pub use vm::VM;
 
 /// A compiled function.
