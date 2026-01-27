@@ -41,6 +41,12 @@ description: Moca プログラミング言語とバイトコード VM のドキ�
 |----------|-------------|
 | [testing.md](testing.md) | スナップショットテストの仕様。.mc ファイルと期待出力を外部ファイルで管理するテストインフラストラクチャ。 |
 
+### Contributing
+
+| Document | Description |
+|----------|-------------|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | ドキュメントの書き方ガイド。frontmatter の形式、構造、スタイルガイドを定義。 |
+
 ## Architecture
 
 ```
