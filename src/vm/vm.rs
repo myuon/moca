@@ -826,10 +826,7 @@ impl VM {
 
                 // Write barrier: get old value first (immutable borrow)
                 let old_value = {
-                    let heap_obj = self
-                        .heap
-                        .get(r)
-                        .ok_or("runtime error: invalid reference")?;
+                    let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                     let obj = heap_obj
                         .as_object()
                         .ok_or("runtime error: expected object")?;
@@ -1245,9 +1242,7 @@ impl VM {
 
                 let (result, quickened_op) = match (&a, &b) {
                     (Value::I64(av), Value::I64(bv)) => (Value::I64(av + bv), Some(Op::AddI64)),
-                    (Value::F64(av), Value::F64(bv)) => {
-                        (Value::F64(av + bv), Some(Op::AddF64))
-                    }
+                    (Value::F64(av), Value::F64(bv)) => (Value::F64(av + bv), Some(Op::AddF64)),
                     _ => (self.add(a, b)?, None),
                 };
 
@@ -1266,9 +1261,7 @@ impl VM {
 
                 let (result, quickened_op) = match (&a, &b) {
                     (Value::I64(av), Value::I64(bv)) => (Value::I64(av - bv), Some(Op::SubI64)),
-                    (Value::F64(av), Value::F64(bv)) => {
-                        (Value::F64(av - bv), Some(Op::SubF64))
-                    }
+                    (Value::F64(av), Value::F64(bv)) => (Value::F64(av - bv), Some(Op::SubF64)),
                     _ => (self.sub(a, b)?, None),
                 };
 
@@ -1286,9 +1279,7 @@ impl VM {
 
                 let (result, quickened_op) = match (&a, &b) {
                     (Value::I64(av), Value::I64(bv)) => (Value::I64(av * bv), Some(Op::MulI64)),
-                    (Value::F64(av), Value::F64(bv)) => {
-                        (Value::F64(av * bv), Some(Op::MulF64))
-                    }
+                    (Value::F64(av), Value::F64(bv)) => (Value::F64(av * bv), Some(Op::MulF64)),
                     _ => (self.mul(a, b)?, None),
                 };
 
@@ -1325,14 +1316,20 @@ impl VM {
                 // Check if this function is hot
                 if self.should_jit_compile(*func_idx, &func_name) {
                     // Compile the function with JIT (architecture-specific)
-                    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+                    #[cfg(all(
+                        any(target_arch = "aarch64", target_arch = "x86_64"),
+                        feature = "jit"
+                    ))]
                     {
                         let func_clone = func.clone();
                         self.jit_compile_function(&func_clone, *func_idx);
                     }
 
                     // On unsupported platforms or without jit feature, just log that compilation would happen
-                    #[cfg(not(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit")))]
+                    #[cfg(not(all(
+                        any(target_arch = "aarch64", target_arch = "x86_64"),
+                        feature = "jit"
+                    )))]
                     if self.trace_jit {
                         eprintln!("[JIT] Would compile '{}' (JIT not available)", func_name);
                         self.jit_compile_count += 1;
@@ -1351,7 +1348,8 @@ impl VM {
                 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
                 if self.is_jit_compiled(*func_idx) {
                     // Execute JIT compiled function
-                    let result = self.execute_jit_function(*func_idx, *argc, &chunk.functions[*func_idx]);
+                    let result =
+                        self.execute_jit_function(*func_idx, *argc, &chunk.functions[*func_idx]);
                     match result {
                         Ok(ret_val) => {
                             // Push return value onto stack
@@ -1474,9 +1472,7 @@ impl VM {
     fn compare(&self, a: &Value, b: &Value) -> Result<i32, String> {
         match (a, b) {
             (Value::I64(a), Value::I64(b)) => Ok(a.cmp(b) as i32),
-            (Value::F64(a), Value::F64(b)) => {
-                Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0))
-            }
+            (Value::F64(a), Value::F64(b)) => Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0)),
             (Value::I64(a), Value::F64(b)) => {
                 let a = *a as f64;
                 Ok(a.partial_cmp(b).map(|o| o as i32).unwrap_or(0))
@@ -1778,7 +1774,11 @@ mod tests {
             Op::ArrayLen, // If we can get length, it's a valid array
         ]);
 
-        assert!(result.is_ok(), "SetL write barrier test failed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "SetL write barrier test failed: {:?}",
+            result
+        );
         // The last value should be the array length (1 element)
         let stack = result.unwrap();
         assert!(stack.iter().any(|v| *v == Value::I64(1)));
@@ -1805,9 +1805,9 @@ mod tests {
                     Op::SetL(0),
                     // Update object.x = 2 (triggers write barrier)
                     // SetF expects stack: [object, value] (value on top)
-                    Op::GetL(0),       // push object
-                    Op::PushInt(2),    // push value
-                    Op::SetF(0),       // str_idx 0 = "x", stores 2 in object.x
+                    Op::GetL(0),    // push object
+                    Op::PushInt(2), // push value
+                    Op::SetF(0),    // str_idx 0 = "x", stores 2 in object.x
                     // Get the updated field to verify
                     Op::GetL(0),
                     Op::GetF(0),
@@ -1820,7 +1820,11 @@ mod tests {
 
         let mut vm = VM::new();
         let result = vm.run(&chunk);
-        assert!(result.is_ok(), "SetF write barrier test failed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "SetF write barrier test failed: {:?}",
+            result
+        );
 
         // The last pushed value should be the updated field value (2)
         assert!(

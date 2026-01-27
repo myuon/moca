@@ -25,8 +25,8 @@ pub enum Op {
     // ========================================
     // v0 Core: Local Variables
     // ========================================
-    GetL(usize),   // GETL: Push local (renamed from LoadLocal)
-    SetL(usize),   // SETL: Store local with write barrier (renamed from StoreLocal)
+    GetL(usize), // GETL: Push local (renamed from LoadLocal)
+    SetL(usize), // SETL: Store local with write barrier (renamed from StoreLocal)
 
     // ========================================
     // v0 Core: Arithmetic (generic)
@@ -39,21 +39,21 @@ pub enum Op {
     Neg,
 
     // v0 Core: Typed arithmetic (I64)
-    AddI64,   // ADD_I64: i64 + i64 -> i64 (renamed from AddInt)
-    SubI64,   // SUB_I64: i64 - i64 -> i64 (renamed from SubInt)
-    MulI64,   // MUL_I64: i64 * i64 -> i64 (renamed from MulInt)
-    DivI64,   // DIV_I64: i64 / i64 -> i64 (renamed from DivInt)
+    AddI64, // ADD_I64: i64 + i64 -> i64 (renamed from AddInt)
+    SubI64, // SUB_I64: i64 - i64 -> i64 (renamed from SubInt)
+    MulI64, // MUL_I64: i64 * i64 -> i64 (renamed from MulInt)
+    DivI64, // DIV_I64: i64 / i64 -> i64 (renamed from DivInt)
 
     // v0 Extension: Typed arithmetic (F64)
-    AddF64,   // ADD_F64: f64 + f64 -> f64 (renamed from AddFloat)
-    SubF64,   // SUB_F64: f64 - f64 -> f64 (renamed from SubFloat)
-    MulF64,   // MUL_F64: f64 * f64 -> f64 (renamed from MulFloat)
-    DivF64,   // DIV_F64: f64 / f64 -> f64 (renamed from DivFloat)
+    AddF64, // ADD_F64: f64 + f64 -> f64 (renamed from AddFloat)
+    SubF64, // SUB_F64: f64 - f64 -> f64 (renamed from SubFloat)
+    MulF64, // MUL_F64: f64 * f64 -> f64 (renamed from MulFloat)
+    DivF64, // DIV_F64: f64 / f64 -> f64 (renamed from DivFloat)
 
     // ========================================
     // v0 Core: Comparison
     // ========================================
-    Eq,  // EQ: same-type equality
+    Eq, // EQ: same-type equality
     Ne,
     Lt,
     Le,
@@ -90,9 +90,9 @@ pub enum Op {
     // ========================================
     // v0 Core: Heap & Objects
     // ========================================
-    New(usize),   // NEW: Allocate object (renamed from AllocObject)
-    GetF(usize),  // GETF: Get field by string index (renamed from GetField)
-    SetF(usize),  // SETF: Set field with write barrier (renamed from SetField)
+    New(usize),  // NEW: Allocate object (renamed from AllocObject)
+    GetF(usize), // GETF: Get field by string index (renamed from GetField)
+    SetF(usize), // SETF: Set field with write barrier (renamed from SetField)
 
     // Quickened field access (with cached offset) - extension
     GetFCached(usize, u16), // (field_name_idx, cached_offset)

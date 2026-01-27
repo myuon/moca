@@ -49,7 +49,13 @@ fn run_dump_test(path: &Path, dump_type: &str) -> (String, String, i32) {
     let dump_result = match dump_type {
         "ast" => dump_ast(path),
         "bytecode" => dump_bytecode(path),
-        _ => return (String::new(), format!("unknown dump type: {}", dump_type), 1),
+        _ => {
+            return (
+                String::new(),
+                format!("unknown dump type: {}", dump_type),
+                1,
+            );
+        }
     };
 
     let dump_output = match dump_result {
@@ -122,7 +128,9 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
         assert!(
             actual_stderr.contains(&expected_stderr),
             "stderr mismatch for {:?}\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
-            moca_path, expected_stderr, actual_stderr
+            moca_path,
+            expected_stderr,
+            actual_stderr
         );
     }
 

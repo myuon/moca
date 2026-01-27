@@ -49,7 +49,8 @@ impl From<Result<(), String>> for MocaResult {
 /// Error callback function type.
 ///
 /// Called when an error occurs, with the error message and user data.
-pub type MocaErrorFn = Option<unsafe extern "C" fn(message: *const c_char, userdata: *mut std::ffi::c_void)>;
+pub type MocaErrorFn =
+    Option<unsafe extern "C" fn(message: *const c_char, userdata: *mut std::ffi::c_void)>;
 
 /// Host function type.
 ///

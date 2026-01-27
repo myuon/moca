@@ -695,12 +695,7 @@ mod tests {
             name: "test".to_string(),
             arity: 0,
             locals_count: 1,
-            code: vec![
-                Op::PushInt(42),
-                Op::SetL(0),
-                Op::GetL(0),
-                Op::Ret,
-            ],
+            code: vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0), Op::Ret],
         };
 
         let compiler = JitCompiler::new();
@@ -732,15 +727,15 @@ mod tests {
             locals_count: 1,
             code: vec![
                 Op::PushInt(0),    // 0: push 0
-                Op::SetL(0), // 1: i = 0
-                Op::GetL(0),  // 2: push i (loop start)
+                Op::SetL(0),       // 1: i = 0
+                Op::GetL(0),       // 2: push i (loop start)
                 Op::PushInt(10),   // 3: push 10
                 Op::LtI64,         // 4: i < 10
                 Op::JmpIfFalse(9), // 5: if false, exit
-                Op::GetL(0),  // 6: push i
+                Op::GetL(0),       // 6: push i
                 Op::PushInt(1),    // 7: push 1
                 Op::AddI64,        // 8: i + 1
-                Op::SetL(0), // 9: i = i + 1  (target of JmpIfFalse)
+                Op::SetL(0),       // 9: i = i + 1  (target of JmpIfFalse)
                 Op::Jmp(2),        // 10: goto loop start
                 Op::Ret,           // 11: return
             ],

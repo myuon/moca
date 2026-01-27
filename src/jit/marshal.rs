@@ -82,7 +82,14 @@ impl JitContext {
     /// Create a new JIT context with allocated stack and locals.
     pub fn new(locals_count: usize) -> Self {
         let stack = vec![JitValue { tag: 0, payload: 0 }; 256].into_boxed_slice();
-        let locals = vec![JitValue { tag: tags::TAG_NIL, payload: 0 }; locals_count].into_boxed_slice();
+        let locals = vec![
+            JitValue {
+                tag: tags::TAG_NIL,
+                payload: 0
+            };
+            locals_count
+        ]
+        .into_boxed_slice();
 
         JitContext {
             stack: Box::into_raw(stack) as *mut JitValue,
@@ -124,7 +131,10 @@ impl Drop for JitContext {
         unsafe {
             // Reconstruct boxes and drop them
             let _ = Box::from_raw(std::slice::from_raw_parts_mut(self.stack, 256));
-            let _ = Box::from_raw(std::slice::from_raw_parts_mut(self.locals, self.locals_count));
+            let _ = Box::from_raw(std::slice::from_raw_parts_mut(
+                self.locals,
+                self.locals_count,
+            ));
         }
     }
 }

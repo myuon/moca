@@ -54,22 +54,22 @@ impl Reg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Cond {
-    O = 0x0,   // Overflow
-    No = 0x1,  // Not overflow
-    B = 0x2,   // Below (unsigned <)
-    Ae = 0x3,  // Above or equal (unsigned >=)
-    E = 0x4,   // Equal
-    Ne = 0x5,  // Not equal
-    Be = 0x6,  // Below or equal (unsigned <=)
-    A = 0x7,   // Above (unsigned >)
-    S = 0x8,   // Sign (negative)
-    Ns = 0x9,  // Not sign (non-negative)
-    P = 0xA,   // Parity even
-    Np = 0xB,  // Parity odd
-    L = 0xC,   // Less (signed <)
-    Ge = 0xD,  // Greater or equal (signed >=)
-    Le = 0xE,  // Less or equal (signed <=)
-    G = 0xF,   // Greater (signed >)
+    O = 0x0,  // Overflow
+    No = 0x1, // Not overflow
+    B = 0x2,  // Below (unsigned <)
+    Ae = 0x3, // Above or equal (unsigned >=)
+    E = 0x4,  // Equal
+    Ne = 0x5, // Not equal
+    Be = 0x6, // Below or equal (unsigned <=)
+    A = 0x7,  // Above (unsigned >)
+    S = 0x8,  // Sign (negative)
+    Ns = 0x9, // Not sign (non-negative)
+    P = 0xA,  // Parity even
+    Np = 0xB, // Parity odd
+    L = 0xC,  // Less (signed <)
+    Ge = 0xD, // Greater or equal (signed >=)
+    Le = 0xE, // Less or equal (signed <=)
+    G = 0xF,  // Greater (signed >)
 }
 
 impl Cond {
@@ -480,7 +480,12 @@ impl<'a> X86_64Assembler<'a> {
 
     /// SETcc r8 (set byte based on condition)
     pub fn setcc(&mut self, cond: Cond, dst: Reg) {
-        if dst.needs_rex_ext() || dst == Reg::Rsp || dst == Reg::Rbp || dst == Reg::Rsi || dst == Reg::Rdi {
+        if dst.needs_rex_ext()
+            || dst == Reg::Rsp
+            || dst == Reg::Rbp
+            || dst == Reg::Rsi
+            || dst == Reg::Rdi
+        {
             // Need REX prefix to access SPL, BPL, SIL, DIL or R8B-R15B
             self.buf.emit_u8(0x40 | dst.rex_b());
         }

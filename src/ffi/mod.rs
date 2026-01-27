@@ -10,26 +10,26 @@
 //! - Valid VM instances created by `moca_vm_new()`
 //! - Proper lifetime management (VM must outlive all operations)
 
-mod types;
-mod vm_ffi;
-mod stack;
 mod call;
 mod error;
 mod load;
+mod stack;
+mod types;
+mod vm_ffi;
 
 // Re-export all FFI types and functions for public use
-#[allow(unused_imports)]
-pub use types::*;
-#[allow(unused_imports)]
-pub use vm_ffi::*;
-#[allow(unused_imports)]
-pub use stack::*;
 #[allow(unused_imports)]
 pub use call::*;
 #[allow(unused_imports)]
 pub use error::*;
 #[allow(unused_imports)]
 pub use load::*;
+#[allow(unused_imports)]
+pub use stack::*;
+#[allow(unused_imports)]
+pub use types::*;
+#[allow(unused_imports)]
+pub use vm_ffi::*;
 
 /// Version information
 pub const MOCA_VERSION_MAJOR: u32 = 0;
@@ -71,11 +71,7 @@ mod tests {
         assert_eq!(moca_version_minor(), 1);
         assert_eq!(moca_version_patch(), 0);
 
-        let version = unsafe {
-            std::ffi::CStr::from_ptr(moca_version())
-                .to_str()
-                .unwrap()
-        };
+        let version = unsafe { std::ffi::CStr::from_ptr(moca_version()).to_str().unwrap() };
         assert_eq!(version, "0.1.0");
     }
 }
