@@ -757,4 +757,156 @@ mod compiler_api_tests {
             print(a % b);
         "#).unwrap();
     }
+
+    // Tests for ast.rs Expr::span() coverage (Object, StructLiteral patterns)
+    #[test]
+    fn test_type_error_in_object_literal() {
+        // Error occurs in object literal, triggering Expr::Object span()
+        let err = compile_expect_error(r#"
+            let obj: {x: int} = { x: "not an int" };
+        "#);
+        assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
+    }
+
+    #[test]
+    fn test_type_error_in_struct_literal() {
+        // Error occurs in struct literal, triggering Expr::StructLiteral span()
+        let err = compile_expect_error(r#"
+            struct Point { x: int, y: int }
+            let p: Point = Point { x: "bad", y: 2 };
+        "#);
+        assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
+    }
+
+    #[test]
+    fn test_object_field_type_inference() {
+        // Test object type inference paths
+        compile_and_run(r#"
+            let obj = { name: "test", value: 42, flag: true };
+            print(obj.name);
+            print(obj.value);
+            print(obj.flag);
+        "#).unwrap();
+    }
+
+    #[test]
+    fn test_struct_literal_all_fields() {
+        // Test struct literal with all field types
+        compile_and_run(r#"
+            struct Data {
+                num: int,
+                text: string,
+                flag: bool
+            }
+            let d = Data { num: 100, text: "hello", flag: false };
+            print(d.num);
+            print(d.text);
+            print(d.flag);
+        "#).unwrap();
+    }
+
+    // Additional typechecker coverage tests
+    #[test]
+    fn test_type_error_object_missing_field() {
+        let err = compile_expect_error(r#"
+            let obj: {x: int, y: int} = { x: 1 };
+        "#);
+        assert!(err.contains("field") || err.contains("y") || err.contains("expected"));
+    }
+
+    #[test]
+    fn test_type_error_struct_missing_field() {
+        let err = compile_expect_error(r#"
+            struct Point { x: int, y: int }
+            let p = Point { x: 1 };
+        "#);
+        assert!(err.contains("field") || err.contains("y") || err.contains("expected"));
+    }
+
+    #[test]
+    fn test_nullable_assignment() {
+        compile_and_run(r#"
+            var x: int? = 42;
+            x = nil;
+            print(x);
+            x = 100;
+            print(x);
+        "#).unwrap();
+    }
+
+    #[test]
+    fn test_type_annotation_array_nested() {
+        compile_and_run(r#"
+            let arr: array<array<int>> = [[1, 2], [3, 4]];
+            print(arr[0][0]);
+            print(arr[1][1]);
+        "#).unwrap();
+    }
+
+    // More typechecker coverage
+    #[test]
+    fn test_void_function_returns_nil() {
+        compile_and_run(r#"
+            fun test() {
+                print("test");
+            }
+            test();
+        "#).unwrap();
+    }
+
+    #[test]
+    fn test_type_error_assign_wrong_type() {
+        let err = compile_expect_error(r#"
+            var x: int = 1;
+            x = "hello";
+        "#);
+        assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
+    }
+
+    #[test]
+    fn test_struct_with_nullable() {
+        compile_and_run(r#"
+            struct User {
+                name: string,
+                age: int?
+            }
+            let u1 = User { name: "Alice", age: 30 };
+            let u2 = User { name: "Bob", age: nil };
+            print(u1.name);
+            print(u2.name);
+        "#).unwrap();
+    }
+
+    #[test]
+    fn test_function_with_object_param() {
+        compile_and_run(r#"
+            fun get_x(obj: {x: int}) -> int {
+                return obj.x;
+            }
+            let result = get_x({ x: 42 });
+            print(result);
+        "#).unwrap();
+    }
+
+    #[test]
+    fn test_type_inference_binary_ops() {
+        compile_and_run(r#"
+            let a = 1 + 2;
+            let b = 1.0 + 2.0;
+            let c = "a" + "b";
+            let d = true;
+            print(a);
+            print(b);
+            print(c);
+            print(d);
+        "#).unwrap();
+    }
+
+    #[test]
+    fn test_type_error_comparison_mismatch() {
+        let err = compile_expect_error(r#"
+            let x = 1 < "hello";
+        "#);
+        assert!(err.contains("type") || err.contains("int") || err.contains("string"));
+    }
 }
