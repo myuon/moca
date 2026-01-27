@@ -1,0 +1,4 @@
+10
+caught: runtime error: negative value not allowed
+inner caught: runtime error: inner error
+outer caught: runtime error: rethrown
