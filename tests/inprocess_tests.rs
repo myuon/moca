@@ -2,179 +2,13 @@
 //!
 //! These tests call the compiler/VM APIs directly instead of spawning
 //! a separate process, so they are included in coverage measurement.
-
-use std::path::Path;
-
-use moca::compiler::run_file_with_config;
-use moca::config::RuntimeConfig;
-
-fn run_test_file(name: &str) -> Result<(), String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("snapshots")
-        .join(name);
-    run_file_with_config(&path, &RuntimeConfig::default())
-}
-
-fn run_test_file_expect_error(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("snapshots")
-        .join(name);
-    run_file_with_config(&path, &RuntimeConfig::default())
-        .expect_err("expected error")
-}
-
-// Basic tests
-#[test]
-fn test_basic_arithmetic() {
-    run_test_file("basic/arithmetic.mc").unwrap();
-}
-
-#[test]
-fn test_basic_boolean_operations() {
-    run_test_file("basic/boolean_operations.mc").unwrap();
-}
-
-#[test]
-fn test_basic_comparison() {
-    run_test_file("basic/comparison.mc").unwrap();
-}
-
-#[test]
-fn test_basic_control_flow() {
-    run_test_file("basic/control_flow.mc").unwrap();
-}
-
-#[test]
-fn test_basic_factorial() {
-    run_test_file("basic/factorial.mc").unwrap();
-}
-
-#[test]
-fn test_basic_fibonacci() {
-    run_test_file("basic/fibonacci.mc").unwrap();
-}
-
-#[test]
-fn test_basic_fizzbuzz() {
-    run_test_file("basic/fizzbuzz.mc").unwrap();
-}
-
-#[test]
-fn test_basic_object_literal() {
-    run_test_file("basic/object_literal.mc").unwrap();
-}
-
-#[test]
-fn test_basic_struct_operations() {
-    run_test_file("basic/struct_operations.mc").unwrap();
-}
-
-#[test]
-fn test_basic_typed_functions() {
-    run_test_file("basic/typed_functions.mc").unwrap();
-}
-
-#[test]
-fn test_basic_array_typed() {
-    run_test_file("basic/array_typed.mc").unwrap();
-}
-
-#[test]
-fn test_basic_try_catch_throw() {
-    run_test_file("basic/try_catch_throw.mc").unwrap();
-}
-
-#[test]
-fn test_basic_unary_not() {
-    run_test_file("basic/unary_not.mc").unwrap();
-}
-
-#[test]
-fn test_basic_while_loops() {
-    run_test_file("basic/while_loops.mc").unwrap();
-}
-
-#[test]
-fn test_basic_index_assign() {
-    run_test_file("basic/index_assign.mc").unwrap();
-}
-
-#[test]
-fn test_basic_function_return_types() {
-    run_test_file("basic/function_return_types.mc").unwrap();
-}
-
-#[test]
-fn test_basic_if_else_chains() {
-    run_test_file("basic/if_else_chains.mc").unwrap();
-}
-
-#[test]
-fn test_basic_modulo_operator() {
-    run_test_file("basic/modulo_operator.mc").unwrap();
-}
-
-// Error tests - these should fail compilation/type checking
-#[test]
-fn test_error_division_by_zero() {
-    // This one actually runs and throws at runtime
-    let result = run_test_file("errors/division_by_zero.mc");
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_error_undefined_variable() {
-    let err = run_test_file_expect_error("errors/undefined_variable.mc");
-    assert!(err.contains("undefined"));
-}
-
-#[test]
-fn test_error_undefined_function() {
-    let err = run_test_file_expect_error("errors/undefined_function.mc");
-    assert!(err.contains("undefined"));
-}
-
-#[test]
-fn test_error_immutable_assignment() {
-    let err = run_test_file_expect_error("errors/immutable_assignment.mc");
-    assert!(err.contains("immutable") || err.contains("cannot assign"));
-}
-
-#[test]
-fn test_error_invalid_and_operator() {
-    let err = run_test_file_expect_error("errors/invalid_and_operator.mc");
-    assert!(err.contains("&&"));
-}
-
-#[test]
-fn test_error_invalid_or_operator() {
-    let err = run_test_file_expect_error("errors/invalid_or_operator.mc");
-    assert!(err.contains("||"));
-}
-
-#[test]
-fn test_error_invalid_escape_sequence() {
-    let err = run_test_file_expect_error("errors/invalid_escape_sequence.mc");
-    assert!(err.contains("escape"));
-}
-
-#[test]
-fn test_error_unexpected_character() {
-    let err = run_test_file_expect_error("errors/unexpected_character.mc");
-    assert!(err.contains("unexpected"));
-}
-
-#[test]
-fn test_error_type_mismatch() {
-    let err = run_test_file_expect_error("errors/type_mismatch.mc");
-    assert!(err.contains("expected") || err.contains("found"));
-}
+//!
+//! Note: File-based snapshot tests are now in snapshot_tests.rs and also
+//! run in-process for coverage.
 
 // Direct compiler API tests for coverage
 mod compiler_api_tests {
-    use moca::compiler::{Lexer, Parser, TypeChecker, Resolver, Codegen};
+    use moca::compiler::{Codegen, Lexer, Parser, Resolver, TypeChecker};
     use moca::vm::VM;
 
     fn compile_and_run(source: &str) -> Result<(), String> {
@@ -184,7 +18,11 @@ mod compiler_api_tests {
         let program = parser.parse()?;
         let mut typechecker = TypeChecker::new("test.mc");
         typechecker.check_program(&program).map_err(|errors| {
-            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; ")
+            errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+                .join("; ")
         })?;
         let mut resolver = Resolver::new("test.mc");
         let resolved = resolver.resolve(program)?;
@@ -201,64 +39,83 @@ mod compiler_api_tests {
     // Nullable type tests
     #[test]
     fn test_nullable_type() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let x: int? = nil;
             let y: int? = 42;
             print(x);
             print(y);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_nullable_string() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let s: string? = nil;
             let t: string? = "hello";
             print(s);
             print(t);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Object type tests
     #[test]
     fn test_nested_object() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let obj = { a: { b: 1 } };
             print(obj.a.b);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_object_with_array() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let obj = { items: [1, 2, 3] };
             print(obj.items[0]);
             print(obj.items[1]);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Array type tests
     #[test]
     fn test_array_of_objects() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let arr = [{ x: 1 }, { x: 2 }];
             print(arr[0].x);
             print(arr[1].x);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_empty_array() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let arr: array<int> = [];
             print(arr);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Function type tests
     #[test]
     fn test_function_call_chain() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun add(a: int, b: int) -> int {
                 return a + b;
             }
@@ -266,12 +123,15 @@ mod compiler_api_tests {
                 return a * b;
             }
             print(add(mul(2, 3), 4));
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_recursive_function() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun sum(n: int) -> int {
                 if n <= 0 {
                     return 0;
@@ -279,122 +139,150 @@ mod compiler_api_tests {
                 return n + sum(n - 1);
             }
             print(sum(5));
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Struct tests
     #[test]
     fn test_struct_with_array_field() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             struct Container {
                 items: array<int>
             }
             let c = Container { items: [1, 2, 3] };
             print(c.items[0]);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_struct_multiple() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             struct Point { x: int, y: int }
             struct Size { width: int, height: int }
             let p = Point { x: 10, y: 20 };
             let s = Size { width: 100, height: 200 };
             print(p.x);
             print(s.width);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Type error tests for typechecker coverage
     #[test]
     fn test_type_error_array_element() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let arr: array<int> = [1, "hello", 3];
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_type_error_function_return() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             fun get_int() -> int {
                 return "hello";
             }
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_type_error_function_argument() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             fun takes_int(x: int) {
                 print(x);
             }
             takes_int("hello");
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_type_error_binary_op() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = "hello" - 1;
-        "#);
+        "#,
+        );
         assert!(err.contains("type") || err.contains("string") || err.contains("int"));
     }
 
     #[test]
     fn test_type_error_if_condition() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             if "not a bool" {
                 print("yes");
             }
-        "#);
+        "#,
+        );
         assert!(err.contains("bool") || err.contains("expected") || err.contains("string"));
     }
 
     #[test]
     fn test_type_error_while_condition() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             while 42 {
                 print("loop");
             }
-        "#);
+        "#,
+        );
         assert!(err.contains("bool") || err.contains("expected") || err.contains("int"));
     }
 
     // Resolver error tests
     #[test]
     fn test_resolver_duplicate_function() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             fun foo() { }
             fun foo() { }
-        "#);
+        "#,
+        );
         assert!(err.contains("foo") || err.contains("duplicate") || err.contains("already"));
     }
 
     #[test]
     fn test_resolver_duplicate_struct() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             struct Point { x: int }
             struct Point { y: int }
-        "#);
+        "#,
+        );
         assert!(err.contains("Point") || err.contains("duplicate") || err.contains("already"));
     }
 
     // Complex expression tests
     #[test]
     fn test_complex_expression() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let x = (1 + 2) * 3 - 4 / 2;
             print(x);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_comparison_operators() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let a = 1;
             let b = 2;
             let c = 3;
@@ -404,35 +292,44 @@ mod compiler_api_tests {
             print(b >= a);
             print(a == 1);
             print(b != 1);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Float operations
     #[test]
     fn test_float_arithmetic() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let x = 3.14;
             let y = 2.0;
             print(x + y);
             print(x - y);
             print(x * y);
             print(x / y);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // String operations
     #[test]
     fn test_string_concatenation() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let s = "Hello, " + "World!";
             print(s);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Control flow tests
     #[test]
     fn test_nested_if() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let x = 10;
             if x > 5 {
                 if x > 8 {
@@ -443,23 +340,29 @@ mod compiler_api_tests {
             } else {
                 print("small");
             }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_while_with_condition() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             var i = 0;
             while i < 5 {
                 print(i);
                 i = i + 1;
             }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_nested_while() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             var i = 0;
             while i < 3 {
                 var j = 0;
@@ -469,23 +372,29 @@ mod compiler_api_tests {
                 }
                 i = i + 1;
             }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // For-in tests
     #[test]
     fn test_for_in_range() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             for i in [1, 2, 3, 4, 5] {
                 print(i);
             }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Return tests
     #[test]
     fn test_early_return() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun check(x: int) -> int {
                 if x < 0 {
                     return -1;
@@ -498,13 +407,16 @@ mod compiler_api_tests {
             print(check(-5));
             print(check(0));
             print(check(5));
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Recursion tests
     #[test]
     fn test_mutual_recursion() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun is_even(n: int) -> bool {
                 if n == 0 { return true; }
                 return is_odd(n - 1);
@@ -515,190 +427,236 @@ mod compiler_api_tests {
             }
             print(is_even(4));
             print(is_odd(4));
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Additional type error tests for better typechecker coverage
     #[test]
     fn test_type_error_object_field() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let obj = { x: 1, y: "hello" };
             let z: int = obj.y;
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("string") || err.contains("int"));
     }
 
     #[test]
     fn test_type_error_array_index_type() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let arr = [1, 2, 3];
             let x = arr["bad"];
-        "#);
+        "#,
+        );
         assert!(err.contains("int") || err.contains("string") || err.contains("index"));
     }
 
     #[test]
     fn test_type_error_struct_field_type() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1, y: "bad" };
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_type_error_unary_not_int() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = !42;
-        "#);
+        "#,
+        );
         assert!(err.contains("bool") || err.contains("int") || err.contains("expected"));
     }
 
     #[test]
     fn test_type_error_unary_neg_bool() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = -true;
-        "#);
+        "#,
+        );
         assert!(err.contains("int") || err.contains("float") || err.contains("bool"));
     }
 
     #[test]
     fn test_type_error_for_in_non_array() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             for i in 42 {
                 print(i);
             }
-        "#);
+        "#,
+        );
         assert!(err.contains("array") || err.contains("int") || err.contains("expected"));
     }
 
     #[test]
     fn test_type_error_call_non_function() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = 42;
             x();
-        "#);
+        "#,
+        );
         assert!(err.contains("function") || err.contains("call") || err.contains("int"));
     }
 
     #[test]
     fn test_type_error_wrong_arg_count() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             fun add(a: int, b: int) -> int {
                 return a + b;
             }
             add(1);
-        "#);
+        "#,
+        );
         assert!(err.contains("argument") || err.contains("2") || err.contains("1"));
     }
 
     // Parser error tests
     #[test]
     fn test_parse_error_unclosed_paren() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = (1 + 2;
-        "#);
+        "#,
+        );
         assert!(err.contains("RParen") || err.contains(")") || err.contains("expected"));
     }
 
     #[test]
     fn test_parse_error_unclosed_brace() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             fun test() {
                 print(1);
-        "#);
+        "#,
+        );
         assert!(err.contains("RBrace") || err.contains("}") || err.contains("expected"));
     }
 
     #[test]
     fn test_parse_error_unclosed_bracket() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let arr = [1, 2, 3;
-        "#);
+        "#,
+        );
         assert!(err.contains("RBracket") || err.contains("]") || err.contains("expected"));
     }
 
     #[test]
     fn test_parse_error_missing_semicolon() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = 1
             let y = 2;
-        "#);
+        "#,
+        );
         assert!(err.contains("Semicolon") || err.contains(";") || err.contains("expected"));
     }
 
     // Resolver error tests
     #[test]
     fn test_resolver_undefined_in_expr() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = y + 1;
-        "#);
+        "#,
+        );
         assert!(err.contains("undefined") || err.contains("y"));
     }
 
     #[test]
     fn test_resolver_assign_to_undefined() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             x = 42;
-        "#);
+        "#,
+        );
         assert!(err.contains("undefined") || err.contains("x"));
     }
 
     // Additional coverage tests
     #[test]
     fn test_empty_function() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun empty() {
             }
             empty();
             print("done");
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_function_no_return_type() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun greet(name: string) {
                 print("Hello, ");
                 print(name);
             }
             greet("World");
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_nested_array_access() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let arr = [[1, 2], [3, 4], [5, 6]];
             print(arr[0][0]);
             print(arr[1][1]);
             print(arr[2][0]);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_object_empty() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let obj = {};
             print(obj);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_struct_field_update() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             struct Counter { value: int }
             var c = Counter { value: 0 };
             c.value = c.value + 1;
             print(c.value);
             c.value = c.value + 1;
             print(c.value);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_type_annotation_function_param() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun process(items: array<int>) -> int {
                 var sum = 0;
                 for item in items {
@@ -707,21 +665,27 @@ mod compiler_api_tests {
                 return sum;
             }
             print(process([1, 2, 3, 4, 5]));
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_object_type_annotation() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let obj: {x: int, y: int} = { x: 10, y: 20 };
             print(obj.x);
             print(obj.y);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_multiple_return_paths() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun classify(n: int) -> string {
                 if n < 0 {
                     return "negative";
@@ -734,20 +698,26 @@ mod compiler_api_tests {
             print(classify(-5));
             print(classify(0));
             print(classify(5));
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_deeply_nested_expression() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let x = ((((1 + 2) * 3) - 4) / 2);
             print(x);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_mixed_arithmetic() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let a = 10;
             let b = 3;
             print(a + b);
@@ -755,44 +725,54 @@ mod compiler_api_tests {
             print(a * b);
             print(a / b);
             print(a % b);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Tests for ast.rs Expr::span() coverage (Object, StructLiteral patterns)
     #[test]
     fn test_type_error_in_object_literal() {
         // Error occurs in object literal, triggering Expr::Object span()
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let obj: {x: int} = { x: "not an int" };
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_type_error_in_struct_literal() {
         // Error occurs in struct literal, triggering Expr::StructLiteral span()
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             struct Point { x: int, y: int }
             let p: Point = Point { x: "bad", y: 2 };
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_object_field_type_inference() {
         // Test object type inference paths
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let obj = { name: "test", value: 42, flag: true };
             print(obj.name);
             print(obj.value);
             print(obj.flag);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_struct_literal_all_fields() {
         // Test struct literal with all field types
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             struct Data {
                 num: int,
                 text: string,
@@ -802,70 +782,88 @@ mod compiler_api_tests {
             print(d.num);
             print(d.text);
             print(d.flag);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // Additional typechecker coverage tests
     #[test]
     fn test_type_error_object_missing_field() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let obj: {x: int, y: int} = { x: 1 };
-        "#);
+        "#,
+        );
         assert!(err.contains("field") || err.contains("y") || err.contains("expected"));
     }
 
     #[test]
     fn test_type_error_struct_missing_field() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             struct Point { x: int, y: int }
             let p = Point { x: 1 };
-        "#);
+        "#,
+        );
         assert!(err.contains("field") || err.contains("y") || err.contains("expected"));
     }
 
     #[test]
     fn test_nullable_assignment() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             var x: int? = 42;
             x = nil;
             print(x);
             x = 100;
             print(x);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_type_annotation_array_nested() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let arr: array<array<int>> = [[1, 2], [3, 4]];
             print(arr[0][0]);
             print(arr[1][1]);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     // More typechecker coverage
     #[test]
     fn test_void_function_returns_nil() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun test() {
                 print("test");
             }
             test();
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_type_error_assign_wrong_type() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             var x: int = 1;
             x = "hello";
-        "#);
+        "#,
+        );
         assert!(err.contains("expected") || err.contains("int") || err.contains("string"));
     }
 
     #[test]
     fn test_struct_with_nullable() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             struct User {
                 name: string,
                 age: int?
@@ -874,23 +872,29 @@ mod compiler_api_tests {
             let u2 = User { name: "Bob", age: nil };
             print(u1.name);
             print(u2.name);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_function_with_object_param() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             fun get_x(obj: {x: int}) -> int {
                 return obj.x;
             }
             let result = get_x({ x: 42 });
             print(result);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_type_inference_binary_ops() {
-        compile_and_run(r#"
+        compile_and_run(
+            r#"
             let a = 1 + 2;
             let b = 1.0 + 2.0;
             let c = "a" + "b";
@@ -899,14 +903,18 @@ mod compiler_api_tests {
             print(b);
             print(c);
             print(d);
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_type_error_comparison_mismatch() {
-        let err = compile_expect_error(r#"
+        let err = compile_expect_error(
+            r#"
             let x = 1 < "hello";
-        "#);
+        "#,
+        );
         assert!(err.contains("type") || err.contains("int") || err.contains("string"));
     }
 }
