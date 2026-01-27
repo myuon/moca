@@ -255,9 +255,7 @@ mod tests {
         fs::write(temp.join("src/utils.mc"), "fun helper() { return 42; }").unwrap();
 
         let mut loader = ModuleLoader::new(temp.clone());
-        let program = loader
-            .load_with_imports(&temp.join("src/main.mc"))
-            .unwrap();
+        let program = loader.load_with_imports(&temp.join("src/main.mc")).unwrap();
 
         // Should have: helper function + 2 statements from main
         let fn_count = program

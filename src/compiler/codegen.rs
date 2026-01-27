@@ -17,6 +17,12 @@ pub struct Codegen {
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
 }
 
+impl Default for Codegen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Codegen {
     pub fn new() -> Self {
         Self {

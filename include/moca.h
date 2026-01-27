@@ -144,14 +144,6 @@ typedef struct {
 } MocaVm;
 
 /**
- * Error callback function type.
- *
- * Called when an error occurs, with the error message and user data.
- */
-typedef void (*MocaErrorFn)(const char *message,
-                            void *userdata);
-
-/**
  * Host function type.
  *
  * A C function that can be registered and called from moca code.
@@ -162,6 +154,14 @@ typedef void (*MocaErrorFn)(const char *message,
  * 4. Return `MOCA_OK` or an error code
  */
 typedef MocaResult (*MocaCFunc)(MocaVm *vm);
+
+/**
+ * Error callback function type.
+ *
+ * Called when an error occurs, with the error message and user data.
+ */
+typedef void (*MocaErrorFn)(const char *message,
+                            void *userdata);
 
 
 
@@ -234,77 +234,180 @@ uint32_t moca_version_patch(void)
 ;
 
 /**
- * Create a new VM instance.
+ * Call a moca function by name.
  *
- * Returns a pointer to a new VM instance, or NULL if allocation fails.
- * The returned VM must be freed with `moca_vm_free()`.
+ * Arguments must be pushed onto the stack before calling.
+ * The result will be on the stack after a successful call.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance
+ * - `func_name`: Name of the function to call (null-terminated)
+ * - `nargs`: Number of arguments on the stack
+ *
+ * # Returns
+ * - `MOCA_OK` on success
+ * - `MOCA_ERROR_NOT_FOUND` if function not found
+ * - `MOCA_ERROR_RUNTIME` on execution error
+ */
+
+MocaResult moca_call(MocaVm *vm,
+                     const char *func_name,
+                     int32_t nargs)
+;
+
+/**
+ * Protected call - catches errors instead of aborting.
+ *
+ * Same as `moca_call`, but errors are caught and returned as a result code
+ * instead of propagating.
+ */
+
+MocaResult moca_pcall(MocaVm *vm,
+                      const char *func_name,
+                      int32_t nargs)
+;
+
+/**
+ * Register a host function.
+ *
+ * The function can then be called from moca code.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance
+ * - `name`: Function name (null-terminated)
+ * - `func`: Function pointer
+ * - `arity`: Number of arguments the function expects
+ */
+
+MocaResult moca_register_function(MocaVm *vm,
+                                  const char *name,
+                                  MocaCFunc func,
+                                  int32_t arity)
+;
+
+/**
+ * Set a global variable.
+ *
+ * Pops the top value from the stack and sets it as a global.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance
+ * - `name`: Global variable name (null-terminated)
+ */
+
+MocaResult moca_set_global(MocaVm *vm,
+                           const char *name)
+;
+
+/**
+ * Get a global variable.
+ *
+ * Pushes the global's value onto the stack.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance
+ * - `name`: Global variable name (null-terminated)
+ */
+
+MocaResult moca_get_global(MocaVm *vm,
+                           const char *name)
+;
+
+/**
+ * Get the last error message.
+ *
+ * Returns a pointer to the error message string, or NULL if no error.
+ * The returned pointer is valid until the next API call that may set an error.
  *
  * # Example (C)
  * ```c
- * moca_vm *vm = moca_vm_new();
- * if (vm == NULL) {
- *     // Handle allocation failure
+ * moca_result res = moca_call(vm, "func", 0);
+ * if (res != MOCA_OK) {
+ *     printf("Error: %s\n", moca_get_error(vm));
  * }
- * // ... use vm ...
- * moca_vm_free(vm);
  * ```
  */
 
-MocaVm *moca_vm_new(void)
+const char *moca_get_error(const MocaVm *vm)
 ;
 
 /**
- * Free a VM instance.
+ * Clear the last error.
  *
- * After this call, the VM pointer is invalid and must not be used.
- *
- * # Safety
- *
- * - `vm` must be a valid pointer returned by `moca_vm_new()`
- * - `vm` must not have been freed already
- * - No other operations may be in progress on this VM
+ * After calling this, `moca_get_error` will return NULL until
+ * another error occurs.
  */
 
-void moca_vm_free(MocaVm *vm)
+void moca_clear_error(MocaVm *vm)
 ;
 
 /**
- * Set the memory limit for the VM.
+ * Check if there is a pending error.
  *
- * This must be called before loading bytecode.
+ * Returns true if an error is set, false otherwise.
+ */
+
+bool moca_has_error(const MocaVm *vm)
+;
+
+/**
+ * Load bytecode from memory.
+ *
+ * This parses and validates the bytecode, making it ready for execution.
  *
  * # Arguments
  * - `vm`: Valid VM instance
- * - `bytes`: Maximum memory in bytes (0 = no limit)
+ * - `data`: Pointer to bytecode data
+ * - `len`: Length of bytecode data in bytes
+ *
+ * # Returns
+ * - `MOCA_OK` on success
+ * - `MOCA_ERROR_INVALID_ARG` if data is NULL
+ * - `MOCA_ERROR_VERIFY` if bytecode is invalid
  */
 
-void moca_set_memory_limit(MocaVm *vm,
-                           uintptr_t _bytes)
+MocaResult moca_load_chunk(MocaVm *vm,
+                           const uint8_t *data,
+                           uintptr_t len)
 ;
 
 /**
- * Set the error callback function.
+ * Load bytecode from a file.
  *
- * The callback will be invoked whenever an error occurs.
+ * This reads the file, parses the bytecode, and validates it.
  *
  * # Arguments
  * - `vm`: Valid VM instance
- * - `callback`: Error callback function (or NULL to disable)
- * - `userdata`: User data passed to callback
+ * - `path`: Path to bytecode file (null-terminated)
+ *
+ * # Returns
+ * - `MOCA_OK` on success
+ * - `MOCA_ERROR_INVALID_ARG` if path is NULL
+ * - `MOCA_ERROR_NOT_FOUND` if file cannot be read
+ * - `MOCA_ERROR_VERIFY` if bytecode is invalid
  */
 
-void moca_set_error_callback(MocaVm *vm,
-                             MocaErrorFn callback,
-                             void *userdata)
+MocaResult moca_load_file(MocaVm *vm,
+                          const char *path)
 ;
 
 /**
- * Check if the VM has a loaded chunk.
+ * Save bytecode to a file.
  *
- * Returns true if bytecode has been loaded, false otherwise.
+ * This serializes the currently loaded chunk to a file.
+ *
+ * # Arguments
+ * - `vm`: Valid VM instance with a loaded chunk
+ * - `path`: Path to output file (null-terminated)
+ *
+ * # Returns
+ * - `MOCA_OK` on success
+ * - `MOCA_ERROR_INVALID_ARG` if no chunk is loaded or path is NULL
+ * - `MOCA_ERROR_RUNTIME` if file cannot be written
  */
 
-bool moca_has_chunk(MocaVm *vm)
+MocaResult moca_save_file(MocaVm *vm,
+                          const char *path)
 ;
 
 /**
@@ -483,180 +586,77 @@ void moca_set_top(MocaVm *vm,
 ;
 
 /**
- * Call a moca function by name.
+ * Create a new VM instance.
  *
- * Arguments must be pushed onto the stack before calling.
- * The result will be on the stack after a successful call.
- *
- * # Arguments
- * - `vm`: Valid VM instance
- * - `func_name`: Name of the function to call (null-terminated)
- * - `nargs`: Number of arguments on the stack
- *
- * # Returns
- * - `MOCA_OK` on success
- * - `MOCA_ERROR_NOT_FOUND` if function not found
- * - `MOCA_ERROR_RUNTIME` on execution error
- */
-
-MocaResult moca_call(MocaVm *vm,
-                     const char *func_name,
-                     int32_t nargs)
-;
-
-/**
- * Protected call - catches errors instead of aborting.
- *
- * Same as `moca_call`, but errors are caught and returned as a result code
- * instead of propagating.
- */
-
-MocaResult moca_pcall(MocaVm *vm,
-                      const char *func_name,
-                      int32_t nargs)
-;
-
-/**
- * Register a host function.
- *
- * The function can then be called from moca code.
- *
- * # Arguments
- * - `vm`: Valid VM instance
- * - `name`: Function name (null-terminated)
- * - `func`: Function pointer
- * - `arity`: Number of arguments the function expects
- */
-
-MocaResult moca_register_function(MocaVm *vm,
-                                  const char *name,
-                                  MocaCFunc func,
-                                  int32_t arity)
-;
-
-/**
- * Set a global variable.
- *
- * Pops the top value from the stack and sets it as a global.
- *
- * # Arguments
- * - `vm`: Valid VM instance
- * - `name`: Global variable name (null-terminated)
- */
-
-MocaResult moca_set_global(MocaVm *vm,
-                           const char *name)
-;
-
-/**
- * Get a global variable.
- *
- * Pushes the global's value onto the stack.
- *
- * # Arguments
- * - `vm`: Valid VM instance
- * - `name`: Global variable name (null-terminated)
- */
-
-MocaResult moca_get_global(MocaVm *vm,
-                           const char *name)
-;
-
-/**
- * Get the last error message.
- *
- * Returns a pointer to the error message string, or NULL if no error.
- * The returned pointer is valid until the next API call that may set an error.
+ * Returns a pointer to a new VM instance, or NULL if allocation fails.
+ * The returned VM must be freed with `moca_vm_free()`.
  *
  * # Example (C)
  * ```c
- * moca_result res = moca_call(vm, "func", 0);
- * if (res != MOCA_OK) {
- *     printf("Error: %s\n", moca_get_error(vm));
+ * moca_vm *vm = moca_vm_new();
+ * if (vm == NULL) {
+ *     // Handle allocation failure
  * }
+ * // ... use vm ...
+ * moca_vm_free(vm);
  * ```
  */
 
-const char *moca_get_error(const MocaVm *vm)
+MocaVm *moca_vm_new(void)
 ;
 
 /**
- * Clear the last error.
+ * Free a VM instance.
  *
- * After calling this, `moca_get_error` will return NULL until
- * another error occurs.
+ * After this call, the VM pointer is invalid and must not be used.
+ *
+ * # Safety
+ *
+ * - `vm` must be a valid pointer returned by `moca_vm_new()`
+ * - `vm` must not have been freed already
+ * - No other operations may be in progress on this VM
  */
 
-void moca_clear_error(MocaVm *vm)
+void moca_vm_free(MocaVm *vm)
 ;
 
 /**
- * Check if there is a pending error.
+ * Set the memory limit for the VM.
  *
- * Returns true if an error is set, false otherwise.
- */
-
-bool moca_has_error(const MocaVm *vm)
-;
-
-/**
- * Load bytecode from memory.
- *
- * This parses and validates the bytecode, making it ready for execution.
+ * This must be called before loading bytecode.
  *
  * # Arguments
  * - `vm`: Valid VM instance
- * - `data`: Pointer to bytecode data
- * - `len`: Length of bytecode data in bytes
- *
- * # Returns
- * - `MOCA_OK` on success
- * - `MOCA_ERROR_INVALID_ARG` if data is NULL
- * - `MOCA_ERROR_VERIFY` if bytecode is invalid
+ * - `bytes`: Maximum memory in bytes (0 = no limit)
  */
 
-MocaResult moca_load_chunk(MocaVm *vm,
-                           const uint8_t *data,
-                           uintptr_t len)
+void moca_set_memory_limit(MocaVm *vm,
+                           uintptr_t _bytes)
 ;
 
 /**
- * Load bytecode from a file.
+ * Set the error callback function.
  *
- * This reads the file, parses the bytecode, and validates it.
+ * The callback will be invoked whenever an error occurs.
  *
  * # Arguments
  * - `vm`: Valid VM instance
- * - `path`: Path to bytecode file (null-terminated)
- *
- * # Returns
- * - `MOCA_OK` on success
- * - `MOCA_ERROR_INVALID_ARG` if path is NULL
- * - `MOCA_ERROR_NOT_FOUND` if file cannot be read
- * - `MOCA_ERROR_VERIFY` if bytecode is invalid
+ * - `callback`: Error callback function (or NULL to disable)
+ * - `userdata`: User data passed to callback
  */
 
-MocaResult moca_load_file(MocaVm *vm,
-                          const char *path)
+void moca_set_error_callback(MocaVm *vm,
+                             MocaErrorFn callback,
+                             void *userdata)
 ;
 
 /**
- * Save bytecode to a file.
+ * Check if the VM has a loaded chunk.
  *
- * This serializes the currently loaded chunk to a file.
- *
- * # Arguments
- * - `vm`: Valid VM instance with a loaded chunk
- * - `path`: Path to output file (null-terminated)
- *
- * # Returns
- * - `MOCA_OK` on success
- * - `MOCA_ERROR_INVALID_ARG` if no chunk is loaded or path is NULL
- * - `MOCA_ERROR_RUNTIME` if file cannot be written
+ * Returns true if bytecode has been loaded, false otherwise.
  */
 
-MocaResult moca_save_file(MocaVm *vm,
-                          const char *path)
+bool moca_has_chunk(MocaVm *vm)
 ;
 
 #endif  /* MOCA_H */

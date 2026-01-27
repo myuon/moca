@@ -1,10 +1,11 @@
 //! Function call and registration FFI functions.
 
 #![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::missing_safety_doc)]
 
 use super::types::{HostFunction, MocaCFunc, MocaResult, MocaVm};
 use super::vm_ffi::get_wrapper_mut;
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 
 /// Call a moca function by name.
 ///
@@ -155,10 +156,7 @@ pub unsafe extern "C" fn moca_register_function(
 /// - `vm`: Valid VM instance
 /// - `name`: Global variable name (null-terminated)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn moca_set_global(
-    vm: *mut MocaVm,
-    name: *const c_char,
-) -> MocaResult {
+pub unsafe extern "C" fn moca_set_global(vm: *mut MocaVm, name: *const c_char) -> MocaResult {
     let Some(wrapper) = get_wrapper_mut(vm) else {
         return MocaResult::ErrorInvalidArg;
     };
@@ -197,10 +195,7 @@ pub unsafe extern "C" fn moca_set_global(
 /// - `vm`: Valid VM instance
 /// - `name`: Global variable name (null-terminated)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn moca_get_global(
-    vm: *mut MocaVm,
-    name: *const c_char,
-) -> MocaResult {
+pub unsafe extern "C" fn moca_get_global(vm: *mut MocaVm, name: *const c_char) -> MocaResult {
     let Some(wrapper) = get_wrapper_mut(vm) else {
         return MocaResult::ErrorInvalidArg;
     };

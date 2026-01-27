@@ -89,7 +89,8 @@ impl Value {
     }
 
     /// Check if two values are equal.
-    pub fn eq(&self, other: &Value) -> bool {
+    /// Note: This allows cross-type comparison (e.g., I64 == F64).
+    pub fn value_eq(&self, other: &Value) -> bool {
         match (self, other) {
             (Value::I64(a), Value::I64(b)) => a == b,
             (Value::F64(a), Value::F64(b)) => a == b,
@@ -141,7 +142,7 @@ impl Value {
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        Value::eq(self, other)
+        self.value_eq(other)
     }
 }
 
@@ -220,11 +221,11 @@ mod tests {
 
     #[test]
     fn test_equality() {
-        assert!(Value::I64(42).eq(&Value::I64(42)));
-        assert!(Value::F64(3.14).eq(&Value::F64(3.14)));
-        assert!(Value::I64(42).eq(&Value::F64(42.0)));
-        assert!(Value::Null.eq(&Value::Null));
-        assert!(!Value::I64(1).eq(&Value::Null));
+        assert!(Value::I64(42).value_eq(&Value::I64(42)));
+        assert!(Value::F64(3.14).value_eq(&Value::F64(3.14)));
+        assert!(Value::I64(42).value_eq(&Value::F64(42.0)));
+        assert!(Value::Null.value_eq(&Value::Null));
+        assert!(!Value::I64(1).value_eq(&Value::Null));
     }
 
     // ============================================================

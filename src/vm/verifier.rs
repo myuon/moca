@@ -11,8 +11,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::ops::Op;
 use super::Function;
+use super::ops::Op;
 
 /// Verification error types
 #[derive(Debug, Clone, PartialEq)]
@@ -26,9 +26,17 @@ pub enum VerifyError {
         actual: usize,
     },
     /// Stack underflow
-    StackUnderflow { pc: usize, required: usize, actual: usize },
+    StackUnderflow {
+        pc: usize,
+        required: usize,
+        actual: usize,
+    },
     /// Stack overflow (exceeds max_stack)
-    StackOverflow { pc: usize, height: usize, max: usize },
+    StackOverflow {
+        pc: usize,
+        height: usize,
+        max: usize,
+    },
     /// Empty function
     EmptyFunction,
     /// Function does not end with Ret
@@ -41,16 +49,28 @@ impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VerifyError::InvalidJumpTarget { pc, target } => {
-                write!(f, "invalid jump target at pc={}: target={} is out of bounds", pc, target)
+                write!(
+                    f,
+                    "invalid jump target at pc={}: target={} is out of bounds",
+                    pc, target
+                )
             }
-            VerifyError::StackHeightMismatch { pc, expected, actual } => {
+            VerifyError::StackHeightMismatch {
+                pc,
+                expected,
+                actual,
+            } => {
                 write!(
                     f,
                     "stack height mismatch at pc={}: expected {}, got {}",
                     pc, expected, actual
                 )
             }
-            VerifyError::StackUnderflow { pc, required, actual } => {
+            VerifyError::StackUnderflow {
+                pc,
+                required,
+                actual,
+            } => {
                 write!(
                     f,
                     "stack underflow at pc={}: requires {} values, but only {} on stack",
@@ -173,7 +193,10 @@ impl Verifier {
                 | Op::TryBegin(target) => {
                     // Validate jump target
                     if *target >= len {
-                        return Err(VerifyError::InvalidJumpTarget { pc, target: *target });
+                        return Err(VerifyError::InvalidJumpTarget {
+                            pc,
+                            target: *target,
+                        });
                     }
                     leaders.insert(*target);
                     // Instruction after conditional jump is also a leader
@@ -257,7 +280,10 @@ impl Verifier {
             block.successors = successors;
         }
 
-        Ok(CFG { blocks, pc_to_block })
+        Ok(CFG {
+            blocks,
+            pc_to_block,
+        })
     }
 
     /// Verify stack heights using abstract interpretation
@@ -279,7 +305,12 @@ impl Verifier {
             let mut height = block_heights[block_idx].unwrap();
 
             // Simulate stack effects through the block
-            for (pc, op) in code.iter().enumerate().skip(block.start).take(block.end - block.start) {
+            for (pc, op) in code
+                .iter()
+                .enumerate()
+                .skip(block.start)
+                .take(block.end - block.start)
+            {
                 let (pops, pushes) = self.stack_effect(op);
 
                 // Check underflow
@@ -330,7 +361,11 @@ impl Verifier {
     fn stack_effect(&self, op: &Op) -> (usize, usize) {
         match op {
             // Constants: push 1
-            Op::PushInt(_) | Op::PushFloat(_) | Op::PushTrue | Op::PushFalse | Op::PushNull
+            Op::PushInt(_)
+            | Op::PushFloat(_)
+            | Op::PushTrue
+            | Op::PushFalse
+            | Op::PushNull
             | Op::PushString(_) => (0, 1),
 
             // Stack operations
@@ -424,10 +459,7 @@ mod tests {
     #[test]
     fn test_simple_function() {
         let verifier = Verifier::new();
-        let func = make_func(vec![
-            Op::PushInt(42),
-            Op::Ret,
-        ]);
+        let func = make_func(vec![Op::PushInt(42), Op::Ret]);
         assert!(verifier.verify_function(&func).is_ok());
     }
 
@@ -435,12 +467,12 @@ mod tests {
     fn test_cfg_build() {
         let verifier = Verifier::new();
         let func = make_func(vec![
-            Op::PushTrue,       // 0: block 0
-            Op::JmpIfFalse(4),  // 1
-            Op::PushInt(1),     // 2: block 1
-            Op::Jmp(5),         // 3
-            Op::PushInt(2),     // 4: block 2
-            Op::Ret,            // 5: block 3
+            Op::PushTrue,      // 0: block 0
+            Op::JmpIfFalse(4), // 1
+            Op::PushInt(1),    // 2: block 1
+            Op::Jmp(5),        // 3
+            Op::PushInt(2),    // 4: block 2
+            Op::Ret,           // 5: block 3
         ]);
 
         let cfg = verifier.build_cfg(&func).unwrap();
@@ -455,17 +487,20 @@ mod tests {
         // if true { push 1 } else { push 2; push 3 }
         // This has inconsistent stack heights at merge point
         let func = make_func(vec![
-            Op::PushTrue,       // 0: stack=1
-            Op::JmpIfFalse(4),  // 1: stack=0
-            Op::PushInt(1),     // 2: stack=1
-            Op::Jmp(6),         // 3: stack=1 -> merge at 6
-            Op::PushInt(2),     // 4: stack=1
-            Op::PushInt(3),     // 5: stack=2 -> merge at 6 (MISMATCH)
-            Op::Ret,            // 6: expects consistent height
+            Op::PushTrue,      // 0: stack=1
+            Op::JmpIfFalse(4), // 1: stack=0
+            Op::PushInt(1),    // 2: stack=1
+            Op::Jmp(6),        // 3: stack=1 -> merge at 6
+            Op::PushInt(2),    // 4: stack=1
+            Op::PushInt(3),    // 5: stack=2 -> merge at 6 (MISMATCH)
+            Op::Ret,           // 6: expects consistent height
         ]);
 
         let result = verifier.verify_function(&func);
-        assert!(matches!(result, Err(VerifyError::StackHeightMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(VerifyError::StackHeightMismatch { .. })
+        ));
     }
 
     #[test]
@@ -504,12 +539,7 @@ mod tests {
     #[test]
     fn test_arithmetic_operations() {
         let verifier = Verifier::new();
-        let func = make_func(vec![
-            Op::PushInt(1),
-            Op::PushInt(2),
-            Op::Add,
-            Op::Ret,
-        ]);
+        let func = make_func(vec![Op::PushInt(1), Op::PushInt(2), Op::Add, Op::Ret]);
         assert!(verifier.verify_function(&func).is_ok());
     }
 
@@ -518,11 +548,11 @@ mod tests {
         let verifier = Verifier::new();
         // Simple loop: while true { }
         let func = make_func(vec![
-            Op::PushTrue,       // 0
-            Op::JmpIfFalse(3),  // 1: if false, exit
-            Op::Jmp(0),         // 2: back to start (backward jump)
-            Op::PushNull,       // 3
-            Op::Ret,            // 4
+            Op::PushTrue,      // 0
+            Op::JmpIfFalse(3), // 1: if false, exit
+            Op::Jmp(0),        // 2: back to start (backward jump)
+            Op::PushNull,      // 3
+            Op::Ret,           // 4
         ]);
         assert!(verifier.verify_function(&func).is_ok());
     }
@@ -538,7 +568,7 @@ mod tests {
             locals_count: 0,
             code: vec![
                 Op::PushInt(1),
-                Op::Call(0, 0),  // safepoint at pc=1
+                Op::Call(0, 0), // safepoint at pc=1
                 Op::Ret,
             ],
             stackmap: Some(FunctionStackMap::new()), // Empty stackmap
@@ -546,7 +576,10 @@ mod tests {
 
         // Should fail because Call is a safepoint but no StackMap entry exists
         let result = verifier.verify_function(&func);
-        assert!(matches!(result, Err(VerifyError::MissingStackMap { pc: 1 })));
+        assert!(matches!(
+            result,
+            Err(VerifyError::MissingStackMap { pc: 1 })
+        ));
 
         // Add StackMap entry for the safepoint
         let mut stackmap = FunctionStackMap::new();
@@ -566,7 +599,7 @@ mod tests {
             locals_count: 0,
             code: vec![
                 Op::PushInt(1),
-                Op::Call(0, 0),  // safepoint, but no stackmap
+                Op::Call(0, 0), // safepoint, but no stackmap
                 Op::Ret,
             ],
             stackmap: None, // No stackmap, verification skipped
@@ -589,9 +622,9 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code: vec![
-                Op::PushInt(1),   // height: 1
-                Op::PushInt(2),   // height: 2
-                Op::PushInt(3),   // height: 3 -> OVERFLOW (max is 2)
+                Op::PushInt(1), // height: 1
+                Op::PushInt(2), // height: 2
+                Op::PushInt(3), // height: 3 -> OVERFLOW (max is 2)
                 Op::Ret,
             ],
             stackmap: None,
@@ -643,20 +676,23 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code: vec![
-                Op::PushTrue,     // 0: height: 1
+                Op::PushTrue,      // 0: height: 1
                 Op::JmpIfFalse(5), // 1: height: 0, jumps to 5
-                Op::PushInt(1),   // 2: height: 1
-                Op::PushInt(2),   // 3: height: 2
-                Op::Jmp(6),       // 4: jumps to 6 with height 2
-                Op::PushInt(3),   // 5: height: 1 (from jump)
-                Op::Ret,          // 6: merge point - heights don't match!
+                Op::PushInt(1),    // 2: height: 1
+                Op::PushInt(2),    // 3: height: 2
+                Op::Jmp(6),        // 4: jumps to 6 with height 2
+                Op::PushInt(3),    // 5: height: 1 (from jump)
+                Op::Ret,           // 6: merge point - heights don't match!
             ],
             stackmap: None,
         };
 
         let result = verifier.verify_function(&func);
         assert!(result.is_err());
-        assert!(matches!(result, Err(VerifyError::StackHeightMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(VerifyError::StackHeightMismatch { .. })
+        ));
     }
 
     /// Test: Spec 7.5 - Valid control flow with matching heights
@@ -670,12 +706,12 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code: vec![
-                Op::PushTrue,     // 0: height: 1
+                Op::PushTrue,      // 0: height: 1
                 Op::JmpIfFalse(4), // 1: height: 0, jumps to 4
-                Op::PushInt(1),   // 2: height: 1
-                Op::Jmp(5),       // 3: jumps to 5 with height 1
-                Op::PushInt(2),   // 4: height: 1 (from jump)
-                Op::Ret,          // 5: merge point - heights match!
+                Op::PushInt(1),    // 2: height: 1
+                Op::Jmp(5),        // 3: jumps to 5 with height 1
+                Op::PushInt(2),    // 4: height: 1 (from jump)
+                Op::Ret,           // 5: merge point - heights match!
             ],
             stackmap: None,
         };
@@ -699,9 +735,9 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code: vec![
-                Op::PushInt(0),   // 0: function index
-                Op::Call(0, 0),   // 1: CALL is safepoint
-                Op::Ret,          // 2: return
+                Op::PushInt(0), // 0: function index
+                Op::Call(0, 0), // 1: CALL is safepoint
+                Op::Ret,        // 2: return
             ],
             stackmap: Some(stackmap),
         };
@@ -725,9 +761,9 @@ mod tests {
             locals_count: 0,
             code: vec![
                 Op::PushString(0), // 0: field name
-                Op::PushInt(42),  // 1: field value
-                Op::New(1),       // 2: NEW is safepoint (allocates object)
-                Op::Ret,          // 3: return
+                Op::PushInt(42),   // 1: field value
+                Op::New(1),        // 2: NEW is safepoint (allocates object)
+                Op::Ret,           // 3: return
             ],
             stackmap: Some(stackmap),
         };
@@ -772,7 +808,7 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code: vec![
-                Op::Jmp(100),  // Jump to non-existent instruction
+                Op::Jmp(100), // Jump to non-existent instruction
                 Op::Ret,
             ],
             stackmap: None,
@@ -796,13 +832,13 @@ mod tests {
             code: vec![
                 Op::PushInt(10),
                 Op::PushInt(5),
-                Op::AddI64,       // 10 + 5 = 15
+                Op::AddI64, // 10 + 5 = 15
                 Op::PushInt(3),
-                Op::SubI64,       // 15 - 3 = 12
+                Op::SubI64, // 15 - 3 = 12
                 Op::PushInt(2),
-                Op::MulI64,       // 12 * 2 = 24
+                Op::MulI64, // 12 * 2 = 24
                 Op::PushInt(4),
-                Op::DivI64,       // 24 / 4 = 6
+                Op::DivI64, // 24 / 4 = 6
                 Op::Ret,
             ],
             stackmap: None,
@@ -843,11 +879,11 @@ mod tests {
             code: vec![
                 Op::PushInt(1),
                 Op::PushInt(2),
-                Op::LtI64,        // 1 < 2 = true
+                Op::LtI64, // 1 < 2 = true
                 Op::PushFloat(1.5),
                 Op::PushFloat(2.5),
-                Op::LtF64,        // 1.5 < 2.5 = true
-                Op::Eq,           // true == true = true
+                Op::LtF64, // 1.5 < 2.5 = true
+                Op::Eq,    // true == true = true
                 Op::Ret,
             ],
             stackmap: None,

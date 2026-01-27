@@ -15,7 +15,7 @@ pub mod vm;
 
 // Re-export commonly used types
 pub use config::{GcMode, JitMode, RuntimeConfig};
-pub use vm::{Chunk, Value, VM};
+pub use vm::{Chunk, VM, Value};
 
 // Re-export FFI types for C bindings
 pub use ffi::*;

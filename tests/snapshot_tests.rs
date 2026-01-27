@@ -1,81 +1,112 @@
+//! Snapshot tests for the moca compiler.
+//!
+//! All tests run in-process to contribute to coverage measurement.
+
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
-use moca::config::RuntimeConfig;
-use moca::compiler;
+use moca::compiler::{dump_ast, dump_bytecode, run_file_capturing_output};
+use moca::config::{JitMode, RuntimeConfig};
 
-/// Run a .mc file with the moca CLI and return (stdout, stderr, exit_code)
-fn run_moca_file(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -> (String, String, i32) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_moca"));
-    cmd.arg("run");
-    cmd.arg(path);
-    // Extra args come after the file (CLI expects: run FILE [OPTIONS])
-    for arg in extra_args {
-        cmd.arg(arg);
+/// Run a .mc file in-process and return (stdout, stderr, exit_code)
+fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, String, i32) {
+    let (output, result) = run_file_capturing_output(path, config);
+
+    match result {
+        Ok(()) => (output.stdout, String::new(), 0),
+        Err(e) => (output.stdout, e, 1),
     }
-
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
-    }
-
-    let output = cmd.output().expect("failed to execute moca");
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    (stdout, stderr, exit_code)
 }
 
-/// Get extra CLI args based on directory name
-fn get_args_for_dir(dir_name: &str) -> Vec<&'static str> {
+/// Get RuntimeConfig based on directory name
+fn get_config_for_dir(dir_name: &str) -> RuntimeConfig {
     match dir_name {
-        "jit" => vec!["--jit=on"],
-        _ => vec![],
+        "jit" => RuntimeConfig {
+            jit_mode: JitMode::On,
+            jit_threshold: 1, // Low threshold to trigger JIT quickly in tests
+            ..RuntimeConfig::default()
+        },
+        _ => RuntimeConfig::default(),
+    }
+}
+
+/// Check if a test is a dump test (FFI tests that dump AST/bytecode)
+fn is_dump_test(base_path: &Path) -> Option<&'static str> {
+    let name = base_path.file_name()?.to_str()?;
+    if name.starts_with("dump_ast") {
+        Some("ast")
+    } else if name.starts_with("dump_bytecode") {
+        Some("bytecode")
+    } else {
+        None
+    }
+}
+
+/// Run a dump test and return (stdout, stderr, exit_code)
+/// Dump tests both run the program AND dump AST/bytecode
+fn run_dump_test(path: &Path, dump_type: &str) -> (String, String, i32) {
+    // First get the dump output
+    let dump_result = match dump_type {
+        "ast" => dump_ast(path),
+        "bytecode" => dump_bytecode(path),
+        _ => {
+            return (
+                String::new(),
+                format!("unknown dump type: {}", dump_type),
+                1,
+            );
+        }
+    };
+
+    let dump_output = match dump_result {
+        Ok(output) => output,
+        Err(e) => return (String::new(), e, 1),
+    };
+
+    // Then run the program to get stdout
+    let (output, result) = run_file_capturing_output(path, &RuntimeConfig::default());
+
+    match result {
+        Ok(()) => {
+            // Format stderr like CLI does: "== AST ==" or "== Bytecode ==" header
+            let header = match dump_type {
+                "ast" => "== AST ==",
+                "bytecode" => "== Bytecode ==",
+                _ => "",
+            };
+            let stderr = format!("{}\n{}", header, dump_output);
+            (output.stdout, stderr, 0)
+        }
+        Err(e) => (output.stdout, e, 1),
     }
 }
 
 /// Run a single snapshot test (file-based or directory-based)
 fn run_snapshot_test(test_path: &Path, dir_name: &str) {
-    let mut extra_args: Vec<String> = get_args_for_dir(dir_name)
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-
     // Determine if this is a directory-based test or file-based test
-    let (moca_path, working_dir, base_path) = if test_path.is_dir() {
+    let (moca_path, base_path) = if test_path.is_dir() {
         // Directory-based test: look for main.mc as entry point
         let main_moca = test_path.join("main.mc");
         if !main_moca.exists() {
-            panic!(
-                "Directory test {:?} must contain main.mc",
-                test_path
-            );
+            panic!("Directory test {:?} must contain main.mc", test_path);
         }
         // Expected output files are at the directory level (e.g., testdir.stdout)
-        (main_moca, Some(test_path), test_path.to_path_buf())
+        (main_moca, test_path.to_path_buf())
     } else {
         // File-based test
-        (test_path.to_path_buf(), None, test_path.with_extension(""))
+        (test_path.to_path_buf(), test_path.with_extension(""))
     };
 
-    // Check for .args file with extra CLI arguments
-    let args_path = base_path.with_extension("args");
-    if args_path.exists() {
-        let args_content = fs::read_to_string(&args_path)
-            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", args_path, e));
-        for arg in args_content.lines() {
-            let arg = arg.trim();
-            if !arg.is_empty() && !arg.starts_with('#') {
-                extra_args.push(arg.to_string());
-            }
-        }
-    }
-
-    let extra_args_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
+    // Determine how to run the test
     let (actual_stdout, actual_stderr, actual_exitcode) =
-        run_moca_file(&moca_path, &extra_args_refs, working_dir);
+        if let Some(dump_type) = is_dump_test(&base_path) {
+            // Dump test (AST or bytecode)
+            run_dump_test(&moca_path, dump_type)
+        } else {
+            // Regular test
+            let config = get_config_for_dir(dir_name);
+            run_moca_file_inprocess(&moca_path, &config)
+        };
 
     // Check stdout (exact match)
     let stdout_path = base_path.with_extension("stdout");
@@ -97,7 +128,9 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
         assert!(
             actual_stderr.contains(&expected_stderr),
             "stderr mismatch for {:?}\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
-            moca_path, expected_stderr, actual_stderr
+            moca_path,
+            expected_stderr,
+            actual_stderr
         );
     }
 
@@ -226,13 +259,12 @@ fn run_gc_snapshot_test(test_path: &Path) {
     // 1. Run with GC enabled (normal mode) - should succeed
     {
         let config = RuntimeConfig::default();
-        let result = compiler::run_file_with_config(test_path, &config);
+        let (actual_stdout, actual_stderr, actual_exitcode) =
+            run_moca_file_inprocess(test_path, &config);
 
-        // Check expected stdout if exists (via CLI for stdout capture)
+        // Check expected stdout if exists
         let stdout_path = base_path.with_extension("stdout");
         if stdout_path.exists() {
-            // Use CLI for stdout verification
-            let (actual_stdout, _, actual_exitcode) = run_moca_file(test_path, &[], None);
             let expected_stdout = fs::read_to_string(&stdout_path)
                 .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
             assert_eq!(
@@ -242,16 +274,15 @@ fn run_gc_snapshot_test(test_path: &Path) {
             );
             assert_eq!(
                 actual_exitcode, 0,
-                "exit code should be 0 for {:?} (GC enabled)",
-                test_path
+                "exit code should be 0 for {:?} (GC enabled), stderr: {}",
+                test_path, actual_stderr
             );
         } else {
             // Just verify it succeeds
-            assert!(
-                result.is_ok(),
-                "GC enabled test should succeed for {:?}, got error: {:?}",
-                test_path,
-                result.err()
+            assert_eq!(
+                actual_exitcode, 0,
+                "GC enabled test should succeed for {:?}, got error: {}",
+                test_path, actual_stderr
             );
         }
     }
@@ -270,51 +301,38 @@ fn run_gc_snapshot_test(test_path: &Path) {
             ..Default::default()
         };
 
-        let result = compiler::run_file_with_config(&gc_disabled_path, &config);
+        let (_, actual_stderr, actual_exitcode) =
+            run_moca_file_inprocess(&gc_disabled_path, &config);
 
         // Check expected stderr if exists
         let gc_disabled_base = gc_disabled_path.with_extension("");
         let stderr_path = gc_disabled_base.with_extension("stderr");
 
+        // Should fail (exit code != 0)
+        assert_ne!(
+            actual_exitcode, 0,
+            "GC disabled test should fail for {:?}, but it succeeded",
+            gc_disabled_path
+        );
+
         if stderr_path.exists() {
             let expected_stderr = fs::read_to_string(&stderr_path)
                 .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stderr_path, e));
-
-            match &result {
-                Err(err_msg) => {
-                    assert!(
-                        err_msg.contains(&expected_stderr),
-                        "stderr mismatch for {:?} (GC disabled)\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
-                        gc_disabled_path,
-                        expected_stderr,
-                        err_msg
-                    );
-                }
-                Ok(_) => {
-                    panic!(
-                        "GC disabled test should fail for {:?}, but it succeeded",
-                        gc_disabled_path
-                    );
-                }
-            }
+            assert!(
+                actual_stderr.contains(&expected_stderr),
+                "stderr mismatch for {:?} (GC disabled)\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
+                gc_disabled_path,
+                expected_stderr,
+                actual_stderr
+            );
         } else {
             // Just verify it fails with heap limit exceeded
-            match result {
-                Err(err_msg) => {
-                    assert!(
-                        err_msg.contains("heap limit exceeded"),
-                        "Error should mention heap limit exceeded for {:?}, got: {}",
-                        gc_disabled_path,
-                        err_msg
-                    );
-                }
-                Ok(_) => {
-                    panic!(
-                        "GC disabled test should fail for {:?}, but it succeeded",
-                        gc_disabled_path
-                    );
-                }
-            }
+            assert!(
+                actual_stderr.contains("heap limit exceeded"),
+                "Error should mention heap limit exceeded for {:?}, got: {}",
+                gc_disabled_path,
+                actual_stderr
+            );
         }
     }
 }

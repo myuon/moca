@@ -5,6 +5,7 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::collapsible_if)]
+#![allow(clippy::missing_safety_doc)]
 
 use super::types::MocaVm;
 use super::vm_ffi::get_wrapper_mut;
@@ -89,11 +90,7 @@ pub unsafe extern "C" fn moca_push_string(vm: *mut MocaVm, str: *const c_char, l
 fn resolve_index(stack_len: usize, index: i32) -> Option<usize> {
     if index >= 0 {
         let idx = index as usize;
-        if idx < stack_len {
-            Some(idx)
-        } else {
-            None
-        }
+        if idx < stack_len { Some(idx) } else { None }
     } else {
         let offset = (-index) as usize;
         if offset <= stack_len {

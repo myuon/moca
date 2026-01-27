@@ -1498,8 +1498,8 @@ mod tests {
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Main =="));
         assert!(output.contains("PushInt 42"));
-        assert!(output.contains("SetL"));   // renamed from StoreLocal
-        assert!(output.contains("GetL"));   // renamed from LoadLocal
+        assert!(output.contains("SetL")); // renamed from StoreLocal
+        assert!(output.contains("GetL")); // renamed from LoadLocal
         assert!(output.contains("Print"));
     }
 
@@ -1508,8 +1508,8 @@ mod tests {
         let chunk = compile("fun add(a, b) { return a + b; } print(add(1, 2));");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Function[0]: add"));
-        assert!(output.contains("GetL 0"));  // renamed from LoadLocal
-        assert!(output.contains("GetL 1"));  // renamed from LoadLocal
+        assert!(output.contains("GetL 0")); // renamed from LoadLocal
+        assert!(output.contains("GetL 1")); // renamed from LoadLocal
         assert!(output.contains("Add"));
         assert!(output.contains("Ret"));
         assert!(output.contains("Call 0, 2 ; add"));

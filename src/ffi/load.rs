@@ -2,6 +2,7 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::collapsible_if)]
+#![allow(clippy::missing_safety_doc)]
 
 use super::types::{MocaResult, MocaVm};
 use super::vm_ffi::get_wrapper_mut;
@@ -175,7 +176,7 @@ pub unsafe extern "C" fn moca_save_file(vm: *mut MocaVm, path: *const c_char) ->
 mod tests {
     use super::*;
     use crate::ffi::vm_ffi::{moca_vm_free, moca_vm_new};
-    use crate::vm::{bytecode, Chunk, Function, Op};
+    use crate::vm::{Chunk, Function, Op, bytecode};
     use std::ffi::CString;
 
     #[test]

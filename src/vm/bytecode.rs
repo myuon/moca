@@ -8,8 +8,8 @@
 //! - Main function
 //! - Debug info (optional)
 
-use super::{Chunk, Function, Op};
 use super::stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
+use super::{Chunk, Function, Op};
 use std::io::{self, Read, Write};
 
 /// Magic bytes for moca bytecode files
@@ -102,7 +102,8 @@ pub fn write_chunk<W: Write>(w: &mut W, chunk: &Chunk) -> io::Result<()> {
 pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
     // Magic
     let mut magic = [0u8; 4];
-    r.read_exact(&mut magic).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut magic)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     if &magic != MAGIC {
         return Err(BytecodeError::InvalidMagic);
     }
@@ -530,7 +531,8 @@ fn write_u8<W: Write>(w: &mut W, v: u8) -> io::Result<()> {
 
 fn read_u8<R: Read>(r: &mut R) -> Result<u8, BytecodeError> {
     let mut buf = [0u8; 1];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(buf[0])
 }
 
@@ -540,7 +542,8 @@ fn write_u16<W: Write>(w: &mut W, v: u16) -> io::Result<()> {
 
 fn read_u16<R: Read>(r: &mut R) -> Result<u16, BytecodeError> {
     let mut buf = [0u8; 2];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(u16::from_le_bytes(buf))
 }
 
@@ -550,7 +553,8 @@ fn write_u32<W: Write>(w: &mut W, v: u32) -> io::Result<()> {
 
 fn read_u32<R: Read>(r: &mut R) -> Result<u32, BytecodeError> {
     let mut buf = [0u8; 4];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(u32::from_le_bytes(buf))
 }
 
@@ -560,7 +564,8 @@ fn write_u64<W: Write>(w: &mut W, v: u64) -> io::Result<()> {
 
 fn read_u64<R: Read>(r: &mut R) -> Result<u64, BytecodeError> {
     let mut buf = [0u8; 8];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(u64::from_le_bytes(buf))
 }
 
@@ -570,7 +575,8 @@ fn write_i64<W: Write>(w: &mut W, v: i64) -> io::Result<()> {
 
 fn read_i64<R: Read>(r: &mut R) -> Result<i64, BytecodeError> {
     let mut buf = [0u8; 8];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(i64::from_le_bytes(buf))
 }
 
@@ -580,7 +586,8 @@ fn write_f64<W: Write>(w: &mut W, v: f64) -> io::Result<()> {
 
 fn read_f64<R: Read>(r: &mut R) -> Result<f64, BytecodeError> {
     let mut buf = [0u8; 8];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(f64::from_le_bytes(buf))
 }
 
@@ -592,7 +599,8 @@ fn write_string<W: Write>(w: &mut W, s: &str) -> io::Result<()> {
 fn read_string<R: Read>(r: &mut R) -> Result<String, BytecodeError> {
     let len = read_u32(r)? as usize;
     let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf).map_err(|_| BytecodeError::UnexpectedEof)?;
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
     String::from_utf8(buf).map_err(|_| BytecodeError::InvalidUtf8)
 }
 
@@ -636,20 +644,13 @@ mod tests {
     #[test]
     fn test_roundtrip_with_functions() {
         let chunk = Chunk {
-            functions: vec![
-                Function {
-                    name: "add".to_string(),
-                    arity: 2,
-                    locals_count: 2,
-                    code: vec![
-                        Op::GetL(0),
-                        Op::GetL(1),
-                        Op::AddI64,
-                        Op::Ret,
-                    ],
-                    stackmap: None,
-                },
-            ],
+            functions: vec![Function {
+                name: "add".to_string(),
+                arity: 2,
+                locals_count: 2,
+                code: vec![Op::GetL(0), Op::GetL(1), Op::AddI64, Op::Ret],
+                stackmap: None,
+            }],
             main: Function {
                 name: "main".to_string(),
                 arity: 0,
@@ -690,10 +691,7 @@ mod tests {
                 name: "main".to_string(),
                 arity: 0,
                 locals_count: 4,
-                code: vec![
-                    Op::New(2),
-                    Op::Ret,
-                ],
+                code: vec![Op::New(2), Op::Ret],
                 stackmap: Some(stackmap),
             },
             strings: vec![],
@@ -725,7 +723,10 @@ mod tests {
     fn test_unsupported_version() {
         let data = b"MOCA\xFF\x00\x00\x00";
         let result = deserialize(data);
-        assert!(matches!(result, Err(BytecodeError::UnsupportedVersion(255))));
+        assert!(matches!(
+            result,
+            Err(BytecodeError::UnsupportedVersion(255))
+        ));
     }
 
     #[test]
@@ -743,11 +744,30 @@ mod tests {
             Op::Dup,
             Op::GetL(100),
             Op::SetL(200),
-            Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod, Op::Neg,
-            Op::AddI64, Op::SubI64, Op::MulI64, Op::DivI64,
-            Op::AddF64, Op::SubF64, Op::MulF64, Op::DivF64,
-            Op::Eq, Op::Ne, Op::Lt, Op::Le, Op::Gt, Op::Ge,
-            Op::LtI64, Op::LeI64, Op::GtI64, Op::GeI64,
+            Op::Add,
+            Op::Sub,
+            Op::Mul,
+            Op::Div,
+            Op::Mod,
+            Op::Neg,
+            Op::AddI64,
+            Op::SubI64,
+            Op::MulI64,
+            Op::DivI64,
+            Op::AddF64,
+            Op::SubF64,
+            Op::MulF64,
+            Op::DivF64,
+            Op::Eq,
+            Op::Ne,
+            Op::Lt,
+            Op::Le,
+            Op::Gt,
+            Op::Ge,
+            Op::LtI64,
+            Op::LeI64,
+            Op::GtI64,
+            Op::GeI64,
             Op::LtF64,
             Op::Not,
             Op::Jmp(1000),
@@ -756,16 +776,32 @@ mod tests {
             Op::Call(5, 3),
             Op::Ret,
             Op::New(10),
-            Op::GetF(1), Op::SetF(2),
-            Op::GetFCached(3, 4), Op::SetFCached(5, 6),
+            Op::GetF(1),
+            Op::SetF(2),
+            Op::GetFCached(3, 4),
+            Op::SetFCached(5, 6),
             Op::AllocArray(7),
-            Op::ArrayLen, Op::ArrayGet, Op::ArraySet, Op::ArrayPush, Op::ArrayPop, Op::ArrayGetInt,
-            Op::StringLen, Op::StringConcat,
-            Op::TypeOf, Op::ToString, Op::ParseInt,
-            Op::Throw, Op::TryBegin(100), Op::TryEnd,
+            Op::ArrayLen,
+            Op::ArrayGet,
+            Op::ArraySet,
+            Op::ArrayPush,
+            Op::ArrayPop,
+            Op::ArrayGetInt,
+            Op::StringLen,
+            Op::StringConcat,
+            Op::TypeOf,
+            Op::ToString,
+            Op::ParseInt,
+            Op::Throw,
+            Op::TryBegin(100),
+            Op::TryEnd,
             Op::Print,
             Op::GcHint(1024),
-            Op::ThreadSpawn(1), Op::ChannelCreate, Op::ChannelSend, Op::ChannelRecv, Op::ThreadJoin,
+            Op::ThreadSpawn(1),
+            Op::ChannelCreate,
+            Op::ChannelSend,
+            Op::ChannelRecv,
+            Op::ThreadJoin,
         ];
 
         let chunk = Chunk {

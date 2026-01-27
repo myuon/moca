@@ -21,8 +21,9 @@ pub use typechecker::TypeChecker;
 use crate::config::{JitMode, RuntimeConfig};
 use crate::vm::VM;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Options for dumping intermediate representations.
 ///
@@ -81,6 +82,92 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
 /// Compile and run a file with import support.
 pub fn run_file(path: &Path) -> Result<(), String> {
     run_file_with_config(path, &RuntimeConfig::default())
+}
+
+/// Output captured from running a file.
+#[derive(Debug, Clone, Default)]
+pub struct CapturedOutput {
+    /// Standard output from print statements
+    pub stdout: String,
+}
+
+/// Compile and run a file, capturing output for testing.
+///
+/// Returns (stdout_content, Ok(())) on success, or (stdout_content, Err(msg)) on error.
+/// This allows tests to check both the output and any error messages.
+pub fn run_file_capturing_output(
+    path: &Path,
+    config: &RuntimeConfig,
+) -> (CapturedOutput, Result<(), String>) {
+    // Use Arc<Mutex<Cursor>> to allow shared ownership of the buffer
+    let stdout_buffer = Arc::new(Mutex::new(Cursor::new(Vec::new())));
+    let buffer_clone = Arc::clone(&stdout_buffer);
+
+    let result = (|| {
+        let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let mut loader = ModuleLoader::new(root_dir);
+
+        // Load main file with all imports
+        let program = loader.load_with_imports(path)?;
+
+        let filename = path.to_string_lossy().to_string();
+
+        // Type checking
+        let mut typechecker = TypeChecker::new(&filename);
+        typechecker
+            .check_program(&program)
+            .map_err(|errors| format_type_errors(&filename, &errors))?;
+
+        // Name resolution
+        let mut resolver = Resolver::new(&filename);
+        let resolved = resolver.resolve(program)?;
+
+        // Code generation
+        let mut codegen = Codegen::new();
+        let mut chunk = codegen.compile(resolved)?;
+
+        // Execution with output capture using a wrapper that writes to the shared buffer
+        let mut vm = VM::new_with_config(
+            config.heap_limit,
+            config.gc_enabled,
+            Box::new(SharedWriter(buffer_clone)),
+        );
+        vm.set_jit_config(config.jit_threshold, config.trace_jit);
+
+        match config.jit_mode {
+            JitMode::Off => {
+                vm.run(&chunk)?;
+            }
+            JitMode::On | JitMode::Auto => {
+                vm.run_with_quickening(&mut chunk)?;
+            }
+        }
+
+        Ok(())
+    })();
+
+    // Extract the output from the buffer
+    let output = {
+        let buffer = stdout_buffer.lock().unwrap();
+        CapturedOutput {
+            stdout: String::from_utf8_lossy(buffer.get_ref()).to_string(),
+        }
+    };
+
+    (output, result)
+}
+
+/// A Write wrapper that writes to a shared buffer.
+struct SharedWriter(Arc<Mutex<Cursor<Vec<u8>>>>);
+
+impl Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap().flush()
+    }
 }
 
 /// Compile and run a file with import support and runtime configuration.
@@ -260,6 +347,44 @@ pub fn check_file(path: &Path) -> Result<(), String> {
         .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     Ok(())
+}
+
+/// Compile a file and return the AST dump as a string.
+pub fn dump_ast(path: &Path) -> Result<String, String> {
+    let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut loader = ModuleLoader::new(root_dir);
+
+    // Load main file with all imports
+    let program = loader.load_with_imports(path)?;
+
+    Ok(dump::format_ast(&program))
+}
+
+/// Compile a file and return the bytecode dump as a string.
+pub fn dump_bytecode(path: &Path) -> Result<String, String> {
+    let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut loader = ModuleLoader::new(root_dir);
+
+    // Load main file with all imports
+    let program = loader.load_with_imports(path)?;
+
+    let filename = path.to_string_lossy().to_string();
+
+    // Type checking
+    let mut typechecker = TypeChecker::new(&filename);
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
+
+    // Name resolution
+    let mut resolver = Resolver::new(&filename);
+    let resolved = resolver.resolve(program)?;
+
+    // Code generation
+    let mut codegen = Codegen::new();
+    let chunk = codegen.compile(resolved)?;
+
+    Ok(dump::format_bytecode(&chunk))
 }
 
 /// Format type errors for display.
