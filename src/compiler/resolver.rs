@@ -127,10 +127,11 @@ pub enum ResolvedExpr {
         fields: Vec<ResolvedExpr>,
     },
     /// Method call: `obj.method(args)`
-    /// Method name is kept for runtime dispatch (type not known statically).
+    /// Statically dispatched to the resolved function.
     MethodCall {
         object: Box<ResolvedExpr>,
         method: String,
+        func_index: usize,
         args: Vec<ResolvedExpr>,
     },
 }
@@ -349,6 +350,17 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// Get struct name from a ResolvedExpr if it's a struct literal
+    fn get_struct_name(&self, expr: &ResolvedExpr) -> Option<String> {
+        match expr {
+            ResolvedExpr::StructLiteral { struct_index, .. } => self
+                .resolved_structs
+                .get(*struct_index)
+                .map(|s| s.name.clone()),
+            _ => None,
+        }
+    }
+
     fn resolve_statements(
         &self,
         statements: Vec<Statement>,
@@ -377,7 +389,8 @@ impl<'a> Resolver<'a> {
                 span: _,
             } => {
                 let init = self.resolve_expr(init, scope)?;
-                let slot = scope.declare(name.clone(), mutable);
+                let struct_name = self.get_struct_name(&init);
+                let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
                 Ok(ResolvedStatement::Let { slot, init })
             }
             Statement::Assign { name, value, span } => {
@@ -683,18 +696,46 @@ impl<'a> Resolver<'a> {
                 object,
                 method,
                 args,
-                ..
+                span,
             } => {
+                // Get struct name from the object expression before resolving
+                let struct_name = match &*object {
+                    Expr::Ident { name, .. } => {
+                        scope.lookup_with_type(name).and_then(|(_, _, sn)| sn)
+                    }
+                    Expr::StructLiteral { name, .. } => Some(name.clone()),
+                    _ => None,
+                };
+
                 let resolved_object = self.resolve_expr(*object, scope)?;
                 let resolved_args: Vec<_> = args
                     .into_iter()
                     .map(|a| self.resolve_expr(a, scope))
                     .collect::<Result<_, _>>()?;
 
-                // Method name is kept for runtime dispatch
+                // Resolve method to function index (static dispatch)
+                let func_index = if let Some(sn) = &struct_name {
+                    let struct_info = self
+                        .structs
+                        .get(sn)
+                        .ok_or_else(|| self.error(&format!("undefined struct '{}'", sn), span))?;
+                    *struct_info.methods.get(&method).ok_or_else(|| {
+                        self.error(
+                            &format!("undefined method '{}' for struct '{}'", method, sn),
+                            span,
+                        )
+                    })?
+                } else {
+                    return Err(self.error(
+                        &format!("cannot call method '{}' on non-struct value", method),
+                        span,
+                    ));
+                };
+
                 Ok(ResolvedExpr::MethodCall {
                     object: Box::new(resolved_object),
                     method,
+                    func_index,
                     args: resolved_args,
                 })
             }
@@ -709,9 +750,13 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// Information about a local variable: (slot, mutable, struct_name).
+/// struct_name is Some if the variable holds a struct instance.
+type LocalInfo = (usize, bool, Option<String>);
+
 /// A scope for variable resolution.
 struct Scope {
-    locals: Vec<HashMap<String, (usize, bool)>>,
+    locals: Vec<HashMap<String, LocalInfo>>,
     locals_count: usize,
 }
 
@@ -724,19 +769,33 @@ impl Scope {
     }
 
     fn declare(&mut self, name: String, mutable: bool) -> usize {
+        self.declare_with_type(name, mutable, None)
+    }
+
+    fn declare_with_type(
+        &mut self,
+        name: String,
+        mutable: bool,
+        struct_name: Option<String>,
+    ) -> usize {
         let slot = self.locals_count;
         self.locals_count += 1;
         self.locals
             .last_mut()
             .unwrap()
-            .insert(name, (slot, mutable));
+            .insert(name, (slot, mutable, struct_name));
         slot
     }
 
     fn lookup(&self, name: &str) -> Option<(usize, bool)> {
+        self.lookup_with_type(name)
+            .map(|(slot, mutable, _)| (slot, mutable))
+    }
+
+    fn lookup_with_type(&self, name: &str) -> Option<LocalInfo> {
         for scope in self.locals.iter().rev() {
-            if let Some(&slot) = scope.get(name) {
-                return Some(slot);
+            if let Some(info) = scope.get(name) {
+                return Some(info.clone());
             }
         }
         None

@@ -7,19 +7,19 @@ struct Counter {
 
 impl Counter {
     fun get(self) -> int {
-        self.count
+        return self.count;
     }
 
     fun increment(self) {
-        self.count = self.count + 1
+        self.count = self.count + 1;
     }
 
     fun add(self, n: int) {
-        self.count = self.count + n
+        self.count = self.count + n;
     }
 
     fun reset(self) {
-        self.count = 0
+        self.count = 0;
     }
 }
 
@@ -57,11 +57,11 @@ struct Point {
 
 impl Point {
     fun sum(self) -> int {
-        self.x + self.y
+        return self.x + self.y;
     }
 
     fun set_x(self, val: int) {
-        self.x = val
+        self.x = val;
     }
 }
 
