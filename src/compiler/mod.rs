@@ -345,6 +345,44 @@ pub fn check_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Compile a file and return the AST dump as a string.
+pub fn dump_ast(path: &Path) -> Result<String, String> {
+    let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut loader = ModuleLoader::new(root_dir);
+
+    // Load main file with all imports
+    let program = loader.load_with_imports(path)?;
+
+    Ok(dump::format_ast(&program))
+}
+
+/// Compile a file and return the bytecode dump as a string.
+pub fn dump_bytecode(path: &Path) -> Result<String, String> {
+    let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut loader = ModuleLoader::new(root_dir);
+
+    // Load main file with all imports
+    let program = loader.load_with_imports(path)?;
+
+    let filename = path.to_string_lossy().to_string();
+
+    // Type checking
+    let mut typechecker = TypeChecker::new(&filename);
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
+
+    // Name resolution
+    let mut resolver = Resolver::new(&filename);
+    let resolved = resolver.resolve(program)?;
+
+    // Code generation
+    let mut codegen = Codegen::new();
+    let chunk = codegen.compile(resolved)?;
+
+    Ok(dump::format_bytecode(&chunk))
+}
+
 /// Format type errors for display.
 fn format_type_errors(filename: &str, errors: &[typechecker::TypeError]) -> String {
     let mut output = String::new();

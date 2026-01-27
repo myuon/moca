@@ -1,68 +1,57 @@
 # Spec.md
 
 ## 1. Goal
-- `.mc` ファイルを `tests/snapshots/` に追加するだけでカバレッジに反映されるようにする
+- JIT/FFIテストをin-process実行に移行し、subprocessを完全に廃止する
+- すべてのスナップショットテストがカバレッジに反映されるようにする
 
 ## 2. Non-Goals
-- 新しいテストフレームワークの導入
-- 外部クレートの追加
-- JIT関連のin-processテスト対応（既存のsubprocess方式を維持）
+- CLIのフラグ解析テスト（CLIそのものは別途テストしない）
+- JITの実際のネイティブコード生成テスト（JIT有効化のパステストのみ）
 
 ## 3. Target Users
 - moca言語の開発者
-- テストケースを追加するコントリビューター
 
 ## 4. Core User Flow
-1. 開発者が `tests/snapshots/basic/new_feature.mc` を作成
-2. 対応する `new_feature.stdout` を作成
-3. `cargo test` を実行 → テストが自動的に実行される
-4. `cargo llvm-cov` を実行 → カバレッジに反映される
+1. `tests/snapshots/jit/*.mc` ファイルを追加
+2. `cargo test` で自動実行
+3. `cargo llvm-cov` でカバレッジ反映
 
 ## 5. Inputs & Outputs
-- **入力**: `.mc` ファイル + `.stdout` / `.stderr` / `.exitcode` ファイル
-- **出力**: テスト結果（pass/fail）、カバレッジレポート
+- **入力**: `.mc` ファイル + `.stdout` / `.stderr` ファイル
+- **出力**: テスト結果、カバレッジレポート
 
 ## 6. Tech Stack
-- 言語: Rust (Edition 2024)
-- 追加依存: なし（標準ライブラリの `std::io::Write` のみ使用）
+- 言語: Rust
+- 追加依存: なし
 
 ## 7. Rules & Constraints
-- VMの `println!` を `Write` トレイトベースに変更
-- デフォルトは `stdout` への出力（既存動作を維持）
-- `snapshot_tests.rs` を修正してin-process実行に変更
-- 既存のAPIシグネチャは可能な限り維持
+- `run_file_capturing_output` にJIT設定オプション追加
+- dump用API（`compile_and_dump_ast`, `compile_and_dump_bytecode`）を追加
+- `snapshot_tests.rs` から subprocess 呼び出しを完全削除
 
 ## 8. Open Questions
 - なし
 
 ## 9. Acceptance Criteria
-1. `tests/snapshots/basic/*.mc` がin-processで実行される
-2. `tests/snapshots/errors/*.mc` がin-processで実行される
-3. `.stdout` ファイルとの比較が正常に動作する
-4. `.stderr` ファイルとの比較が正常に動作する
-5. `.exitcode` ファイルとの比較が正常に動作する
-6. `cargo llvm-cov` でcompilerモジュールのカバレッジが計測される
-7. 既存の `cargo test` が全てパスする
-8. JITテスト（`jit/`）は既存のsubprocess方式を維持する
+1. JITテスト（3ファイル）がin-processで実行される
+2. FFIテスト（dump_ast, dump_bytecode）がin-processで実行される
+3. `snapshot_tests.rs` から `Command::new` が完全に削除される
+4. 全テストが `cargo test` でパスする
+5. `cargo llvm-cov` で全テストがカバレッジに反映される
 
 ## 10. Verification Strategy
-- **進捗検証**: 各ステップ完了後に `cargo test` でテストがパスすることを確認
-- **達成検証**: `cargo llvm-cov` で `tests/snapshots/` のテストがカバレッジに反映されることを確認
-- **漏れ検出**: 既存のsnapshot testが全て動作することを確認
+- **進捗検証**: 各機能実装後に `cargo test` でパス確認
+- **達成検証**: `grep -r "Command::new" tests/` で subprocess 呼び出しがないことを確認
+- **漏れ検出**: `cargo llvm-cov` でカバレッジ確認
 
 ## 11. Test Plan
 
-### e2e シナリオ 1: 基本テストのカバレッジ反映
-- **Given**: `tests/snapshots/basic/arithmetic.mc` が存在する
-- **When**: `cargo llvm-cov --test snapshot_tests` を実行
-- **Then**: compiler/parser.rs などのカバレッジが計測される
+### e2e シナリオ 1: JITテストのカバレッジ
+- **Given**: `tests/snapshots/jit/fibonacci.mc` が存在
+- **When**: `cargo llvm-cov` を実行
+- **Then**: JIT関連コードパスがカバレッジに反映
 
-### e2e シナリオ 2: エラーテストのカバレッジ反映
-- **Given**: `tests/snapshots/errors/type_mismatch.mc` が存在する
-- **When**: `cargo llvm-cov --test snapshot_tests` を実行
-- **Then**: compiler/typechecker.rs のエラーパスがカバレッジに反映される
-
-### e2e シナリオ 3: 新規ファイル追加時の自動検出
-- **Given**: 新しい `tests/snapshots/basic/new_test.mc` を追加
+### e2e シナリオ 2: dump APIテスト
+- **Given**: `tests/snapshots/ffi/dump_ast.mc` が存在
 - **When**: `cargo test` を実行
-- **Then**: 新しいテストが自動的に実行される
+- **Then**: AST dump出力が期待値と一致
