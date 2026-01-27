@@ -1,4 +1,9 @@
-# Spec: Static Type System
+---
+title: Static Type System Specification
+description: 静的型システムの仕様。Hindley-Milner 型推論による型安全性保証、nullable 型、配列・オブジェクト型を定義。
+---
+
+# Static Type System Specification
 
 ## 1. Goal
 

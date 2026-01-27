@@ -1,7 +1,6 @@
 ---
 title: mocaVM Core Specification
-version: 0.1.0
-status: implemented
+description: VM コア機能の仕様。Value 表現、命令セット、Verifier ルール、StackMap フォーマット、GC 統合を定義。
 ---
 
 # mocaVM Core Specification

@@ -1,3 +1,8 @@
+---
+title: Snapshot Testing
+description: スナップショットテストの仕様。.mc ファイルと期待出力を外部ファイルで管理するテストインフラストラクチャ。
+---
+
 # Snapshot Testing
 
 moca のスナップショットテストは、`.mc`ファイルとその期待出力を外部ファイルで管理する仕組みです。

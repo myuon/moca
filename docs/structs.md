@@ -1,3 +1,8 @@
+---
+title: Struct Declarations Specification
+description: 構造体型の仕様。固定フィールドを持つデータ型、impl ブロックによるメソッド定義、名義的型付けを定義。
+---
+
 # Struct Declarations Specification
 
 ## Overview
