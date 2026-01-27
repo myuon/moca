@@ -62,19 +62,50 @@ struct Rectangle {
 }
 
 impl Rectangle {
-    fn area(self) -> int {
+    fun area(self) -> int {
         return self.width * self.height;
     }
 
-    fn scale(self, factor: int) {
+    fun scale(self, factor: int) {
         self.width = self.width * factor;
         self.height = self.height * factor;
     }
 }
 
-let rect = Rectangle { width: 10, height: 5 };
+var rect = Rectangle { width: 10, height: 5 };
 let a = rect.area();  // 50
-rect.scale(2);
+rect.scale(2);        // rect is now { width: 20, height: 10 }
+```
+
+#### Self Parameter
+
+- `self` is passed by value (reference to the struct instance)
+- Modifications to `self.field` are reflected in the caller
+- Methods are statically dispatched using `StructName::method` naming
+
+#### Method Chaining
+
+Methods can return struct instances to enable chaining:
+
+```mc
+struct Builder {
+    value: int
+}
+
+impl Builder {
+    fun add(self, n: int) -> Builder {
+        return Builder { value: self.value + n };
+    }
+
+    fun get(self) -> int {
+        return self.value;
+    }
+}
+
+let b = Builder { value: 0 };
+let result = b.add(5);
+let final = result.add(10);
+print(final.get());  // 15
 ```
 
 ## Type System Integration
@@ -162,7 +193,7 @@ struct_init_field ::= IDENT ':' expr
 
 ### Parsing
 1. `struct Point { x: int, y: int }` parses successfully
-2. `impl Point { fn origin() -> Point { ... } }` parses successfully
+2. `impl Point { fun origin() -> Point { ... } }` parses successfully
 3. `Point { x: 1, y: 2 }` parses as struct literal expression
 
 ### Type Checking

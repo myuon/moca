@@ -600,22 +600,18 @@ impl Codegen {
             ResolvedExpr::MethodCall {
                 object,
                 method: _,
+                func_index,
                 args,
+                return_struct_name: _,
             } => {
-                // TODO: Implement proper method dispatch
-                // For now, compile as a function call with the method name
-                // Push object (self) first, then args
+                // Push object (self) as first argument, then other args
                 self.compile_expr(object, ops)?;
                 for arg in args {
                     self.compile_expr(arg, ops)?;
                 }
 
-                // For now, pop arguments and return nil as we don't have method dispatch
-                ops.push(Op::Pop);
-                for _ in 0..args.len() {
-                    ops.push(Op::Pop);
-                }
-                ops.push(Op::PushNull);
+                // Call the resolved method function (self + args)
+                ops.push(Op::Call(*func_index, args.len() + 1));
             }
         }
 

@@ -1076,9 +1076,22 @@ impl ResolvedProgramPrinter {
             ResolvedExpr::MethodCall {
                 object,
                 method,
+                func_index,
                 args,
+                return_struct_name,
             } => {
-                self.write(&format!("{}MethodCall .{}({})", prefix, method, args.len()));
+                let ret_info = return_struct_name
+                    .as_ref()
+                    .map(|s| format!(" -> {}", s))
+                    .unwrap_or_default();
+                self.write(&format!(
+                    "{}MethodCall .{}({}) -> func[{}]{}",
+                    prefix,
+                    method,
+                    args.len(),
+                    func_index,
+                    ret_info
+                ));
                 self.newline();
                 let has_args = !args.is_empty();
                 let obj_prefix = if has_args { "├── " } else { "└── " };
