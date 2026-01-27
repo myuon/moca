@@ -2,8 +2,22 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use moca::compiler::run_file_capturing_output;
+use moca::config::RuntimeConfig;
+
+/// Run a .mc file in-process and return (stdout, stderr, exit_code)
+fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, String, i32) {
+    let (output, result) = run_file_capturing_output(path, config);
+
+    match result {
+        Ok(()) => (output.stdout, String::new(), 0),
+        Err(e) => (output.stdout, e, 1),
+    }
+}
+
 /// Run a .mc file with the moca CLI and return (stdout, stderr, exit_code)
-fn run_moca_file(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -> (String, String, i32) {
+/// Used for tests that require CLI-specific features (JIT flags, dump options, etc.)
+fn run_moca_file_subprocess(path: &Path, extra_args: &[&str], working_dir: Option<&Path>) -> (String, String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_moca"));
     cmd.arg("run");
     cmd.arg(path);
@@ -33,6 +47,11 @@ fn get_args_for_dir(dir_name: &str) -> Vec<&'static str> {
     }
 }
 
+/// Check if a directory requires subprocess execution (CLI-specific features)
+fn requires_subprocess(dir_name: &str) -> bool {
+    matches!(dir_name, "jit" | "ffi")
+}
+
 /// Run a single snapshot test (file-based or directory-based)
 fn run_snapshot_test(test_path: &Path, dir_name: &str) {
     let mut extra_args: Vec<String> = get_args_for_dir(dir_name)
@@ -59,7 +78,8 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
 
     // Check for .args file with extra CLI arguments
     let args_path = base_path.with_extension("args");
-    if args_path.exists() {
+    let has_args_file = args_path.exists();
+    if has_args_file {
         let args_content = fs::read_to_string(&args_path)
             .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", args_path, e));
         for arg in args_content.lines() {
@@ -70,9 +90,15 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
         }
     }
 
-    let extra_args_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
-    let (actual_stdout, actual_stderr, actual_exitcode) =
-        run_moca_file(&moca_path, &extra_args_refs, working_dir);
+    // Decide whether to use in-process or subprocess execution
+    let use_subprocess = requires_subprocess(dir_name) || has_args_file || working_dir.is_some();
+
+    let (actual_stdout, actual_stderr, actual_exitcode) = if use_subprocess {
+        let extra_args_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
+        run_moca_file_subprocess(&moca_path, &extra_args_refs, working_dir)
+    } else {
+        run_moca_file_inprocess(&moca_path, &RuntimeConfig::default())
+    };
 
     // Check stdout (exact match)
     let stdout_path = base_path.with_extension("stdout");

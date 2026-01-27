@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use crate::vm::ic::InlineCacheTable;
@@ -74,10 +75,17 @@ pub struct VM {
     jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
+    /// Output stream for print statements
+    output: Box<dyn Write>,
 }
 
 impl VM {
     pub fn new() -> Self {
+        Self::with_output(Box::new(io::stdout()))
+    }
+
+    /// Create a VM with a custom output stream.
+    pub fn with_output(output: Box<dyn Write>) -> Self {
         Self {
             stack: Vec::with_capacity(1024),
             frames: Vec::with_capacity(64),
@@ -96,6 +104,7 @@ impl VM {
             #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
+            output,
         }
     }
 
@@ -921,7 +930,7 @@ impl VM {
             Op::Print => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
-                println!("{}", s);
+                writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
                 // print returns the value it printed (for expression statements)
                 self.stack.push(value);
             }
