@@ -1,7 +1,6 @@
 ---
 title: mocaVM C API Specification
-version: 0.1.0
-status: implemented
+description: C 言語 API の仕様。VM ライフサイクル、スタック操作、関数呼び出し、バイトコードのシリアライズを定義。
 ---
 
 # mocaVM C API Specification
