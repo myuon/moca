@@ -1,0 +1,3 @@
+while 42 {
+    print("loop");
+}
