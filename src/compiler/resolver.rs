@@ -1,5 +1,6 @@
 use crate::compiler::ast::*;
 use crate::compiler::lexer::Span;
+use crate::compiler::types::TypeAnnotation;
 use std::collections::HashMap;
 
 /// Resolved program with variable indices and function references.
@@ -133,6 +134,8 @@ pub enum ResolvedExpr {
         method: String,
         func_index: usize,
         args: Vec<ResolvedExpr>,
+        /// If the method returns a struct, the struct name
+        return_struct_name: Option<String>,
     },
 }
 
@@ -144,6 +147,8 @@ struct StructDefInfo {
     fields: Vec<String>,
     /// Methods: method_name -> function_index
     methods: HashMap<String, usize>,
+    /// Method return types: method_name -> struct_name (if returns a struct)
+    method_return_types: HashMap<String, Option<String>>,
 }
 
 /// The resolver performs name resolution and variable slot assignment.
@@ -225,6 +230,7 @@ impl<'a> Resolver<'a> {
                     index,
                     fields: fields.clone(),
                     methods: HashMap::new(),
+                    method_return_types: HashMap::new(),
                 },
             );
             self.resolved_structs.push(ResolvedStruct {
@@ -274,9 +280,26 @@ impl<'a> Resolver<'a> {
                 }
                 self.functions.insert(func_name.clone(), func_index);
 
+                // Get return type struct name if method returns a struct
+                let return_struct_name = method.return_type.as_ref().and_then(|rt| {
+                    if let TypeAnnotation::Named(name) = rt {
+                        // Check if this name is a known struct
+                        if self.structs.contains_key(name) {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                });
+
                 // Add method to struct's method table
                 let struct_info = self.structs.get_mut(&impl_block.struct_name).unwrap();
                 struct_info.methods.insert(method.name.clone(), func_index);
+                struct_info
+                    .method_return_types
+                    .insert(method.name.clone(), return_struct_name);
             }
         }
 
@@ -350,13 +373,16 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// Get struct name from a ResolvedExpr if it's a struct literal
+    /// Get struct name from a ResolvedExpr if it evaluates to a struct
     fn get_struct_name(&self, expr: &ResolvedExpr) -> Option<String> {
         match expr {
             ResolvedExpr::StructLiteral { struct_index, .. } => self
                 .resolved_structs
                 .get(*struct_index)
                 .map(|s| s.name.clone()),
+            ResolvedExpr::MethodCall {
+                return_struct_name, ..
+            } => return_struct_name.clone(),
             _ => None,
         }
     }
@@ -714,17 +740,23 @@ impl<'a> Resolver<'a> {
                     .collect::<Result<_, _>>()?;
 
                 // Resolve method to function index (static dispatch)
-                let func_index = if let Some(sn) = &struct_name {
+                let (func_index, return_struct_name) = if let Some(sn) = &struct_name {
                     let struct_info = self
                         .structs
                         .get(sn)
                         .ok_or_else(|| self.error(&format!("undefined struct '{}'", sn), span))?;
-                    *struct_info.methods.get(&method).ok_or_else(|| {
+                    let idx = *struct_info.methods.get(&method).ok_or_else(|| {
                         self.error(
                             &format!("undefined method '{}' for struct '{}'", method, sn),
                             span,
                         )
-                    })?
+                    })?;
+                    let ret_type = struct_info
+                        .method_return_types
+                        .get(&method)
+                        .cloned()
+                        .flatten();
+                    (idx, ret_type)
                 } else {
                     return Err(self.error(
                         &format!("cannot call method '{}' on non-struct value", method),
@@ -737,6 +769,7 @@ impl<'a> Resolver<'a> {
                     method,
                     func_index,
                     args: resolved_args,
+                    return_struct_name,
                 })
             }
         }

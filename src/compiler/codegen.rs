@@ -602,6 +602,7 @@ impl Codegen {
                 method: _,
                 func_index,
                 args,
+                return_struct_name: _,
             } => {
                 // Push object (self) as first argument, then other args
                 self.compile_expr(object, ops)?;

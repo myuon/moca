@@ -71,3 +71,23 @@ print(p.sum());
 var p2 = Point { x: 0, y: 10 };
 p2.set_x(5);
 print(p2.sum());
+
+// Test 6: Method chaining (method returns struct)
+struct Builder {
+    value: int
+}
+
+impl Builder {
+    fun add(self, n: int) -> Builder {
+        return Builder { value: self.value + n };
+    }
+
+    fun get(self) -> int {
+        return self.value;
+    }
+}
+
+let b = Builder { value: 0 };
+let b2 = b.add(5);
+let b3 = b2.add(10);
+print(b3.get());
