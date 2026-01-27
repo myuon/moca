@@ -81,15 +81,38 @@ pub struct VM {
 
 impl VM {
     pub fn new() -> Self {
-        Self::with_output(Box::new(io::stdout()))
+        Self::new_with_config(None, true, Box::new(io::stdout()))
     }
 
     /// Create a VM with a custom output stream.
     pub fn with_output(output: Box<dyn Write>) -> Self {
+        Self::new_with_config(None, true, output)
+    }
+
+    /// Create a new VM with custom heap configuration.
+    ///
+    /// # Arguments
+    /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
+    /// * `gc_enabled` - Whether GC is enabled
+    pub fn new_with_heap_config(heap_limit: Option<usize>, gc_enabled: bool) -> Self {
+        Self::new_with_config(heap_limit, gc_enabled, Box::new(io::stdout()))
+    }
+
+    /// Create a new VM with full configuration.
+    ///
+    /// # Arguments
+    /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
+    /// * `gc_enabled` - Whether GC is enabled
+    /// * `output` - Output stream for print statements
+    pub fn new_with_config(
+        heap_limit: Option<usize>,
+        gc_enabled: bool,
+        output: Box<dyn Write>,
+    ) -> Self {
         Self {
             stack: Vec::with_capacity(1024),
             frames: Vec::with_capacity(64),
-            heap: Heap::new(),
+            heap: Heap::new_with_config(heap_limit, gc_enabled),
             try_frames: Vec::new(),
             ic_tables: Vec::new(),
             main_ic: InlineCacheTable::new(),
@@ -520,7 +543,7 @@ impl VM {
             }
             Op::PushString(idx) => {
                 let s = chunk.strings.get(idx).cloned().unwrap_or_default();
-                let r = self.heap.alloc_string(s);
+                let r = self.heap.alloc_string(s)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::Pop => {
@@ -694,7 +717,7 @@ impl VM {
                     elements.push(self.stack.pop().ok_or("stack underflow")?);
                 }
                 elements.reverse();
-                let r = self.heap.alloc_array(elements);
+                let r = self.heap.alloc_array(elements)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::ArrayLen => {
@@ -800,7 +823,7 @@ impl VM {
                         .ok_or("runtime error: object key must be a string")?;
                     fields.insert(key_str.value.clone(), value);
                 }
-                let r = self.heap.alloc_object_map(fields);
+                let r = self.heap.alloc_object_map(fields)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::GetF(str_idx) => {
@@ -860,7 +883,7 @@ impl VM {
                 let b_str = self.value_to_string(&b)?;
 
                 let result = format!("{}{}", a_str, b_str);
-                let r = self.heap.alloc_string(result);
+                let r = self.heap.alloc_string(result)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::TypeOf => {
@@ -882,13 +905,13 @@ impl VM {
                         }
                     }
                 };
-                let r = self.heap.alloc_string(type_name.to_string());
+                let r = self.heap.alloc_string(type_name.to_string())?;
                 self.stack.push(Value::Ref(r));
             }
             Op::ToString => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
-                let r = self.heap.alloc_string(s);
+                let r = self.heap.alloc_string(s)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::ParseInt => {
@@ -1186,7 +1209,7 @@ impl VM {
                 // Create an array with [id, id] (sender and receiver share the channel)
                 let arr = self
                     .heap
-                    .alloc_array(vec![Value::I64(id as i64), Value::I64(id as i64)]);
+                    .alloc_array(vec![Value::I64(id as i64), Value::I64(id as i64)])?;
                 self.stack.push(Value::Ref(arr));
             }
             Op::ChannelSend => {
@@ -1409,7 +1432,7 @@ impl VM {
 
                 if let (Some(a_str), Some(b_str)) = (a_obj.as_string(), b_obj.as_string()) {
                     let result = format!("{}{}", a_str.value, b_str.value);
-                    let r = self.heap.alloc_string(result);
+                    let r = self.heap.alloc_string(result)?;
                     return Ok(Value::Ref(r));
                 }
 
@@ -1568,7 +1591,7 @@ impl VM {
             self.stack.truncate(try_frame.stack_depth);
 
             // Push the error message as a string
-            let error_ref = self.heap.alloc_string(error.clone());
+            let error_ref = self.heap.alloc_string(error.clone())?;
             self.stack.push(Value::Ref(error_ref));
 
             // Jump to the handler

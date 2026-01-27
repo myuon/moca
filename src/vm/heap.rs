@@ -144,10 +144,23 @@ pub struct Heap {
     next_shape_id: u32,
     /// Cache of shape signatures to shape IDs
     shape_cache: HashMap<Vec<String>, u32>,
+    /// Hard limit on heap size (None = unlimited)
+    heap_limit: Option<usize>,
+    /// Whether GC is enabled
+    gc_enabled: bool,
 }
 
 impl Heap {
     pub fn new() -> Self {
+        Self::new_with_config(None, true)
+    }
+
+    /// Create a new heap with custom configuration.
+    ///
+    /// # Arguments
+    /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
+    /// * `gc_enabled` - Whether GC is enabled
+    pub fn new_with_config(heap_limit: Option<usize>, gc_enabled: bool) -> Self {
         Self {
             objects: Vec::new(),
             free_list: Vec::new(),
@@ -155,6 +168,8 @@ impl Heap {
             gc_threshold: 1024 * 1024, // 1MB initial threshold
             next_shape_id: 1,
             shape_cache: HashMap::new(),
+            heap_limit,
+            gc_enabled,
         }
     }
 
@@ -173,9 +188,24 @@ impl Heap {
         }
     }
 
+    /// Check if allocation would exceed heap limit.
+    fn check_heap_limit(&self, additional_size: usize) -> Result<(), String> {
+        if let Some(limit) = self.heap_limit {
+            let new_total = self.bytes_allocated + additional_size;
+            if new_total > limit {
+                return Err(format!(
+                    "runtime error: heap limit exceeded (allocated: {} bytes, limit: {} bytes)",
+                    new_total, limit
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Allocate a new string on the heap.
-    pub fn alloc_string(&mut self, value: String) -> GcRef {
+    pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
         let size = std::mem::size_of::<MocaString>() + value.len();
+        self.check_heap_limit(size)?;
         self.bytes_allocated += size;
 
         let obj = HeapObject::String(MocaString {
@@ -185,12 +215,13 @@ impl Heap {
             },
             value,
         });
-        self.alloc_object(obj)
+        Ok(self.alloc_object(obj))
     }
 
     /// Allocate a new array on the heap.
-    pub fn alloc_array(&mut self, elements: Vec<Value>) -> GcRef {
+    pub fn alloc_array(&mut self, elements: Vec<Value>) -> Result<GcRef, String> {
         let size = std::mem::size_of::<MocaArray>() + elements.len() * std::mem::size_of::<Value>();
+        self.check_heap_limit(size)?;
         self.bytes_allocated += size;
 
         let obj = HeapObject::Array(MocaArray {
@@ -200,13 +231,14 @@ impl Heap {
             },
             elements,
         });
-        self.alloc_object(obj)
+        Ok(self.alloc_object(obj))
     }
 
     /// Allocate a new object on the heap.
-    pub fn alloc_object_map(&mut self, fields: HashMap<String, Value>) -> GcRef {
+    pub fn alloc_object_map(&mut self, fields: HashMap<String, Value>) -> Result<GcRef, String> {
         let size = std::mem::size_of::<MocaObject>()
             + fields.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+        self.check_heap_limit(size)?;
         self.bytes_allocated += size;
 
         // Compute shape ID based on field names
@@ -221,7 +253,7 @@ impl Heap {
             fields,
             shape_id,
         });
-        self.alloc_object(obj)
+        Ok(self.alloc_object(obj))
     }
 
     fn alloc_object(&mut self, obj: HeapObject) -> GcRef {
@@ -247,7 +279,7 @@ impl Heap {
 
     /// Check if GC should be triggered.
     pub fn should_gc(&self) -> bool {
-        self.bytes_allocated >= self.gc_threshold
+        self.gc_enabled && self.bytes_allocated >= self.gc_threshold
     }
 
     /// Get the number of bytes currently allocated.
@@ -333,7 +365,7 @@ mod tests {
     #[test]
     fn test_alloc_string() {
         let mut heap = Heap::new();
-        let r = heap.alloc_string("hello".to_string());
+        let r = heap.alloc_string("hello".to_string()).unwrap();
         let obj = heap.get(r).unwrap();
         assert_eq!(obj.as_string().unwrap().value, "hello");
     }
@@ -341,7 +373,7 @@ mod tests {
     #[test]
     fn test_alloc_array() {
         let mut heap = Heap::new();
-        let r = heap.alloc_array(vec![Value::I64(1), Value::I64(2), Value::I64(3)]);
+        let r = heap.alloc_array(vec![Value::I64(1), Value::I64(2), Value::I64(3)]).unwrap();
         let obj = heap.get(r).unwrap();
         assert_eq!(obj.as_array().unwrap().elements.len(), 3);
     }
@@ -351,8 +383,8 @@ mod tests {
         let mut heap = Heap::new();
 
         // Allocate some objects
-        let _r1 = heap.alloc_string("garbage".to_string());
-        let r2 = heap.alloc_string("keep".to_string());
+        let _r1 = heap.alloc_string("garbage".to_string()).unwrap();
+        let r2 = heap.alloc_string("keep".to_string()).unwrap();
 
         assert_eq!(heap.object_count(), 2);
 
@@ -368,10 +400,10 @@ mod tests {
         let mut heap = Heap::new();
 
         // Create a string
-        let str_ref = heap.alloc_string("inside array".to_string());
+        let str_ref = heap.alloc_string("inside array".to_string()).unwrap();
 
         // Create an array containing the string
-        let arr_ref = heap.alloc_array(vec![Value::Ref(str_ref)]);
+        let arr_ref = heap.alloc_array(vec![Value::Ref(str_ref)]).unwrap();
 
         assert_eq!(heap.object_count(), 2);
 

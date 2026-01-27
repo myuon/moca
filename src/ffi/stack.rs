@@ -70,7 +70,11 @@ pub unsafe extern "C" fn moca_push_string(vm: *mut MocaVm, str: *const c_char, l
         let string = String::from_utf8_lossy(slice).into_owned();
 
         // Allocate on heap and push reference
-        let gc_ref = wrapper.vm.heap_mut().alloc_string(string);
+        let gc_ref = wrapper
+            .vm
+            .heap_mut()
+            .alloc_string(string)
+            .expect("heap allocation failed");
         wrapper.ffi_stack.push(Value::Ref(gc_ref));
     }
 }

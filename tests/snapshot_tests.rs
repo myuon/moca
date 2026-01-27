@@ -212,3 +212,127 @@ fn snapshot_modules() {
 fn snapshot_ffi() {
     run_snapshot_dir("ffi");
 }
+
+#[test]
+fn snapshot_gc() {
+    run_gc_snapshot_dir("gc");
+}
+
+/// Run GC-specific snapshot tests.
+/// For each .mc file, runs with GC enabled (should succeed).
+/// If a corresponding .gc_disabled.mc file exists, runs it with GC disabled
+/// and a small heap limit (should fail with heap limit exceeded error).
+fn run_gc_snapshot_dir(dir: &str) {
+    let dir_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join(dir);
+
+    if !dir_path.exists() {
+        return;
+    }
+
+    let entries: Vec<_> = fs::read_dir(&dir_path)
+        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", dir_path, e))
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let path = e.path();
+            // Include .mc files that don't have .gc_disabled in the name
+            path.extension().map_or(false, |ext| ext == "mc")
+                && !path
+                    .file_stem()
+                    .map_or(false, |s| s.to_string_lossy().ends_with(".gc_disabled"))
+        })
+        .collect();
+
+    for entry in entries {
+        let path = entry.path();
+        run_gc_snapshot_test(&path);
+    }
+}
+
+/// Run a GC snapshot test for a single .mc file.
+fn run_gc_snapshot_test(test_path: &Path) {
+    let base_path = test_path.with_extension("");
+    let file_stem = test_path.file_stem().unwrap().to_string_lossy();
+
+    // 1. Run with GC enabled (normal mode) - should succeed
+    {
+        let config = RuntimeConfig::default();
+        let (actual_stdout, actual_stderr, actual_exitcode) =
+            run_moca_file_inprocess(test_path, &config);
+
+        // Check expected stdout if exists
+        let stdout_path = base_path.with_extension("stdout");
+        if stdout_path.exists() {
+            let expected_stdout = fs::read_to_string(&stdout_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
+            assert_eq!(
+                actual_stdout, expected_stdout,
+                "stdout mismatch for {:?} (GC enabled)\n--- expected ---\n{}\n--- actual ---\n{}",
+                test_path, expected_stdout, actual_stdout
+            );
+            assert_eq!(
+                actual_exitcode, 0,
+                "exit code should be 0 for {:?} (GC enabled), stderr: {}",
+                test_path, actual_stderr
+            );
+        } else {
+            // Just verify it succeeds
+            assert_eq!(
+                actual_exitcode, 0,
+                "GC enabled test should succeed for {:?}, got error: {}",
+                test_path, actual_stderr
+            );
+        }
+    }
+
+    // 2. Check for .gc_disabled.mc file
+    let gc_disabled_path = test_path
+        .parent()
+        .unwrap()
+        .join(format!("{}.gc_disabled.mc", file_stem));
+
+    if gc_disabled_path.exists() {
+        // Run with GC disabled and small heap limit - should fail
+        let config = RuntimeConfig {
+            gc_enabled: false,
+            heap_limit: Some(50 * 1024), // 50KB heap limit
+            ..Default::default()
+        };
+
+        let (_, actual_stderr, actual_exitcode) =
+            run_moca_file_inprocess(&gc_disabled_path, &config);
+
+        // Check expected stderr if exists
+        let gc_disabled_base = gc_disabled_path.with_extension("");
+        let stderr_path = gc_disabled_base.with_extension("stderr");
+
+        // Should fail (exit code != 0)
+        assert_ne!(
+            actual_exitcode, 0,
+            "GC disabled test should fail for {:?}, but it succeeded",
+            gc_disabled_path
+        );
+
+        if stderr_path.exists() {
+            let expected_stderr = fs::read_to_string(&stderr_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stderr_path, e));
+            assert!(
+                actual_stderr.contains(&expected_stderr),
+                "stderr mismatch for {:?} (GC disabled)\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
+                gc_disabled_path,
+                expected_stderr,
+                actual_stderr
+            );
+        } else {
+            // Just verify it fails with heap limit exceeded
+            assert!(
+                actual_stderr.contains("heap limit exceeded"),
+                "Error should mention heap limit exceeded for {:?}, got: {}",
+                gc_disabled_path,
+                actual_stderr
+            );
+        }
+    }
+}
