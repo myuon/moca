@@ -378,15 +378,12 @@ impl Verifier {
 
             // Binary arithmetic: pop 2, push 1
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod => (2, 1),
-            Op::AddI64 | Op::SubI64 | Op::MulI64 | Op::DivI64 => (2, 1),
-            Op::AddF64 | Op::SubF64 | Op::MulF64 | Op::DivF64 => (2, 1),
 
             // Unary
             Op::Neg | Op::Not => (1, 1),
 
             // Comparison: pop 2, push 1
             Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge => (2, 1),
-            Op::LtI64 | Op::LeI64 | Op::GtI64 | Op::GeI64 | Op::LtF64 => (2, 1),
 
             // Control flow
             Op::Jmp(_) => (0, 0),
@@ -400,8 +397,6 @@ impl Verifier {
             Op::New(n) => (*n * 2, 1), // pops n key-value pairs, pushes object
             Op::GetF(_) => (1, 1),     // pops object, pushes field value
             Op::SetF(_) => (2, 0),     // pops object and value
-            Op::GetFCached(_, _) => (1, 1),
-            Op::SetFCached(_, _) => (2, 0),
 
             // Array operations
             Op::AllocArray(n) => (*n, 1), // pops n elements, pushes array
@@ -410,7 +405,6 @@ impl Verifier {
             Op::ArraySet => (3, 0),  // pops array, index, value
             Op::ArrayPush => (2, 0), // pops array and value
             Op::ArrayPop => (1, 1),  // pops array, pushes value
-            Op::ArrayGetInt => (2, 1),
 
             // Type operations
             Op::TypeOf => (1, 1),
@@ -650,7 +644,7 @@ mod tests {
             code: vec![
                 Op::PushInt(1),
                 Op::PushInt(2),
-                Op::AddI64,
+                Op::Add,
                 Op::Ret, // Proper return
             ],
             stackmap: None,
@@ -828,13 +822,13 @@ mod tests {
             code: vec![
                 Op::PushInt(10),
                 Op::PushInt(5),
-                Op::AddI64, // 10 + 5 = 15
+                Op::Add, // 10 + 5 = 15
                 Op::PushInt(3),
-                Op::SubI64, // 15 - 3 = 12
+                Op::Sub, // 15 - 3 = 12
                 Op::PushInt(2),
-                Op::MulI64, // 12 * 2 = 24
+                Op::Mul, // 12 * 2 = 24
                 Op::PushInt(4),
-                Op::DivI64, // 24 / 4 = 6
+                Op::Div, // 24 / 4 = 6
                 Op::Ret,
             ],
             stackmap: None,
@@ -849,13 +843,13 @@ mod tests {
             code: vec![
                 Op::PushFloat(10.0),
                 Op::PushFloat(5.0),
-                Op::AddF64,
+                Op::Add,
                 Op::PushFloat(3.0),
-                Op::SubF64,
+                Op::Sub,
                 Op::PushFloat(2.0),
-                Op::MulF64,
+                Op::Mul,
                 Op::PushFloat(4.0),
-                Op::DivF64,
+                Op::Div,
                 Op::Ret,
             ],
             stackmap: None,
@@ -875,11 +869,11 @@ mod tests {
             code: vec![
                 Op::PushInt(1),
                 Op::PushInt(2),
-                Op::LtI64, // 1 < 2 = true
+                Op::Lt, // 1 < 2 = true
                 Op::PushFloat(1.5),
                 Op::PushFloat(2.5),
-                Op::LtF64, // 1.5 < 2.5 = true
-                Op::Eq,    // true == true = true
+                Op::Lt, // 1.5 < 2.5 = true
+                Op::Eq, // true == true = true
                 Op::Ret,
             ],
             stackmap: None,
