@@ -1,85 +1,102 @@
-# Spec.md
+# Spec.md - JIT Call命令と再帰関数サポート
 
 ## 1. Goal
-- JITの有無でパフォーマンスが悪化していないことをCIで自動検証し、JIT有効時に10%以上の改善がなければテスト失敗とする
+- JITコンパイルされた関数内からの関数呼び出し（Call命令）をサポートし、再帰関数を含むユーザー定義関数をJIT実行できるようにする
 
 ## 2. Non-Goals
-- 詳細なパフォーマンスレポート生成（Criterionの役割）
-- 複数回実行による統計的分析
-- プラットフォーム別の閾値設定
+- AArch64のCall命令サポート（x86-64のみ）
+- 組み込み関数（push, len等）のJIT内呼び出し最適化
+- クロージャのJITサポート
+- 末尾呼び出し最適化
+- スタックオーバーフロー対策（OSのスタック制限に任せる）
 
 ## 3. Target Users
-- 開発者がPR作成時にJIT最適化の効果を自動検証
-- CIがマージ前にパフォーマンス劣化を検出
+- mocaプログラムを実行するユーザー
+- 再帰アルゴリズムや関数呼び出しを多用するコードでJIT最適化の恩恵を受けたいユーザー
 
 ## 4. Core User Flow
-1. `cargo test --features jit` を実行
-2. 各ベンチマークシナリオでJIT無効版を実行し、実行時間を計測
-3. 同シナリオでJIT有効版を実行し、実行時間を計測
-4. `optimized <= baseline * 0.9` を検証
-5. 閾値未達成の場合、テスト失敗（CI red）
+1. ユーザーがmocaプログラムを実行（`moca run --jit on`）
+2. 関数が呼び出し閾値に達するとJITコンパイルされる
+3. JITコンパイルされた関数内でCall命令が実行される
+4. 呼び出し先がJITコンパイル済みなら、JITコードを直接呼び出す
+5. 呼び出し先が未コンパイルなら、VMヘルパー経由でインタプリタ実行
+6. 戻り値がJITスタックにプッシュされ、実行継続
 
 ## 5. Inputs & Outputs
-**入力:**
-- ベンチマークソースコード（Rust内で文字列として定義）
-- RuntimeConfig（JIT on/off、threshold設定）
+### Inputs
+- Call命令を含むmoca関数のバイトコード
+- JitCallContext（VMポインタ、chunkポインタ、ヘルパー関数ポインタ）
 
-**出力:**
-- テスト結果（pass/fail）
-- 失敗時: baseline時間、optimized時間、改善率を表示
+### Outputs
+- JITコンパイルされたネイティブコード（Call命令対応）
+- 関数の戻り値（JitReturn: tag + payload）
 
 ## 6. Tech Stack
 - 言語: Rust
-- テストフレームワーク: cargo test（標準）
-- 時間計測: `std::time::Instant`
-- JIT制御: `RuntimeConfig` + compiler API (`run_file_capturing_output`)
-- 配置: `tests/perf_benchmark.rs`
+- アーキテクチャ: x86-64
+- JITアセンブラ: 自前実装（src/jit/x86_64.rs）
+- テスト: cargo test --features jit
 
 ## 7. Rules & Constraints
-- JITは `--features jit` フラグで有効化
-- JIT無効時は `jit_threshold = u32::MAX` で実質無効化
-- JIT有効時は `jit_threshold = 1` で即座にJIT化
-- 閾値: optimized <= baseline * 0.9（10%以上改善）
-- 1回の実行で判定（複数回実行による平均化はしない）
-- 既存の `benches/vm_benchmark.rs` は削除
+### 振る舞いのルール
+- JIT関数からの呼び出し先がJITコンパイル済みの場合、直接JITコードを呼び出す
+- 呼び出し先が未コンパイルの場合、jit_call_helper経由でVM実行
+- 組み込み関数の呼び出しはインタプリタにフォールバック
+
+### 技術的制約
+- System V AMD64 ABIに準拠（RDI, RSI, RDX, RCX で引数渡し）
+- callee-savedレジスタ（R12-R15, RBX, RBP）を保存・復元
+- JITスタック（VSTACK）は16バイトアラインメントのValue構造
+
+### 前提
+- 現在のCall命令スキップ（compiler_x86_64.rs:102-108）を削除する
+- emit_call実装は既存のものをベースに修正
 
 ## 8. Open Questions
-- なし
+なし
 
-## 9. Acceptance Criteria
-1. `cargo test --features jit perf_` でベンチマークテストが実行される
-2. JIT有効時に10%以上改善していればテストがpass
-3. JIT有効時に10%未満の改善（または悪化）ならテストがfail
-4. 失敗時にbaseline時間、optimized時間、改善率が出力される
-5. 以下のシナリオがテストされる: sum_loop, nested_loop, hot_function, fibonacci, array_operations
-6. 既存の `benches/vm_benchmark.rs` が削除されている
-7. GitHub Actions CIで `cargo test --features jit` が実行可能
+## 9. Acceptance Criteria（最大10個）
+1. [ ] Call命令を含む関数がJITコンパイルされる（エラーにならない）
+2. [ ] JIT関数から別のJIT関数を呼び出せる
+3. [ ] JIT関数から未コンパイル関数を呼び出せる（インタプリタ実行）
+4. [ ] 再帰関数（fib等）がJIT実行で正しい結果を返す
+5. [ ] `perf_fibonacci`ベンチマークで10%以上の改善
+6. [ ] `perf_hot_function`ベンチマークで10%以上の改善
+7. [ ] `--trace-jit`で再帰呼び出しがJIT経由であることを確認できる
+8. [ ] 既存のJITテスト（sum_loop, nested_loop）が引き続きパスする
 
 ## 10. Verification Strategy
-**進捗検証:**
-- 各シナリオ実装後に `cargo test --features jit perf_<scenario>` で個別確認
+### 進捗検証
+- 各タスク完了時に`cargo test --features jit`を実行
+- `--trace-jit`オプションでJIT呼び出しログを確認
 
-**達成検証:**
-- `cargo test --features jit` で全テストがpassすること
-- Acceptance Criteriaのチェックリストを手動確認
+### 達成検証
+- `cargo test --features jit perf_`で全ベンチマークテストがパス
+- trace-jitで`fib`関数が複数回JIT実行されていることを確認
 
-**漏れ検出:**
-- 既存ベンチマークのシナリオが全て移行されていることを確認
-- `benches/vm_benchmark.rs` が削除されていることを確認
+### 漏れ検出
+- 既存テストスイート（`cargo test --features jit`）が全てパス
+- 手動で`fib(20)`等を実行し、正しい結果と高速化を確認
 
 ## 11. Test Plan
 
-### e2e シナリオ 1: JIT改善が閾値を超える場合
-- **Given**: hot_function シナリオ（JITの恩恵が大きい）
-- **When**: `cargo test --features jit perf_hot_function` を実行
-- **Then**: テストがpassし、改善率が表示される
+### e2e シナリオ 1: 再帰関数のJIT実行
+```
+Given: fib(n)を定義したmocaプログラム
+When: --jit on --jit-threshold 1で実行
+Then: fib(20)が正しい結果(6765)を返し、baselineより高速
+```
 
-### e2e シナリオ 2: テスト失敗時の出力確認
-- **Given**: 閾値を0.5（50%改善必須）に一時変更
-- **When**: テストを実行
-- **Then**: 失敗し、baseline時間、optimized時間、改善率が出力される
+### e2e シナリオ 2: 相互再帰関数
+```
+Given: is_even(n)とis_odd(n)が相互に呼び出すプログラム
+When: --jit on --jit-threshold 1で実行
+Then: is_even(10)がtrueを返し、両関数がJIT実行される
+```
 
-### e2e シナリオ 3: CIでの実行
-- **Given**: GitHub Actions workflow
-- **When**: PRを作成
-- **Then**: `cargo test --features jit` が実行され、結果がCI上で確認できる
+### e2e シナリオ 3: ホット関数呼び出し
+```
+Given: ループ内でdo_work(n)を10000回呼び出すプログラム
+When: --jit on --jit-threshold 1で実行
+Then: 正しい結果を返し、perf_hot_functionが10%以上改善
+```
