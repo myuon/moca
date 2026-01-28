@@ -21,7 +21,53 @@ pub use typechecker::TypeChecker;
 /// Standard library prelude, embedded at compile time.
 pub const STDLIB_PRELUDE: &str = include_str!("../../std/prelude.mc");
 
+use crate::compiler::ast::{Item, Program};
 use crate::config::{JitMode, RuntimeConfig};
+use std::collections::HashSet;
+
+/// Parse and prepend stdlib to a user program.
+/// The stdlib functions are added at the beginning so they are available globally.
+/// If a user function has the same name as a stdlib function, the stdlib function is skipped.
+fn prepend_stdlib(mut user_program: Program) -> Result<Program, String> {
+    // Collect user-defined function names to avoid conflicts
+    let user_fn_names: HashSet<String> = user_program
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::FnDef(fn_def) = item {
+                Some(fn_def.name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Parse the stdlib prelude
+    let mut lexer = Lexer::new("<stdlib>", STDLIB_PRELUDE);
+    let tokens = lexer.scan_tokens()?;
+    let mut parser = Parser::new("<stdlib>", tokens);
+    let stdlib_program = parser.parse()?;
+
+    // Filter out stdlib functions that conflict with user functions
+    let filtered_stdlib_items: Vec<Item> = stdlib_program
+        .items
+        .into_iter()
+        .filter(|item| {
+            if let Item::FnDef(fn_def) = item {
+                !user_fn_names.contains(&fn_def.name)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    // Prepend filtered stdlib items to user program
+    let mut combined_items = filtered_stdlib_items;
+    combined_items.append(&mut user_program.items);
+    user_program.items = combined_items;
+
+    Ok(user_program)
+}
 use crate::vm::VM;
 use std::fs::File;
 use std::io::{Cursor, Write};
@@ -111,7 +157,10 @@ pub fn run_file_capturing_output(
         let mut loader = ModuleLoader::new(root_dir);
 
         // Load main file with all imports
-        let program = loader.load_with_imports(path)?;
+        let user_program = loader.load_with_imports(path)?;
+
+        // Prepend standard library
+        let program = prepend_stdlib(user_program)?;
 
         let filename = path.to_string_lossy().to_string();
 
@@ -179,7 +228,10 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     let mut loader = ModuleLoader::new(root_dir);
 
     // Load main file with all imports
-    let program = loader.load_with_imports(path)?;
+    let user_program = loader.load_with_imports(path)?;
+
+    // Prepend standard library
+    let program = prepend_stdlib(user_program)?;
 
     let filename = path.to_string_lossy().to_string();
 
@@ -242,7 +294,10 @@ pub fn run_file_with_dump(
     let mut loader = ModuleLoader::new(root_dir);
 
     // Load main file with all imports
-    let program = loader.load_with_imports(path)?;
+    let user_program = loader.load_with_imports(path)?;
+
+    // Prepend standard library
+    let program = prepend_stdlib(user_program)?;
 
     let filename = path.to_string_lossy().to_string();
 
