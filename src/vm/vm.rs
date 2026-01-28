@@ -1310,6 +1310,9 @@ unsafe extern "C" fn jit_call_helper(
 
     {
         // Execute via interpreter: push frame and run until return
+        // Track the frame depth BEFORE pushing our frame, so we know when to stop
+        let starting_frame_depth = vm.frames.len();
+
         let new_stack_base = vm.stack.len() - argc;
         vm.frames.push(Frame {
             func_index,
@@ -1317,17 +1320,12 @@ unsafe extern "C" fn jit_call_helper(
             stack_base: new_stack_base,
         });
 
-        // Run until the function returns
+        // Run until the function returns (when frame depth returns to starting level)
         loop {
             let frame = match vm.frames.last_mut() {
                 Some(f) => f,
                 None => break,
             };
-
-            // Check if we've returned from the called function
-            if frame.func_index != func_index && frame.func_index != usize::MAX {
-                // We're in a different function, keep executing
-            }
 
             let current_func = if frame.func_index == usize::MAX {
                 &chunk.main
@@ -1346,10 +1344,9 @@ unsafe extern "C" fn jit_call_helper(
             match vm.execute_op(op, chunk) {
                 Ok(ControlFlow::Continue) => {}
                 Ok(ControlFlow::Return) => {
-                    // Check if we returned from our target function
-                    if vm.frames.is_empty()
-                        || vm.frames.last().map(|f| f.func_index) != Some(func_index)
-                    {
+                    // Check if we returned from our target function by checking frame depth
+                    // This correctly handles nested calls to the same function
+                    if vm.frames.len() <= starting_frame_depth {
                         break;
                     }
                 }

@@ -67,6 +67,25 @@ fn assert_optimization_effect(name: &str, source: &str) {
     );
 }
 
+/// Run a JIT correctness test and return the output.
+/// Used for scenarios where JIT correctness matters but performance improvement isn't expected.
+fn run_jit_correctness_test(source: &str) -> String {
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("moca_test_{}.mc", std::process::id()));
+    std::fs::write(&temp_file, source).expect("failed to write temp file");
+
+    let config = RuntimeConfig {
+        jit_mode: JitMode::On,
+        jit_threshold: 1, // Compile immediately
+        ..Default::default()
+    };
+
+    let (output, result) = run_file_capturing_output(&temp_file, &config);
+    std::fs::remove_file(&temp_file).ok();
+    result.expect("JIT execution failed");
+    output.stdout
+}
+
 // ============================================================================
 // Benchmark Scenarios
 // ============================================================================
@@ -179,4 +198,39 @@ fun array_sum(n) {
 print(array_sum(100000));
 "#;
     assert_optimization_effect("array_operations", source);
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn jit_mutual_recursion() {
+    // Test mutual recursion: is_even calls is_odd, is_odd calls is_even
+    // This tests that emit_call_external (non-self recursion) works correctly.
+    //
+    // Note: Mutual recursion through jit_call_helper has overhead that makes
+    // it slower than the interpreter. This test verifies correctness only.
+    // Performance improvement would require implementing mutual call optimization
+    // similar to emit_call_self.
+    let source = r#"
+fun is_even(n) {
+    if n == 0 {
+        return 1;
+    }
+    return is_odd(n - 1);
+}
+
+fun is_odd(n) {
+    if n == 0 {
+        return 0;
+    }
+    return is_even(n - 1);
+}
+
+// Test various inputs
+print(is_even(0));   // 1 (0 is even)
+print(is_even(1));   // 0 (1 is odd)
+print(is_even(10));  // 1 (10 is even)
+print(is_even(11));  // 0 (11 is odd)
+"#;
+    let output = run_jit_correctness_test(source);
+    assert_eq!(output.trim(), "1\n0\n1\n0");
 }
