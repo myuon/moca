@@ -412,10 +412,6 @@ impl Verifier {
             Op::ArrayPop => (1, 1),  // pops array, pushes value
             Op::ArrayGetInt => (2, 1),
 
-            // String operations
-            Op::StringLen => (1, 1),
-            Op::StringConcat => (2, 1),
-
             // Type operations
             Op::TypeOf => (1, 1),
             Op::ToString => (1, 1),

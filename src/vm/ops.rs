@@ -110,12 +110,6 @@ pub enum Op {
     ArrayGetInt, // Quickened: Array access with int index
 
     // ========================================
-    // Extension: String operations (not in v0 core)
-    // ========================================
-    StringLen,
-    StringConcat,
-
-    // ========================================
     // Extension: Type operations
     // ========================================
     TypeOf,   // Push type name as string

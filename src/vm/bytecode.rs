@@ -288,8 +288,6 @@ const OP_ARRAY_SET: u8 = 49;
 const OP_ARRAY_PUSH: u8 = 50;
 const OP_ARRAY_POP: u8 = 51;
 const OP_ARRAY_GET_INT: u8 = 52;
-const OP_STRING_LEN: u8 = 53;
-const OP_STRING_CONCAT: u8 = 54;
 const OP_TYPE_OF: u8 = 55;
 const OP_TO_STRING: u8 = 56;
 const OP_PARSE_INT: u8 = 57;
@@ -407,8 +405,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::ArrayPush => w.write_all(&[OP_ARRAY_PUSH])?,
         Op::ArrayPop => w.write_all(&[OP_ARRAY_POP])?,
         Op::ArrayGetInt => w.write_all(&[OP_ARRAY_GET_INT])?,
-        Op::StringLen => w.write_all(&[OP_STRING_LEN])?,
-        Op::StringConcat => w.write_all(&[OP_STRING_CONCAT])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::ToString => w.write_all(&[OP_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
@@ -503,8 +499,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_ARRAY_PUSH => Op::ArrayPush,
         OP_ARRAY_POP => Op::ArrayPop,
         OP_ARRAY_GET_INT => Op::ArrayGetInt,
-        OP_STRING_LEN => Op::StringLen,
-        OP_STRING_CONCAT => Op::StringConcat,
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
         OP_PARSE_INT => Op::ParseInt,
@@ -787,8 +781,6 @@ mod tests {
             Op::ArrayPush,
             Op::ArrayPop,
             Op::ArrayGetInt,
-            Op::StringLen,
-            Op::StringConcat,
             Op::TypeOf,
             Op::ToString,
             Op::ParseInt,
