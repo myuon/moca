@@ -76,7 +76,7 @@ impl CompiledCode {
         F: Copy,
     {
         unsafe {
-            let ptr = self.memory.as_ref().add(self.entry_offset);
+            let ptr = self.memory.as_ptr().add(self.entry_offset);
             std::mem::transmute_copy(&ptr)
         }
     }
@@ -109,7 +109,11 @@ impl JitCompiler {
     }
 
     /// Compile a function to native code.
-    pub fn compile(mut self, func: &Function) -> Result<CompiledCode, String> {
+    ///
+    /// # Arguments
+    /// * `func` - The function to compile
+    /// * `_func_index` - The index of this function (reserved for future self-recursion optimization)
+    pub fn compile(mut self, func: &Function, _func_index: usize) -> Result<CompiledCode, String> {
         // Emit prologue
         self.emit_prologue(func);
 
@@ -236,12 +240,8 @@ impl JitCompiler {
 
             Op::Ret => self.emit_ret(),
 
-            // Operations that fall back to interpreter
-            _ => {
-                // For now, unsupported ops are skipped
-                // In a full implementation, we'd call runtime helpers
-                Ok(())
-            }
+            // Unsupported operations - fail compilation so VM falls back to interpreter
+            _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
         }
     }
 
@@ -700,7 +700,7 @@ mod tests {
         };
 
         let compiler = JitCompiler::new();
-        let result = compiler.compile(&func);
+        let result = compiler.compile(&func, 0);
 
         // Just verify it compiles without error
         assert!(result.is_ok());
@@ -717,7 +717,7 @@ mod tests {
         };
 
         let compiler = JitCompiler::new();
-        let result = compiler.compile(&func);
+        let result = compiler.compile(&func, 0);
         assert!(result.is_ok());
     }
 
@@ -745,7 +745,7 @@ mod tests {
         };
 
         let compiler = JitCompiler::new();
-        let result = compiler.compile(&func);
+        let result = compiler.compile(&func, 0);
         assert!(result.is_ok());
     }
 }

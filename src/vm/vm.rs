@@ -1260,6 +1260,11 @@ unsafe extern "C" fn jit_call_helper(
         return JitReturn { tag: 3, payload: 0 }; // TAG_NIL
     }
 
+    // Check if we should JIT compile this function (increments call count)
+    if vm.should_jit_compile(func_index, &func.name) {
+        vm.jit_compile_function(func, func_index);
+    }
+
     // FAST PATH: If target function is JIT compiled, call directly with stack allocation
     // This avoids heap allocations and VM stack operations for recursive JIT calls.
     // Combine is_jit_compiled check and entry point lookup into single HashMap access.
