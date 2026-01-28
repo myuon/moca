@@ -18,6 +18,9 @@ pub use parser::Parser;
 pub use resolver::Resolver;
 pub use typechecker::TypeChecker;
 
+/// Standard library prelude, embedded at compile time.
+pub const STDLIB_PRELUDE: &str = include_str!("../../std/prelude.mc");
+
 use crate::config::{JitMode, RuntimeConfig};
 use crate::vm::VM;
 use std::fs::File;
