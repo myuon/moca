@@ -179,7 +179,7 @@ impl VM {
         }
 
         let compiler = JitCompiler::new();
-        match compiler.compile(func) {
+        match compiler.compile(func, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -213,7 +213,7 @@ impl VM {
         }
 
         let compiler = JitCompiler::new();
-        match compiler.compile(func) {
+        match compiler.compile(func, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
