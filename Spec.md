@@ -1,102 +1,132 @@
-# Spec.md - JIT Call命令と再帰関数サポート
+# Spec.md - AArch64 JIT Call命令サポート
 
 ## 1. Goal
-- JITコンパイルされた関数内からの関数呼び出し（Call命令）をサポートし、再帰関数を含むユーザー定義関数をJIT実行できるようにする
+- aarch64 JITでOp::Call命令をサポートし、相互再帰（is_even ↔ is_odd）がJITコンパイルされて正しく動作する
 
 ## 2. Non-Goals
-- AArch64のCall命令サポート（x86-64のみ）
-- 組み込み関数（push, len等）のJIT内呼び出し最適化
-- クロージャのJITサポート
+- CallBuiltin（組み込み関数呼び出し）
+- 可変長引数のサポート
+- クロージャ呼び出し
+- 自己再帰最適化（emit_call_self）は今回スコープ外
 - 末尾呼び出し最適化
-- スタックオーバーフロー対策（OSのスタック制限に任せる）
 
 ## 3. Target Users
-- mocaプログラムを実行するユーザー
-- 再帰アルゴリズムや関数呼び出しを多用するコードでJIT最適化の恩恵を受けたいユーザー
+- mocaコンパイラの開発者
+- aarch64（Apple Silicon Mac等）でJITを使用するユーザー
 
 ## 4. Core User Flow
-1. ユーザーがmocaプログラムを実行（`moca run --jit on`）
-2. 関数が呼び出し閾値に達するとJITコンパイルされる
-3. JITコンパイルされた関数内でCall命令が実行される
-4. 呼び出し先がJITコンパイル済みなら、JITコードを直接呼び出す
-5. 呼び出し先が未コンパイルなら、VMヘルパー経由でインタプリタ実行
-6. 戻り値がJITスタックにプッシュされ、実行継続
+1. ユーザーが相互再帰を含むmocaコードを実行
+2. JITが関数をコンパイル（Call命令を含む）
+3. JITコードがjit_call_helper経由で他の関数を呼び出し
+4. 正しい結果が返される
 
 ## 5. Inputs & Outputs
 ### Inputs
-- Call命令を含むmoca関数のバイトコード
-- JitCallContext（VMポインタ、chunkポインタ、ヘルパー関数ポインタ）
+- Op::Call(func_index, argc) バイトコード命令
+- 引数の値（VSTACKから取得）
 
 ### Outputs
-- JITコンパイルされたネイティブコード（Call命令対応）
-- 関数の戻り値（JitReturn: tag + payload）
+- ターゲット関数の戻り値（VSTACKに格納）
+- JitReturn構造体（tag, payload）
 
 ## 6. Tech Stack
 - 言語: Rust
-- アーキテクチャ: x86-64
-- JITアセンブラ: 自前実装（src/jit/x86_64.rs）
+- アーキテクチャ: AArch64 (ARM64)
+- アセンブラ: 既存のAArch64Assembler（src/jit/asm_aarch64.rs）
 - テスト: cargo test --features jit
 
 ## 7. Rules & Constraints
-### 振る舞いのルール
-- JIT関数からの呼び出し先がJITコンパイル済みの場合、直接JITコードを呼び出す
-- 呼び出し先が未コンパイルの場合、jit_call_helper経由でVM実行
-- 組み込み関数の呼び出しはインタプリタにフォールバック
 
-### 技術的制約
-- System V AMD64 ABIに準拠（RDI, RSI, RDX, RCX で引数渡し）
-- callee-savedレジスタ（R12-R15, RBX, RBP）を保存・復元
-- JITスタック（VSTACK）は16バイトアラインメントのValue構造
+### 呼び出し規約（AArch64 AAPCS64準拠）
+- 引数: x0, x1, x2, x3, ... （最初の8引数）
+- 戻り値: x0（tag）, x1（payload）
+- Callee-saved: x19-x28, x29(fp), x30(lr)
+- Caller-saved: x0-x18
 
-### 前提
-- 現在のCall命令スキップ（compiler_x86_64.rs:102-108）を削除する
-- emit_call実装は既存のものをベースに修正
+### jit_call_helper引数
+- x0: ctx (*mut JitCallContext)
+- x1: func_index (u64)
+- x2: argc (u64)
+- x3: args (*const JitValue)
+
+### レジスタ使用規則（既存のregs定義に従う）
+- VM_CTX (x19): VMコンテキストポインタ
+- VSTACK (x20): 値スタックポインタ
+- LOCALS (x21): ローカル変数ベースポインタ
+- TMP0/TMP1 (x9/x10): 一時レジスタ
+
+### 実装制約
+- 既存のemit_prologue/emit_epilogueと整合性を保つ
+- スタックは16バイトアラインメントを維持
+- x86_64のemit_call_externalのロジックをaarch64に変換
 
 ## 8. Open Questions
 なし
 
-## 9. Acceptance Criteria（最大10個）
-1. [ ] Call命令を含む関数がJITコンパイルされる（エラーにならない）
-2. [ ] JIT関数から別のJIT関数を呼び出せる
-3. [ ] JIT関数から未コンパイル関数を呼び出せる（インタプリタ実行）
-4. [ ] 再帰関数（fib等）がJIT実行で正しい結果を返す
-5. [ ] `perf_fibonacci`ベンチマークで10%以上の改善
-6. [ ] `perf_hot_function`ベンチマークで10%以上の改善
-7. [ ] `--trace-jit`で再帰呼び出しがJIT経由であることを確認できる
-8. [ ] 既存のJITテスト（sum_loop, nested_loop）が引き続きパスする
+## 9. Acceptance Criteria
+1. [x] compiler.rsにemit_call関数が実装されている
+2. [x] Op::Call(func_index, argc)がcompile_opで処理される
+3. [x] jit_call_helperが正しい引数で呼び出される
+4. [x] 戻り値がVSTACKに正しく格納される
+5. [x] スタックの深さ(stack_depth)が正しく更新される
+6. [x] `cargo test --features jit jit_mutual_recursion`が通る
+7. [x] is_even/is_oddの両方がJITコンパイルされる（trace-jitで確認可能）
+8. [x] 結果が正しい（is_even(0)=1, is_even(1)=0, is_even(10)=1, is_even(11)=0）
 
 ## 10. Verification Strategy
+
 ### 進捗検証
-- 各タスク完了時に`cargo test --features jit`を実行
-- `--trace-jit`オプションでJIT呼び出しログを確認
+- emit_call実装後、単純な関数呼び出しのバイトコードを手動テスト
+- `cargo run --features jit -- run --jit on --trace-jit <test.mc>` でJITトレース確認
 
 ### 達成検証
-- `cargo test --features jit perf_`で全ベンチマークテストがパス
-- trace-jitで`fib`関数が複数回JIT実行されていることを確認
+- `cargo test --features jit jit_mutual_recursion` が通る
+- トレース出力で両関数がJITコンパイルされていることを確認
 
 ### 漏れ検出
-- 既存テストスイート（`cargo test --features jit`）が全てパス
-- 手動で`fib(20)`等を実行し、正しい結果と高速化を確認
+- x86_64のemit_call_externalと比較し、同等の機能が実装されているか確認
+- カバレッジ: 引数0個/1個/複数個のテストケース
 
 ## 11. Test Plan
 
-### e2e シナリオ 1: 再帰関数のJIT実行
+### E2E Test 1: 基本的な相互再帰
 ```
-Given: fib(n)を定義したmocaプログラム
-When: --jit on --jit-threshold 1で実行
-Then: fib(20)が正しい結果(6765)を返し、baselineより高速
-```
-
-### e2e シナリオ 2: 相互再帰関数
-```
-Given: is_even(n)とis_odd(n)が相互に呼び出すプログラム
-When: --jit on --jit-threshold 1で実行
-Then: is_even(10)がtrueを返し、両関数がJIT実行される
+Given: is_even/is_oddの相互再帰関数が定義されている
+When: is_even(10)を実行（JIT有効、threshold=1）
+Then:
+  - 両関数がJITコンパイルされる
+  - 結果が1（10は偶数）
 ```
 
-### e2e シナリオ 3: ホット関数呼び出し
+### E2E Test 2: 複数回の呼び出し
 ```
-Given: ループ内でdo_work(n)を10000回呼び出すプログラム
-When: --jit on --jit-threshold 1で実行
-Then: 正しい結果を返し、perf_hot_functionが10%以上改善
+Given: is_even/is_oddの相互再帰関数が定義されている
+When: is_even(0), is_even(1), is_even(10), is_even(11)を順に実行
+Then:
+  - 結果がそれぞれ1, 0, 1, 0
+  - パニックやクラッシュが発生しない
 ```
+
+### E2E Test 3: 既存テストとの互換性
+```
+Given: JITフィーチャーが有効
+When: cargo test --features jit を実行
+Then:
+  - jit_mutual_recursionがPASS
+  - 他のJITテストが壊れていない
+```
+
+## 12. TODO List
+
+### Setup
+- [x] x86_64のemit_call_external実装を確認・理解
+
+### Core
+- [x] emit_call関数を実装（jit_call_helper呼び出し）
+- [x] compile_opにOp::Callのハンドリングを追加
+- [x] 引数のVSTACK→レジスタ渡しを実装
+- [x] 戻り値のVSTACKへの格納を実装
+
+### Test & Polish
+- [x] jit_mutual_recursionテストを実行して確認
+- [x] trace-jitで両関数のJITコンパイルを確認
