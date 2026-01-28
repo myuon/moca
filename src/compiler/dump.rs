@@ -1254,16 +1254,6 @@ impl<'a> Disassembler<'a> {
             Op::Mod => self.output.push_str("Mod"),
             Op::Neg => self.output.push_str("Neg"),
 
-            // Quickened arithmetic
-            Op::AddI64 => self.output.push_str("AddInt"),
-            Op::AddF64 => self.output.push_str("AddFloat"),
-            Op::SubI64 => self.output.push_str("SubInt"),
-            Op::SubF64 => self.output.push_str("SubFloat"),
-            Op::MulI64 => self.output.push_str("MulInt"),
-            Op::MulF64 => self.output.push_str("MulFloat"),
-            Op::DivI64 => self.output.push_str("DivInt"),
-            Op::DivF64 => self.output.push_str("DivFloat"),
-
             // Comparison
             Op::Eq => self.output.push_str("Eq"),
             Op::Ne => self.output.push_str("Ne"),
@@ -1271,13 +1261,6 @@ impl<'a> Disassembler<'a> {
             Op::Le => self.output.push_str("Le"),
             Op::Gt => self.output.push_str("Gt"),
             Op::Ge => self.output.push_str("Ge"),
-
-            // Quickened comparison
-            Op::LtI64 => self.output.push_str("LtI64"),
-            Op::LeI64 => self.output.push_str("LeI64"),
-            Op::GtI64 => self.output.push_str("GtI64"),
-            Op::GeI64 => self.output.push_str("GeI64"),
-            Op::LtF64 => self.output.push_str("LtF64"),
 
             // Logical
             Op::Not => self.output.push_str("Not"),
@@ -1307,7 +1290,6 @@ impl<'a> Disassembler<'a> {
             Op::ArraySet => self.output.push_str("ArraySet"),
             Op::ArrayPush => self.output.push_str("ArrayPush"),
             Op::ArrayPop => self.output.push_str("ArrayPop"),
-            Op::ArrayGetInt => self.output.push_str("ArrayGetInt"),
 
             // Object operations
             Op::New(n) => self.output.push_str(&format!("AllocObject {}", n)),
@@ -1330,26 +1312,6 @@ impl<'a> Disassembler<'a> {
                     .unwrap_or("<?>");
                 self.output
                     .push_str(&format!("SetField {} ; .{}", idx, field));
-            }
-            Op::GetFCached(idx, cache) => {
-                let field = self
-                    .chunk
-                    .strings
-                    .get(*idx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<?>");
-                self.output
-                    .push_str(&format!("GetFieldCached {}, {} ; .{}", idx, cache, field));
-            }
-            Op::SetFCached(idx, cache) => {
-                let field = self
-                    .chunk
-                    .strings
-                    .get(*idx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<?>");
-                self.output
-                    .push_str(&format!("SetFieldCached {}, {} ; .{}", idx, cache, field));
             }
 
             // Type operations

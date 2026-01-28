@@ -251,25 +251,12 @@ const OP_MUL: u8 = 12;
 const OP_DIV: u8 = 13;
 const OP_MOD: u8 = 14;
 const OP_NEG: u8 = 15;
-const OP_ADD_I64: u8 = 16;
-const OP_SUB_I64: u8 = 17;
-const OP_MUL_I64: u8 = 18;
-const OP_DIV_I64: u8 = 19;
-const OP_ADD_F64: u8 = 20;
-const OP_SUB_F64: u8 = 21;
-const OP_MUL_F64: u8 = 22;
-const OP_DIV_F64: u8 = 23;
 const OP_EQ: u8 = 24;
 const OP_NE: u8 = 25;
 const OP_LT: u8 = 26;
 const OP_LE: u8 = 27;
 const OP_GT: u8 = 28;
 const OP_GE: u8 = 29;
-const OP_LT_I64: u8 = 30;
-const OP_LE_I64: u8 = 31;
-const OP_GT_I64: u8 = 32;
-const OP_GE_I64: u8 = 33;
-const OP_LT_F64: u8 = 34;
 const OP_NOT: u8 = 35;
 const OP_JMP: u8 = 36;
 const OP_JMP_IF_FALSE: u8 = 37;
@@ -279,15 +266,12 @@ const OP_RET: u8 = 40;
 const OP_NEW: u8 = 41;
 const OP_GET_F: u8 = 42;
 const OP_SET_F: u8 = 43;
-const OP_GET_F_CACHED: u8 = 44;
-const OP_SET_F_CACHED: u8 = 45;
 const OP_ALLOC_ARRAY: u8 = 46;
 const OP_ARRAY_LEN: u8 = 47;
 const OP_ARRAY_GET: u8 = 48;
 const OP_ARRAY_SET: u8 = 49;
 const OP_ARRAY_PUSH: u8 = 50;
 const OP_ARRAY_POP: u8 = 51;
-const OP_ARRAY_GET_INT: u8 = 52;
 const OP_TYPE_OF: u8 = 55;
 const OP_TO_STRING: u8 = 56;
 const OP_PARSE_INT: u8 = 57;
@@ -335,25 +319,12 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::Div => w.write_all(&[OP_DIV])?,
         Op::Mod => w.write_all(&[OP_MOD])?,
         Op::Neg => w.write_all(&[OP_NEG])?,
-        Op::AddI64 => w.write_all(&[OP_ADD_I64])?,
-        Op::SubI64 => w.write_all(&[OP_SUB_I64])?,
-        Op::MulI64 => w.write_all(&[OP_MUL_I64])?,
-        Op::DivI64 => w.write_all(&[OP_DIV_I64])?,
-        Op::AddF64 => w.write_all(&[OP_ADD_F64])?,
-        Op::SubF64 => w.write_all(&[OP_SUB_F64])?,
-        Op::MulF64 => w.write_all(&[OP_MUL_F64])?,
-        Op::DivF64 => w.write_all(&[OP_DIV_F64])?,
         Op::Eq => w.write_all(&[OP_EQ])?,
         Op::Ne => w.write_all(&[OP_NE])?,
         Op::Lt => w.write_all(&[OP_LT])?,
         Op::Le => w.write_all(&[OP_LE])?,
         Op::Gt => w.write_all(&[OP_GT])?,
         Op::Ge => w.write_all(&[OP_GE])?,
-        Op::LtI64 => w.write_all(&[OP_LT_I64])?,
-        Op::LeI64 => w.write_all(&[OP_LE_I64])?,
-        Op::GtI64 => w.write_all(&[OP_GT_I64])?,
-        Op::GeI64 => w.write_all(&[OP_GE_I64])?,
-        Op::LtF64 => w.write_all(&[OP_LT_F64])?,
         Op::Not => w.write_all(&[OP_NOT])?,
         Op::Jmp(target) => {
             w.write_all(&[OP_JMP])?;
@@ -385,16 +356,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_SET_F])?;
             write_u32(w, *idx as u32)?;
         }
-        Op::GetFCached(idx, offset) => {
-            w.write_all(&[OP_GET_F_CACHED])?;
-            write_u32(w, *idx as u32)?;
-            write_u16(w, *offset)?;
-        }
-        Op::SetFCached(idx, offset) => {
-            w.write_all(&[OP_SET_F_CACHED])?;
-            write_u32(w, *idx as u32)?;
-            write_u16(w, *offset)?;
-        }
         Op::AllocArray(size) => {
             w.write_all(&[OP_ALLOC_ARRAY])?;
             write_u32(w, *size as u32)?;
@@ -404,7 +365,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::ArraySet => w.write_all(&[OP_ARRAY_SET])?,
         Op::ArrayPush => w.write_all(&[OP_ARRAY_PUSH])?,
         Op::ArrayPop => w.write_all(&[OP_ARRAY_POP])?,
-        Op::ArrayGetInt => w.write_all(&[OP_ARRAY_GET_INT])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::ToString => w.write_all(&[OP_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
@@ -450,25 +410,12 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_DIV => Op::Div,
         OP_MOD => Op::Mod,
         OP_NEG => Op::Neg,
-        OP_ADD_I64 => Op::AddI64,
-        OP_SUB_I64 => Op::SubI64,
-        OP_MUL_I64 => Op::MulI64,
-        OP_DIV_I64 => Op::DivI64,
-        OP_ADD_F64 => Op::AddF64,
-        OP_SUB_F64 => Op::SubF64,
-        OP_MUL_F64 => Op::MulF64,
-        OP_DIV_F64 => Op::DivF64,
         OP_EQ => Op::Eq,
         OP_NE => Op::Ne,
         OP_LT => Op::Lt,
         OP_LE => Op::Le,
         OP_GT => Op::Gt,
         OP_GE => Op::Ge,
-        OP_LT_I64 => Op::LtI64,
-        OP_LE_I64 => Op::LeI64,
-        OP_GT_I64 => Op::GtI64,
-        OP_GE_I64 => Op::GeI64,
-        OP_LT_F64 => Op::LtF64,
         OP_NOT => Op::Not,
         OP_JMP => Op::Jmp(read_u32(r)? as usize),
         OP_JMP_IF_FALSE => Op::JmpIfFalse(read_u32(r)? as usize),
@@ -482,23 +429,12 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_NEW => Op::New(read_u32(r)? as usize),
         OP_GET_F => Op::GetF(read_u32(r)? as usize),
         OP_SET_F => Op::SetF(read_u32(r)? as usize),
-        OP_GET_F_CACHED => {
-            let idx = read_u32(r)? as usize;
-            let offset = read_u16(r)?;
-            Op::GetFCached(idx, offset)
-        }
-        OP_SET_F_CACHED => {
-            let idx = read_u32(r)? as usize;
-            let offset = read_u16(r)?;
-            Op::SetFCached(idx, offset)
-        }
         OP_ALLOC_ARRAY => Op::AllocArray(read_u32(r)? as usize),
         OP_ARRAY_LEN => Op::ArrayLen,
         OP_ARRAY_GET => Op::ArrayGet,
         OP_ARRAY_SET => Op::ArraySet,
         OP_ARRAY_PUSH => Op::ArrayPush,
         OP_ARRAY_POP => Op::ArrayPop,
-        OP_ARRAY_GET_INT => Op::ArrayGetInt,
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
         OP_PARSE_INT => Op::ParseInt,
@@ -642,7 +578,7 @@ mod tests {
                 name: "add".to_string(),
                 arity: 2,
                 locals_count: 2,
-                code: vec![Op::GetL(0), Op::GetL(1), Op::AddI64, Op::Ret],
+                code: vec![Op::GetL(0), Op::GetL(1), Op::Add, Op::Ret],
                 stackmap: None,
             }],
             main: Function {
@@ -744,25 +680,12 @@ mod tests {
             Op::Div,
             Op::Mod,
             Op::Neg,
-            Op::AddI64,
-            Op::SubI64,
-            Op::MulI64,
-            Op::DivI64,
-            Op::AddF64,
-            Op::SubF64,
-            Op::MulF64,
-            Op::DivF64,
             Op::Eq,
             Op::Ne,
             Op::Lt,
             Op::Le,
             Op::Gt,
             Op::Ge,
-            Op::LtI64,
-            Op::LeI64,
-            Op::GtI64,
-            Op::GeI64,
-            Op::LtF64,
             Op::Not,
             Op::Jmp(1000),
             Op::JmpIfFalse(2000),
@@ -772,15 +695,12 @@ mod tests {
             Op::New(10),
             Op::GetF(1),
             Op::SetF(2),
-            Op::GetFCached(3, 4),
-            Op::SetFCached(5, 6),
             Op::AllocArray(7),
             Op::ArrayLen,
             Op::ArrayGet,
             Op::ArraySet,
             Op::ArrayPush,
             Op::ArrayPop,
-            Op::ArrayGetInt,
             Op::TypeOf,
             Op::ToString,
             Op::ParseInt,

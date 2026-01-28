@@ -22,7 +22,7 @@ pub use typechecker::TypeChecker;
 pub const STDLIB_PRELUDE: &str = include_str!("../../std/prelude.mc");
 
 use crate::compiler::ast::{Item, Program};
-use crate::config::{JitMode, RuntimeConfig};
+use crate::config::RuntimeConfig;
 use std::collections::HashSet;
 
 /// Parse and prepend stdlib to a user program.
@@ -176,7 +176,7 @@ pub fn run_file_capturing_output(
 
         // Code generation
         let mut codegen = Codegen::new();
-        let mut chunk = codegen.compile(resolved)?;
+        let chunk = codegen.compile(resolved)?;
 
         // Execution with output capture using a wrapper that writes to the shared buffer
         let mut vm = VM::new_with_config(
@@ -186,14 +186,7 @@ pub fn run_file_capturing_output(
         );
         vm.set_jit_config(config.jit_threshold, config.trace_jit);
 
-        match config.jit_mode {
-            JitMode::Off => {
-                vm.run(&chunk)?;
-            }
-            JitMode::On | JitMode::Auto => {
-                vm.run_with_quickening(&mut chunk)?;
-            }
-        }
+        vm.run(&chunk)?;
 
         Ok(())
     })();
@@ -247,7 +240,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Code generation
     let mut codegen = Codegen::new();
-    let mut chunk = codegen.compile(resolved)?;
+    let chunk = codegen.compile(resolved)?;
 
     // Log JIT settings if tracing is enabled
     if config.trace_jit {
@@ -261,16 +254,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
     vm.set_jit_config(config.jit_threshold, config.trace_jit);
 
-    // Use quickening mode for better performance
-    match config.jit_mode {
-        JitMode::Off => {
-            vm.run(&chunk)?;
-        }
-        JitMode::On | JitMode::Auto => {
-            // Run with quickening and JIT compilation
-            vm.run_with_quickening(&mut chunk)?;
-        }
-    }
+    vm.run(&chunk)?;
 
     // Print GC stats if requested
     if config.gc_stats {
@@ -325,7 +309,7 @@ pub fn run_file_with_dump(
 
     // Code generation
     let mut codegen = Codegen::new();
-    let mut chunk = codegen.compile(resolved)?;
+    let chunk = codegen.compile(resolved)?;
 
     // Dump bytecode if requested
     if let Some(ref output_path) = dump_opts.dump_bytecode {
@@ -345,16 +329,7 @@ pub fn run_file_with_dump(
     let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
     vm.set_jit_config(config.jit_threshold, config.trace_jit);
 
-    // Use quickening mode for better performance
-    match config.jit_mode {
-        JitMode::Off => {
-            vm.run(&chunk)?;
-        }
-        JitMode::On | JitMode::Auto => {
-            // Run with quickening and JIT compilation
-            vm.run_with_quickening(&mut chunk)?;
-        }
-    }
+    vm.run(&chunk)?;
 
     // Print GC stats if requested
     if config.gc_stats {
