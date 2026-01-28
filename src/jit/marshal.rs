@@ -164,6 +164,28 @@ impl JitReturn {
 /// Returns: JitReturn (tag in RAX, payload in RDX)
 pub type JitFn = unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn;
 
+/// Runtime call context passed to JIT code for function calls.
+/// This allows JIT code to call back into VM for function execution.
+#[repr(C)]
+pub struct JitCallContext {
+    /// Pointer to the VM instance
+    pub vm: *mut u8,
+    /// Pointer to the chunk (bytecode)
+    pub chunk: *const u8,
+    /// Function call helper: (ctx, func_index, argc, args_ptr) -> JitReturn
+    pub call_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
+}
+
+/// Type signature for call helper function.
+/// Called from JIT code to execute a function call via VM.
+/// Arguments:
+///   - ctx: *mut JitCallContext - context with VM and chunk pointers
+///   - func_index: u64 - index of function to call
+///   - argc: u64 - number of arguments
+///   - args: *const JitValue - pointer to arguments array (argc values)
+/// Returns: JitReturn with the function's return value
+pub type CallHelperFn = unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -84,6 +84,10 @@ pub struct JitCompiler {
     stack_map: HashMap<usize, Vec<bool>>,
     /// Current stack depth (number of values)
     stack_depth: usize,
+    /// Index of the function being compiled (for self-recursion detection)
+    self_func_index: Option<usize>,
+    /// Number of locals for the function being compiled
+    self_locals_count: usize,
 }
 
 impl JitCompiler {
@@ -94,11 +98,24 @@ impl JitCompiler {
             forward_refs: Vec::new(),
             stack_map: HashMap::new(),
             stack_depth: 0,
+            self_func_index: None,
+            self_locals_count: 0,
         }
     }
 
     /// Compile a function to native code.
-    pub fn compile(mut self, func: &Function) -> Result<CompiledCode, String> {
+    ///
+    /// # Arguments
+    /// * `func` - The function to compile
+    /// * `func_index` - The index of this function (for self-recursion optimization)
+    pub fn compile(
+        mut self,
+        func: &Function,
+        func_index: usize,
+    ) -> Result<CompiledCode, String> {
+        // Store function info for self-recursion detection
+        self.self_func_index = Some(func_index);
+        self.self_locals_count = func.locals_count;
         // Emit prologue
         self.emit_prologue(func);
 
@@ -217,6 +234,8 @@ impl JitCompiler {
             Op::JmpIfTrue(target) => self.emit_jmp_if_true(*target),
 
             Op::Ret => self.emit_ret(),
+
+            Op::Call(func_index, argc) => self.emit_call(*func_index, *argc),
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -571,6 +590,204 @@ impl JitCompiler {
         Ok(())
     }
 
+    /// Emit a function call.
+    /// Uses direct call for self-recursion, otherwise falls back to runtime helper.
+    fn emit_call(&mut self, target_func_index: usize, argc: usize) -> Result<(), String> {
+        // Check for self-recursion: if calling ourselves, use direct call
+        if self.self_func_index == Some(target_func_index) {
+            return self.emit_call_self(argc);
+        }
+        self.emit_call_external(target_func_index, argc)
+    }
+
+    /// Emit a direct self-recursive call (optimized path).
+    ///
+    /// This avoids going through jit_call_helper by:
+    /// 1. Allocating new locals on native stack
+    /// 2. Copying arguments to new locals
+    /// 3. Calling entry point directly (offset 0)
+    /// 4. Deallocating locals
+    fn emit_call_self(&mut self, argc: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        let args_offset = (argc as i32) * VALUE_SIZE;
+        let locals_size = (self.self_locals_count as i32) * VALUE_SIZE;
+
+        // Save callee-saved registers
+        asm.push(regs::VM_CTX);  // R12
+        asm.push(regs::VSTACK); // R13
+        asm.push(regs::LOCALS); // R14
+
+        // Allocate new locals on native stack
+        // We need locals_count * 16 bytes, but must maintain 16-byte alignment
+        // After 3 pushes (24 bytes) + prologue (48 bytes) = 72 bytes from entry RSP-8
+        // Total: 72 + 8 = 80 bytes, which is 16-byte aligned
+        // Adding locals_size must keep alignment, so round up to multiple of 16
+        let aligned_locals_size = ((locals_size + 15) / 16) * 16;
+        if aligned_locals_size > 0 {
+            asm.sub_ri32(Reg::Rsp, aligned_locals_size);
+        }
+
+        // Copy arguments from VSTACK to new locals (first argc slots)
+        // Arguments are at [VSTACK - argc*16, VSTACK)
+        // New locals are at [RSP, RSP + locals_size)
+        for i in 0..argc {
+            let src_offset = -((argc - i) as i32) * VALUE_SIZE; // Relative to VSTACK
+            let dst_offset = (i as i32) * VALUE_SIZE; // Relative to RSP
+
+            // Load tag and payload from VSTACK
+            asm.mov_rm(regs::TMP0, regs::VSTACK, src_offset);      // tag
+            asm.mov_rm(regs::TMP1, regs::VSTACK, src_offset + 8);  // payload
+
+            // Store to new locals on stack
+            asm.mov_mr(Reg::Rsp, dst_offset, regs::TMP0);      // tag
+            asm.mov_mr(Reg::Rsp, dst_offset + 8, regs::TMP1);  // payload
+        }
+
+        // DON'T adjust VSTACK here - callee starts at our current VSTACK position
+        // This way callee's stack operations don't overwrite our stack values
+        // We'll pop the args AFTER the call returns
+
+        // Set up call arguments:
+        // RDI = VM_CTX (R12) - same context
+        // RSI = VSTACK (R13) - callee starts here (after our args)
+        // RDX = new locals (RSP)
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rr(Reg::Rsi, regs::VSTACK);
+        asm.mov_rr(Reg::Rdx, Reg::Rsp);
+
+        // Drop asm to release the borrow before getting buf.len()
+        drop(asm);
+
+        // Call self (entry point is at offset 0 from function start)
+        // We need to compute the relative offset from current position to entry
+        // Since we're in the middle of the function, we need a backward jump
+        // Use call rel32 instruction
+        let call_site = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.call_rel32(0); // Placeholder, will be patched
+        }
+
+        // Calculate offset from end of call instruction to entry (offset 0)
+        // call rel32 is 5 bytes, so after emitting, we're at call_site + 5
+        // Relative offset = target - (call_site + 5) = 0 - (call_site + 5) = -(call_site + 5)
+        let rel_offset = -((call_site + 5) as i32);
+
+        // Patch the call instruction
+        let code = self.buf.code_mut();
+        code[call_site + 1..call_site + 5].copy_from_slice(&rel_offset.to_le_bytes());
+
+        // Deallocate locals
+        if aligned_locals_size > 0 {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.add_ri32(Reg::Rsp, aligned_locals_size);
+        }
+
+        // Restore saved registers and push return value
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.pop(regs::LOCALS);
+            asm.pop(regs::VSTACK);
+            asm.pop(regs::VM_CTX);
+
+            // Now pop the arguments that were on our stack before the call
+            // VSTACK was restored to its original value (after the args)
+            asm.sub_ri32(regs::VSTACK, args_offset);
+
+            // Return value is in RAX (tag) and RDX (payload)
+            // Store it where the first arg was, then advance VSTACK by one slot
+            asm.mov_mr(regs::VSTACK, 0, Reg::Rax);  // store tag
+            asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);  // store payload
+            asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Update stack depth: -argc + 1
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
+
+        Ok(())
+    }
+
+    /// Emit an external function call via runtime helper.
+    ///
+    /// Call convention for runtime helper (System V AMD64):
+    ///   RDI = ctx (*mut JitCallContext, from VM_CTX register)
+    ///   RSI = func_index
+    ///   RDX = argc
+    ///   RCX = args pointer (points to argc JitValues on our stack)
+    ///
+    /// The helper returns JitReturn in RAX (tag) and RDX (payload).
+    fn emit_call_external(&mut self, func_index: usize, argc: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Arguments are already on the JIT value stack (VSTACK).
+        // We need to compute the pointer to the first argument.
+        // VSTACK points to the next free slot, so args start at VSTACK - argc * VALUE_SIZE
+
+        let args_offset = (argc as i32) * VALUE_SIZE;
+
+        // Save callee-saved registers that we use and that the helper might clobber
+        // when calling into other JIT functions.
+        // We push 3 registers for 16-byte stack alignment (6 in prologue + 3 = 9 total = 72 bytes)
+        // After return address (8 bytes), 72 + 8 = 80, which is 16-byte aligned.
+        asm.push(regs::VM_CTX);   // R12 - save our JitCallContext pointer
+        asm.push(regs::VSTACK);   // R13 - save our value stack pointer (CRITICAL!)
+        asm.push(regs::LOCALS);   // R14 - save our locals pointer
+
+        // Calculate args pointer: RCX = VSTACK - argc * VALUE_SIZE
+        // Note: VSTACK (R13) still has original value, we just pushed a copy
+        asm.mov_rr(Reg::Rcx, regs::VSTACK);
+        asm.sub_ri32(Reg::Rcx, args_offset);
+
+        // Set up arguments for call_helper:
+        // RDI = ctx (VM_CTX register, which is R12)
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+
+        // RSI = func_index
+        asm.mov_ri64(Reg::Rsi, func_index as i64);
+
+        // RDX = argc
+        asm.mov_ri64(Reg::Rdx, argc as i64);
+
+        // RCX = args pointer (already set above)
+
+        // Load the call_helper function pointer from JitCallContext.
+        // JitCallContext layout:
+        //   offset 0: vm (*mut u8)
+        //   offset 8: chunk (*const u8)
+        //   offset 16: call_helper (fn pointer)
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 16); // R8 = ctx->call_helper
+
+        // Stack alignment calculation:
+        // Entry: RSP = X - 8 (X was 16-aligned, return addr pushed by caller)
+        // After prologue (6 pushes): RSP = X - 8 - 48 = X - 56 (8 bytes off alignment)
+        // After our 3 pushes: RSP = X - 56 - 24 = X - 80 (16-byte aligned!)
+        // So no extra alignment push needed.
+
+        // Call the helper function
+        asm.call_r(regs::TMP4);
+
+        // Restore saved registers (in reverse order)
+        asm.pop(regs::LOCALS);
+        asm.pop(regs::VSTACK);
+        asm.pop(regs::VM_CTX);
+
+        // Pop the arguments from JIT stack (they've been consumed)
+        // VSTACK is now restored to its original value (after the arguments)
+        asm.sub_ri32(regs::VSTACK, args_offset);
+
+        // Push the return value onto the JIT stack
+        // Return value is in RAX (tag) and RDX (payload)
+        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);  // store tag
+        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);  // store payload
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        // Update stack depth: -argc + 1 (pop args, push result)
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
+
+        Ok(())
+    }
+
     /// Patch forward references for jumps.
     fn patch_forward_refs(&mut self) {
         for (native_offset, bytecode_target) in &self.forward_refs {
@@ -636,7 +853,7 @@ mod tests {
         };
 
         let compiler = JitCompiler::new();
-        let result = compiler.compile(&func);
+        let result = compiler.compile(&func, 0); // func_index = 0 for tests
 
         // Just verify it compiles without error
         assert!(result.is_ok());
@@ -653,7 +870,7 @@ mod tests {
         };
 
         let compiler = JitCompiler::new();
-        let result = compiler.compile(&func);
+        let result = compiler.compile(&func, 0);
         assert!(result.is_ok());
     }
 
@@ -681,7 +898,7 @@ mod tests {
         };
 
         let compiler = JitCompiler::new();
-        let result = compiler.compile(&func);
+        let result = compiler.compile(&func, 0);
         assert!(result.is_ok());
     }
 }

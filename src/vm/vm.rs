@@ -10,7 +10,7 @@ use crate::jit::compiler::{CompiledCode, JitCompiler};
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
 use crate::jit::compiler_x86_64::{CompiledCode, JitCompiler};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
-use crate::jit::marshal::{JitContext, JitReturn, JitValue};
+use crate::jit::marshal::{JitCallContext, JitContext, JitReturn, JitValue};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -179,7 +179,7 @@ impl VM {
         }
 
         let compiler = JitCompiler::new();
-        match compiler.compile(func) {
+        match compiler.compile(func, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -213,7 +213,7 @@ impl VM {
         }
 
         let compiler = JitCompiler::new();
-        match compiler.compile(func) {
+        match compiler.compile(func, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -246,8 +246,13 @@ impl VM {
         func_index: usize,
         argc: usize,
         func: &Function,
+        chunk: &Chunk,
     ) -> Result<Value, String> {
-        let compiled = self.jit_functions.get(&func_index).unwrap();
+        // Get the entry point first to avoid borrow conflicts
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn = {
+            let compiled = self.jit_functions.get(&func_index).unwrap();
+            unsafe { compiled.entry_point() }
+        };
 
         // Create JIT context with locals
         let locals_count = func.locals_count;
@@ -266,14 +271,22 @@ impl VM {
             ctx.set_local(i, JitValue::from_value(arg));
         }
 
-        // Get the function pointer
-        // Signature: fn(vm_ctx: *mut u8, vstack: *mut JitValue, locals: *mut JitValue) -> JitReturn
-        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
-            unsafe { compiled.entry_point() };
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+        };
 
         // Execute the JIT code
-        // Pass null for vm_ctx (not used currently), stack and locals pointers
-        let result: JitReturn = unsafe { entry(std::ptr::null_mut(), ctx.stack, ctx.locals) };
+        // Pass call context, stack and locals pointers
+        let result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
 
         if self.trace_jit {
             eprintln!(
@@ -296,8 +309,13 @@ impl VM {
         func_index: usize,
         argc: usize,
         func: &Function,
+        chunk: &Chunk,
     ) -> Result<Value, String> {
-        let compiled = self.jit_functions.get(&func_index).unwrap();
+        // Get the entry point first to avoid borrow conflicts
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn = {
+            let compiled = self.jit_functions.get(&func_index).unwrap();
+            unsafe { compiled.entry_point() }
+        };
 
         // Create JIT context with locals
         let locals_count = func.locals_count;
@@ -316,15 +334,22 @@ impl VM {
             ctx.set_local(i, JitValue::from_value(arg));
         }
 
-        // Get the function pointer
-        // Signature: fn(vm_ctx: *mut u8, vstack: *mut JitValue, locals: *mut JitValue) -> JitReturn
-        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
-            unsafe { compiled.entry_point() };
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+        };
 
         // Execute the JIT code
-        // SAFETY: The compiled code follows AArch64 calling convention.
-        // vm_ctx is null (not used currently), stack and locals are valid pointers.
-        let result: JitReturn = unsafe { entry(std::ptr::null_mut(), ctx.stack, ctx.locals) };
+        // Pass call context, stack and locals pointers
+        let result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
 
         if self.trace_jit {
             eprintln!(
@@ -343,6 +368,9 @@ impl VM {
     }
 
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), String> {
+        // Initialize call counts for JIT
+        self.init_call_counts(chunk);
+
         // Start with main
         self.frames.push(Frame {
             func_index: usize::MAX, // Marker for main
@@ -611,6 +639,38 @@ impl VM {
                     ));
                 }
 
+                // Check if we should JIT compile this function
+                #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                {
+                    if self.should_jit_compile(func_index, &func.name) {
+                        self.jit_compile_function(func, func_index);
+                    }
+
+                    // If JIT compiled, execute via JIT
+                    if self.is_jit_compiled(func_index) {
+                        let result =
+                            self.execute_jit_function(func_index, argc, func, chunk)?;
+                        self.stack.push(result);
+                        return Ok(ControlFlow::Continue);
+                    }
+                }
+
+                #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                {
+                    if self.should_jit_compile(func_index, &func.name) {
+                        self.jit_compile_function(func, func_index);
+                    }
+
+                    // If JIT compiled, execute via JIT
+                    if self.is_jit_compiled(func_index) {
+                        let result =
+                            self.execute_jit_function(func_index, argc, func, chunk)?;
+                        self.stack.push(result);
+                        return Ok(ControlFlow::Continue);
+                    }
+                }
+
+                // Fall back to interpreter
                 let new_stack_base = self.stack.len() - argc;
 
                 self.frames.push(Frame {
@@ -1181,6 +1241,145 @@ impl VM {
         // Collect all roots from the stack
         let roots: Vec<Value> = self.stack.clone();
         self.heap.collect(&roots);
+    }
+}
+
+/// JIT call helper function.
+/// This is called from JIT code when executing a Call instruction.
+/// It executes the target function via the VM and returns the result.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_call_helper(
+    ctx: *mut JitCallContext,
+    func_index: u64,
+    argc: u64,
+    args: *const JitValue,
+) -> JitReturn {
+    // SAFETY: ctx, vm, and chunk pointers are valid for the duration of this call
+    // as they are set up by execute_jit_function before calling JIT code.
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+    let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
+
+    let func_index = func_index as usize;
+    let argc = argc as usize;
+
+    let func = &chunk.functions[func_index];
+
+    // Check arity
+    if argc != func.arity {
+        // Return nil on error (could improve error handling)
+        return JitReturn { tag: 3, payload: 0 }; // TAG_NIL
+    }
+
+    // Check if we should JIT compile this function (increments call count)
+    if vm.should_jit_compile(func_index, &func.name) {
+        vm.jit_compile_function(func, func_index);
+    }
+
+    // FAST PATH: If target function is JIT compiled, call directly with stack allocation
+    // This avoids heap allocations and VM stack operations for recursive JIT calls.
+    // Combine is_jit_compiled check and entry point lookup into single HashMap access.
+    if let Some(compiled) = vm.jit_functions.get(&func_index) {
+        // Get entry point directly from the compiled code
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
+            unsafe { compiled.entry_point() };
+
+        // Use stack-allocated locals (fixed size, supports up to 64 locals)
+        const MAX_LOCALS: usize = 64;
+        let mut locals = [JitValue { tag: 3, payload: 0 }; MAX_LOCALS];
+
+        // Copy arguments to locals (arguments are the first `argc` locals)
+        for i in 0..argc {
+            locals[i] = unsafe { *args.add(i) };
+        }
+
+        // Use stack-allocated value stack
+        let mut stack = [JitValue { tag: 0, payload: 0 }; 256];
+
+        // Call JIT function directly with stack-allocated buffers
+        let result = unsafe {
+            entry(
+                ctx as *mut u8, // Same context - recursive calls use same call_helper
+                stack.as_mut_ptr(),
+                locals.as_mut_ptr(),
+            )
+        };
+
+        // Only check trace_jit flag if enabled (avoid branch in hot path when disabled)
+        #[cfg(debug_assertions)]
+        if vm.trace_jit {
+            eprintln!(
+                "[JIT] Executed function '{}', result: tag={}, payload={}",
+                func.name, result.tag, result.payload
+            );
+        }
+
+        return result;
+    }
+
+    // SLOW PATH: Execute via interpreter
+    // Push arguments to VM stack
+    for i in 0..argc {
+        let jit_val = unsafe { *args.add(i) };
+        vm.stack.push(jit_val.to_value());
+    }
+
+    {
+        // Execute via interpreter: push frame and run until return
+        // Track the frame depth BEFORE pushing our frame, so we know when to stop
+        let starting_frame_depth = vm.frames.len();
+
+        let new_stack_base = vm.stack.len() - argc;
+        vm.frames.push(Frame {
+            func_index,
+            pc: 0,
+            stack_base: new_stack_base,
+        });
+
+        // Run until the function returns (when frame depth returns to starting level)
+        loop {
+            let frame = match vm.frames.last_mut() {
+                Some(f) => f,
+                None => break,
+            };
+
+            let current_func = if frame.func_index == usize::MAX {
+                &chunk.main
+            } else {
+                &chunk.functions[frame.func_index]
+            };
+
+            if frame.pc >= current_func.code.len() {
+                // End of function
+                break;
+            }
+
+            let op = current_func.code[frame.pc].clone();
+            frame.pc += 1;
+
+            match vm.execute_op(op, chunk) {
+                Ok(ControlFlow::Continue) => {}
+                Ok(ControlFlow::Return) => {
+                    // Check if we returned from our target function by checking frame depth
+                    // This correctly handles nested calls to the same function
+                    if vm.frames.len() <= starting_frame_depth {
+                        break;
+                    }
+                }
+                Ok(ControlFlow::Exit) => break,
+                Err(_) => {
+                    return JitReturn { tag: 3, payload: 0 }; // TAG_NIL on error
+                }
+            }
+        }
+
+        // Get return value from stack
+        let result = vm.stack.pop().unwrap_or(Value::Null);
+        let jit_result = JitValue::from_value(&result);
+        JitReturn {
+            tag: jit_result.tag,
+            payload: jit_result.payload,
+        }
     }
 }
 

@@ -1,85 +1,132 @@
-# Spec.md
+# Spec.md - AArch64 JIT Call命令サポート
 
 ## 1. Goal
-- JITの有無でパフォーマンスが悪化していないことをCIで自動検証し、JIT有効時に10%以上の改善がなければテスト失敗とする
+- aarch64 JITでOp::Call命令をサポートし、相互再帰（is_even ↔ is_odd）がJITコンパイルされて正しく動作する
 
 ## 2. Non-Goals
-- 詳細なパフォーマンスレポート生成（Criterionの役割）
-- 複数回実行による統計的分析
-- プラットフォーム別の閾値設定
+- CallBuiltin（組み込み関数呼び出し）
+- 可変長引数のサポート
+- クロージャ呼び出し
+- 自己再帰最適化（emit_call_self）は今回スコープ外
+- 末尾呼び出し最適化
 
 ## 3. Target Users
-- 開発者がPR作成時にJIT最適化の効果を自動検証
-- CIがマージ前にパフォーマンス劣化を検出
+- mocaコンパイラの開発者
+- aarch64（Apple Silicon Mac等）でJITを使用するユーザー
 
 ## 4. Core User Flow
-1. `cargo test --features jit` を実行
-2. 各ベンチマークシナリオでJIT無効版を実行し、実行時間を計測
-3. 同シナリオでJIT有効版を実行し、実行時間を計測
-4. `optimized <= baseline * 0.9` を検証
-5. 閾値未達成の場合、テスト失敗（CI red）
+1. ユーザーが相互再帰を含むmocaコードを実行
+2. JITが関数をコンパイル（Call命令を含む）
+3. JITコードがjit_call_helper経由で他の関数を呼び出し
+4. 正しい結果が返される
 
 ## 5. Inputs & Outputs
-**入力:**
-- ベンチマークソースコード（Rust内で文字列として定義）
-- RuntimeConfig（JIT on/off、threshold設定）
+### Inputs
+- Op::Call(func_index, argc) バイトコード命令
+- 引数の値（VSTACKから取得）
 
-**出力:**
-- テスト結果（pass/fail）
-- 失敗時: baseline時間、optimized時間、改善率を表示
+### Outputs
+- ターゲット関数の戻り値（VSTACKに格納）
+- JitReturn構造体（tag, payload）
 
 ## 6. Tech Stack
 - 言語: Rust
-- テストフレームワーク: cargo test（標準）
-- 時間計測: `std::time::Instant`
-- JIT制御: `RuntimeConfig` + compiler API (`run_file_capturing_output`)
-- 配置: `tests/perf_benchmark.rs`
+- アーキテクチャ: AArch64 (ARM64)
+- アセンブラ: 既存のAArch64Assembler（src/jit/asm_aarch64.rs）
+- テスト: cargo test --features jit
 
 ## 7. Rules & Constraints
-- JITは `--features jit` フラグで有効化
-- JIT無効時は `jit_threshold = u32::MAX` で実質無効化
-- JIT有効時は `jit_threshold = 1` で即座にJIT化
-- 閾値: optimized <= baseline * 0.9（10%以上改善）
-- 1回の実行で判定（複数回実行による平均化はしない）
-- 既存の `benches/vm_benchmark.rs` は削除
+
+### 呼び出し規約（AArch64 AAPCS64準拠）
+- 引数: x0, x1, x2, x3, ... （最初の8引数）
+- 戻り値: x0（tag）, x1（payload）
+- Callee-saved: x19-x28, x29(fp), x30(lr)
+- Caller-saved: x0-x18
+
+### jit_call_helper引数
+- x0: ctx (*mut JitCallContext)
+- x1: func_index (u64)
+- x2: argc (u64)
+- x3: args (*const JitValue)
+
+### レジスタ使用規則（既存のregs定義に従う）
+- VM_CTX (x19): VMコンテキストポインタ
+- VSTACK (x20): 値スタックポインタ
+- LOCALS (x21): ローカル変数ベースポインタ
+- TMP0/TMP1 (x9/x10): 一時レジスタ
+
+### 実装制約
+- 既存のemit_prologue/emit_epilogueと整合性を保つ
+- スタックは16バイトアラインメントを維持
+- x86_64のemit_call_externalのロジックをaarch64に変換
 
 ## 8. Open Questions
-- なし
+なし
 
 ## 9. Acceptance Criteria
-1. `cargo test --features jit perf_` でベンチマークテストが実行される
-2. JIT有効時に10%以上改善していればテストがpass
-3. JIT有効時に10%未満の改善（または悪化）ならテストがfail
-4. 失敗時にbaseline時間、optimized時間、改善率が出力される
-5. 以下のシナリオがテストされる: sum_loop, nested_loop, hot_function, fibonacci, array_operations
-6. 既存の `benches/vm_benchmark.rs` が削除されている
-7. GitHub Actions CIで `cargo test --features jit` が実行可能
+1. [x] compiler.rsにemit_call関数が実装されている
+2. [x] Op::Call(func_index, argc)がcompile_opで処理される
+3. [x] jit_call_helperが正しい引数で呼び出される
+4. [x] 戻り値がVSTACKに正しく格納される
+5. [x] スタックの深さ(stack_depth)が正しく更新される
+6. [x] `cargo test --features jit jit_mutual_recursion`が通る
+7. [x] is_even/is_oddの両方がJITコンパイルされる（trace-jitで確認可能）
+8. [x] 結果が正しい（is_even(0)=1, is_even(1)=0, is_even(10)=1, is_even(11)=0）
 
 ## 10. Verification Strategy
-**進捗検証:**
-- 各シナリオ実装後に `cargo test --features jit perf_<scenario>` で個別確認
 
-**達成検証:**
-- `cargo test --features jit` で全テストがpassすること
-- Acceptance Criteriaのチェックリストを手動確認
+### 進捗検証
+- emit_call実装後、単純な関数呼び出しのバイトコードを手動テスト
+- `cargo run --features jit -- run --jit on --trace-jit <test.mc>` でJITトレース確認
 
-**漏れ検出:**
-- 既存ベンチマークのシナリオが全て移行されていることを確認
-- `benches/vm_benchmark.rs` が削除されていることを確認
+### 達成検証
+- `cargo test --features jit jit_mutual_recursion` が通る
+- トレース出力で両関数がJITコンパイルされていることを確認
+
+### 漏れ検出
+- x86_64のemit_call_externalと比較し、同等の機能が実装されているか確認
+- カバレッジ: 引数0個/1個/複数個のテストケース
 
 ## 11. Test Plan
 
-### e2e シナリオ 1: JIT改善が閾値を超える場合
-- **Given**: hot_function シナリオ（JITの恩恵が大きい）
-- **When**: `cargo test --features jit perf_hot_function` を実行
-- **Then**: テストがpassし、改善率が表示される
+### E2E Test 1: 基本的な相互再帰
+```
+Given: is_even/is_oddの相互再帰関数が定義されている
+When: is_even(10)を実行（JIT有効、threshold=1）
+Then:
+  - 両関数がJITコンパイルされる
+  - 結果が1（10は偶数）
+```
 
-### e2e シナリオ 2: テスト失敗時の出力確認
-- **Given**: 閾値を0.5（50%改善必須）に一時変更
-- **When**: テストを実行
-- **Then**: 失敗し、baseline時間、optimized時間、改善率が出力される
+### E2E Test 2: 複数回の呼び出し
+```
+Given: is_even/is_oddの相互再帰関数が定義されている
+When: is_even(0), is_even(1), is_even(10), is_even(11)を順に実行
+Then:
+  - 結果がそれぞれ1, 0, 1, 0
+  - パニックやクラッシュが発生しない
+```
 
-### e2e シナリオ 3: CIでの実行
-- **Given**: GitHub Actions workflow
-- **When**: PRを作成
-- **Then**: `cargo test --features jit` が実行され、結果がCI上で確認できる
+### E2E Test 3: 既存テストとの互換性
+```
+Given: JITフィーチャーが有効
+When: cargo test --features jit を実行
+Then:
+  - jit_mutual_recursionがPASS
+  - 他のJITテストが壊れていない
+```
+
+## 12. TODO List
+
+### Setup
+- [x] x86_64のemit_call_external実装を確認・理解
+
+### Core
+- [x] emit_call関数を実装（jit_call_helper呼び出し）
+- [x] compile_opにOp::Callのハンドリングを追加
+- [x] 引数のVSTACK→レジスタ渡しを実装
+- [x] 戻り値のVSTACKへの格納を実装
+
+### Test & Polish
+- [x] jit_mutual_recursionテストを実行して確認
+- [x] trace-jitで両関数のJITコンパイルを確認
