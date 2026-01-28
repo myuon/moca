@@ -738,21 +738,34 @@ impl VM {
             }
             Op::ArrayGet => {
                 let index = self.pop_int()?;
-                let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ref().ok_or("runtime error: expected array")?;
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ref().ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let arr = obj.as_array().ok_or("runtime error: expected array")?;
 
-                if index < 0 || index as usize >= arr.elements.len() {
-                    return Err(format!(
-                        "runtime error: array index {} out of bounds (length {})",
-                        index,
-                        arr.elements.len()
-                    ));
+                if let Some(arr) = obj.as_array() {
+                    if index < 0 || index as usize >= arr.elements.len() {
+                        return Err(format!(
+                            "runtime error: array index {} out of bounds (length {})",
+                            index,
+                            arr.elements.len()
+                        ));
+                    }
+                    let value = arr.elements[index as usize];
+                    self.stack.push(value);
+                } else if let Some(s) = obj.as_string() {
+                    let bytes = s.value.as_bytes();
+                    if index < 0 || index as usize >= bytes.len() {
+                        return Err(format!(
+                            "runtime error: string index {} out of bounds (length {})",
+                            index,
+                            bytes.len()
+                        ));
+                    }
+                    let byte_value = bytes[index as usize] as i64;
+                    self.stack.push(Value::I64(byte_value));
+                } else {
+                    return Err("runtime error: expected array or string".to_string());
                 }
-
-                let value = arr.elements[index as usize];
-                self.stack.push(value);
             }
             Op::ArraySet => {
                 let value = self.stack.pop().ok_or("stack underflow")?;

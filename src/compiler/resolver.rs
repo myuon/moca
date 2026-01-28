@@ -267,7 +267,9 @@ impl<'a> Resolver<'a> {
             for method in &impl_block.methods {
                 // Create a unique function name for the method: StructName::method_name
                 let func_name = format!("{}::{}", impl_block.struct_name, method.name);
-                let func_index = func_defs.len() + self.functions.len();
+                // func_index is the next available index in resolved_functions
+                // which will contain func_defs first, then all methods
+                let func_index = self.functions.len();
 
                 if self.functions.contains_key(&func_name) {
                     return Err(self.error(
