@@ -1,0 +1,181 @@
+//! Performance benchmark tests that verify JIT optimization provides
+//! at least 10% improvement over interpreter baseline.
+//!
+//! These tests run with `cargo test --features jit perf_`.
+
+use moca::compiler::run_file_capturing_output;
+use moca::config::{JitMode, RuntimeConfig};
+use std::time::{Duration, Instant};
+
+/// Required improvement ratio (JIT time must be <= baseline * this value)
+const IMPROVEMENT_THRESHOLD: f64 = 0.9;
+
+/// Run a benchmark scenario and return execution time.
+fn run_benchmark(source: &str, jit_enabled: bool) -> Duration {
+    // Create temp file
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("moca_perf_{}.mc", std::process::id()));
+    std::fs::write(&temp_file, source).expect("failed to write temp file");
+
+    let config = if jit_enabled {
+        RuntimeConfig {
+            jit_mode: JitMode::On,
+            jit_threshold: 1, // Compile immediately
+            ..Default::default()
+        }
+    } else {
+        RuntimeConfig {
+            jit_mode: JitMode::Off,
+            jit_threshold: u32::MAX, // Never compile
+            ..Default::default()
+        }
+    };
+
+    let start = Instant::now();
+    let (_output, result) = run_file_capturing_output(&temp_file, &config);
+    let elapsed = start.elapsed();
+
+    // Cleanup
+    std::fs::remove_file(&temp_file).ok();
+
+    result.expect("benchmark execution failed");
+    elapsed
+}
+
+/// Assert that JIT version is at least 10% faster than baseline.
+fn assert_optimization_effect(name: &str, source: &str) {
+    let baseline = run_benchmark(source, false);
+    let optimized = run_benchmark(source, true);
+
+    let ratio = optimized.as_secs_f64() / baseline.as_secs_f64();
+    let improvement_pct = (1.0 - ratio) * 100.0;
+
+    println!(
+        "[{}] baseline: {:?}, optimized: {:?}, improvement: {:.1}%",
+        name, baseline, optimized, improvement_pct
+    );
+
+    assert!(
+        optimized.as_secs_f64() <= baseline.as_secs_f64() * IMPROVEMENT_THRESHOLD,
+        "{}: JIT optimization did not meet 10% improvement threshold.\n\
+         baseline: {:?}, optimized: {:?}, ratio: {:.3} (need <= {})",
+        name,
+        baseline,
+        optimized,
+        ratio,
+        IMPROVEMENT_THRESHOLD
+    );
+}
+
+// ============================================================================
+// Benchmark Scenarios
+// ============================================================================
+
+#[test]
+#[cfg(feature = "jit")]
+fn perf_sum_loop() {
+    let source = r#"
+fun sum_to(n) {
+    var total = 0;
+    var i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+print(sum_to(1000000));
+"#;
+    assert_optimization_effect("sum_loop", source);
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn perf_nested_loop() {
+    let source = r#"
+fun nested(n) {
+    var count = 0;
+    var i = 0;
+    while i < n {
+        var j = 0;
+        while j < n {
+            count = count + 1;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+print(nested(500));
+"#;
+    assert_optimization_effect("nested_loop", source);
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn perf_hot_function() {
+    let source = r#"
+fun do_work(n) {
+    var sum = 0;
+    var i = 0;
+    while i < n {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+}
+
+var total = 0;
+var j = 0;
+while j < 10000 {
+    total = total + do_work(100);
+    j = j + 1;
+}
+print(total);
+"#;
+    assert_optimization_effect("hot_function", source);
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn perf_fibonacci() {
+    let source = r#"
+fun fib(n) {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+print(fib(30));
+"#;
+    assert_optimization_effect("fibonacci", source);
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn perf_array_operations() {
+    let source = r#"
+fun array_sum(n) {
+    var arr = [];
+    var i = 0;
+    while i < n {
+        push(arr, i);
+        i = i + 1;
+    }
+
+    var sum = 0;
+    var j = 0;
+    while j < len(arr) {
+        sum = sum + arr[j];
+        j = j + 1;
+    }
+    return sum;
+}
+
+print(array_sum(100000));
+"#;
+    assert_optimization_effect("array_operations", source);
+}

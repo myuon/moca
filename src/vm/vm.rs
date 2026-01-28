@@ -666,7 +666,9 @@ impl VM {
             Op::ArrayGet => {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
-                let r = val.as_ref().ok_or("runtime error: expected array or string")?;
+                let r = val
+                    .as_ref()
+                    .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
                 if let Some(arr) = obj.as_array() {

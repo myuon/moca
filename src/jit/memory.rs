@@ -104,7 +104,7 @@ impl ExecutableMemory {
 
     /// Get a pointer to the memory.
     pub fn as_ptr(&self) -> *const u8 {
-        self.ptr.as_ref()
+        self.ptr.as_ptr()
     }
 
     /// Get a mutable pointer to the memory.
@@ -113,7 +113,7 @@ impl ExecutableMemory {
         if self.executable {
             None
         } else {
-            Some(self.ptr.as_ref())
+            Some(self.ptr.as_ptr())
         }
     }
 
@@ -134,8 +134,8 @@ impl ExecutableMemory {
         }
 
         unsafe {
-            let dest = self.ptr.as_ref().add(offset);
-            std::ptr::copy_nonoverlapping(data.as_ref(), dest, data.len());
+            let dest = self.ptr.as_ptr().add(offset);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
         }
 
         Ok(())
@@ -151,7 +151,7 @@ impl ExecutableMemory {
 
         let result = unsafe {
             libc::mprotect(
-                self.ptr.as_ref() as *mut libc::c_void,
+                self.ptr.as_ptr() as *mut libc::c_void,
                 self.size,
                 libc::PROT_READ | libc::PROT_EXEC,
             )
@@ -198,7 +198,7 @@ impl ExecutableMemory {
         }
 
         // SAFETY: Caller guarantees the memory contains valid code
-        Some(unsafe { std::mem::transmute_copy(&self.ptr.as_ref()) })
+        Some(unsafe { std::mem::transmute_copy(&self.ptr.as_ptr()) })
     }
 }
 
@@ -207,7 +207,7 @@ impl Drop for ExecutableMemory {
         #[cfg(unix)]
         {
             unsafe {
-                libc::munmap(self.ptr.as_ref() as *mut libc::c_void, self.size);
+                libc::munmap(self.ptr.as_ptr() as *mut libc::c_void, self.size);
             }
         }
         #[cfg(not(unix))]
@@ -215,7 +215,7 @@ impl Drop for ExecutableMemory {
             let layout = std::alloc::Layout::from_size_align(self.size, Self::page_size())
                 .expect("invalid layout");
             unsafe {
-                std::alloc::dealloc(self.ptr.as_ref(), layout);
+                std::alloc::dealloc(self.ptr.as_ptr(), layout);
             }
         }
     }
