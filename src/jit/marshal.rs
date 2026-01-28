@@ -49,7 +49,7 @@ impl JitValue {
     }
 
     /// Convert JIT representation back to VM Value.
-    pub fn to_value(&self) -> Value {
+    pub fn to_value(self) -> Value {
         match self.tag {
             tags::TAG_INT => Value::I64(self.payload as i64),
             tags::TAG_FLOAT => Value::F64(f64::from_bits(self.payload)),
@@ -130,8 +130,8 @@ impl Drop for JitContext {
     fn drop(&mut self) {
         unsafe {
             // Reconstruct boxes and drop them
-            let _ = Box::from_raw(std::slice::from_raw_parts_mut(self.stack, 256));
-            let _ = Box::from_raw(std::slice::from_raw_parts_mut(
+            let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(self.stack, 256));
+            let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                 self.locals,
                 self.locals_count,
             ));
@@ -150,7 +150,7 @@ pub struct JitReturn {
 
 impl JitReturn {
     /// Convert to VM Value.
-    pub fn to_value(&self) -> Value {
+    pub fn to_value(self) -> Value {
         JitValue {
             tag: self.tag,
             payload: self.payload,

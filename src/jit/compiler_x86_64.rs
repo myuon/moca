@@ -67,7 +67,7 @@ impl CompiledCode {
         F: Copy,
     {
         unsafe {
-            let ptr = self.memory.as_ref().add(self.entry_offset);
+            let ptr = self.memory.as_ptr().add(self.entry_offset);
             std::mem::transmute_copy(&ptr)
         }
     }
@@ -632,6 +632,7 @@ mod tests {
             arity: 0,
             locals_count: 1,
             code: vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0), Op::Ret],
+            stackmap: None,
         };
 
         let compiler = JitCompiler::new();
@@ -648,6 +649,7 @@ mod tests {
             arity: 0,
             locals_count: 0,
             code: vec![Op::PushInt(10), Op::PushInt(20), Op::Add, Op::Ret],
+            stackmap: None,
         };
 
         let compiler = JitCompiler::new();
@@ -675,6 +677,7 @@ mod tests {
                 Op::Jmp(2),        // 10: goto loop start
                 Op::Ret,           // 11: return
             ],
+            stackmap: None,
         };
 
         let compiler = JitCompiler::new();
