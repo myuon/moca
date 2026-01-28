@@ -1260,26 +1260,55 @@ unsafe extern "C" fn jit_call_helper(
         return JitReturn { tag: 3, payload: 0 }; // TAG_NIL
     }
 
+    // FAST PATH: If target function is JIT compiled, call directly with stack allocation
+    // This avoids heap allocations and VM stack operations for recursive JIT calls.
+    // Combine is_jit_compiled check and entry point lookup into single HashMap access.
+    if let Some(compiled) = vm.jit_functions.get(&func_index) {
+        // Get entry point directly from the compiled code
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
+            unsafe { compiled.entry_point() };
+
+        // Use stack-allocated locals (fixed size, supports up to 64 locals)
+        const MAX_LOCALS: usize = 64;
+        let mut locals = [JitValue { tag: 3, payload: 0 }; MAX_LOCALS];
+
+        // Copy arguments to locals (arguments are the first `argc` locals)
+        for i in 0..argc {
+            locals[i] = unsafe { *args.add(i) };
+        }
+
+        // Use stack-allocated value stack
+        let mut stack = [JitValue { tag: 0, payload: 0 }; 256];
+
+        // Call JIT function directly with stack-allocated buffers
+        let result = unsafe {
+            entry(
+                ctx as *mut u8, // Same context - recursive calls use same call_helper
+                stack.as_mut_ptr(),
+                locals.as_mut_ptr(),
+            )
+        };
+
+        // Only check trace_jit flag if enabled (avoid branch in hot path when disabled)
+        #[cfg(debug_assertions)]
+        if vm.trace_jit {
+            eprintln!(
+                "[JIT] Executed function '{}', result: tag={}, payload={}",
+                func.name, result.tag, result.payload
+            );
+        }
+
+        return result;
+    }
+
+    // SLOW PATH: Execute via interpreter
     // Push arguments to VM stack
     for i in 0..argc {
         let jit_val = unsafe { *args.add(i) };
         vm.stack.push(jit_val.to_value());
     }
 
-    // Check if target function is JIT compiled
-    if vm.is_jit_compiled(func_index) {
-        // Execute via JIT
-        match vm.execute_jit_function(func_index, argc, func, chunk) {
-            Ok(result) => {
-                let jit_result = JitValue::from_value(&result);
-                JitReturn {
-                    tag: jit_result.tag,
-                    payload: jit_result.payload,
-                }
-            }
-            Err(_) => JitReturn { tag: 3, payload: 0 }, // TAG_NIL on error
-        }
-    } else {
+    {
         // Execute via interpreter: push frame and run until return
         let new_stack_base = vm.stack.len() - argc;
         vm.frames.push(Frame {

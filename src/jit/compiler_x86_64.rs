@@ -99,14 +99,6 @@ impl JitCompiler {
 
     /// Compile a function to native code.
     pub fn compile(mut self, func: &Function) -> Result<CompiledCode, String> {
-        // Check if function contains Call instructions - skip JIT for now
-        // TODO: Fix Call instruction handling for recursive functions
-        for op in &func.code {
-            if matches!(op, Op::Call(_, _)) {
-                return Err("Functions with Call instructions not yet supported in JIT".to_string());
-            }
-        }
-
         // Emit prologue
         self.emit_prologue(func);
 
@@ -600,7 +592,16 @@ impl JitCompiler {
 
         let args_offset = (argc as i32) * VALUE_SIZE;
 
+        // Save callee-saved registers that we use and that the helper might clobber
+        // when calling into other JIT functions.
+        // We push 3 registers for 16-byte stack alignment (6 in prologue + 3 = 9 total = 72 bytes)
+        // After return address (8 bytes), 72 + 8 = 80, which is 16-byte aligned.
+        asm.push(regs::VM_CTX);   // R12 - save our JitCallContext pointer
+        asm.push(regs::VSTACK);   // R13 - save our value stack pointer (CRITICAL!)
+        asm.push(regs::LOCALS);   // R14 - save our locals pointer
+
         // Calculate args pointer: RCX = VSTACK - argc * VALUE_SIZE
+        // Note: VSTACK (R13) still has original value, we just pushed a copy
         asm.mov_rr(Reg::Rcx, regs::VSTACK);
         asm.sub_ri32(Reg::Rcx, args_offset);
 
@@ -623,22 +624,22 @@ impl JitCompiler {
         //   offset 16: call_helper (fn pointer)
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 16); // R8 = ctx->call_helper
 
-        // Save VM_CTX (R12) since the called function may use it
-        asm.push(regs::VM_CTX);
-
-        // Align stack to 16 bytes if needed (we pushed 1 register = 8 bytes)
-        // For proper alignment, push another register
-        asm.push(regs::LOCALS);
+        // Stack alignment calculation:
+        // Entry: RSP = X - 8 (X was 16-aligned, return addr pushed by caller)
+        // After prologue (6 pushes): RSP = X - 8 - 48 = X - 56 (8 bytes off alignment)
+        // After our 3 pushes: RSP = X - 56 - 24 = X - 80 (16-byte aligned!)
+        // So no extra alignment push needed.
 
         // Call the helper function
         asm.call_r(regs::TMP4);
 
-        // Restore saved registers
+        // Restore saved registers (in reverse order)
         asm.pop(regs::LOCALS);
+        asm.pop(regs::VSTACK);
         asm.pop(regs::VM_CTX);
 
         // Pop the arguments from JIT stack (they've been consumed)
-        // VSTACK still points to after the arguments, so subtract to remove them
+        // VSTACK is now restored to its original value (after the arguments)
         asm.sub_ri32(regs::VSTACK, args_offset);
 
         // Push the return value onto the JIT stack
