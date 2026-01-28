@@ -906,9 +906,10 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
 
-                // Object can be array<T> or struct (structs are compiled as arrays)
+                // Object can be array<T>, string, or struct (structs are compiled as arrays)
                 match self.substitution.apply(&obj_type) {
                     Type::Array(elem) => self.substitution.apply(&elem),
+                    Type::String => Type::Int, // String index returns byte value as int
                     Type::Struct { fields, .. } => {
                         // For structs, index access returns a type variable
                         // (we'd need to know the index value at compile time to be precise)
@@ -926,7 +927,7 @@ impl TypeChecker {
                     }
                     _ => {
                         self.errors.push(TypeError::new(
-                            format!("expected array or struct, found `{}`", obj_type),
+                            format!("expected array, string or struct, found `{}`", obj_type),
                             *span,
                         ));
                         self.fresh_var()
