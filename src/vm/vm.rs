@@ -1260,6 +1260,21 @@ unsafe extern "C" fn jit_call_helper(
         return JitReturn { tag: 3, payload: 0 }; // TAG_NIL
     }
 
+    // Increment call count and potentially JIT compile this function
+    // This ensures functions called from JIT code can also become hot
+    if func_index < vm.call_counts.len() {
+        vm.call_counts[func_index] += 1;
+        if vm.call_counts[func_index] == vm.jit_threshold && !vm.is_jit_compiled(func_index) {
+            if vm.trace_jit {
+                eprintln!(
+                    "[JIT] Hot function detected: {} (calls: {})",
+                    func.name, vm.jit_threshold
+                );
+            }
+            vm.jit_compile_function(func, func_index);
+        }
+    }
+
     // FAST PATH: If target function is JIT compiled, call directly with stack allocation
     // This avoids heap allocations and VM stack operations for recursive JIT calls.
     // Combine is_jit_compiled check and entry point lookup into single HashMap access.
