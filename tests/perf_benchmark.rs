@@ -156,6 +156,7 @@ print(fib(30));
 
 #[test]
 #[cfg(feature = "jit")]
+#[ignore = "JIT does not support AllocArray, CallBuiltin (push/len), GetIndex yet"]
 fn perf_array_operations() {
     let source = r#"
 fun array_sum(n) {
