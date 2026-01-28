@@ -67,33 +67,29 @@ enum Value {
 | `POP` | -1 |
 | `DUP` | +1 |
 
-### 5.3 Arithmetic (I64)
+### 5.3 Arithmetic
 
-| Instruction | Stack Effect |
-|-------------|--------------|
-| `ADD_I64` | -1 |
-| `SUB_I64` | -1 |
-| `MUL_I64` | -1 |
-| `DIV_I64` | -1 |
+| Instruction | Stack Effect | Description |
+|-------------|--------------|-------------|
+| `ADD` | -1 | Addition (I64/F64/String) |
+| `SUB` | -1 | Subtraction (I64/F64) |
+| `MUL` | -1 | Multiplication (I64/F64) |
+| `DIV` | -1 | Division (I64/F64) |
+| `MOD` | -1 | Modulo (I64) |
+| `NEG` | 0 | Negation (I64/F64) |
 
-### 5.4 Arithmetic (F64)
-
-| Instruction | Stack Effect |
-|-------------|--------------|
-| `ADD_F64` | -1 |
-| `SUB_F64` | -1 |
-| `MUL_F64` | -1 |
-| `DIV_F64` | -1 |
-
-### 5.5 Comparison
+### 5.4 Comparison
 
 | Instruction | Stack Effect |
 |-------------|--------------|
 | `EQ` | -1 |
-| `LT_I64` | -1 |
-| `LT_F64` | -1 |
+| `NE` | -1 |
+| `LT` | -1 |
+| `LE` | -1 |
+| `GT` | -1 |
+| `GE` | -1 |
 
-### 5.6 Control Flow
+### 5.5 Control Flow
 
 | Instruction | Stack Effect |
 |-------------|--------------|
@@ -101,14 +97,14 @@ enum Value {
 | `JMP_IF_TRUE label` | -1 |
 | `JMP_IF_FALSE label` | -1 |
 
-### 5.7 Calls & Returns
+### 5.6 Calls & Returns
 
 | Instruction | Stack Effect |
 |-------------|--------------|
 | `CALL f, argc` | -argc + 1 |
 | `RET` | -1 |
 
-### 5.8 Heap & Objects
+### 5.7 Heap & Objects
 
 | Instruction | Stack Effect |
 |-------------|--------------|
@@ -116,7 +112,7 @@ enum Value {
 | `GETF field` | 0 |
 | `SETF field` | -2 |
 
-### 5.9 Extended Instructions (仕様外、既存維持)
+### 5.8 Extended Instructions (仕様外、既存維持)
 
 以下の命令は仕様外として削除せず維持：
 - Exception: `Throw`, `TryBegin`, `TryEnd`
