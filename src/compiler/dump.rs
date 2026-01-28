@@ -1352,10 +1352,6 @@ impl<'a> Disassembler<'a> {
                     .push_str(&format!("SetFieldCached {}, {} ; .{}", idx, cache, field));
             }
 
-            // String operations
-            Op::StringLen => self.output.push_str("StringLen"),
-            Op::StringConcat => self.output.push_str("StringConcat"),
-
             // Type operations
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::ToString => self.output.push_str("ToString"),

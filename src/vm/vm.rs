@@ -881,24 +881,6 @@ impl VM {
 
                 obj.fields.insert(field_name, value);
             }
-            Op::StringLen => {
-                let s = self.stack.pop().ok_or("stack underflow")?;
-                let r = s.as_ref().ok_or("runtime error: expected string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let s = obj.as_string().ok_or("runtime error: expected string")?;
-                self.stack.push(Value::I64(s.value.chars().count() as i64));
-            }
-            Op::StringConcat => {
-                let b = self.stack.pop().ok_or("stack underflow")?;
-                let a = self.stack.pop().ok_or("stack underflow")?;
-
-                let a_str = self.value_to_string(&a)?;
-                let b_str = self.value_to_string(&b)?;
-
-                let result = format!("{}{}", a_str, b_str);
-                let r = self.heap.alloc_string(result)?;
-                self.stack.push(Value::Ref(r));
-            }
             Op::TypeOf => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let type_name = match &value {
@@ -1776,8 +1758,9 @@ mod tests {
 
     #[test]
     fn test_string_operations() {
+        // Test string concatenation using Op::Add
         let stack = run_code_with_strings(
-            vec![Op::PushString(0), Op::PushString(1), Op::StringConcat],
+            vec![Op::PushString(0), Op::PushString(1), Op::Add],
             vec!["Hello, ".to_string(), "World!".to_string()],
         )
         .unwrap();
