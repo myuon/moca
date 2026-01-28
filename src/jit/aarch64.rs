@@ -231,6 +231,16 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// LDUR Xt, [Xn, #simm9] (load 64-bit, unscaled signed offset)
+    pub fn ldur(&mut self, rt: Reg, rn: Reg, simm9: i16) {
+        // 1111 1000 010i iiii iiii 00nn nnnt tttt
+        let inst = 0xF8400000
+            | (((simm9 as u32) & 0x1FF) << 12)
+            | ((rn.code() as u32) << 5)
+            | (rt.code() as u32);
+        self.emit_raw(inst);
+    }
+
     /// STR Xt, [Xn, #imm12] (store 64-bit, unsigned offset)
     pub fn str(&mut self, rt: Reg, rn: Reg, imm12: u16) {
         // 1111 1001 00ii iiii iiii iinn nnnt tttt
@@ -323,7 +333,8 @@ impl<'a> AArch64Assembler<'a> {
 
     /// STP X1, X2, [SP, #imm]! (store pair with pre-index)
     pub fn stp_pre(&mut self, rt1: Reg, rt2: Reg, imm: i16) {
-        // 1010 1001 11ii iiii it2t 2tnn nnnt 1t1t1
+        // STP pre-index: opc=10, V=0, bits[25:24]=01, bit23=1 (pre-index), L=0 (store)
+        // Encoding: 10 101 0 01 1 0 imm7 Rt2 Rn Rt1 = 0xA9800000
         let scaled = ((imm / 8) as u32) & 0x7F;
         let inst = 0xA9800000
             | (scaled << 15)
@@ -335,7 +346,8 @@ impl<'a> AArch64Assembler<'a> {
 
     /// LDP X1, X2, [SP], #imm (load pair with post-index)
     pub fn ldp_post(&mut self, rt1: Reg, rt2: Reg, imm: i16) {
-        // 1010 1000 11ii iiii it2t 2tnn nnnt 1t1t1
+        // LDP post-index: opc=10, V=0, bits[25:24]=00, bit23=1 (post-index), L=1 (load)
+        // Encoding: 10 101 0 00 1 1 imm7 Rt2 Rn Rt1 = 0xA8C00000
         let scaled = ((imm / 8) as u32) & 0x7F;
         let inst = 0xA8C00000
             | (scaled << 15)

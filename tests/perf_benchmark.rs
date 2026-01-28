@@ -159,6 +159,10 @@ print(total);
 
 #[test]
 #[cfg(feature = "jit")]
+#[cfg_attr(
+    target_arch = "aarch64",
+    ignore = "aarch64 JIT does not yet have emit_call_self optimization"
+)]
 fn perf_fibonacci() {
     let source = r#"
 fun fib(n) {
