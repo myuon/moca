@@ -240,6 +240,8 @@ impl JitCompiler {
 
             Op::Ret => self.emit_ret(),
 
+            Op::Call(func_index, argc) => self.emit_call(*func_index, *argc),
+
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
         }
@@ -614,13 +616,146 @@ impl JitCompiler {
     }
 
     /// Return from function.
+    /// Emit a function call via jit_call_helper.
+    ///
+    /// This calls the runtime helper to execute the function.
+    /// Arguments are on the JIT value stack (VSTACK).
+    ///
+    /// AArch64 calling convention (AAPCS64):
+    ///   x0 = ctx (*mut JitCallContext)
+    ///   x1 = func_index (u64)
+    ///   x2 = argc (u64)
+    ///   x3 = args pointer (points to argc JitValues on our stack)
+    ///
+    /// The helper returns JitReturn in x0 (tag) and x1 (payload).
+    fn emit_call(&mut self, func_index: usize, argc: usize) -> Result<(), String> {
+        let args_offset = (argc as u16) * VALUE_SIZE;
+
+        // Save callee-saved registers that we use
+        // These might be clobbered when call_helper calls into other JIT functions
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // stp x19, x20, [sp, #-16]!  (VM_CTX, VSTACK)
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            // stp x21, x22, [sp, #-16]!  (LOCALS, CONSTS)
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Calculate args pointer: x3 = VSTACK - argc * VALUE_SIZE
+        // VSTACK points to the next free slot, args start before that
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            if args_offset > 0 {
+                asm.sub_imm(Reg::X3, regs::VSTACK, args_offset);
+            } else {
+                asm.mov(Reg::X3, regs::VSTACK);
+            }
+        }
+
+        // Set up arguments for jit_call_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = func_index
+        // x2 = argc
+        // x3 = args pointer (already set above)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        // Load func_index into x1
+        self.emit_load_imm64_to_reg(func_index as i64, Reg::X1);
+
+        // Load argc into x2
+        self.emit_load_imm64_to_reg(argc as i64, Reg::X2);
+
+        // Load the call_helper function pointer from JitCallContext.
+        // JitCallContext layout:
+        //   offset 0: vm (*mut u8)
+        //   offset 8: chunk (*const u8)
+        //   offset 16: call_helper (fn pointer)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 16); // x9 = ctx->call_helper
+        }
+
+        // Call the helper function
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers (in reverse order)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // ldp x21, x22, [sp], #16
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            // ldp x19, x20, [sp], #16
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Pop the arguments from JIT stack (they've been consumed)
+        // VSTACK is now restored to its original value (after the arguments)
+        if args_offset > 0 {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, args_offset);
+        }
+
+        // Push the return value onto the JIT stack
+        // Return value is in x0 (tag) and x1 (payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);  // store tag
+            asm.str(Reg::X1, regs::VSTACK, 8);  // store payload
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Update stack depth: -argc + 1 (pop args, push result)
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
+
+        Ok(())
+    }
+
+    /// Load a 64-bit immediate into a specific register.
+    fn emit_load_imm64_to_reg(&mut self, n: i64, rd: Reg) {
+        let u = n as u64;
+
+        // MOVZ for first 16 bits
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov_imm(rd, (u & 0xFFFF) as u16);
+        }
+
+        // MOVK for remaining bits if needed
+        if u > 0xFFFF {
+            // MOVK Xd, #imm16, LSL #16
+            let inst =
+                0xF2A00000 | ((((u >> 16) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
+            self.buf.emit_u32(inst);
+        }
+        if u > 0xFFFF_FFFF {
+            // MOVK Xd, #imm16, LSL #32
+            let inst =
+                0xF2C00000 | ((((u >> 32) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
+            self.buf.emit_u32(inst);
+        }
+        if u > 0xFFFF_FFFF_FFFF {
+            // MOVK Xd, #imm16, LSL #48
+            let inst =
+                0xF2E00000 | ((((u >> 48) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
+            self.buf.emit_u32(inst);
+        }
+    }
+
     fn emit_ret(&mut self) -> Result<(), String> {
         let mut asm = AArch64Assembler::new(&mut self.buf);
 
-        // Jump to epilogue (will be at end of function)
-        // We'll handle this specially - for now, inline the epilogue
+        // Pop return value from JIT stack into x0 (tag) and x1 (payload)
+        // Stack layout: [tag: 8 bytes][payload: 8 bytes]
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(Reg::X0, regs::VSTACK, 0);  // tag
+        asm.ldr(Reg::X1, regs::VSTACK, 8);  // payload
 
-        // Restore callee-saved registers
+        // Restore callee-saved registers and return
         asm.ldp_post(Reg::X21, Reg::X22, 16);
         asm.ldp_post(Reg::X19, Reg::X20, 16);
         asm.ldp_post(Reg::Fp, Reg::Lr, 16);

@@ -309,9 +309,13 @@ impl VM {
         func_index: usize,
         argc: usize,
         func: &Function,
-        _chunk: &Chunk, // Reserved for future Call instruction support
+        chunk: &Chunk,
     ) -> Result<Value, String> {
-        let compiled = self.jit_functions.get(&func_index).unwrap();
+        // Get the entry point first to avoid borrow conflicts
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn = {
+            let compiled = self.jit_functions.get(&func_index).unwrap();
+            unsafe { compiled.entry_point() }
+        };
 
         // Create JIT context with locals
         let locals_count = func.locals_count;
@@ -330,15 +334,22 @@ impl VM {
             ctx.set_local(i, JitValue::from_value(arg));
         }
 
-        // Get the function pointer
-        // Signature: fn(vm_ctx: *mut u8, vstack: *mut JitValue, locals: *mut JitValue) -> JitReturn
-        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
-            unsafe { compiled.entry_point() };
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+        };
 
         // Execute the JIT code
-        // SAFETY: The compiled code follows AArch64 calling convention.
-        // vm_ctx is null (not used currently), stack and locals are valid pointers.
-        let result: JitReturn = unsafe { entry(std::ptr::null_mut(), ctx.stack, ctx.locals) };
+        // Pass call context, stack and locals pointers
+        let result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
 
         if self.trace_jit {
             eprintln!(
@@ -1233,10 +1244,10 @@ impl VM {
     }
 }
 
-/// JIT call helper function for x86-64.
+/// JIT call helper function.
 /// This is called from JIT code when executing a Call instruction.
 /// It executes the target function via the VM and returns the result.
-#[cfg(all(target_arch = "x86_64", feature = "jit"))]
+#[cfg(feature = "jit")]
 unsafe extern "C" fn jit_call_helper(
     ctx: *mut JitCallContext,
     func_index: u64,
