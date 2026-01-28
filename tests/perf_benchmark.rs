@@ -85,7 +85,7 @@ fun sum_to(n) {
     return total;
 }
 
-print(sum_to(10000));
+print(sum_to(1000000));
 "#;
     assert_optimization_effect("sum_loop", source);
 }
@@ -108,7 +108,7 @@ fun nested(n) {
     return count;
 }
 
-print(nested(100));
+print(nested(500));
 "#;
     assert_optimization_effect("nested_loop", source);
 }
@@ -129,7 +129,7 @@ fun do_work(n) {
 
 var total = 0;
 var j = 0;
-while j < 1000 {
+while j < 10000 {
     total = total + do_work(100);
     j = j + 1;
 }
@@ -149,7 +149,7 @@ fun fib(n) {
     return fib(n - 1) + fib(n - 2);
 }
 
-print(fib(25));
+print(fib(30));
 "#;
     assert_optimization_effect("fibonacci", source);
 }
@@ -175,7 +175,7 @@ fun array_sum(n) {
     return sum;
 }
 
-print(array_sum(1000));
+print(array_sum(100000));
 "#;
     assert_optimization_effect("array_operations", source);
 }
