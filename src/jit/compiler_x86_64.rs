@@ -99,6 +99,14 @@ impl JitCompiler {
 
     /// Compile a function to native code.
     pub fn compile(mut self, func: &Function) -> Result<CompiledCode, String> {
+        // Check if function contains Call instructions - skip JIT for now
+        // TODO: Fix Call instruction handling for recursive functions
+        for op in &func.code {
+            if matches!(op, Op::Call(_, _)) {
+                return Err("Functions with Call instructions not yet supported in JIT".to_string());
+            }
+        }
+
         // Emit prologue
         self.emit_prologue(func);
 
@@ -217,6 +225,8 @@ impl JitCompiler {
             Op::JmpIfTrue(target) => self.emit_jmp_if_true(*target),
 
             Op::Ret => self.emit_ret(),
+
+            Op::Call(func_index, argc) => self.emit_call(*func_index, *argc),
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -567,6 +577,78 @@ impl JitCompiler {
         asm.pop(Reg::Rbx);
         asm.pop(Reg::Rbp);
         asm.ret();
+
+        Ok(())
+    }
+
+    /// Emit a function call.
+    /// This calls the runtime helper to execute the function via VM.
+    ///
+    /// Call convention for runtime helper (System V AMD64):
+    ///   RDI = ctx (*mut JitCallContext, from VM_CTX register)
+    ///   RSI = func_index
+    ///   RDX = argc
+    ///   RCX = args pointer (points to argc JitValues on our stack)
+    ///
+    /// The helper returns JitReturn in RAX (tag) and RDX (payload).
+    fn emit_call(&mut self, func_index: usize, argc: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Arguments are already on the JIT value stack (VSTACK).
+        // We need to compute the pointer to the first argument.
+        // VSTACK points to the next free slot, so args start at VSTACK - argc * VALUE_SIZE
+
+        let args_offset = (argc as i32) * VALUE_SIZE;
+
+        // Calculate args pointer: RCX = VSTACK - argc * VALUE_SIZE
+        asm.mov_rr(Reg::Rcx, regs::VSTACK);
+        asm.sub_ri32(Reg::Rcx, args_offset);
+
+        // Set up arguments for call_helper:
+        // RDI = ctx (VM_CTX register, which is R12)
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+
+        // RSI = func_index
+        asm.mov_ri64(Reg::Rsi, func_index as i64);
+
+        // RDX = argc
+        asm.mov_ri64(Reg::Rdx, argc as i64);
+
+        // RCX = args pointer (already set above)
+
+        // Load the call_helper function pointer from JitCallContext.
+        // JitCallContext layout:
+        //   offset 0: vm (*mut u8)
+        //   offset 8: chunk (*const u8)
+        //   offset 16: call_helper (fn pointer)
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 16); // R8 = ctx->call_helper
+
+        // Save VM_CTX (R12) since the called function may use it
+        asm.push(regs::VM_CTX);
+
+        // Align stack to 16 bytes if needed (we pushed 1 register = 8 bytes)
+        // For proper alignment, push another register
+        asm.push(regs::LOCALS);
+
+        // Call the helper function
+        asm.call_r(regs::TMP4);
+
+        // Restore saved registers
+        asm.pop(regs::LOCALS);
+        asm.pop(regs::VM_CTX);
+
+        // Pop the arguments from JIT stack (they've been consumed)
+        // VSTACK still points to after the arguments, so subtract to remove them
+        asm.sub_ri32(regs::VSTACK, args_offset);
+
+        // Push the return value onto the JIT stack
+        // Return value is in RAX (tag) and RDX (payload)
+        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);  // store tag
+        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);  // store payload
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        // Update stack depth: -argc + 1 (pop args, push result)
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
 
         Ok(())
     }

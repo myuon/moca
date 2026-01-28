@@ -10,7 +10,7 @@ use crate::jit::compiler::{CompiledCode, JitCompiler};
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
 use crate::jit::compiler_x86_64::{CompiledCode, JitCompiler};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
-use crate::jit::marshal::{JitContext, JitReturn, JitValue};
+use crate::jit::marshal::{JitCallContext, JitContext, JitReturn, JitValue};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -246,8 +246,13 @@ impl VM {
         func_index: usize,
         argc: usize,
         func: &Function,
+        chunk: &Chunk,
     ) -> Result<Value, String> {
-        let compiled = self.jit_functions.get(&func_index).unwrap();
+        // Get the entry point first to avoid borrow conflicts
+        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn = {
+            let compiled = self.jit_functions.get(&func_index).unwrap();
+            unsafe { compiled.entry_point() }
+        };
 
         // Create JIT context with locals
         let locals_count = func.locals_count;
@@ -266,14 +271,22 @@ impl VM {
             ctx.set_local(i, JitValue::from_value(arg));
         }
 
-        // Get the function pointer
-        // Signature: fn(vm_ctx: *mut u8, vstack: *mut JitValue, locals: *mut JitValue) -> JitReturn
-        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
-            unsafe { compiled.entry_point() };
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+        };
 
         // Execute the JIT code
-        // Pass null for vm_ctx (not used currently), stack and locals pointers
-        let result: JitReturn = unsafe { entry(std::ptr::null_mut(), ctx.stack, ctx.locals) };
+        // Pass call context, stack and locals pointers
+        let result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
 
         if self.trace_jit {
             eprintln!(
@@ -296,6 +309,7 @@ impl VM {
         func_index: usize,
         argc: usize,
         func: &Function,
+        _chunk: &Chunk, // Reserved for future Call instruction support
     ) -> Result<Value, String> {
         let compiled = self.jit_functions.get(&func_index).unwrap();
 
@@ -343,6 +357,9 @@ impl VM {
     }
 
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), String> {
+        // Initialize call counts for JIT
+        self.init_call_counts(chunk);
+
         // Start with main
         self.frames.push(Frame {
             func_index: usize::MAX, // Marker for main
@@ -611,6 +628,38 @@ impl VM {
                     ));
                 }
 
+                // Check if we should JIT compile this function
+                #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                {
+                    if self.should_jit_compile(func_index, &func.name) {
+                        self.jit_compile_function(func, func_index);
+                    }
+
+                    // If JIT compiled, execute via JIT
+                    if self.is_jit_compiled(func_index) {
+                        let result =
+                            self.execute_jit_function(func_index, argc, func, chunk)?;
+                        self.stack.push(result);
+                        return Ok(ControlFlow::Continue);
+                    }
+                }
+
+                #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                {
+                    if self.should_jit_compile(func_index, &func.name) {
+                        self.jit_compile_function(func, func_index);
+                    }
+
+                    // If JIT compiled, execute via JIT
+                    if self.is_jit_compiled(func_index) {
+                        let result =
+                            self.execute_jit_function(func_index, argc, func, chunk)?;
+                        self.stack.push(result);
+                        return Ok(ControlFlow::Continue);
+                    }
+                }
+
+                // Fall back to interpreter
                 let new_stack_base = self.stack.len() - argc;
 
                 self.frames.push(Frame {
@@ -1181,6 +1230,114 @@ impl VM {
         // Collect all roots from the stack
         let roots: Vec<Value> = self.stack.clone();
         self.heap.collect(&roots);
+    }
+}
+
+/// JIT call helper function for x86-64.
+/// This is called from JIT code when executing a Call instruction.
+/// It executes the target function via the VM and returns the result.
+#[cfg(all(target_arch = "x86_64", feature = "jit"))]
+unsafe extern "C" fn jit_call_helper(
+    ctx: *mut JitCallContext,
+    func_index: u64,
+    argc: u64,
+    args: *const JitValue,
+) -> JitReturn {
+    // SAFETY: ctx, vm, and chunk pointers are valid for the duration of this call
+    // as they are set up by execute_jit_function before calling JIT code.
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+    let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
+
+    let func_index = func_index as usize;
+    let argc = argc as usize;
+
+    let func = &chunk.functions[func_index];
+
+    // Check arity
+    if argc != func.arity {
+        // Return nil on error (could improve error handling)
+        return JitReturn { tag: 3, payload: 0 }; // TAG_NIL
+    }
+
+    // Push arguments to VM stack
+    for i in 0..argc {
+        let jit_val = unsafe { *args.add(i) };
+        vm.stack.push(jit_val.to_value());
+    }
+
+    // Check if target function is JIT compiled
+    if vm.is_jit_compiled(func_index) {
+        // Execute via JIT
+        match vm.execute_jit_function(func_index, argc, func, chunk) {
+            Ok(result) => {
+                let jit_result = JitValue::from_value(&result);
+                JitReturn {
+                    tag: jit_result.tag,
+                    payload: jit_result.payload,
+                }
+            }
+            Err(_) => JitReturn { tag: 3, payload: 0 }, // TAG_NIL on error
+        }
+    } else {
+        // Execute via interpreter: push frame and run until return
+        let new_stack_base = vm.stack.len() - argc;
+        vm.frames.push(Frame {
+            func_index,
+            pc: 0,
+            stack_base: new_stack_base,
+        });
+
+        // Run until the function returns
+        loop {
+            let frame = match vm.frames.last_mut() {
+                Some(f) => f,
+                None => break,
+            };
+
+            // Check if we've returned from the called function
+            if frame.func_index != func_index && frame.func_index != usize::MAX {
+                // We're in a different function, keep executing
+            }
+
+            let current_func = if frame.func_index == usize::MAX {
+                &chunk.main
+            } else {
+                &chunk.functions[frame.func_index]
+            };
+
+            if frame.pc >= current_func.code.len() {
+                // End of function
+                break;
+            }
+
+            let op = current_func.code[frame.pc].clone();
+            frame.pc += 1;
+
+            match vm.execute_op(op, chunk) {
+                Ok(ControlFlow::Continue) => {}
+                Ok(ControlFlow::Return) => {
+                    // Check if we returned from our target function
+                    if vm.frames.is_empty()
+                        || vm.frames.last().map(|f| f.func_index) != Some(func_index)
+                    {
+                        break;
+                    }
+                }
+                Ok(ControlFlow::Exit) => break,
+                Err(_) => {
+                    return JitReturn { tag: 3, payload: 0 }; // TAG_NIL on error
+                }
+            }
+        }
+
+        // Get return value from stack
+        let result = vm.stack.pop().unwrap_or(Value::Null);
+        let jit_result = JitValue::from_value(&result);
+        JitReturn {
+            tag: jit_result.tag,
+            payload: jit_result.payload,
+        }
     }
 }
 
