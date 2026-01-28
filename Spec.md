@@ -1,79 +1,77 @@
 # Spec.md
 
 ## 1. Goal
-- 標準ライブラリ（文字列操作・数学関数）をMocaで実装し、`run`時に自動で読み込まれるようにする
-- 文字列インデックスアクセス（`s[0]`）を言語機能として追加し、`str_contains`の実装を可能にする
+- VMから不要な動的最適化機構（Quickening, Inline Cache）を削除し、静的型付け言語として適切なシンプルな構造にする
 
 ## 2. Non-Goals
-- ファイルI/O、ネットワーク機能
-- 名前空間付きインポート（`std.math.abs`形式）
-- 大規模な標準ライブラリ
-- 負のインデックス（`s[-1]`）
-- スライス（`s[0:3]`）
-- byte型の導入（将来検討）
+- JIT機能の変更・削除（維持する）
+- パフォーマンス改善（今回は対象外）
+- コンパイラによる型特殊化命令の生成（将来課題）
+- 新機能の追加
 
 ## 3. Target Users
-- Mocaユーザーが基本的な文字列操作・数学関数を追加importなしで使えるようにする
+- mocaコンパイラ/VMの開発者
+- コードベースを理解しようとする貢献者
 
 ## 4. Core User Flow
-1. ユーザーが `moca run example.mc` を実行
-2. コンパイラが自動的に標準ライブラリを読み込む
-3. ユーザーコード内で `abs(-5)` や `str_len("hello")` などがそのまま使える
-4. 文字列に対して `s[0]` でバイト値（int）を取得できる
-5. 特別なimport文は不要
+1. 開発者がVMコードを読む
+2. 不要な動的最適化コードがなく、シンプルに理解できる
+3. `cargo test` で全テストがパスする
+4. 既存のmocaプログラムが正常に動作する
 
 ## 5. Inputs & Outputs
-- **入力**: ユーザーのMocaソースコード
-- **出力**: 標準ライブラリ関数が利用可能な状態で実行
+- **入力**: 現在のVMコード（quickening, inline cache, 特殊化命令を含む）
+- **出力**: クリーンアップされたVMコード（上記を削除済み）
 
 ## 6. Tech Stack
-- 言語: Moca（標準ライブラリ本体）、Rust（コンパイラ/VM修正）
-- 埋め込み: `include_str!` マクロでビルド時にバイナリに含める
-- テスト: 既存のスナップショットテスト + Mocaサンプルコード
+- 言語: Rust
+- テスト: cargo test + insta (snapshot tests)
 
 ## 7. Rules & Constraints
-- 標準ライブラリはすべてMocaで記述する
-- 関数はグローバル名前空間に配置（`import`不要）
-- ビルド時に `std/` のソースを埋め込む（単一バイナリ配布可能）
-- 既存の組み込み関数（print, len, push, pop等）との名前衝突を避ける
-- 文字列インデックスアクセス:
-  - 戻り値は `int`（バイト値、0-255）
-  - 範囲外アクセスはランタイムエラー（例外throw）
-  - 負のインデックスは非サポート
+- JIT機能は一切変更しない
+- 既存の全テスト（unit, snapshot）をパスさせる
+- 既存のmocaプログラムの動作を維持する
+- 削除対象:
+  - Quickening関連コード（`run_with_quickening`, `execute_op_quickening`, `quicken_instruction`）
+  - Inline Cache関連コード（`ic.rs`, `ic_tables`, `main_ic`）
+  - 型特殊化命令（`AddI64`, `SubI64`, `MulI64`, `DivI64`, `AddF64`, `SubF64`, `MulF64`, `DivF64`）
+  - 比較特殊化命令（`LtI64`, `LeI64`, `GtI64`, `GeI64`, `LtF64`）
+  - Cached命令（`GetFCached`, `SetFCached`）
+  - `ArrayGetInt`（Quickening用の特殊化命令）
 
 ## 8. Open Questions
 - なし
 
 ## 9. Acceptance Criteria
-1. `std/prelude.mc` が存在し、標準ライブラリ関数が定義されている
-2. `moca run` 実行時に標準ライブラリが自動で読み込まれる
-3. ユーザーコードから `abs(-5)` を呼び出して `5` が返る
-4. ユーザーコードから `max(3, 7)` を呼び出して `7` が返る
-5. ユーザーコードから `min(3, 7)` を呼び出して `3` が返る
-6. 文字列に対して `"hello"[0]` で `104`（'h'のASCII値）が返る
-7. 文字列の範囲外アクセス `"hi"[10]` でランタイムエラーが発生する
-8. ユーザーコードから `str_len("hello")` を呼び出して `5` が返る
-9. ユーザーコードから `str_contains("hello", "ell")` を呼び出して `true` が返る
-10. 既存のテストが引き続きパスする
+1. `cargo test` が全てパスする
+2. `src/vm/ic.rs` が削除されている
+3. `Op::AddI64`, `Op::SubI64` 等の型特殊化命令が `ops.rs` から削除されている
+4. `Op::GetFCached`, `Op::SetFCached` が削除されている
+5. `VM::run_with_quickening` メソッドが削除されている
+6. `VM` 構造体から `ic_tables`, `main_ic` フィールドが削除されている
+7. コンパイラが `VM::run` を直接呼び出すようになっている（quickeningモード分岐なし）
+8. JIT関連コード（`should_jit_compile`, `jit_threshold`, `call_counts`等）が維持されている
+9. 既存のスナップショットテストが全てパスする
+10. `#![allow(dead_code)]` の不要な箇所が削除されている
 
 ## 10. Verification Strategy
-- **進捗検証**: 各機能実装後に `moca run` でサンプルコードを実行し動作確認
-- **達成検証**: 全Acceptance Criteriaをチェックリストで確認、`cargo test` が全てパス
-- **漏れ検出**: 標準ライブラリの各関数に対応するテストケースが存在することを確認
+- **進捗検証**: 各削除作業後に `cargo test` を実行し、テストがパスすることを確認
+- **達成検証**: 全Acceptance Criteriaをチェックリストで確認
+- **漏れ検出**: `grep -r "quicken\|inline_cache\|AddI64\|GetFCached"` で残存コードがないことを確認
 
 ## 11. Test Plan
 
-### E2E シナリオ 1: 文字列インデックスアクセス
-- **Given**: 文字列インデックスアクセスが実装されたコンパイラ
-- **When**: `print("hello"[0]); print("hello"[4]);` を含むMocaファイルを実行
-- **Then**: `104`（'h'）, `111`（'o'）が順に出力される
+### Scenario 1: 基本的な算術演算
+- **Given**: 整数・浮動小数点の四則演算を含むmocaプログラム
+- **When**: コンパイル・実行する
+- **Then**: 正しい計算結果が得られる（既存スナップショットテストで検証）
 
-### E2E シナリオ 2: 数学関数と文字列関数の利用
-- **Given**: 標準ライブラリが埋め込まれたコンパイラ
-- **When**: `print(abs(-10)); print(str_len("hello")); print(str_contains("hello", "ell"));` を実行
-- **Then**: `10`, `5`, `true` が順に出力される
+### Scenario 2: オブジェクトプロパティアクセス
+- **Given**: オブジェクトのフィールドアクセスを含むmocaプログラム
+- **When**: コンパイル・実行する
+- **Then**: 正しくプロパティが取得・設定できる
 
-### E2E シナリオ 3: 既存機能との共存
-- **Given**: 標準ライブラリが埋め込まれたコンパイラ
-- **When**: 既存のexamplesディレクトリのサンプルを実行
-- **Then**: 既存の動作が変わらない（回帰なし）
+### Scenario 3: JIT機能の維持確認
+- **Given**: JitMode::On でホット関数を含むプログラム
+- **When**: 実行する
+- **Then**: JITコンパイルが発動する（trace_jit有効時にログ出力）
