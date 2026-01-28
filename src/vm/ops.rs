@@ -78,10 +78,10 @@ pub enum Op {
     // ========================================
     AllocArray(usize), // Allocate array with n elements from stack
     ArrayLen,
-    ArrayGet,   // stack: [array, index] -> [value]
-    ArraySet,   // stack: [array, index, value] -> []
-    ArrayPush,  // stack: [array, value] -> []
-    ArrayPop,   // stack: [array] -> [value]
+    ArrayGet,  // stack: [array, index] -> [value]
+    ArraySet,  // stack: [array, index, value] -> []
+    ArrayPush, // stack: [array, value] -> []
+    ArrayPop,  // stack: [array] -> [value]
 
     // ========================================
     // Type operations

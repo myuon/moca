@@ -373,7 +373,9 @@ mod tests {
     #[test]
     fn test_alloc_array() {
         let mut heap = Heap::new();
-        let r = heap.alloc_array(vec![Value::I64(1), Value::I64(2), Value::I64(3)]).unwrap();
+        let r = heap
+            .alloc_array(vec![Value::I64(1), Value::I64(2), Value::I64(3)])
+            .unwrap();
         let obj = heap.get(r).unwrap();
         assert_eq!(obj.as_array().unwrap().elements.len(), 3);
     }

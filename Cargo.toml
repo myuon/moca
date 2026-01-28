@@ -18,12 +18,7 @@ ratatui = "0.28"
 crossterm = "0.28"
 libc = "0.2"
 
-[[bench]]
-name = "vm_benchmark"
-harness = false
-
 [dev-dependencies]
-criterion = "0.5"
 
 [build-dependencies]
 cbindgen = "0.28"
