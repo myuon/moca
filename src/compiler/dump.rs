@@ -1389,9 +1389,7 @@ impl<'a> Disassembler<'a> {
             Op::VectorPop => self.output.push_str("VectorPop"),
 
             // Syscall operations
-            Op::Syscall(num, argc) => {
-                self.output.push_str(&format!("Syscall {} {}", num, argc))
-            }
+            Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
         }
     }
 }

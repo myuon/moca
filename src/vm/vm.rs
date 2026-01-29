@@ -92,7 +92,12 @@ impl VM {
     /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
     /// * `gc_enabled` - Whether GC is enabled
     pub fn new_with_heap_config(heap_limit: Option<usize>, gc_enabled: bool) -> Self {
-        Self::new_with_config(heap_limit, gc_enabled, Box::new(io::stdout()), Box::new(io::stderr()))
+        Self::new_with_config(
+            heap_limit,
+            gc_enabled,
+            Box::new(io::stdout()),
+            Box::new(io::stderr()),
+        )
     }
 
     /// Create a new VM with full configuration.

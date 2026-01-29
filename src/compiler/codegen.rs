@@ -597,10 +597,8 @@ impl Codegen {
                     "syscall_write" => {
                         // syscall_write(fd, buf, count) -> bytes_written
                         if args.len() != 3 {
-                            return Err(
-                                "syscall_write takes exactly 3 arguments (fd, buf, count)"
-                                    .to_string(),
-                            );
+                            return Err("syscall_write takes exactly 3 arguments (fd, buf, count)"
+                                .to_string());
                         }
                         // Push arguments in order: fd, buf, count
                         self.compile_expr(&args[0], ops)?;
