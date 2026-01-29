@@ -133,6 +133,27 @@ moca add https://github.com/user/moca-utils@v1.0.0
 moca fmt src/
 ```
 
+### Run Tests
+
+```bash
+# Run all tests in the project
+moca test
+
+# Run tests in a specific directory
+moca test src/tests/
+```
+
+Test output format:
+```
+✓ _test_add passed
+✓ _test_sub passed
+✗ _test_divide failed: runtime error: division by zero
+
+2 passed, 1 failed
+```
+
+Exit code is `0` if all tests pass, `1` if any test fails.
+
 ### Dump Compiler IR
 
 ```bash

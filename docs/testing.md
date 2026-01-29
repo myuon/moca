@@ -1,11 +1,97 @@
 ---
-title: Snapshot Testing
-description: スナップショットテストの仕様。.mc ファイルと期待出力を外部ファイルで管理するテストインフラストラクチャ。
+title: Testing
+description: moca のテスト機能。ユーザーコード用のテストフレームワークと、コンパイラ開発用のスナップショットテスト。
 ---
 
-# Snapshot Testing
+# Testing
 
-moca のスナップショットテストは、`.mc`ファイルとその期待出力を外部ファイルで管理する仕組みです。
+moca には2種類のテスト機能があります：
+
+1. **moca test**: ユーザーコード用のテストフレームワーク
+2. **Snapshot Testing**: コンパイラ開発用のテストインフラ
+
+---
+
+## moca test
+
+`moca test` コマンドでプロジェクト内のテスト関数を自動検出・実行できます。
+
+### テスト関数の書き方
+
+`_test_` プレフィックスを持つ引数なし・戻り値なしの関数がテスト対象になります。
+
+```moca
+fun add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fun _test_add() {
+    assert_eq(add(1, 2), 3, "1 + 2 should be 3");
+    assert_eq(add(0, 0), 0, "0 + 0 should be 0");
+}
+
+fun _test_add_negative() {
+    assert_eq(add(-1, -2), -3, "-1 + -2 should be -3");
+}
+```
+
+### アサーション関数
+
+標準ライブラリ（std/prelude.mc）で提供されるアサーション関数：
+
+| 関数 | 説明 |
+|------|------|
+| `assert(condition, msg)` | 条件が false なら msg でエラーを throw |
+| `assert_eq(actual, expected, msg)` | int 値が等しくなければエラーを throw |
+| `assert_eq_str(actual, expected, msg)` | string 値が等しくなければエラーを throw |
+| `assert_eq_bool(actual, expected, msg)` | bool 値が等しくなければエラーを throw |
+
+失敗時のエラーメッセージには expected/actual の値が含まれます：
+```
+runtime error: values should match (expected: 3, actual: 2)
+```
+
+### テストの実行
+
+```bash
+# プロジェクトの src/ 配下を検索して実行
+moca test
+
+# 特定のディレクトリを指定
+moca test src/math/
+```
+
+### 出力形式
+
+```
+✓ _test_add passed
+✓ _test_add_negative passed
+✗ _test_divide_by_zero failed: runtime error: division by zero
+
+2 passed, 1 failed
+```
+
+- 全テスト成功: 終了コード `0`
+- 1つでも失敗: 終了コード `1`
+- 1つ失敗しても残りのテストは継続実行
+
+### Compiler API
+
+Rust から直接テストを実行する API も提供されています：
+
+```rust
+use moca::compiler::{run_tests, TestResults};
+use moca::config::RuntimeConfig;
+
+let results: TestResults = run_tests(&path, &RuntimeConfig::default())?;
+println!("{} passed, {} failed", results.passed, results.failed);
+```
+
+---
+
+## Snapshot Testing
+
+moca コンパイラ開発用のスナップショットテストは、`.mc`ファイルとその期待出力を外部ファイルで管理する仕組みです。
 
 ## ディレクトリ構造
 
