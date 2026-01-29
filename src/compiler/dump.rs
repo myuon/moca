@@ -1283,11 +1283,8 @@ impl<'a> Disassembler<'a> {
             }
             Op::Ret => self.output.push_str("Ret"),
 
-            // Array operations
-            Op::AllocArray(n) => self.output.push_str(&format!("AllocArray {}", n)),
+            // Array operations (legacy)
             Op::ArrayLen => self.output.push_str("ArrayLen"),
-            Op::ArrayGet => self.output.push_str("ArrayGet"),
-            Op::ArraySet => self.output.push_str("ArraySet"),
             Op::ArrayPush => self.output.push_str("ArrayPush"),
             Op::ArrayPop => self.output.push_str("ArrayPop"),
 

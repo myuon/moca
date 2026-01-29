@@ -74,14 +74,11 @@ pub enum Op {
     SetF(usize), // SETF: Set field with write barrier
 
     // ========================================
-    // Array operations
+    // Array operations (legacy, kept for compatibility)
     // ========================================
-    AllocArray(usize), // Allocate array with n elements from stack
-    ArrayLen,
-    ArrayGet,  // stack: [array, index] -> [value]
-    ArraySet,  // stack: [array, index, value] -> []
-    ArrayPush, // stack: [array, value] -> []
-    ArrayPop,  // stack: [array] -> [value]
+    ArrayLen,          // Works on both Array and Slots types
+    ArrayPush,         // stack: [array, value] -> []
+    ArrayPop,          // stack: [array] -> [value]
 
     // ========================================
     // Heap slot operations (low-level array support)

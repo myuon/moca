@@ -696,15 +696,6 @@ impl VM {
 
                 return Ok(ControlFlow::Return);
             }
-            Op::AllocArray(n) => {
-                let mut elements = Vec::with_capacity(n);
-                for _ in 0..n {
-                    elements.push(self.stack.pop().ok_or("stack underflow")?);
-                }
-                elements.reverse();
-                let r = self.heap.alloc_array(elements)?;
-                self.stack.push(Value::Ref(r));
-            }
             Op::ArrayLen => {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val
@@ -725,61 +716,6 @@ impl VM {
                     return Err("runtime error: len expects array or string".to_string());
                 };
                 self.stack.push(Value::I64(len));
-            }
-            Op::ArrayGet => {
-                let index = self.pop_int()?;
-                let val = self.stack.pop().ok_or("stack underflow")?;
-                let r = val
-                    .as_ref()
-                    .ok_or("runtime error: expected array or string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-
-                if let Some(arr) = obj.as_array() {
-                    if index < 0 || index as usize >= arr.elements.len() {
-                        return Err(format!(
-                            "runtime error: array index {} out of bounds (length {})",
-                            index,
-                            arr.elements.len()
-                        ));
-                    }
-                    let value = arr.elements[index as usize];
-                    self.stack.push(value);
-                } else if let Some(s) = obj.as_string() {
-                    let bytes = s.value.as_bytes();
-                    if index < 0 || index as usize >= bytes.len() {
-                        return Err(format!(
-                            "runtime error: string index {} out of bounds (length {})",
-                            index,
-                            bytes.len()
-                        ));
-                    }
-                    let byte_value = bytes[index as usize] as i64;
-                    self.stack.push(Value::I64(byte_value));
-                } else {
-                    return Err("runtime error: expected array or string".to_string());
-                }
-            }
-            Op::ArraySet => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let index = self.pop_int()?;
-                let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ref().ok_or("runtime error: expected array")?;
-
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-                let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
-
-                if index < 0 || index as usize >= arr.elements.len() {
-                    return Err(format!(
-                        "runtime error: array index {} out of bounds (length {})",
-                        index,
-                        arr.elements.len()
-                    ));
-                }
-
-                arr.elements[index as usize] = value;
             }
             Op::ArrayPush => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -1610,11 +1546,13 @@ mod tests {
 
     #[test]
     fn test_array_operations() {
+        // AllocHeap takes slots from stack: [len, e1, e2, e3] -> creates Slots object
         let stack = run_code(vec![
-            Op::PushInt(1),
-            Op::PushInt(2),
-            Op::PushInt(3),
-            Op::AllocArray(3),
+            Op::PushInt(3),  // length
+            Op::PushInt(1),  // element 0
+            Op::PushInt(2),  // element 1
+            Op::PushInt(3),  // element 2
+            Op::AllocHeap(4), // 1 len + 3 elements
             Op::ArrayLen,
         ])
         .unwrap();
@@ -1645,13 +1583,15 @@ mod tests {
         // 2. Overwrites local 0 with a new array (triggers write barrier)
         // 3. Verifies execution completes successfully
         let result = run_code(vec![
-            // Allocate array and store in local 0
-            Op::PushInt(1),
-            Op::AllocArray(1),
+            // Allocate array [len=1, elem] and store in local 0
+            Op::PushInt(1),  // length
+            Op::PushInt(1),  // element
+            Op::AllocHeap(2),
             Op::SetL(0),
-            // Allocate another array
-            Op::PushInt(2),
-            Op::AllocArray(1),
+            // Allocate another array [len=1, elem]
+            Op::PushInt(1),  // length
+            Op::PushInt(2),  // element
+            Op::AllocHeap(2),
             // Overwrite local 0 (triggers write barrier, old value was array ref)
             Op::SetL(0),
             // Get local 0 to verify it's still a valid reference

@@ -266,10 +266,8 @@ const OP_RET: u8 = 40;
 const OP_NEW: u8 = 41;
 const OP_GET_F: u8 = 42;
 const OP_SET_F: u8 = 43;
-const OP_ALLOC_ARRAY: u8 = 46;
+// Legacy opcodes 46, 48, 49 removed (AllocArray, ArrayGet, ArraySet)
 const OP_ARRAY_LEN: u8 = 47;
-const OP_ARRAY_GET: u8 = 48;
-const OP_ARRAY_SET: u8 = 49;
 const OP_ARRAY_PUSH: u8 = 50;
 const OP_ARRAY_POP: u8 = 51;
 const OP_TYPE_OF: u8 = 55;
@@ -361,13 +359,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_SET_F])?;
             write_u32(w, *idx as u32)?;
         }
-        Op::AllocArray(size) => {
-            w.write_all(&[OP_ALLOC_ARRAY])?;
-            write_u32(w, *size as u32)?;
-        }
         Op::ArrayLen => w.write_all(&[OP_ARRAY_LEN])?,
-        Op::ArrayGet => w.write_all(&[OP_ARRAY_GET])?,
-        Op::ArraySet => w.write_all(&[OP_ARRAY_SET])?,
         Op::ArrayPush => w.write_all(&[OP_ARRAY_PUSH])?,
         Op::ArrayPop => w.write_all(&[OP_ARRAY_POP])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
@@ -448,10 +440,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_NEW => Op::New(read_u32(r)? as usize),
         OP_GET_F => Op::GetF(read_u32(r)? as usize),
         OP_SET_F => Op::SetF(read_u32(r)? as usize),
-        OP_ALLOC_ARRAY => Op::AllocArray(read_u32(r)? as usize),
         OP_ARRAY_LEN => Op::ArrayLen,
-        OP_ARRAY_GET => Op::ArrayGet,
-        OP_ARRAY_SET => Op::ArraySet,
         OP_ARRAY_PUSH => Op::ArrayPush,
         OP_ARRAY_POP => Op::ArrayPop,
         OP_TYPE_OF => Op::TypeOf,
@@ -719,10 +708,7 @@ mod tests {
             Op::New(10),
             Op::GetF(1),
             Op::SetF(2),
-            Op::AllocArray(7),
             Op::ArrayLen,
-            Op::ArrayGet,
-            Op::ArraySet,
             Op::ArrayPush,
             Op::ArrayPop,
             Op::TypeOf,

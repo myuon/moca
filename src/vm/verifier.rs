@@ -398,11 +398,8 @@ impl Verifier {
             Op::GetF(_) => (1, 1),     // pops object, pushes field value
             Op::SetF(_) => (2, 0),     // pops object and value
 
-            // Array operations
-            Op::AllocArray(n) => (*n, 1), // pops n elements, pushes array
+            // Array operations (legacy, kept for compatibility)
             Op::ArrayLen => (1, 1),
-            Op::ArrayGet => (2, 1),  // pops array and index, pushes value
-            Op::ArraySet => (3, 0),  // pops array, index, value
             Op::ArrayPush => (2, 0), // pops array and value
             Op::ArrayPop => (1, 1),  // pops array, pushes value
 
