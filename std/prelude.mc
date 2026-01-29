@@ -2,35 +2,19 @@
 // This file is automatically loaded when running Moca programs.
 
 // ============================================================================
-// I/O Functions
+// I/O Functions (using syscall_write)
 // ============================================================================
 
-// Print any value to stdout with a newline.
-// Uses syscall_write internally.
-fun print(x) {
-    let s = to_string(x);
-    let n = len(s);
-    syscall_write(1, s, n);
-    syscall_write(1, "\n", 1);
-}
-
-// Alias for print
-fun println(x) {
-    print(x);
-}
-
-// Print a value to stdout without a newline.
+// Print a string to stdout without a newline.
 fun print_str(s: string) {
     let n = len(s);
     syscall_write(1, s, n);
 }
 
-// Print to stderr with a newline.
-fun eprintln(x) {
-    let s = to_string(x);
+// Print a string to stderr without a newline.
+fun eprint_str(s: string) {
     let n = len(s);
     syscall_write(2, s, n);
-    syscall_write(2, "\n", 1);
 }
 
 // ============================================================================

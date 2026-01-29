@@ -559,9 +559,9 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args } => {
                 match name.as_str() {
-                    "print_debug" => {
+                    "print" | "print_debug" => {
                         if args.len() != 1 {
-                            return Err("print_debug takes exactly 1 argument".to_string());
+                            return Err("print/print_debug takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::PrintDebug);

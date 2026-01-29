@@ -187,6 +187,7 @@ impl<'a> Resolver<'a> {
             filename,
             functions: HashMap::new(),
             builtins: vec![
+                "print".to_string(),
                 "print_debug".to_string(),
                 "len".to_string(),
                 "push".to_string(),
