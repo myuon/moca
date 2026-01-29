@@ -71,18 +71,12 @@ fun str_contains(haystack: string, needle: string) -> bool {
 
 // Check if a byte is a whitespace character (space, tab, newline, carriage return)
 fun _is_whitespace(c: int) -> bool {
-    if c == 32 { return true; }
-    if c == 9 { return true; }
-    if c == 10 { return true; }
-    if c == 13 { return true; }
-    return false;
+    return c == 32 || c == 9 || c == 10 || c == 13;
 }
 
 // Check if a byte is a digit ('0'-'9')
 fun _is_digit(c: int) -> bool {
-    if c < 48 { return false; }
-    if c > 57 { return false; }
-    return true;
+    return c >= 48 && c <= 57;
 }
 
 // Parse a string to an integer.
@@ -93,17 +87,8 @@ fun std_parse_int(s: string) -> int {
     var i = 0;
 
     // Skip leading whitespace
-    var continue_ws = true;
-    while continue_ws {
-        if i >= n {
-            continue_ws = false;
-        } else {
-            if _is_whitespace(s[i]) {
-                i = i + 1;
-            } else {
-                continue_ws = false;
-            }
-        }
+    while i < n && _is_whitespace(s[i]) {
+        i = i + 1;
     }
 
     if i >= n {
@@ -117,42 +102,21 @@ fun std_parse_int(s: string) -> int {
         i = i + 1;
     }
 
-    if i >= n {
-        throw "cannot parse '" + s + "' as int";
-    }
-    if !_is_digit(s[i]) {
+    if i >= n || !_is_digit(s[i]) {
         throw "cannot parse '" + s + "' as int";
     }
 
     // Parse digits
     var result = 0;
-    var continue_digits = true;
-    while continue_digits {
-        if i >= n {
-            continue_digits = false;
-        } else {
-            if _is_digit(s[i]) {
-                let digit = s[i] - 48;
-                result = result * 10 + digit;
-                i = i + 1;
-            } else {
-                continue_digits = false;
-            }
-        }
+    while i < n && _is_digit(s[i]) {
+        let digit = s[i] - 48;
+        result = result * 10 + digit;
+        i = i + 1;
     }
 
     // Skip trailing whitespace
-    var continue_ws2 = true;
-    while continue_ws2 {
-        if i >= n {
-            continue_ws2 = false;
-        } else {
-            if _is_whitespace(s[i]) {
-                i = i + 1;
-            } else {
-                continue_ws2 = false;
-            }
-        }
+    while i < n && _is_whitespace(s[i]) {
+        i = i + 1;
     }
 
     // Check for trailing non-whitespace characters
