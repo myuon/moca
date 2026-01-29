@@ -148,7 +148,7 @@ jobs:
             });
 
             const botComment = comments.find(c =>
-              c.user.type === 'Bot' && c.body.includes('## Coverage Report')
+              c.user.login === 'github-actions[bot]' && c.body.includes('## 📊 Coverage Report')
             );
 
             if (botComment) {
