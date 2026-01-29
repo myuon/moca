@@ -64,3 +64,68 @@ fun str_contains(haystack: string, needle: string) -> bool {
     }
     return false;
 }
+
+// ============================================================================
+// Parsing Functions
+// ============================================================================
+
+// Check if a byte is a whitespace character (space, tab, newline, carriage return)
+fun _is_whitespace(c: int) -> bool {
+    return c == 32 || c == 9 || c == 10 || c == 13;
+}
+
+// Check if a byte is a digit ('0'-'9')
+fun _is_digit(c: int) -> bool {
+    return c >= 48 && c <= 57;
+}
+
+// Parse a string to an integer.
+// Handles leading/trailing whitespace and optional negative sign.
+// Throws an error if the string cannot be parsed as an integer.
+fun std_parse_int(s: string) -> int {
+    let n = len(s);
+    var i = 0;
+
+    // Skip leading whitespace
+    while i < n && _is_whitespace(s[i]) {
+        i = i + 1;
+    }
+
+    if i >= n {
+        throw "cannot parse empty string as int";
+    }
+
+    // Check for negative sign
+    var negative = false;
+    if s[i] == 45 {
+        negative = true;
+        i = i + 1;
+    }
+
+    if i >= n || !_is_digit(s[i]) {
+        throw "cannot parse '" + s + "' as int";
+    }
+
+    // Parse digits
+    var result = 0;
+    while i < n && _is_digit(s[i]) {
+        let digit = s[i] - 48;
+        result = result * 10 + digit;
+        i = i + 1;
+    }
+
+    // Skip trailing whitespace
+    while i < n && _is_whitespace(s[i]) {
+        i = i + 1;
+    }
+
+    // Check for trailing non-whitespace characters
+    if i < n {
+        throw "cannot parse '" + s + "' as int";
+    }
+
+    if negative {
+        return -result;
+    }
+    return result;
+}

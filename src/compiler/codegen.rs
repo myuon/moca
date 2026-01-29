@@ -437,27 +437,35 @@ impl Codegen {
             }
             ResolvedExpr::Binary { op, left, right } => {
                 // Handle short-circuit evaluation for && and ||
+                // JmpIfFalse/JmpIfTrue pop the condition value, so we need to Dup first
+                // to keep the result on stack when short-circuiting
                 match op {
                     BinaryOp::And => {
+                        // For &&: if left is false, skip right and keep false on stack
                         self.compile_expr(left, ops)?;
+                        ops.push(Op::Dup); // Duplicate for the jump check
                         let jump_if_false = ops.len();
-                        ops.push(Op::JmpIfFalse(0)); // Placeholder
-                        ops.push(Op::Pop); // Pop the true value
+                        ops.push(Op::JmpIfFalse(0)); // Placeholder, consumes the dup'd value
+                        ops.push(Op::Pop); // Pop the original true value
                         self.compile_expr(right, ops)?;
                         let end = ops.len();
                         ops[jump_if_false] = Op::JmpIfFalse(end);
-                        // If left was false, it's still on stack
-                        // If left was true, right's value is on stack
+                        // If left was false: jump taken, original false still on stack
+                        // If left was true: pop it, right's value is on stack
                         return Ok(());
                     }
                     BinaryOp::Or => {
+                        // For ||: if left is true, skip right and keep true on stack
                         self.compile_expr(left, ops)?;
+                        ops.push(Op::Dup); // Duplicate for the jump check
                         let jump_if_true = ops.len();
-                        ops.push(Op::JmpIfTrue(0)); // Placeholder
-                        ops.push(Op::Pop); // Pop the false value
+                        ops.push(Op::JmpIfTrue(0)); // Placeholder, consumes the dup'd value
+                        ops.push(Op::Pop); // Pop the original false value
                         self.compile_expr(right, ops)?;
                         let end = ops.len();
                         ops[jump_if_true] = Op::JmpIfTrue(end);
+                        // If left was true: jump taken, original true still on stack
+                        // If left was false: pop it, right's value is on stack
                         return Ok(());
                     }
                     _ => {}

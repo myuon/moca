@@ -1,0 +1,24 @@
+== && with false on left ==
+returns_false called
+false
+== && with true on left ==
+returns_true called
+returns_false called
+false
+== || with true on left ==
+returns_true called
+true
+== || with false on left ==
+returns_false called
+returns_true called
+true
+== chained && ==
+returns_true called
+returns_true called
+returns_false called
+false
+== chained || ==
+returns_false called
+returns_false called
+returns_true called
+true
