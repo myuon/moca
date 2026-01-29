@@ -416,7 +416,7 @@ impl Verifier {
             Op::TryEnd => (0, 0),
 
             // Builtins
-            Op::Print => (1, 0),
+            Op::PrintDebug => (1, 0),
 
             // GC hint
             Op::GcHint(_) => (0, 0),
@@ -436,6 +436,8 @@ impl Verifier {
             Op::HeapLoadDyn => (2, 1),   // pops ref and index, pushes value
             Op::HeapStoreDyn => (3, 0),  // pops ref, index, and value
 
+            // Syscall
+            Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
         }
     }
 }

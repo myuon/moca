@@ -274,7 +274,7 @@ const OP_PARSE_INT: u8 = 57;
 const OP_THROW: u8 = 58;
 const OP_TRY_BEGIN: u8 = 59;
 const OP_TRY_END: u8 = 60;
-const OP_PRINT: u8 = 61;
+const OP_PRINT_DEBUG: u8 = 61;
 const OP_GC_HINT: u8 = 62;
 const OP_THREAD_SPAWN: u8 = 63;
 const OP_CHANNEL_CREATE: u8 = 64;
@@ -288,10 +288,11 @@ const OP_HEAP_LOAD_DYN: u8 = 71;
 const OP_HEAP_STORE_DYN: u8 = 72;
 const OP_STR_LEN: u8 = 73;
 // Legacy opcodes 74, 75, 76, 77 removed (AllocVector, AllocVectorCap, VectorPush, VectorPop)
-const OP_SWAP: u8 = 78;
-const OP_PICK: u8 = 79;
-const OP_ALLOC_HEAP_DYN: u8 = 80;
-const OP_PICK_DYN: u8 = 81;
+const OP_SYSCALL: u8 = 78;
+const OP_SWAP: u8 = 79;
+const OP_PICK: u8 = 80;
+const OP_ALLOC_HEAP_DYN: u8 = 81;
+const OP_PICK_DYN: u8 = 82;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -380,7 +381,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *target as u32)?;
         }
         Op::TryEnd => w.write_all(&[OP_TRY_END])?,
-        Op::Print => w.write_all(&[OP_PRINT])?,
+        Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
         Op::GcHint(size) => {
             w.write_all(&[OP_GC_HINT])?;
             write_u32(w, *size as u32)?;
@@ -408,6 +409,11 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
+        Op::Syscall(num, argc) => {
+            w.write_all(&[OP_SYSCALL])?;
+            write_u32(w, *num as u32)?;
+            write_u32(w, *argc as u32)?;
+        }
     }
     Ok(())
 }
@@ -461,7 +467,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_THROW => Op::Throw,
         OP_TRY_BEGIN => Op::TryBegin(read_u32(r)? as usize),
         OP_TRY_END => Op::TryEnd,
-        OP_PRINT => Op::Print,
+        OP_PRINT_DEBUG => Op::PrintDebug,
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_THREAD_SPAWN => Op::ThreadSpawn(read_u32(r)? as usize),
         OP_CHANNEL_CREATE => Op::ChannelCreate,
@@ -474,6 +480,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
+        OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
@@ -615,7 +622,7 @@ mod tests {
                     Op::PushInt(10),
                     Op::PushInt(20),
                     Op::Call(0, 2),
-                    Op::Print,
+                    Op::PrintDebug,
                     Op::Ret,
                 ],
                 stackmap: None,
@@ -732,7 +739,7 @@ mod tests {
             Op::Throw,
             Op::TryBegin(100),
             Op::TryEnd,
-            Op::Print,
+            Op::PrintDebug,
             Op::GcHint(1024),
             Op::ThreadSpawn(1),
             Op::ChannelCreate,

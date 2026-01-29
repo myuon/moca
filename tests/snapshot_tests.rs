@@ -13,8 +13,16 @@ fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, Stri
     let (output, result) = run_file_capturing_output(path, config);
 
     match result {
-        Ok(()) => (output.stdout, String::new(), 0),
-        Err(e) => (output.stdout, e, 1),
+        Ok(()) => (output.stdout, output.stderr, 0),
+        Err(e) => {
+            // Combine captured stderr with error message
+            let stderr = if output.stderr.is_empty() {
+                e
+            } else {
+                format!("{}{}", output.stderr, e)
+            };
+            (output.stdout, stderr, 1)
+        }
     }
 }
 

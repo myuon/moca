@@ -17,6 +17,7 @@ This document defines the syntax and semantics of the Moca programming language.
 | `float` | boxed f64 | IEEE 754 double precision |
 | `bool` | Tag value | `true` / `false` |
 | `nil` | Tag value | Equivalent to null |
+| `any` | Any value | Bypasses type checking, unifies with any type |
 
 ### Compound Types
 

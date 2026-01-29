@@ -20,6 +20,8 @@ pub struct Codegen {
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
     /// Index expression object types (from typechecker)
     index_object_types: HashMap<Span, Type>,
+    /// Map function name -> function index (for calling stdlib functions)
+    function_indices: HashMap<String, usize>,
 }
 
 impl Default for Codegen {
@@ -38,6 +40,7 @@ impl Codegen {
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
+            function_indices: HashMap::new(),
         }
     }
 
@@ -51,6 +54,7 @@ impl Codegen {
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
+            function_indices: HashMap::new(),
         }
     }
 
@@ -97,6 +101,11 @@ impl Codegen {
     pub fn compile(&mut self, program: ResolvedProgram) -> Result<Chunk, String> {
         // Initialize struct field indices for field access resolution
         self.init_structs(program.structs);
+
+        // Build function name -> index map for stdlib function calls
+        for (idx, func) in program.functions.iter().enumerate() {
+            self.function_indices.insert(func.name.clone(), idx);
+        }
 
         // Compile all user-defined functions first
         for func in &program.functions {
@@ -559,12 +568,44 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args } => {
                 match name.as_str() {
-                    "print" => {
+                    "print" | "print_debug" => {
                         if args.len() != 1 {
-                            return Err("print takes exactly 1 argument".to_string());
+                            return Err("print/print_debug takes exactly 1 argument".to_string());
                         }
+                        // If argument is a string literal, call print_str from stdlib
+                        if matches!(&args[0], ResolvedExpr::Str(_)) {
+                            if let Some(&func_idx) = self.function_indices.get("print_str") {
+                                // Call print_str(s)
+                                self.compile_expr(&args[0], ops)?;
+                                ops.push(Op::Call(func_idx, 1));
+                                ops.push(Op::Pop); // discard return value
+                                // Call print_str("\n")
+                                let newline_idx = self.add_string("\n".to_string());
+                                ops.push(Op::PushString(newline_idx));
+                                ops.push(Op::Call(func_idx, 1));
+                                // print_str returns nil, which is what print should return
+                            } else {
+                                // Fallback if print_str not available
+                                self.compile_expr(&args[0], ops)?;
+                                ops.push(Op::PrintDebug);
+                            }
+                        } else {
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::PrintDebug);
+                        }
+                    }
+                    "syscall_write" => {
+                        // syscall_write(fd, buf, count) -> bytes_written
+                        if args.len() != 3 {
+                            return Err("syscall_write takes exactly 3 arguments (fd, buf, count)"
+                                .to_string());
+                        }
+                        // Push arguments in order: fd, buf, count
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::Print);
+                        self.compile_expr(&args[1], ops)?;
+                        self.compile_expr(&args[2], ops)?;
+                        // Syscall 1 = write, 3 arguments
+                        ops.push(Op::Syscall(1, 3));
                     }
                     "len" => {
                         if args.len() != 1 {
@@ -935,7 +976,7 @@ impl Codegen {
             "TryEnd" => Ok(Op::TryEnd),
 
             // Builtins
-            "Print" => Ok(Op::Print),
+            "PrintDebug" => Ok(Op::PrintDebug),
 
             // GC hint
             "GcHint" => {
@@ -1287,20 +1328,20 @@ mod tests {
 
     #[test]
     fn test_simple_print() {
-        let chunk = compile("print(42);").unwrap();
+        let chunk = compile("print_debug(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::PushInt(42)));
-        assert!(chunk.main.code.contains(&Op::Print));
+        assert!(chunk.main.code.contains(&Op::PrintDebug));
     }
 
     #[test]
     fn test_arithmetic() {
-        let chunk = compile("print(1 + 2);").unwrap();
+        let chunk = compile("print_debug(1 + 2);").unwrap();
         assert!(chunk.main.code.contains(&Op::Add));
     }
 
     #[test]
     fn test_function_call() {
-        let chunk = compile("fun foo() { return 42; } print(foo());").unwrap();
+        let chunk = compile("fun foo() { return 42; } print_debug(foo());").unwrap();
         assert_eq!(chunk.functions.len(), 1);
         assert_eq!(chunk.functions[0].name, "foo");
     }

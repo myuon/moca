@@ -98,8 +98,10 @@ impl Substitution {
                     .map(|(n, t)| (n.clone(), self.apply(t)))
                     .collect(),
             },
-            // Primitive types are unchanged
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => ty.clone(),
+            // Primitive types and Any are unchanged
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
+                ty.clone()
+            }
         }
     }
 
@@ -224,6 +226,7 @@ impl TypeChecker {
                     "bool" => Ok(Type::Bool),
                     "string" => Ok(Type::String),
                     "nil" => Ok(Type::Nil),
+                    "any" => Ok(Type::Any),
                     _ => {
                         // Try to find a struct with this name
                         if let Some(info) = self.structs.get(name) {
@@ -277,6 +280,11 @@ impl TypeChecker {
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
+
+            // Any type unifies with any other type
+            // any ~ T -> T (any adapts to the other type)
+            // any ~ any -> any
+            (Type::Any, _) | (_, Type::Any) => Ok(Substitution::new()),
 
             // Type variable unification
             (Type::Var(id), other) | (other, Type::Var(id)) => {
@@ -1357,12 +1365,36 @@ impl TypeChecker {
         span: Span,
     ) -> Option<Type> {
         match name {
-            "print" => {
-                // print accepts any type
+            "print" | "print_debug" => {
+                // print/print_debug accepts any type
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
                 Some(Type::Nil)
+            }
+            "syscall_write" => {
+                // syscall_write(fd: Int, buf: String, count: Int) -> Int
+                if args.len() != 3 {
+                    self.errors.push(TypeError::new(
+                        "syscall_write expects 3 arguments (fd, buf, count)",
+                        span,
+                    ));
+                    return Some(Type::Int);
+                }
+                let fd_type = self.infer_expr(&args[0], env);
+                let buf_type = self.infer_expr(&args[1], env);
+                let count_type = self.infer_expr(&args[2], env);
+
+                if let Err(e) = self.unify(&fd_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                if let Err(e) = self.unify(&buf_type, &Type::String, span) {
+                    self.errors.push(e);
+                }
+                if let Err(e) = self.unify(&count_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                Some(Type::Int) // Returns bytes written or -1
             }
             "len" => {
                 if args.len() != 1 {
