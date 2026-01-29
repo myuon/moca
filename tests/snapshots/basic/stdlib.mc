@@ -28,3 +28,11 @@ print(str_contains("hello", "hello"));
 print("hello"[0]);
 print("hello"[4]);
 print("ABC"[1]);
+
+// std_parse_int - parsing integers from strings
+print(std_parse_int("42"));
+print(std_parse_int("-123"));
+print(std_parse_int("  456  "));
+print(std_parse_int("0"));
+print(std_parse_int("-0"));
+print(std_parse_int("  -789  "));
