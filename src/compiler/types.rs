@@ -24,6 +24,8 @@ pub enum Type {
     Nil,
     /// Array type: `array<T>`
     Array(Box<Type>),
+    /// Vector type: `Vector<T>` (dynamic array)
+    Vector(Box<Type>),
     /// Object type with named fields: `{field1: T1, field2: T2, ...}`
     /// Uses BTreeMap for deterministic ordering.
     Object(BTreeMap<std::string::String, Type>),
@@ -47,6 +49,11 @@ impl Type {
     /// Create a new array type.
     pub fn array(element: Type) -> Type {
         Type::Array(Box::new(element))
+    }
+
+    /// Create a new vector type.
+    pub fn vector(element: Type) -> Type {
+        Type::Vector(Box::new(element))
     }
 
     /// Create a new nullable type.
@@ -77,7 +84,7 @@ impl Type {
         match self {
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => false,
             Type::Var(_) => true,
-            Type::Array(elem) => elem.has_type_vars(),
+            Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
             Type::Object(fields) => fields.values().any(|t| t.has_type_vars()),
             Type::Struct { fields, .. } => fields.iter().any(|(_, t)| t.has_type_vars()),
@@ -102,7 +109,7 @@ impl Type {
                     vars.push(*id);
                 }
             }
-            Type::Array(elem) => elem.collect_type_vars(vars),
+            Type::Array(elem) | Type::Vector(elem) => elem.collect_type_vars(vars),
             Type::Nullable(inner) => inner.collect_type_vars(vars),
             Type::Object(fields) => {
                 for t in fields.values() {
@@ -133,6 +140,7 @@ impl fmt::Display for Type {
             Type::String => write!(f, "string"),
             Type::Nil => write!(f, "nil"),
             Type::Array(elem) => write!(f, "array<{}>", elem),
+            Type::Vector(elem) => write!(f, "Vector<{}>", elem),
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Object(fields) => {
                 write!(f, "{{")?;

@@ -1,5 +1,5 @@
 use crate::compiler::lexer::Span;
-use crate::compiler::types::TypeAnnotation;
+use crate::compiler::types::{Type, TypeAnnotation};
 
 /// A complete program consisting of items (functions and statements).
 #[derive(Debug, Clone)]
@@ -96,6 +96,8 @@ pub enum Statement {
         index: Expr,
         value: Expr,
         span: Span,
+        /// Type of the object (set by typechecker for codegen)
+        object_type: Option<Type>,
     },
     FieldAssign {
         object: Expr,
@@ -178,6 +180,8 @@ pub enum Expr {
         object: Box<Expr>,
         index: Box<Expr>,
         span: Span,
+        /// Type of the object (set by typechecker for codegen)
+        object_type: Option<Type>,
     },
     Field {
         object: Box<Expr>,

@@ -78,6 +78,7 @@ impl Substitution {
                 }
             }
             Type::Array(elem) => Type::Array(Box::new(self.apply(elem))),
+            Type::Vector(elem) => Type::Vector(Box::new(self.apply(elem))),
             Type::Nullable(inner) => Type::Nullable(Box::new(self.apply(inner))),
             Type::Object(fields) => {
                 let new_fields: BTreeMap<String, Type> = fields
@@ -752,16 +753,22 @@ impl TypeChecker {
                 index,
                 value,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Object should be array<T>
+                // Object should be array<T> or Vector<T>
                 let elem_type = self.fresh_var();
                 let arr_type = Type::Array(Box::new(elem_type.clone()));
-                if let Err(e) = self.unify(&obj_type, &arr_type, *span) {
-                    self.errors.push(e);
+                let vec_type = Type::Vector(Box::new(elem_type.clone()));
+                // Try to unify with array first, if fails try vector
+                let is_array = self.unify(&obj_type, &arr_type, *span).is_ok();
+                if !is_array {
+                    if let Err(e) = self.unify(&obj_type, &vec_type, *span) {
+                        self.errors.push(e);
+                    }
                 }
                 if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
                     self.errors.push(e);
@@ -897,6 +904,7 @@ impl TypeChecker {
                 object,
                 index,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
@@ -906,9 +914,10 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
 
-                // Object can be array<T>, string, or struct (structs are compiled as arrays)
+                // Object can be array<T>, Vector<T>, string, or struct (structs are compiled as arrays)
                 match self.substitution.apply(&obj_type) {
                     Type::Array(elem) => self.substitution.apply(&elem),
+                    Type::Vector(elem) => self.substitution.apply(&elem),
                     Type::String => Type::Int, // String index returns byte value as int
                     Type::Struct { fields, .. } => {
                         // For structs, index access returns a type variable
@@ -927,7 +936,7 @@ impl TypeChecker {
                     }
                     _ => {
                         self.errors.push(TypeError::new(
-                            format!("expected array, string or struct, found `{}`", obj_type),
+                            format!("expected array, Vector, string or struct, found `{}`", obj_type),
                             *span,
                         ));
                         self.fresh_var()

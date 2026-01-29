@@ -323,6 +323,7 @@ impl<'a> Parser<'a> {
                     index: *index,
                     value,
                     span,
+                    object_type: None,
                 }),
                 Expr::Field { object, field, .. } => Ok(Statement::FieldAssign {
                     object: *object,
@@ -734,6 +735,7 @@ impl<'a> Parser<'a> {
                     object: Box::new(expr),
                     index: Box::new(index),
                     span,
+                    object_type: None,
                 };
             } else if self.match_token(&TokenKind::Dot) {
                 // Field access or method call
