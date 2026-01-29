@@ -559,9 +559,9 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args } => {
                 match name.as_str() {
-                    "print" | "print_debug" => {
+                    "print_debug" => {
                         if args.len() != 1 {
-                            return Err("print/print_debug takes exactly 1 argument".to_string());
+                            return Err("print_debug takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::PrintDebug);
@@ -1050,20 +1050,20 @@ mod tests {
 
     #[test]
     fn test_simple_print() {
-        let chunk = compile("print(42);").unwrap();
+        let chunk = compile("print_debug(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::PushInt(42)));
         assert!(chunk.main.code.contains(&Op::PrintDebug));
     }
 
     #[test]
     fn test_arithmetic() {
-        let chunk = compile("print(1 + 2);").unwrap();
+        let chunk = compile("print_debug(1 + 2);").unwrap();
         assert!(chunk.main.code.contains(&Op::Add));
     }
 
     #[test]
     fn test_function_call() {
-        let chunk = compile("fun foo() { return 42; } print(foo());").unwrap();
+        let chunk = compile("fun foo() { return 42; } print_debug(foo());").unwrap();
         assert_eq!(chunk.functions.len(), 1);
         assert_eq!(chunk.functions[0].name, "foo");
     }

@@ -5,17 +5,18 @@
 // I/O Functions
 // ============================================================================
 
-// Print a string to stdout with a newline (backward compatible).
+// Print any value to stdout with a newline.
 // Uses syscall_write internally.
-fun print(s: string) {
+fun print(x) {
+    let s = to_string(x);
     let n = len(s);
     syscall_write(1, s, n);
     syscall_write(1, "\n", 1);
 }
 
 // Alias for print
-fun println(s: string) {
-    print(s);
+fun println(x) {
+    print(x);
 }
 
 // Print a value to stdout without a newline.
@@ -24,14 +25,9 @@ fun print_str(s: string) {
     syscall_write(1, s, n);
 }
 
-// Print an integer to stdout with a newline.
-fun println_int(x: int) {
-    let s = to_string(x);
-    println(s);
-}
-
 // Print to stderr with a newline.
-fun eprintln(s: string) {
+fun eprintln(x) {
+    let s = to_string(x);
     let n = len(s);
     syscall_write(2, s, n);
     syscall_write(2, "\n", 1);
