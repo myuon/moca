@@ -648,8 +648,7 @@ impl VM {
 
                     // If JIT compiled, execute via JIT
                     if self.is_jit_compiled(func_index) {
-                        let result =
-                            self.execute_jit_function(func_index, argc, func, chunk)?;
+                        let result = self.execute_jit_function(func_index, argc, func, chunk)?;
                         self.stack.push(result);
                         return Ok(ControlFlow::Continue);
                     }
@@ -663,8 +662,7 @@ impl VM {
 
                     // If JIT compiled, execute via JIT
                     if self.is_jit_compiled(func_index) {
-                        let result =
-                            self.execute_jit_function(func_index, argc, func, chunk)?;
+                        let result = self.execute_jit_function(func_index, argc, func, chunk)?;
                         self.stack.push(result);
                         return Ok(ControlFlow::Continue);
                     }

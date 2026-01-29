@@ -722,8 +722,8 @@ impl JitCompiler {
         // Return value is in x0 (tag) and x1 (payload)
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.str(Reg::X0, regs::VSTACK, 0);  // store tag
-            asm.str(Reg::X1, regs::VSTACK, 8);  // store payload
+            asm.str(Reg::X0, regs::VSTACK, 0); // store tag
+            asm.str(Reg::X1, regs::VSTACK, 8); // store payload
             asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         }
 
@@ -746,20 +746,17 @@ impl JitCompiler {
         // MOVK for remaining bits if needed
         if u > 0xFFFF {
             // MOVK Xd, #imm16, LSL #16
-            let inst =
-                0xF2A00000 | ((((u >> 16) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
+            let inst = 0xF2A00000 | ((((u >> 16) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
             self.buf.emit_u32(inst);
         }
         if u > 0xFFFF_FFFF {
             // MOVK Xd, #imm16, LSL #32
-            let inst =
-                0xF2C00000 | ((((u >> 32) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
+            let inst = 0xF2C00000 | ((((u >> 32) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
             self.buf.emit_u32(inst);
         }
         if u > 0xFFFF_FFFF_FFFF {
             // MOVK Xd, #imm16, LSL #48
-            let inst =
-                0xF2E00000 | ((((u >> 48) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
+            let inst = 0xF2E00000 | ((((u >> 48) & 0xFFFF) as u32) << 5) | (rd.code() as u32);
             self.buf.emit_u32(inst);
         }
     }
@@ -791,8 +788,8 @@ impl JitCompiler {
         // Pop return value from JIT stack into x0 (tag) and x1 (payload)
         // Stack layout: [tag: 8 bytes][payload: 8 bytes]
         asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(Reg::X0, regs::VSTACK, 0);  // tag
-        asm.ldr(Reg::X1, regs::VSTACK, 8);  // payload
+        asm.ldr(Reg::X0, regs::VSTACK, 0); // tag
+        asm.ldr(Reg::X1, regs::VSTACK, 8); // payload
 
         // Restore callee-saved registers and return
         asm.ldp_post(Reg::X21, Reg::X22, 16);
