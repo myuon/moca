@@ -1,132 +1,124 @@
-# Spec.md - AArch64 JIT Call命令サポート
+# Spec.md - moca test コマンド実装
 
 ## 1. Goal
-- aarch64 JITでOp::Call命令をサポートし、相互再帰（is_even ↔ is_odd）がJITコンパイルされて正しく動作する
+- `moca test` コマンドでリポジトリ内の `_test_` プレフィックスを持つ関数を自動検出・実行し、テスト結果を表示できるようにする
+- テスト用のCompiler API (`run_tests`) を提供する
 
 ## 2. Non-Goals
-- CallBuiltin（組み込み関数呼び出し）
-- 可変長引数のサポート
-- クロージャ呼び出し
-- 自己再帰最適化（emit_call_self）は今回スコープ外
-- 末尾呼び出し最適化
+- テストのフィルタリング（特定テストのみ実行）
+- 並列実行
+- カバレッジ計測
+- テスト関数名のプレフィックス変更（後で対応予定）
+- watch モード
 
 ## 3. Target Users
-- mocaコンパイラの開発者
-- aarch64（Apple Silicon Mac等）でJITを使用するユーザー
+- moca 言語でプロジェクトを開発している開発者
+- 自作の関数やロジックの動作を検証したい人
 
 ## 4. Core User Flow
-1. ユーザーが相互再帰を含むmocaコードを実行
-2. JITが関数をコンパイル（Call命令を含む）
-3. JITコードがjit_call_helper経由で他の関数を呼び出し
-4. 正しい結果が返される
+1. ユーザーが `_test_` プレフィックスを持つテスト関数を `.mc` ファイルに記述
+2. テスト内で `assert(condition, msg)` や `assert_eq(a, b, msg)` を使用
+3. `moca test` を実行
+4. 全テストが実行され、各テストの成功/失敗が表示される
+5. 最後に集計結果（passed/failed 数）が表示される
 
 ## 5. Inputs & Outputs
+
 ### Inputs
-- Op::Call(func_index, argc) バイトコード命令
-- 引数の値（VSTACKから取得）
+- `pkg.toml` のエントリーポイント設定（デフォルト: `src/`）
+- `src/` 配下の全 `.mc` ファイル
 
 ### Outputs
-- ターゲット関数の戻り値（VSTACKに格納）
-- JitReturn構造体（tag, payload）
+- 各テストの実行結果: `✓ _test_xxx passed` または `✗ _test_xxx failed: {error}`
+- 集計結果: `X passed, Y failed`
+- 終了コード: 全成功なら 0、1つでも失敗なら 1
 
 ## 6. Tech Stack
-- 言語: Rust
-- アーキテクチャ: AArch64 (ARM64)
-- アセンブラ: 既存のAArch64Assembler（src/jit/asm_aarch64.rs）
-- テスト: cargo test --features jit
+- 言語: Rust（既存プロジェクト）
+- CLI: clap（既存）
+- ファイルスキャン: std::fs（再帰実装）
+- assert/assert_eq: std/prelude.mc（Moca言語で実装）
 
 ## 7. Rules & Constraints
-
-### 呼び出し規約（AArch64 AAPCS64準拠）
-- 引数: x0, x1, x2, x3, ... （最初の8引数）
-- 戻り値: x0（tag）, x1（payload）
-- Callee-saved: x19-x28, x29(fp), x30(lr)
-- Caller-saved: x0-x18
-
-### jit_call_helper引数
-- x0: ctx (*mut JitCallContext)
-- x1: func_index (u64)
-- x2: argc (u64)
-- x3: args (*const JitValue)
-
-### レジスタ使用規則（既存のregs定義に従う）
-- VM_CTX (x19): VMコンテキストポインタ
-- VSTACK (x20): 値スタックポインタ
-- LOCALS (x21): ローカル変数ベースポインタ
-- TMP0/TMP1 (x9/x10): 一時レジスタ
-
-### 実装制約
-- 既存のemit_prologue/emit_epilogueと整合性を保つ
-- スタックは16バイトアラインメントを維持
-- x86_64のemit_call_externalのロジックをaarch64に変換
+- テスト関数は `fun _test_xxx()` の形式（引数なし、戻り値なし）
+- `assert(bool, string)`: 第1引数が false なら第2引数のメッセージで throw
+- `assert_eq(any, any, string)`: 第1引数と第2引数が `==` で等しくなければ throw
+- 1つのテストが失敗しても残りのテストは継続実行
+- pkg.toml が存在すればその設定に従い、なければ `src/` をスキャン
 
 ## 8. Open Questions
-なし
+- なし
 
 ## 9. Acceptance Criteria
-1. [x] compiler.rsにemit_call関数が実装されている
-2. [x] Op::Call(func_index, argc)がcompile_opで処理される
-3. [x] jit_call_helperが正しい引数で呼び出される
-4. [x] 戻り値がVSTACKに正しく格納される
-5. [x] スタックの深さ(stack_depth)が正しく更新される
-6. [x] `cargo test --features jit jit_mutual_recursion`が通る
-7. [x] is_even/is_oddの両方がJITコンパイルされる（trace-jitで確認可能）
-8. [x] 結果が正しい（is_even(0)=1, is_even(1)=0, is_even(10)=1, is_even(11)=0）
+1. `moca test` コマンドが実行できる
+2. `src/` 配下の `.mc` ファイルから `_test_` プレフィックスの関数が検出される
+3. 検出された全テスト関数が順に実行される
+4. `assert(true, "msg")` は何も起こらない
+5. `assert(false, "msg")` は "msg" を含むエラーを throw する
+6. `assert_eq(1, 1, "msg")` は何も起こらない
+7. `assert_eq(1, 2, "msg")` は "msg" を含むエラーを throw する
+8. テスト成功時は `✓ _test_xxx passed` 形式で表示される
+9. テスト失敗時は `✗ _test_xxx failed: {error}` 形式で表示される
+10. 全テスト完了後に `X passed, Y failed` の集計が表示される
 
 ## 10. Verification Strategy
 
 ### 進捗検証
-- emit_call実装後、単純な関数呼び出しのバイトコードを手動テスト
-- `cargo run --features jit -- run --jit on --trace-jit <test.mc>` でJITトレース確認
+- 各タスク完了時に `cargo build` が通ることを確認
+- assert/assert_eq 実装後、簡単なテストコードで動作確認
 
 ### 達成検証
-- `cargo test --features jit jit_mutual_recursion` が通る
-- トレース出力で両関数がJITコンパイルされていることを確認
+- 実際に `_test_` 関数を含む `.mc` ファイルを作成
+- `moca test` を実行し、期待通りの出力が得られることを確認
+- 成功ケースと失敗ケースの両方を含むテストで検証
 
 ### 漏れ検出
-- x86_64のemit_call_externalと比較し、同等の機能が実装されているか確認
-- カバレッジ: 引数0個/1個/複数個のテストケース
+- Acceptance Criteria を1つずつチェック
+- エッジケース: テスト関数が0個の場合、複数ファイルにまたがる場合
 
 ## 11. Test Plan
 
-### E2E Test 1: 基本的な相互再帰
+### E2E シナリオ 1: 全テスト成功
 ```
-Given: is_even/is_oddの相互再帰関数が定義されている
-When: is_even(10)を実行（JIT有効、threshold=1）
-Then:
-  - 両関数がJITコンパイルされる
-  - 結果が1（10は偶数）
-```
-
-### E2E Test 2: 複数回の呼び出し
-```
-Given: is_even/is_oddの相互再帰関数が定義されている
-When: is_even(0), is_even(1), is_even(10), is_even(11)を順に実行
-Then:
-  - 結果がそれぞれ1, 0, 1, 0
-  - パニックやクラッシュが発生しない
+Given: src/math.mc に _test_add() と _test_sub() が定義されている
+       両方とも assert(true, "...") で成功する
+When:  moca test を実行
+Then:  "✓ _test_add passed"
+       "✓ _test_sub passed"
+       "2 passed, 0 failed" が表示され、終了コード 0
 ```
 
-### E2E Test 3: 既存テストとの互換性
+### E2E シナリオ 2: 一部テスト失敗
 ```
-Given: JITフィーチャーが有効
-When: cargo test --features jit を実行
-Then:
-  - jit_mutual_recursionがPASS
-  - 他のJITテストが壊れていない
+Given: src/test.mc に _test_ok() と _test_fail() が定義されている
+       _test_ok は成功、_test_fail は assert(false, "expected") で失敗
+When:  moca test を実行
+Then:  "✓ _test_ok passed"
+       "✗ _test_fail failed: expected" が表示
+       "1 passed, 1 failed" が表示され、終了コード 1
 ```
 
-## 12. TODO List
+### E2E シナリオ 3: assert_eq の検証
+```
+Given: src/test.mc に assert_eq(1, 1, "ok") と assert_eq(1, 2, "ng") を使うテストがある
+When:  各テストを実行
+Then:  前者は成功、後者は "ng" を含むエラーで失敗
+```
 
-### Setup
-- [x] x86_64のemit_call_external実装を確認・理解
+## 12. Implementation Details
 
-### Core
-- [x] emit_call関数を実装（jit_call_helper呼び出し）
-- [x] compile_opにOp::Callのハンドリングを追加
-- [x] 引数のVSTACK→レジスタ渡しを実装
-- [x] 戻り値のVSTACKへの格納を実装
+### Compiler API
+- `compiler::run_tests(path: &Path, config: &RuntimeConfig) -> TestResults`
+- `TestResults` 構造体: passed/failed カウント、各テストの結果リスト
 
-### Test & Polish
-- [x] jit_mutual_recursionテストを実行して確認
-- [x] trace-jitで両関数のJITコンパイルを確認
+### テスト検出ロジック
+1. pkg.toml からエントリーディレクトリを取得（なければ `src/`）
+2. ディレクトリ内の `.mc` ファイルを再帰的に収集
+3. 各ファイルをパースし、`_test_` プレフィックスの関数を抽出
+4. 全テスト関数のリストを返す
+
+### テスト実行ロジック
+1. 各テストファイルをコンパイル
+2. 各 `_test_` 関数を呼び出すコードを生成・実行
+3. エラーがなければ passed、throw されれば failed
+4. 結果を集計して返す
