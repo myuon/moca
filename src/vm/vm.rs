@@ -1026,6 +1026,11 @@ impl VM {
                 let result = self.thread_spawner.join(thread_id)?;
                 self.stack.push(result);
             }
+
+            // Heap slot operations (to be implemented in Phase2)
+            Op::AllocHeap(_) | Op::HeapLoad(_) | Op::HeapStore(_) | Op::HeapLoadDyn | Op::HeapStoreDyn => {
+                todo!("Heap slot operations will be implemented in Phase2")
+            }
         }
 
         Ok(ControlFlow::Continue)

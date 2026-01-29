@@ -84,6 +84,15 @@ pub enum Op {
     ArrayPop,  // stack: [array] -> [value]
 
     // ========================================
+    // Heap slot operations (low-level array support)
+    // ========================================
+    AllocHeap(usize),    // Allocate heap object with n slots from stack: [v1..vn] -> [ref]
+    HeapLoad(usize),     // Load slot at static offset: [ref] -> [value]
+    HeapStore(usize),    // Store to slot at static offset: [ref, value] -> []
+    HeapLoadDyn,         // Load slot at dynamic index: [ref, index] -> [value]
+    HeapStoreDyn,        // Store to slot at dynamic index: [ref, index, value] -> []
+
+    // ========================================
     // Type operations
     // ========================================
     TypeOf,   // Push type name as string

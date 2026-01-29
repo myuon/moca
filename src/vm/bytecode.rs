@@ -285,6 +285,11 @@ const OP_CHANNEL_CREATE: u8 = 64;
 const OP_CHANNEL_SEND: u8 = 65;
 const OP_CHANNEL_RECV: u8 = 66;
 const OP_THREAD_JOIN: u8 = 67;
+const OP_ALLOC_HEAP: u8 = 68;
+const OP_HEAP_LOAD: u8 = 69;
+const OP_HEAP_STORE: u8 = 70;
+const OP_HEAP_LOAD_DYN: u8 = 71;
+const OP_HEAP_STORE_DYN: u8 = 72;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -387,6 +392,20 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::ChannelSend => w.write_all(&[OP_CHANNEL_SEND])?,
         Op::ChannelRecv => w.write_all(&[OP_CHANNEL_RECV])?,
         Op::ThreadJoin => w.write_all(&[OP_THREAD_JOIN])?,
+        Op::AllocHeap(size) => {
+            w.write_all(&[OP_ALLOC_HEAP])?;
+            write_u32(w, *size as u32)?;
+        }
+        Op::HeapLoad(offset) => {
+            w.write_all(&[OP_HEAP_LOAD])?;
+            write_u32(w, *offset as u32)?;
+        }
+        Op::HeapStore(offset) => {
+            w.write_all(&[OP_HEAP_STORE])?;
+            write_u32(w, *offset as u32)?;
+        }
+        Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
+        Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
     }
     Ok(())
 }
@@ -448,6 +467,11 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_CHANNEL_SEND => Op::ChannelSend,
         OP_CHANNEL_RECV => Op::ChannelRecv,
         OP_THREAD_JOIN => Op::ThreadJoin,
+        OP_ALLOC_HEAP => Op::AllocHeap(read_u32(r)? as usize),
+        OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
+        OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
+        OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
+        OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
@@ -714,6 +738,11 @@ mod tests {
             Op::ChannelSend,
             Op::ChannelRecv,
             Op::ThreadJoin,
+            Op::AllocHeap(5),
+            Op::HeapLoad(1),
+            Op::HeapStore(2),
+            Op::HeapLoadDyn,
+            Op::HeapStoreDyn,
         ];
 
         let chunk = Chunk {

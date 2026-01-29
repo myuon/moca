@@ -1345,6 +1345,13 @@ impl<'a> Disassembler<'a> {
             Op::ChannelSend => self.output.push_str("ChannelSend"),
             Op::ChannelRecv => self.output.push_str("ChannelRecv"),
             Op::ThreadJoin => self.output.push_str("ThreadJoin"),
+
+            // Heap slot operations
+            Op::AllocHeap(n) => self.output.push_str(&format!("AllocHeap {}", n)),
+            Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
+            Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
+            Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
+            Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
         }
     }
 }
