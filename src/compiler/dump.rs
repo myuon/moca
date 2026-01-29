@@ -737,6 +737,7 @@ impl ResolvedProgramPrinter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 self.write(&format!("{}IndexAssign", prefix));
                 self.newline();
@@ -955,7 +956,7 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedExpr::Index { object, index } => {
+            ResolvedExpr::Index { object, index, .. } => {
                 self.write(&format!("{}Index", prefix));
                 self.newline();
                 let obj_child = format!("{}│   ", parent_prefix);

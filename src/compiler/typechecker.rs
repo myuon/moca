@@ -183,6 +183,9 @@ pub struct TypeChecker {
     structs: HashMap<String, StructInfo>,
     /// Substitution accumulated during inference
     substitution: Substitution,
+    /// Type of objects in index expressions (Span -> Type)
+    /// Used by codegen to differentiate between array and vector access
+    index_object_types: HashMap<Span, Type>,
 }
 
 impl TypeChecker {
@@ -194,7 +197,13 @@ impl TypeChecker {
             functions: HashMap::new(),
             structs: HashMap::new(),
             substitution: Substitution::new(),
+            index_object_types: HashMap::new(),
         }
+    }
+
+    /// Get the index object types map (for codegen)
+    pub fn index_object_types(&self) -> &HashMap<Span, Type> {
+        &self.index_object_types
     }
 
     /// Generate a fresh type variable.
@@ -759,23 +768,33 @@ impl TypeChecker {
                 let idx_type = self.infer_expr(index, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Object should be array<T> or Vector<T>
-                let elem_type = self.fresh_var();
-                let arr_type = Type::Array(Box::new(elem_type.clone()));
-                let vec_type = Type::Vector(Box::new(elem_type.clone()));
-                // Try to unify with array first, if fails try vector
-                let is_array = self.unify(&obj_type, &arr_type, *span).is_ok();
-                if !is_array {
-                    if let Err(e) = self.unify(&obj_type, &vec_type, *span) {
-                        self.errors.push(e);
-                    }
-                }
+                // Index should be int
                 if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
                     self.errors.push(e);
                 }
-                if let Err(e) = self.unify(&val_type, &elem_type, *span) {
-                    self.errors.push(e);
+
+                // Record the object type for codegen
+                let resolved_obj_type = self.substitution.apply(&obj_type);
+                self.index_object_types.insert(*span, resolved_obj_type.clone());
+
+                // Object can be array<T> or Vector<T>, extract element type and unify with value
+                match resolved_obj_type {
+                    Type::Array(elem) | Type::Vector(elem) => {
+                        if let Err(e) = self.unify(&val_type, &elem, *span) {
+                            self.errors.push(e);
+                        }
+                    }
+                    _ => {
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "cannot index assign to `{}`",
+                                self.substitution.apply(&obj_type)
+                            ),
+                            *span,
+                        ));
+                    }
                 }
+
                 Type::Nil
             }
 
@@ -914,8 +933,12 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
 
+                // Record the object type for codegen
+                let resolved_obj_type = self.substitution.apply(&obj_type);
+                self.index_object_types.insert(*span, resolved_obj_type.clone());
+
                 // Object can be array<T>, Vector<T>, string, or struct (structs are compiled as arrays)
-                match self.substitution.apply(&obj_type) {
+                match resolved_obj_type {
                     Type::Array(elem) => self.substitution.apply(&elem),
                     Type::Vector(elem) => self.substitution.apply(&elem),
                     Type::String => Type::Int, // String index returns byte value as int
@@ -1416,20 +1439,20 @@ impl TypeChecker {
                     self.errors
                         .push(TypeError::new("vec_new expects 0 arguments", span));
                 }
-                // Returns a vector type (for now, represented as a type variable)
-                Some(self.fresh_var())
+                // Returns Vector<T> where T is a fresh type variable
+                Some(Type::Vector(Box::new(self.fresh_var())))
             }
             "vec_with_capacity" => {
                 if args.len() != 1 {
                     self.errors
                         .push(TypeError::new("vec_with_capacity expects 1 argument", span));
-                    return Some(self.fresh_var());
+                    return Some(Type::Vector(Box::new(self.fresh_var())));
                 }
                 let arg_type = self.infer_expr(&args[0], env);
                 if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
                     self.errors.push(e);
                 }
-                Some(self.fresh_var())
+                Some(Type::Vector(Box::new(self.fresh_var())))
             }
             "vec_push" => {
                 if args.len() != 2 {

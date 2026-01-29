@@ -41,6 +41,7 @@ pub enum ResolvedStatement {
         object: ResolvedExpr,
         index: ResolvedExpr,
         value: ResolvedExpr,
+        span: Span,
     },
     FieldAssign {
         object: ResolvedExpr,
@@ -94,6 +95,7 @@ pub enum ResolvedExpr {
     Index {
         object: Box<ResolvedExpr>,
         index: Box<ResolvedExpr>,
+        span: Span,
     },
     Field {
         object: Box<ResolvedExpr>,
@@ -502,6 +504,7 @@ impl<'a> Resolver<'a> {
                 object,
                 index,
                 value,
+                span,
                 ..
             } => {
                 let object = self.resolve_expr(object, scope)?;
@@ -511,6 +514,7 @@ impl<'a> Resolver<'a> {
                     object,
                     index,
                     value,
+                    span,
                 })
             }
             Statement::FieldAssign {
@@ -608,12 +612,13 @@ impl<'a> Resolver<'a> {
                     .collect::<Result<_, String>>()?;
                 Ok(ResolvedExpr::Object { fields: resolved })
             }
-            Expr::Index { object, index, .. } => {
-                let object = self.resolve_expr(*object, scope)?;
-                let index = self.resolve_expr(*index, scope)?;
+            Expr::Index { object, index, span, .. } => {
+                let resolved_object = self.resolve_expr(*object, scope)?;
+                let resolved_index = self.resolve_expr(*index, scope)?;
                 Ok(ResolvedExpr::Index {
-                    object: Box::new(object),
-                    index: Box::new(index),
+                    object: Box::new(resolved_object),
+                    index: Box::new(resolved_index),
+                    span,
                 })
             }
             Expr::Field { object, field, .. } => {

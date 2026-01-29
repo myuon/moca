@@ -1,7 +1,9 @@
 use crate::compiler::ast::{BinaryOp, UnaryOp};
+use crate::compiler::lexer::Span;
 use crate::compiler::resolver::{
     ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct,
 };
+use crate::compiler::types::Type;
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
 use std::collections::HashMap;
 
@@ -15,6 +17,8 @@ pub struct Codegen {
     structs: Vec<ResolvedStruct>,
     /// Map struct name -> (struct_index, field_name -> field_index)
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
+    /// Index expression object types (from typechecker)
+    index_object_types: HashMap<Span, Type>,
 }
 
 impl Default for Codegen {
@@ -32,6 +36,7 @@ impl Codegen {
             emit_debug: true, // Enable debug info by default
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
+            index_object_types: HashMap::new(),
         }
     }
 
@@ -44,7 +49,13 @@ impl Codegen {
             emit_debug: false,
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
+            index_object_types: HashMap::new(),
         }
+    }
+
+    /// Set index object types from typechecker.
+    pub fn set_index_object_types(&mut self, types: HashMap<Span, Type>) {
+        self.index_object_types = types;
     }
 
     /// Initialize struct field indices from resolved program.
@@ -167,14 +178,30 @@ impl Codegen {
                 object,
                 index,
                 value,
+                span,
             } => {
-                self.compile_expr(object, ops)?;
-                // Index needs +1 offset because slot[0] is length
-                self.compile_expr(index, ops)?;
-                ops.push(Op::PushInt(1));
-                ops.push(Op::Add);
-                self.compile_expr(value, ops)?;
-                ops.push(Op::HeapStoreDyn);
+                // Check if the object is a Vector (from type info)
+                let is_vector = self.index_object_types.get(&span)
+                    .map(|t| matches!(t, Type::Vector(_)))
+                    .unwrap_or(false);
+
+                if is_vector {
+                    // Vector assign: vec[i] = v -> HeapLoad(0) to get data ptr, then HeapStoreDyn
+                    // Vector data layout: [elem0, elem1, ...] - no length prefix
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::HeapLoad(0)); // Get data pointer
+                    self.compile_expr(index, ops)?;
+                    self.compile_expr(value, ops)?;
+                    ops.push(Op::HeapStoreDyn);
+                } else {
+                    // Array/struct assign: direct HeapStoreDyn with +1 offset for length
+                    self.compile_expr(object, ops)?;
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::PushInt(1));
+                    ops.push(Op::Add);
+                    self.compile_expr(value, ops)?;
+                    ops.push(Op::HeapStoreDyn);
+                }
             }
             ResolvedStatement::FieldAssign {
                 object,
@@ -418,13 +445,27 @@ impl Codegen {
                 }
                 ops.push(Op::New(fields.len()));
             }
-            ResolvedExpr::Index { object, index } => {
-                self.compile_expr(object, ops)?;
-                // Index needs +1 offset because slot[0] is length
-                self.compile_expr(index, ops)?;
-                ops.push(Op::PushInt(1));
-                ops.push(Op::Add);
-                ops.push(Op::HeapLoadDyn);
+            ResolvedExpr::Index { object, index, span } => {
+                // Check if the object is a Vector (from type info)
+                let is_vector = self.index_object_types.get(&span)
+                    .map(|t| matches!(t, Type::Vector(_)))
+                    .unwrap_or(false);
+
+                if is_vector {
+                    // Vector access: vec[i] -> HeapLoad(0) to get data ptr, then HeapLoadDyn
+                    // Vector data layout: [elem0, elem1, ...] - no length prefix
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::HeapLoad(0)); // Get data pointer
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::HeapLoadDyn);
+                } else {
+                    // Array/struct access: direct HeapLoadDyn with +1 offset for length
+                    self.compile_expr(object, ops)?;
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::PushInt(1));
+                    ops.push(Op::Add);
+                    ops.push(Op::HeapLoadDyn);
+                }
             }
             ResolvedExpr::Field { object, field } => {
                 self.compile_expr(object, ops)?;
