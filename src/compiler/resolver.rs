@@ -6,14 +6,9 @@ use std::collections::HashMap;
 /// A resolved asm instruction.
 #[derive(Debug, Clone)]
 pub enum ResolvedAsmInstruction {
-    Emit {
-        op_name: String,
-        args: Vec<AsmArg>,
-    },
+    Emit { op_name: String, args: Vec<AsmArg> },
     Safepoint,
-    GcHint {
-        size: i64,
-    },
+    GcHint { size: i64 },
 }
 
 /// Resolved program with variable indices and function references.

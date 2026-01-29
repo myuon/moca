@@ -808,18 +808,33 @@ impl Codegen {
                 AsmArg::Int(n) => Some(*n),
                 _ => None,
             })
-            .ok_or_else(|| format!("{} requires an integer argument at position {}", op_name, index))
+            .ok_or_else(|| {
+                format!(
+                    "{} requires an integer argument at position {}",
+                    op_name, index
+                )
+            })
     }
 
     /// Extract a float argument from asm args.
-    fn expect_float_arg(&self, args: &[AsmArg], index: usize, op_name: &str) -> Result<f64, String> {
+    fn expect_float_arg(
+        &self,
+        args: &[AsmArg],
+        index: usize,
+        op_name: &str,
+    ) -> Result<f64, String> {
         args.get(index)
             .and_then(|arg| match arg {
                 AsmArg::Float(f) => Some(*f),
                 AsmArg::Int(n) => Some(*n as f64), // Allow int as float
                 _ => None,
             })
-            .ok_or_else(|| format!("{} requires a float argument at position {}", op_name, index))
+            .ok_or_else(|| {
+                format!(
+                    "{} requires a float argument at position {}",
+                    op_name, index
+                )
+            })
     }
 
     /// Extract a string argument from asm args.
@@ -834,7 +849,12 @@ impl Codegen {
                 AsmArg::String(s) => Some(s.clone()),
                 _ => None,
             })
-            .ok_or_else(|| format!("{} requires a string argument at position {}", op_name, index))
+            .ok_or_else(|| {
+                format!(
+                    "{} requires a string argument at position {}",
+                    op_name, index
+                )
+            })
     }
 }
 

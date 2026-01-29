@@ -958,7 +958,11 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 self.expect(&TokenKind::Semi)?;
 
-                Ok(AsmInstruction::Emit { op_name, args, span })
+                Ok(AsmInstruction::Emit {
+                    op_name,
+                    args,
+                    span,
+                })
             }
             ASM_SAFEPOINT => {
                 self.expect(&TokenKind::LParen)?;
