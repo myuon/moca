@@ -1,8 +1,10 @@
 use crate::compiler::ast::{AsmArg, BinaryOp, UnaryOp};
+use crate::compiler::lexer::Span;
 use crate::compiler::resolver::{
     ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement,
     ResolvedStruct,
 };
+use crate::compiler::types::Type;
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
 use std::collections::HashMap;
 
@@ -16,6 +18,8 @@ pub struct Codegen {
     structs: Vec<ResolvedStruct>,
     /// Map struct name -> (struct_index, field_name -> field_index)
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
+    /// Index expression object types (from typechecker)
+    index_object_types: HashMap<Span, Type>,
 }
 
 impl Default for Codegen {
@@ -33,6 +37,7 @@ impl Codegen {
             emit_debug: true, // Enable debug info by default
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
+            index_object_types: HashMap::new(),
         }
     }
 
@@ -45,7 +50,13 @@ impl Codegen {
             emit_debug: false,
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
+            index_object_types: HashMap::new(),
         }
+    }
+
+    /// Set index object types from typechecker.
+    pub fn set_index_object_types(&mut self, types: HashMap<Span, Type>) {
+        self.index_object_types = types;
     }
 
     /// Initialize struct field indices from resolved program.
@@ -168,11 +179,32 @@ impl Codegen {
                 object,
                 index,
                 value,
+                span,
             } => {
-                self.compile_expr(object, ops)?;
-                self.compile_expr(index, ops)?;
-                self.compile_expr(value, ops)?;
-                ops.push(Op::ArraySet);
+                // Check if the object is a Vector (from type info)
+                let is_vector = self
+                    .index_object_types
+                    .get(span)
+                    .map(|t| matches!(t, Type::Vector(_)))
+                    .unwrap_or(false);
+
+                if is_vector {
+                    // Vector assign: vec[i] = v -> HeapLoad(0) to get data ptr, then HeapStoreDyn
+                    // Vector data layout: [elem0, elem1, ...] - no length prefix
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::HeapLoad(0)); // Get data pointer
+                    self.compile_expr(index, ops)?;
+                    self.compile_expr(value, ops)?;
+                    ops.push(Op::HeapStoreDyn);
+                } else {
+                    // Array/struct assign: direct HeapStoreDyn with +1 offset for length
+                    self.compile_expr(object, ops)?;
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::PushInt(1));
+                    ops.push(Op::Add);
+                    self.compile_expr(value, ops)?;
+                    ops.push(Op::HeapStoreDyn);
+                }
             }
             ResolvedStatement::FieldAssign {
                 object,
@@ -181,11 +213,11 @@ impl Codegen {
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
-                    // Known struct field - use array index assignment
+                    // Known struct field - use heap slot assignment with +1 offset for length
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::PushInt(idx as i64));
+                    ops.push(Op::PushInt((idx + 1) as i64));
                     self.compile_expr(value, ops)?;
-                    ops.push(Op::ArraySet);
+                    ops.push(Op::HeapStoreDyn);
                 } else {
                     // Regular object field assignment
                     self.compile_expr(object, ops)?;
@@ -290,10 +322,12 @@ impl Codegen {
                 let jump_to_end = ops.len();
                 ops.push(Op::JmpIfFalse(0)); // Placeholder
 
-                // x = arr[idx]
+                // x = arr[idx] (with +1 offset for length slot)
                 ops.push(Op::GetL(arr_slot));
                 ops.push(Op::GetL(idx_slot));
-                ops.push(Op::ArrayGet);
+                ops.push(Op::PushInt(1));
+                ops.push(Op::Add);
+                ops.push(Op::HeapLoadDyn);
                 ops.push(Op::SetL(var_slot));
 
                 // Body
@@ -396,11 +430,14 @@ impl Codegen {
                 ops.push(Op::GetL(*slot));
             }
             ResolvedExpr::Array { elements } => {
-                // Push all elements, then allocate array
+                // New array layout: [len, elem0, elem1, ...]
+                // Push length first, then all elements
+                ops.push(Op::PushInt(elements.len() as i64));
                 for elem in elements {
                     self.compile_expr(elem, ops)?;
                 }
-                ops.push(Op::AllocArray(elements.len()));
+                // AllocHeap(n+1) for length + elements
+                ops.push(Op::AllocHeap(elements.len() + 1));
             }
             ResolvedExpr::Object { fields } => {
                 // Push field names and values as pairs
@@ -411,18 +448,41 @@ impl Codegen {
                 }
                 ops.push(Op::New(fields.len()));
             }
-            ResolvedExpr::Index { object, index } => {
-                self.compile_expr(object, ops)?;
-                self.compile_expr(index, ops)?;
-                ops.push(Op::ArrayGet);
+            ResolvedExpr::Index {
+                object,
+                index,
+                span,
+            } => {
+                // Check if the object is a Vector (from type info)
+                let is_vector = self
+                    .index_object_types
+                    .get(span)
+                    .map(|t| matches!(t, Type::Vector(_)))
+                    .unwrap_or(false);
+
+                if is_vector {
+                    // Vector access: vec[i] -> HeapLoad(0) to get data ptr, then HeapLoadDyn
+                    // Vector data layout: [elem0, elem1, ...] - no length prefix
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::HeapLoad(0)); // Get data pointer
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::HeapLoadDyn);
+                } else {
+                    // Array/struct access: direct HeapLoadDyn with +1 offset for length
+                    self.compile_expr(object, ops)?;
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::PushInt(1));
+                    ops.push(Op::Add);
+                    ops.push(Op::HeapLoadDyn);
+                }
             }
             ResolvedExpr::Field { object, field } => {
                 self.compile_expr(object, ops)?;
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
-                    // Known struct field - use array index access
-                    ops.push(Op::PushInt(idx as i64));
-                    ops.push(Op::ArrayGet);
+                    // Known struct field - use heap slot access with +1 offset for length
+                    ops.push(Op::PushInt((idx + 1) as i64));
+                    ops.push(Op::HeapLoadDyn);
                 } else {
                     // Regular object field access
                     let field_idx = self.add_string(field.clone());
@@ -521,7 +581,7 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
-                        ops.push(Op::ArrayPush);
+                        ops.push(Op::VectorPush);
                         // push returns nil
                         ops.push(Op::PushNull);
                     }
@@ -530,7 +590,7 @@ impl Codegen {
                             return Err("pop takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::ArrayPop);
+                        ops.push(Op::VectorPop);
                     }
                     "type_of" => {
                         if args.len() != 1 {
@@ -590,6 +650,92 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ThreadJoin);
                     }
+                    // Vector builtins
+                    // Vector layout: Slots[ptr, len, cap]
+                    "vec_new" => {
+                        if !args.is_empty() {
+                            return Err("vec_new takes no arguments".to_string());
+                        }
+                        // Create empty vector: [ptr=null, len=0, cap=0]
+                        ops.push(Op::PushNull); // ptr = null
+                        ops.push(Op::PushInt(0)); // len = 0
+                        ops.push(Op::PushInt(0)); // cap = 0
+                        ops.push(Op::AllocHeap(3));
+                    }
+                    "vec_with_capacity" => {
+                        if args.len() != 1 {
+                            return Err(
+                                "vec_with_capacity takes exactly 1 argument (capacity)".to_string()
+                            );
+                        }
+                        // Create vector with capacity: [ptr=null, len=0, cap=n]
+                        // Note: data is not pre-allocated, will be allocated on first push
+                        ops.push(Op::PushNull); // ptr = null
+                        ops.push(Op::PushInt(0)); // len = 0
+                        self.compile_expr(&args[0], ops)?; // cap = user specified
+                        ops.push(Op::AllocHeap(3));
+                    }
+                    "vec_push" => {
+                        if args.len() != 2 {
+                            return Err(
+                                "vec_push takes exactly 2 arguments (vector, value)".to_string()
+                            );
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::VectorPush);
+                        ops.push(Op::PushNull); // vec_push returns nil
+                    }
+                    "vec_pop" => {
+                        if args.len() != 1 {
+                            return Err("vec_pop takes exactly 1 argument (vector)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::VectorPop);
+                    }
+                    "vec_len" => {
+                        if args.len() != 1 {
+                            return Err("vec_len takes exactly 1 argument (vector)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(1)); // slot 1 is length
+                    }
+                    "vec_capacity" => {
+                        if args.len() != 1 {
+                            return Err(
+                                "vec_capacity takes exactly 1 argument (vector)".to_string()
+                            );
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(2)); // slot 2 is capacity
+                    }
+                    "vec_get" => {
+                        if args.len() != 2 {
+                            return Err(
+                                "vec_get takes exactly 2 arguments (vector, index)".to_string()
+                            );
+                        }
+                        // Vector layout: [ptr, len, cap]
+                        // Load data ptr, then index into it
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::HeapLoadDyn);
+                    }
+                    "vec_set" => {
+                        if args.len() != 3 {
+                            return Err("vec_set takes exactly 3 arguments (vector, index, value)"
+                                .to_string());
+                        }
+                        // Vector layout: [ptr, len, cap]
+                        // Load data ptr, then store at index
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        self.compile_expr(&args[1], ops)?;
+                        self.compile_expr(&args[2], ops)?;
+                        ops.push(Op::HeapStoreDyn);
+                        ops.push(Op::PushNull); // vec_set returns nil
+                    }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }
             }
@@ -600,11 +746,12 @@ impl Codegen {
                 struct_index: _,
                 fields,
             } => {
-                // Compile struct as an array (tuple) with field values in declaration order
+                // Compile struct as slots with [len, field0, field1, ...] layout
+                ops.push(Op::PushInt(fields.len() as i64));
                 for value in fields {
                     self.compile_expr(value, ops)?;
                 }
-                ops.push(Op::AllocArray(fields.len()));
+                ops.push(Op::AllocHeap(fields.len() + 1));
             }
             ResolvedExpr::MethodCall {
                 object,
@@ -754,16 +901,26 @@ impl Codegen {
                 Ok(Op::SetF(idx))
             }
 
-            // Array operations
-            "AllocArray" => {
-                let n = self.expect_int_arg(args, 0, "AllocArray")? as usize;
-                Ok(Op::AllocArray(n))
+            // Heap slot operations
+            "AllocHeap" => {
+                let n = self.expect_int_arg(args, 0, "AllocHeap")? as usize;
+                Ok(Op::AllocHeap(n))
             }
+            "HeapLoad" => {
+                let n = self.expect_int_arg(args, 0, "HeapLoad")? as usize;
+                Ok(Op::HeapLoad(n))
+            }
+            "HeapStore" => {
+                let n = self.expect_int_arg(args, 0, "HeapStore")? as usize;
+                Ok(Op::HeapStore(n))
+            }
+            "HeapLoadDyn" => Ok(Op::HeapLoadDyn),
+            "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
+
+            // Array/Vector operations
             "ArrayLen" => Ok(Op::ArrayLen),
-            "ArrayGet" => Ok(Op::ArrayGet),
-            "ArraySet" => Ok(Op::ArraySet),
-            "ArrayPush" => Ok(Op::ArrayPush),
-            "ArrayPop" => Ok(Op::ArrayPop),
+            "VectorPush" => Ok(Op::VectorPush),
+            "VectorPop" => Ok(Op::VectorPop),
 
             // Type operations
             "TypeOf" => Ok(Op::TypeOf),

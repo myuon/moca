@@ -753,6 +753,7 @@ impl ResolvedProgramPrinter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 self.write(&format!("{}IndexAssign", prefix));
                 self.newline();
@@ -971,7 +972,7 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedExpr::Index { object, index } => {
+            ResolvedExpr::Index { object, index, .. } => {
                 self.write(&format!("{}Index", prefix));
                 self.newline();
                 let obj_child = format!("{}│   ", parent_prefix);
@@ -1317,13 +1318,8 @@ impl<'a> Disassembler<'a> {
             }
             Op::Ret => self.output.push_str("Ret"),
 
-            // Array operations
-            Op::AllocArray(n) => self.output.push_str(&format!("AllocArray {}", n)),
+            // Array operations (legacy)
             Op::ArrayLen => self.output.push_str("ArrayLen"),
-            Op::ArrayGet => self.output.push_str("ArrayGet"),
-            Op::ArraySet => self.output.push_str("ArraySet"),
-            Op::ArrayPush => self.output.push_str("ArrayPush"),
-            Op::ArrayPop => self.output.push_str("ArrayPop"),
 
             // Object operations
             Op::New(n) => self.output.push_str(&format!("AllocObject {}", n)),
@@ -1352,6 +1348,7 @@ impl<'a> Disassembler<'a> {
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::ToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
+            Op::StrLen => self.output.push_str("StrLen"),
 
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),
@@ -1379,6 +1376,17 @@ impl<'a> Disassembler<'a> {
             Op::ChannelSend => self.output.push_str("ChannelSend"),
             Op::ChannelRecv => self.output.push_str("ChannelRecv"),
             Op::ThreadJoin => self.output.push_str("ThreadJoin"),
+
+            // Heap slot operations
+            Op::AllocHeap(n) => self.output.push_str(&format!("AllocHeap {}", n)),
+            Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
+            Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
+            Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
+            Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
+
+            // Vector operations
+            Op::VectorPush => self.output.push_str("VectorPush"),
+            Op::VectorPop => self.output.push_str("VectorPop"),
         }
     }
 }

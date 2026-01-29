@@ -112,6 +112,7 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
     typechecker
         .check_program(&program)
         .map_err(|errors| format_type_errors(filename, &errors))?;
+    let index_object_types = typechecker.index_object_types().clone();
 
     // Name resolution
     let mut resolver = Resolver::new(filename);
@@ -119,6 +120,7 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
 
     // Code generation
     let mut codegen = Codegen::new();
+    codegen.set_index_object_types(index_object_types);
     let chunk = codegen.compile(resolved)?;
 
     // Execution
@@ -169,6 +171,7 @@ pub fn run_file_capturing_output(
         typechecker
             .check_program(&program)
             .map_err(|errors| format_type_errors(&filename, &errors))?;
+        let index_object_types = typechecker.index_object_types().clone();
 
         // Name resolution
         let mut resolver = Resolver::new(&filename);
@@ -176,6 +179,7 @@ pub fn run_file_capturing_output(
 
         // Code generation
         let mut codegen = Codegen::new();
+        codegen.set_index_object_types(index_object_types);
         let chunk = codegen.compile(resolved)?;
 
         // Execution with output capture using a wrapper that writes to the shared buffer
@@ -233,6 +237,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     typechecker
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
+    let index_object_types = typechecker.index_object_types().clone();
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -240,6 +245,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Code generation
     let mut codegen = Codegen::new();
+    codegen.set_index_object_types(index_object_types);
     let chunk = codegen.compile(resolved)?;
 
     // Log JIT settings if tracing is enabled
@@ -296,6 +302,7 @@ pub fn run_file_with_dump(
     typechecker
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
+    let index_object_types = typechecker.index_object_types().clone();
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -309,6 +316,7 @@ pub fn run_file_with_dump(
 
     // Code generation
     let mut codegen = Codegen::new();
+    codegen.set_index_object_types(index_object_types);
     let chunk = codegen.compile(resolved)?;
 
     // Dump bytecode if requested
@@ -408,6 +416,7 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
     typechecker
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
+    let index_object_types = typechecker.index_object_types().clone();
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -415,6 +424,7 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
 
     // Code generation
     let mut codegen = Codegen::new();
+    codegen.set_index_object_types(index_object_types);
     let chunk = codegen.compile(resolved)?;
 
     Ok(dump::format_bytecode(&chunk))

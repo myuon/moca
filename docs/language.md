@@ -23,7 +23,8 @@ This document defines the syntax and semantics of the Moca programming language.
 | Type | Representation | Notes |
 |------|----------------|-------|
 | `string` | Heap object | UTF-8, immutable |
-| `array` | Heap object | Variable-length array of Values |
+| `array` | Heap object | Fixed-length array of Values |
+| `Vector` | Heap object | Dynamic array with ptr/len/cap layout |
 | `object` | Heap object | Field name → Value mapping |
 
 ## Syntax
@@ -112,6 +113,33 @@ obj.y = 30;
 // nil
 let nothing = nil;
 ```
+
+### Vector Operations
+
+```
+// Create a new vector
+var vec = vec_new();
+
+// Push elements
+vec_push(vec, 10);
+vec_push(vec, 20);
+vec_push(vec, 30);
+
+// Access elements using index syntax (same as array)
+let first = vec[0];    // Read: returns 10
+vec[1] = 25;           // Write: sets vec[1] to 25
+
+// Get length and capacity
+let length = vec_len(vec);       // Current length
+let capacity = vec_capacity(vec); // Current capacity
+
+// Pop element
+let last = vec_pop(vec);  // Removes and returns last element
+```
+
+**Note:** Vector index access (`vec[i]`) uses the type system to differentiate from array access. The compiler generates different bytecode:
+- **Vector**: `HeapLoad(0)` (get data ptr) → `HeapLoadDyn`/`HeapStoreDyn`
+- **Array**: Direct `HeapLoadDyn`/`HeapStoreDyn`
 
 ### Exception Handling
 
@@ -242,6 +270,19 @@ obj_fields  = IDENT ":" expr { "," IDENT ":" expr } ;
 | `parse_int(s)` | Parse string to integer |
 | `spawn(fn)` | Spawn a new thread |
 | `channel()` | Create a channel pair (tx, rx) |
+
+### Vector Functions
+
+| Function | Description |
+|----------|-------------|
+| `vec_new()` | Create an empty vector |
+| `vec_with_capacity(n)` | Create a vector with initial capacity |
+| `vec_push(vec, v)` | Append element to vector |
+| `vec_pop(vec)` | Remove and return last element |
+| `vec_len(vec)` | Get current length |
+| `vec_capacity(vec)` | Get current capacity |
+| `vec_get(vec, i)` | Get element at index (alternative to `vec[i]`) |
+| `vec_set(vec, i, v)` | Set element at index (alternative to `vec[i] = v`) |
 
 ## Error Format
 
