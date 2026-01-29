@@ -152,9 +152,42 @@ TRY_END                     // End try block
 ### Built-in Operations
 
 ```
-PRINT               // Output stack top to stdout
+PRINT_DEBUG         // Debug output stack top to stdout
 GC_HINT <bytes>     // Hint GC about allocation
 ```
+
+### Syscall Operations
+
+```
+SYSCALL <num> <argc>  // Execute system call
+```
+
+#### Syscall Numbers
+
+| Number | Name  | Arguments               | Return Value        |
+|--------|-------|-------------------------|---------------------|
+| 1      | write | fd, buf (string), count | bytes written or -1 |
+
+#### write Syscall
+
+```
+syscall_write(fd: int, buf: string, count: int) -> int
+```
+
+- **fd**: File descriptor (1 = stdout, 2 = stderr)
+- **buf**: String buffer to write
+- **count**: Number of bytes to write (truncated to string length if larger)
+- **Returns**: Number of bytes written, or -1 if fd is invalid
+
+**Example:**
+```moca
+let n = syscall_write(1, "hello", 5);  // writes "hello" to stdout, returns 5
+syscall_write(2, "error\n", 6);        // writes to stderr
+```
+
+**Constraints:**
+- Only fd=1 (stdout) and fd=2 (stderr) are supported
+- Other fd values return -1 without writing
 
 ## Garbage Collection
 
