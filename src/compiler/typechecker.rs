@@ -226,6 +226,7 @@ impl TypeChecker {
                     "bool" => Ok(Type::Bool),
                     "string" => Ok(Type::String),
                     "nil" => Ok(Type::Nil),
+                    "any" => Ok(Type::Any),
                     _ => {
                         // Try to find a struct with this name
                         if let Some(info) = self.structs.get(name) {
