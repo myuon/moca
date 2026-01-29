@@ -74,7 +74,7 @@ jobs:
           cargo llvm-cov --no-report > /dev/null 2>&1
           echo "| File | Coverage | |" > coverage.md
           echo "|------|----------|---|" >> coverage.md
-          cargo llvm-cov report 2>&1 | grep -E '^(compiler/|TOTAL)' | awk '{
+          cargo llvm-cov report 2>&1 | grep -E '^[a-z]' | awk '{
             file = $1
             # Line coverage is the 9th column (after Lines, Missed Lines)
             for (i=1; i<=NF; i++) {
