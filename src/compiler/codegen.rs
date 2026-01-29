@@ -563,8 +563,27 @@ impl Codegen {
                         if args.len() != 1 {
                             return Err("print/print_debug takes exactly 1 argument".to_string());
                         }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::PrintDebug);
+                        // If argument is a string literal, use syscall_write directly
+                        if let ResolvedExpr::Str(s) = &args[0] {
+                            let str_len = s.len();
+                            // Push: fd=1, string, count
+                            ops.push(Op::PushInt(1)); // stdout
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::PushInt(str_len as i64));
+                            ops.push(Op::Syscall(1, 3)); // write syscall
+                            ops.push(Op::Pop); // discard syscall return value
+                            // Print newline
+                            let newline_idx = self.add_string("\n".to_string());
+                            ops.push(Op::PushInt(1)); // stdout
+                            ops.push(Op::PushString(newline_idx));
+                            ops.push(Op::PushInt(1)); // count=1
+                            ops.push(Op::Syscall(1, 3));
+                            ops.push(Op::Pop); // discard return value
+                            ops.push(Op::PushNull); // print returns nil
+                        } else {
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::PrintDebug);
+                        }
                     }
                     "syscall_write" => {
                         // syscall_write(fd, buf, count) -> bytes_written
