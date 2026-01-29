@@ -1350,8 +1350,6 @@ impl<'a> Disassembler<'a> {
             Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
 
             // Vector operations
-            Op::AllocVector => self.output.push_str("AllocVector"),
-            Op::AllocVectorCap => self.output.push_str("AllocVectorCap"),
             Op::VectorPush => self.output.push_str("VectorPush"),
             Op::VectorPop => self.output.push_str("VectorPop"),
         }

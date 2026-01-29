@@ -1459,6 +1459,27 @@ impl TypeChecker {
                 self.infer_expr(&args[0], env);
                 Some(Type::Int)
             }
+            "vec_get" => {
+                if args.len() != 2 {
+                    self.errors
+                        .push(TypeError::new("vec_get expects 2 arguments (vector, index)", span));
+                    return Some(self.fresh_var());
+                }
+                self.infer_expr(&args[0], env);
+                self.infer_expr(&args[1], env);
+                Some(self.fresh_var())
+            }
+            "vec_set" => {
+                if args.len() != 3 {
+                    self.errors
+                        .push(TypeError::new("vec_set expects 3 arguments (vector, index, value)", span));
+                    return Some(Type::Nil);
+                }
+                self.infer_expr(&args[0], env);
+                self.infer_expr(&args[1], env);
+                self.infer_expr(&args[2], env);
+                Some(Type::Nil)
+            }
             _ => None,
         }
     }

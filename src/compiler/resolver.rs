@@ -188,6 +188,8 @@ impl<'a> Resolver<'a> {
                 "vec_pop".to_string(),
                 "vec_len".to_string(),
                 "vec_capacity".to_string(),
+                "vec_get".to_string(),
+                "vec_set".to_string(),
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),

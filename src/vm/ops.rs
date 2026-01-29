@@ -88,10 +88,8 @@ pub enum Op {
     HeapStoreDyn,        // Store to slot at dynamic index: [ref, index, value] -> []
 
     // ========================================
-    // Vector operations
+    // Vector operations (Vector = Slots[ptr, len, cap])
     // ========================================
-    AllocVector,         // Allocate empty vector: [] -> [ref] (ptr=None, len=0, cap=0)
-    AllocVectorCap,      // Allocate vector with capacity: [cap] -> [ref]
     VectorPush,          // Push value to vector: [vec, value] -> []
     VectorPop,           // Pop value from vector: [vec] -> [value]
 

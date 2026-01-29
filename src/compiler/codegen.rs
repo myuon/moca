@@ -601,20 +601,27 @@ impl Codegen {
                         ops.push(Op::ThreadJoin);
                     }
                     // Vector builtins
+                    // Vector layout: Slots[ptr, len, cap]
                     "vec_new" => {
                         if !args.is_empty() {
                             return Err("vec_new takes no arguments".to_string());
                         }
-                        // Create empty vector using AllocVector
-                        ops.push(Op::AllocVector);
+                        // Create empty vector: [ptr=null, len=0, cap=0]
+                        ops.push(Op::PushNull);   // ptr = null
+                        ops.push(Op::PushInt(0)); // len = 0
+                        ops.push(Op::PushInt(0)); // cap = 0
+                        ops.push(Op::AllocHeap(3));
                     }
                     "vec_with_capacity" => {
                         if args.len() != 1 {
                             return Err("vec_with_capacity takes exactly 1 argument (capacity)".to_string());
                         }
-                        // Create vector with capacity using AllocVectorCap
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::AllocVectorCap);
+                        // Create vector with capacity: [ptr=null, len=0, cap=n]
+                        // Note: data is not pre-allocated, will be allocated on first push
+                        ops.push(Op::PushNull);   // ptr = null
+                        ops.push(Op::PushInt(0)); // len = 0
+                        self.compile_expr(&args[0], ops)?; // cap = user specified
+                        ops.push(Op::AllocHeap(3));
                     }
                     "vec_push" => {
                         if args.len() != 2 {
@@ -645,6 +652,30 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::HeapLoad(2)); // slot 2 is capacity
+                    }
+                    "vec_get" => {
+                        if args.len() != 2 {
+                            return Err("vec_get takes exactly 2 arguments (vector, index)".to_string());
+                        }
+                        // Vector layout: [ptr, len, cap]
+                        // Load data ptr, then index into it
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::HeapLoadDyn);
+                    }
+                    "vec_set" => {
+                        if args.len() != 3 {
+                            return Err("vec_set takes exactly 3 arguments (vector, index, value)".to_string());
+                        }
+                        // Vector layout: [ptr, len, cap]
+                        // Load data ptr, then store at index
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        self.compile_expr(&args[1], ops)?;
+                        self.compile_expr(&args[2], ops)?;
+                        ops.push(Op::HeapStoreDyn);
+                        ops.push(Op::PushNull); // vec_set returns nil
                     }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }

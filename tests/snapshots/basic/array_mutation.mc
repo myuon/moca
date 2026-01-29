@@ -10,7 +10,7 @@ vec_push(vec, 20);
 vec_push(vec, 30);
 vec_push(vec, 40);
 print(vec_len(vec));
-print(vec[3]);
+print(vec_get(vec, 3));
 let last = vec_pop(vec);
 print(last);
 print(vec_len(vec));

@@ -433,8 +433,6 @@ impl Verifier {
             Op::HeapStoreDyn => (3, 0),   // pops ref, index, and value
 
             // Vector operations
-            Op::AllocVector => (0, 1),    // pushes new vector ref
-            Op::AllocVectorCap => (1, 1), // pops capacity, pushes new vector ref
             Op::VectorPush => (2, 0),     // pops vector and value
             Op::VectorPop => (1, 1),      // pops vector, pushes value
         }

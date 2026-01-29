@@ -9,7 +9,7 @@ vec_push(vec, 2);
 vec_push(vec, 3);
 vec_push(vec, 4);
 print(vec_len(vec));
-print(vec[3]);
+print(vec_get(vec, 3));
 
 let popped = vec_pop(vec);
 print(popped);
