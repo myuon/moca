@@ -1356,7 +1356,7 @@ impl<'a> Disassembler<'a> {
             Op::TryEnd => self.output.push_str("TryEnd"),
 
             // Builtins
-            Op::Print => self.output.push_str("Print"),
+            Op::PrintDebug => self.output.push_str("PrintDebug"),
 
             // GC hint
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),

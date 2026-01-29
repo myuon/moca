@@ -188,7 +188,7 @@ mod tests {
                 name: "main".to_string(),
                 arity: 0,
                 locals_count: 0,
-                code: vec![Op::PushInt(42), Op::Print, Op::Ret],
+                code: vec![Op::PushInt(42), Op::PrintDebug, Op::Ret],
                 stackmap: None,
             },
             strings: vec![],

@@ -858,7 +858,7 @@ impl VM {
             Op::TryEnd => {
                 self.try_frames.pop();
             }
-            Op::Print => {
+            Op::PrintDebug => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
                 writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;

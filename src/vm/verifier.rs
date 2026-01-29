@@ -413,7 +413,7 @@ impl Verifier {
             Op::TryEnd => (0, 0),
 
             // Builtins
-            Op::Print => (1, 0),
+            Op::PrintDebug => (1, 0),
 
             // GC hint
             Op::GcHint(_) => (0, 0),

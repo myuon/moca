@@ -559,12 +559,12 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args } => {
                 match name.as_str() {
-                    "print" => {
+                    "print" | "print_debug" => {
                         if args.len() != 1 {
-                            return Err("print takes exactly 1 argument".to_string());
+                            return Err("print/print_debug takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::Print);
+                        ops.push(Op::PrintDebug);
                     }
                     "len" => {
                         if args.len() != 1 {
@@ -1037,7 +1037,7 @@ mod tests {
     fn test_simple_print() {
         let chunk = compile("print(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::PushInt(42)));
-        assert!(chunk.main.code.contains(&Op::Print));
+        assert!(chunk.main.code.contains(&Op::PrintDebug));
     }
 
     #[test]
