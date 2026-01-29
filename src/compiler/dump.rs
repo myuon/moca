@@ -1356,7 +1356,7 @@ impl<'a> Disassembler<'a> {
             Op::TryEnd => self.output.push_str("TryEnd"),
 
             // Builtins
-            Op::Print => self.output.push_str("Print"),
+            Op::PrintDebug => self.output.push_str("PrintDebug"),
 
             // GC hint
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
@@ -1387,6 +1387,9 @@ impl<'a> Disassembler<'a> {
             // Vector operations
             Op::VectorPush => self.output.push_str("VectorPush"),
             Op::VectorPop => self.output.push_str("VectorPop"),
+
+            // Syscall operations
+            Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
         }
     }
 }
@@ -1489,9 +1492,9 @@ mod tests {
 
     #[test]
     fn test_resolved_builtin() {
-        let resolved = resolve("print(42);");
+        let resolved = resolve("print_debug(42);");
         let output = format_resolved(&resolved);
-        assert!(output.contains("Builtin(print)"));
+        assert!(output.contains("Builtin(print_debug)"));
     }
 
     // Bytecode disassembler tests
@@ -1507,18 +1510,18 @@ mod tests {
 
     #[test]
     fn test_bytecode_simple() {
-        let chunk = compile("let x = 42; print(x);");
+        let chunk = compile("let x = 42; print_debug(x);");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Main =="));
         assert!(output.contains("PushInt 42"));
         assert!(output.contains("SetL")); // renamed from StoreLocal
         assert!(output.contains("GetL")); // renamed from LoadLocal
-        assert!(output.contains("Print"));
+        assert!(output.contains("PrintDebug"));
     }
 
     #[test]
     fn test_bytecode_function() {
-        let chunk = compile("fun add(a, b) { return a + b; } print(add(1, 2));");
+        let chunk = compile("fun add(a, b) { return a + b; } print_debug(add(1, 2));");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Function[0]: add"));
         assert!(output.contains("GetL 0")); // renamed from LoadLocal
@@ -1530,7 +1533,7 @@ mod tests {
 
     #[test]
     fn test_bytecode_control_flow() {
-        let chunk = compile("if true { print(1); } else { print(2); }");
+        let chunk = compile("if true { print_debug(1); } else { print_debug(2); }");
         let output = format_bytecode(&chunk);
         assert!(output.contains("PushTrue"));
         assert!(output.contains("JmpIfFalse"));
@@ -1539,7 +1542,7 @@ mod tests {
 
     #[test]
     fn test_bytecode_string_constants() {
-        let chunk = compile(r#"let s = "hello"; print(s);"#);
+        let chunk = compile(r#"let s = "hello"; print_debug(s);"#);
         let output = format_bytecode(&chunk);
         assert!(output.contains("== String Constants =="));
         assert!(output.contains("\"hello\""));

@@ -413,7 +413,7 @@ impl Verifier {
             Op::TryEnd => (0, 0),
 
             // Builtins
-            Op::Print => (1, 0),
+            Op::PrintDebug => (1, 0),
 
             // GC hint
             Op::GcHint(_) => (0, 0),
@@ -435,6 +435,9 @@ impl Verifier {
             // Vector operations
             Op::VectorPush => (2, 0), // pops vector and value
             Op::VectorPop => (1, 1),  // pops vector, pushes value
+
+            // Syscall
+            Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
         }
     }
 }

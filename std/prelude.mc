@@ -2,6 +2,22 @@
 // This file is automatically loaded when running Moca programs.
 
 // ============================================================================
+// I/O Functions (using syscall_write)
+// ============================================================================
+
+// Print a string to stdout without a newline.
+fun print_str(s: string) {
+    let n = len(s);
+    syscall_write(1, s, n);
+}
+
+// Print a string to stderr without a newline.
+fun eprint_str(s: string) {
+    let n = len(s);
+    syscall_write(2, s, n);
+}
+
+// ============================================================================
 // Testing / Assertion Functions
 // ============================================================================
 

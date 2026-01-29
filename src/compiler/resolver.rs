@@ -188,6 +188,7 @@ impl<'a> Resolver<'a> {
             functions: HashMap::new(),
             builtins: vec![
                 "print".to_string(),
+                "print_debug".to_string(),
                 "len".to_string(),
                 "push".to_string(),
                 "pop".to_string(),
@@ -209,6 +210,8 @@ impl<'a> Resolver<'a> {
                 "vec_capacity".to_string(),
                 "vec_get".to_string(),
                 "vec_set".to_string(),
+                // Syscall operations
+                "syscall_write".to_string(),
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),
@@ -273,6 +276,16 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .position(|f| f.name == fn_def.name)
                 .unwrap();
+            // Check for builtin name collision
+            if self.builtins.contains(&fn_def.name) {
+                return Err(self.error(
+                    &format!(
+                        "cannot define function '{}': name is reserved for builtin",
+                        fn_def.name
+                    ),
+                    fn_def.span,
+                ));
+            }
             if self.functions.contains_key(&fn_def.name) {
                 return Err(self.error(
                     &format!("function '{}' already defined", fn_def.name),
@@ -932,13 +945,13 @@ mod tests {
 
     #[test]
     fn test_simple_resolution() {
-        let program = resolve("let x = 42; print(x);").unwrap();
+        let program = resolve("let x = 42; print_debug(x);").unwrap();
         assert_eq!(program.main_body.len(), 2);
     }
 
     #[test]
     fn test_undefined_variable() {
-        let result = resolve("print(x);");
+        let result = resolve("print_debug(x);");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("undefined variable"));
     }

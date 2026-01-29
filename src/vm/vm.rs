@@ -70,18 +70,20 @@ pub struct VM {
     jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
-    /// Output stream for print statements
+    /// Output stream for print statements (stdout)
     output: Box<dyn Write>,
+    /// Output stream for stderr
+    stderr: Box<dyn Write>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self::new_with_config(None, true, Box::new(io::stdout()))
+        Self::new_with_config(None, true, Box::new(io::stdout()), Box::new(io::stderr()))
     }
 
     /// Create a VM with a custom output stream.
     pub fn with_output(output: Box<dyn Write>) -> Self {
-        Self::new_with_config(None, true, output)
+        Self::new_with_config(None, true, output, Box::new(io::stderr()))
     }
 
     /// Create a new VM with custom heap configuration.
@@ -90,7 +92,12 @@ impl VM {
     /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
     /// * `gc_enabled` - Whether GC is enabled
     pub fn new_with_heap_config(heap_limit: Option<usize>, gc_enabled: bool) -> Self {
-        Self::new_with_config(heap_limit, gc_enabled, Box::new(io::stdout()))
+        Self::new_with_config(
+            heap_limit,
+            gc_enabled,
+            Box::new(io::stdout()),
+            Box::new(io::stderr()),
+        )
     }
 
     /// Create a new VM with full configuration.
@@ -98,11 +105,13 @@ impl VM {
     /// # Arguments
     /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
     /// * `gc_enabled` - Whether GC is enabled
-    /// * `output` - Output stream for print statements
+    /// * `output` - Output stream for print statements (stdout)
+    /// * `stderr` - Output stream for stderr
     pub fn new_with_config(
         heap_limit: Option<usize>,
         gc_enabled: bool,
         output: Box<dyn Write>,
+        stderr: Box<dyn Write>,
     ) -> Self {
         Self {
             stack: Vec::with_capacity(1024),
@@ -121,6 +130,7 @@ impl VM {
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
             output,
+            stderr,
         }
     }
 
@@ -858,7 +868,7 @@ impl VM {
             Op::TryEnd => {
                 self.try_frames.pop();
             }
-            Op::Print => {
+            Op::PrintDebug => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
                 writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
@@ -1208,6 +1218,17 @@ impl VM {
 
                 self.stack.push(value);
             }
+            Op::Syscall(syscall_num, argc) => {
+                // Collect arguments from stack
+                let mut args = Vec::with_capacity(argc);
+                for _ in 0..argc {
+                    args.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                args.reverse(); // Arguments were popped in reverse order
+
+                let result = self.handle_syscall(syscall_num, &args)?;
+                self.stack.push(result);
+            }
         }
 
         Ok(ControlFlow::Continue)
@@ -1430,6 +1451,73 @@ impl VM {
         // Collect all roots from the stack
         let roots: Vec<Value> = self.stack.clone();
         self.heap.collect(&roots);
+    }
+
+    /// Handle syscall instructions
+    /// Syscall numbers:
+    /// - 1: write(fd, buf, count) -> bytes_written
+    fn handle_syscall(&mut self, syscall_num: usize, args: &[Value]) -> Result<Value, String> {
+        const SYSCALL_WRITE: usize = 1;
+
+        match syscall_num {
+            SYSCALL_WRITE => {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "write syscall expects 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "write: fd must be an integer".to_string())?;
+                let buf_ref = match &args[1] {
+                    Value::Ref(r) => *r,
+                    _ => return Err("write: buf must be a string".to_string()),
+                };
+                let count = args[2]
+                    .as_i64()
+                    .ok_or_else(|| "write: count must be an integer".to_string())?;
+
+                // Get the string from heap
+                let heap_obj = self
+                    .heap
+                    .get(buf_ref)
+                    .ok_or_else(|| "write: invalid reference".to_string())?;
+                let moca_str = heap_obj
+                    .as_string()
+                    .ok_or_else(|| "write: buf must be a string".to_string())?;
+                let buf_str = &moca_str.value;
+
+                // Validate fd (only 1=stdout, 2=stderr allowed)
+                if fd != 1 && fd != 2 {
+                    return Ok(Value::I64(-1)); // Invalid fd
+                }
+
+                // Calculate actual bytes to write
+                let buf_bytes = buf_str.as_bytes();
+                let actual_count = (count as usize).min(buf_bytes.len());
+                let bytes_to_write = &buf_bytes[..actual_count];
+
+                // Write to the appropriate output
+                let result = if fd == 1 {
+                    // stdout
+                    self.output
+                        .write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(-1)
+                } else {
+                    // stderr
+                    self.stderr
+                        .write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(-1)
+                };
+
+                Ok(Value::I64(result))
+            }
+            _ => Err(format!("unknown syscall: {}", syscall_num)),
+        }
     }
 }
 
