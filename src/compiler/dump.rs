@@ -1285,8 +1285,6 @@ impl<'a> Disassembler<'a> {
 
             // Array operations (legacy)
             Op::ArrayLen => self.output.push_str("ArrayLen"),
-            Op::ArrayPush => self.output.push_str("ArrayPush"),
-            Op::ArrayPop => self.output.push_str("ArrayPop"),
 
             // Object operations
             Op::New(n) => self.output.push_str(&format!("AllocObject {}", n)),
@@ -1350,6 +1348,12 @@ impl<'a> Disassembler<'a> {
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
             Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
+
+            // Vector operations
+            Op::AllocVector => self.output.push_str("AllocVector"),
+            Op::AllocVectorCap => self.output.push_str("AllocVectorCap"),
+            Op::VectorPush => self.output.push_str("VectorPush"),
+            Op::VectorPop => self.output.push_str("VectorPop"),
         }
     }
 }

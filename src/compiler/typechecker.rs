@@ -1441,6 +1441,15 @@ impl TypeChecker {
                 self.infer_expr(&args[0], env);
                 Some(self.fresh_var())
             }
+            "vec_len" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_len expects 1 argument", span));
+                    return Some(Type::Int);
+                }
+                self.infer_expr(&args[0], env);
+                Some(Type::Int)
+            }
             "vec_capacity" => {
                 if args.len() != 1 {
                     self.errors

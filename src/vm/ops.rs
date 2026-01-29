@@ -74,11 +74,9 @@ pub enum Op {
     SetF(usize), // SETF: Set field with write barrier
 
     // ========================================
-    // Array operations (legacy, kept for compatibility)
+    // Array operations (legacy, kept for len() on multiple types)
     // ========================================
-    ArrayLen,          // Works on both Array and Slots types
-    ArrayPush,         // stack: [array, value] -> []
-    ArrayPop,          // stack: [array] -> [value]
+    ArrayLen,          // Works on Array, Slots, Vector, and String types
 
     // ========================================
     // Heap slot operations (low-level array support)
@@ -88,6 +86,14 @@ pub enum Op {
     HeapStore(usize),    // Store to slot at static offset: [ref, value] -> []
     HeapLoadDyn,         // Load slot at dynamic index: [ref, index] -> [value]
     HeapStoreDyn,        // Store to slot at dynamic index: [ref, index, value] -> []
+
+    // ========================================
+    // Vector operations
+    // ========================================
+    AllocVector,         // Allocate empty vector: [] -> [ref] (ptr=None, len=0, cap=0)
+    AllocVectorCap,      // Allocate vector with capacity: [cap] -> [ref]
+    VectorPush,          // Push value to vector: [vec, value] -> []
+    VectorPop,           // Pop value from vector: [vec] -> [value]
 
     // ========================================
     // Type operations

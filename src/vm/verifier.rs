@@ -400,8 +400,6 @@ impl Verifier {
 
             // Array operations (legacy, kept for compatibility)
             Op::ArrayLen => (1, 1),
-            Op::ArrayPush => (2, 0), // pops array and value
-            Op::ArrayPop => (1, 1),  // pops array, pushes value
 
             // Type operations
             Op::TypeOf => (1, 1),
@@ -433,6 +431,12 @@ impl Verifier {
             Op::HeapStore(_) => (2, 0),   // pops ref and value
             Op::HeapLoadDyn => (2, 1),    // pops ref and index, pushes value
             Op::HeapStoreDyn => (3, 0),   // pops ref, index, and value
+
+            // Vector operations
+            Op::AllocVector => (0, 1),    // pushes new vector ref
+            Op::AllocVectorCap => (1, 1), // pops capacity, pushes new vector ref
+            Op::VectorPush => (2, 0),     // pops vector and value
+            Op::VectorPop => (1, 1),      // pops vector, pushes value
         }
     }
 }

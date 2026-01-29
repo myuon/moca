@@ -712,61 +712,13 @@ impl VM {
                     slots.slots.first()
                         .and_then(|v| v.as_i64())
                         .ok_or("runtime error: invalid slots length")?
+                } else if let Some(vec) = obj.as_vector() {
+                    // For Vector, len is stored directly in the struct
+                    vec.len
                 } else {
                     return Err("runtime error: len expects array or string".to_string());
                 };
                 self.stack.push(Value::I64(len));
-            }
-            Op::ArrayPush => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ref().ok_or("runtime error: expected array")?;
-
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-
-                // Support both Array and Slots types
-                if let Some(arr) = obj.as_array_mut() {
-                    arr.elements.push(value);
-                } else if let Some(slots) = obj.as_slots_mut() {
-                    // For Slots: push value and update length in slot[0]
-                    slots.slots.push(value);
-                    let new_len = (slots.slots.len() - 1) as i64; // -1 because slot[0] is length
-                    slots.slots[0] = Value::I64(new_len);
-                } else {
-                    return Err("runtime error: expected array".to_string());
-                }
-            }
-            Op::ArrayPop => {
-                let arr = self.stack.pop().ok_or("stack underflow")?;
-                let r = arr.as_ref().ok_or("runtime error: expected array")?;
-
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-
-                // Support both Array and Slots types
-                if let Some(arr) = obj.as_array_mut() {
-                    let value = arr
-                        .elements
-                        .pop()
-                        .ok_or("runtime error: cannot pop from empty array")?;
-                    self.stack.push(value);
-                } else if let Some(slots) = obj.as_slots_mut() {
-                    // For Slots: pop value and update length in slot[0]
-                    if slots.slots.len() <= 1 {
-                        return Err("runtime error: cannot pop from empty array".to_string());
-                    }
-                    let value = slots.slots.pop().ok_or("runtime error: cannot pop from empty array")?;
-                    let new_len = (slots.slots.len() - 1) as i64; // -1 because slot[0] is length
-                    slots.slots[0] = Value::I64(new_len);
-                    self.stack.push(value);
-                } else {
-                    return Err("runtime error: expected array".to_string());
-                }
             }
             Op::New(n) => {
                 let mut fields = HashMap::new();
@@ -1019,11 +971,22 @@ impl VM {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let slots = obj.as_slots().ok_or("runtime error: expected slots object")?;
-                if offset >= slots.slots.len() {
-                    return Err(format!("runtime error: slot index {} out of bounds", offset));
+                if let Some(vec) = obj.as_vector() {
+                    // Vector: offset 0=ptr, 1=len, 2=cap
+                    let value = match offset {
+                        0 => vec.ptr.map(Value::Ref).unwrap_or(Value::Null),
+                        1 => Value::I64(vec.len),
+                        2 => Value::I64(vec.cap),
+                        _ => return Err(format!("runtime error: vector slot index {} out of bounds", offset)),
+                    };
+                    self.stack.push(value);
+                } else {
+                    let slots = obj.as_slots().ok_or("runtime error: expected slots object")?;
+                    if offset >= slots.slots.len() {
+                        return Err(format!("runtime error: slot index {} out of bounds", offset));
+                    }
+                    self.stack.push(slots.slots[offset]);
                 }
-                self.stack.push(slots.slots[offset]);
             }
             Op::HeapStore(offset) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -1042,8 +1005,19 @@ impl VM {
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                // Support both Slots and String types
-                if let Some(slots) = obj.as_slots() {
+                // Support Slots, String, and Vector types
+                if let Some(vec) = obj.as_vector() {
+                    // Vector indexing: read from the data storage
+                    // Codegen adds +1 for fixed arrays, so subtract 1 for vectors
+                    let actual_index = index - 1;
+                    if actual_index < 0 || actual_index >= vec.len {
+                        return Err(format!("runtime error: vector index {} out of bounds (length {})", actual_index, vec.len));
+                    }
+                    let data_ptr = vec.ptr.ok_or("runtime error: vector has no data")?;
+                    let data_obj = self.heap.get(data_ptr).ok_or("runtime error: invalid data reference")?;
+                    let slots = data_obj.as_slots().ok_or("runtime error: vector data is not slots")?;
+                    self.stack.push(slots.slots[actual_index as usize]);
+                } else if let Some(slots) = obj.as_slots() {
                     if index < 0 || index as usize >= slots.slots.len() {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
@@ -1062,7 +1036,7 @@ impl VM {
                     let byte_value = bytes[actual_index as usize] as i64;
                     self.stack.push(Value::I64(byte_value));
                 } else {
-                    return Err("runtime error: expected slots or string".to_string());
+                    return Err("runtime error: expected slots, string, or vector".to_string());
                 }
             }
             Op::HeapStoreDyn => {
@@ -1070,12 +1044,153 @@ impl VM {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
-                let slots = obj.as_slots_mut().ok_or("runtime error: expected slots object")?;
-                if index < 0 || index as usize >= slots.slots.len() {
-                    return Err(format!("runtime error: slot index {} out of bounds", index));
+
+                // Check if it's a Vector first (read-only borrow)
+                let is_vector = {
+                    let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                    obj.as_vector().is_some()
+                };
+
+                if is_vector {
+                    // Vector indexing: write to the data storage
+                    // Codegen adds +1 for fixed arrays, so subtract 1 for vectors
+                    let actual_index = index - 1;
+                    let data_ptr = {
+                        let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                        let vec = obj.as_vector().ok_or("runtime error: expected vector")?;
+                        if actual_index < 0 || actual_index >= vec.len {
+                            return Err(format!("runtime error: vector index {} out of bounds (length {})", actual_index, vec.len));
+                        }
+                        vec.ptr.ok_or("runtime error: vector has no data")?
+                    };
+                    let data_obj = self.heap.get_mut(data_ptr).ok_or("runtime error: invalid data reference")?;
+                    let slots = data_obj.as_slots_mut().ok_or("runtime error: vector data is not slots")?;
+                    slots.slots[actual_index as usize] = value;
+                } else {
+                    let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                    let slots = obj.as_slots_mut().ok_or("runtime error: expected slots object")?;
+                    if index < 0 || index as usize >= slots.slots.len() {
+                        return Err(format!("runtime error: slot index {} out of bounds", index));
+                    }
+                    slots.slots[index as usize] = value;
                 }
-                slots.slots[index as usize] = value;
+            }
+            Op::AllocVector => {
+                // Allocate empty vector: [] -> [ref]
+                let r = self.heap.alloc_vector(None, 0, 0)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::AllocVectorCap => {
+                // Allocate vector with capacity: [cap] -> [ref]
+                let cap = self.pop_int()?;
+                if cap < 0 {
+                    return Err("runtime error: vector capacity cannot be negative".to_string());
+                }
+                let cap = cap as usize;
+                // Allocate data storage if capacity > 0
+                let data_ref = if cap > 0 {
+                    let slots: Vec<Value> = vec![Value::Null; cap];
+                    Some(self.heap.alloc_slots(slots)?)
+                } else {
+                    None
+                };
+                let r = self.heap.alloc_vector(data_ref, 0, cap as i64)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::VectorPush => {
+                // Push value to vector: [vec, value] -> []
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let vec_val = self.stack.pop().ok_or("stack underflow")?;
+                let vec_ref = vec_val.as_ref().ok_or("runtime error: expected vector reference")?;
+
+                // Get vector and check if we need to grow
+                let (data_ptr, len, cap) = {
+                    let vec_obj = self.heap.get(vec_ref).ok_or("runtime error: invalid reference")?;
+                    let vec = vec_obj.as_vector().ok_or("runtime error: expected vector")?;
+                    (vec.ptr, vec.len, vec.cap)
+                };
+
+                if len >= cap {
+                    // Need to grow: new capacity is max(8, cap * 2)
+                    let new_cap = if cap == 0 { 8 } else { cap * 2 };
+
+                    // Allocate new data storage
+                    let new_data: Vec<Value> = vec![Value::Null; new_cap as usize];
+                    let new_data_ref = self.heap.alloc_slots(new_data)?;
+
+                    // Copy old data to new storage if exists
+                    if let Some(old_ptr) = data_ptr {
+                        for i in 0..len as usize {
+                            let old_val = {
+                                let old_obj = self.heap.get(old_ptr).ok_or("runtime error: invalid reference")?;
+                                let old_slots = old_obj.as_slots().ok_or("runtime error: expected slots")?;
+                                old_slots.slots[i].clone()
+                            };
+                            let new_obj = self.heap.get_mut(new_data_ref).ok_or("runtime error: invalid reference")?;
+                            let new_slots = new_obj.as_slots_mut().ok_or("runtime error: expected slots")?;
+                            new_slots.slots[i] = old_val;
+                        }
+                    }
+
+                    // Store the new value
+                    {
+                        let new_obj = self.heap.get_mut(new_data_ref).ok_or("runtime error: invalid reference")?;
+                        let new_slots = new_obj.as_slots_mut().ok_or("runtime error: expected slots")?;
+                        new_slots.slots[len as usize] = value;
+                    }
+
+                    // Update vector header
+                    let vec_obj = self.heap.get_mut(vec_ref).ok_or("runtime error: invalid reference")?;
+                    let vec = vec_obj.as_vector_mut().ok_or("runtime error: expected vector")?;
+                    vec.ptr = Some(new_data_ref);
+                    vec.len = len + 1;
+                    vec.cap = new_cap;
+                } else {
+                    // Has space, just store the value
+                    let data_ptr = data_ptr.ok_or("runtime error: vector has capacity but no data")?;
+                    {
+                        let data_obj = self.heap.get_mut(data_ptr).ok_or("runtime error: invalid reference")?;
+                        let slots = data_obj.as_slots_mut().ok_or("runtime error: expected slots")?;
+                        slots.slots[len as usize] = value;
+                    }
+
+                    // Update length
+                    let vec_obj = self.heap.get_mut(vec_ref).ok_or("runtime error: invalid reference")?;
+                    let vec = vec_obj.as_vector_mut().ok_or("runtime error: expected vector")?;
+                    vec.len = len + 1;
+                }
+            }
+            Op::VectorPop => {
+                // Pop value from vector: [vec] -> [value]
+                let vec_val = self.stack.pop().ok_or("stack underflow")?;
+                let vec_ref = vec_val.as_ref().ok_or("runtime error: expected vector reference")?;
+
+                let (data_ptr, len) = {
+                    let vec_obj = self.heap.get(vec_ref).ok_or("runtime error: invalid reference")?;
+                    let vec = vec_obj.as_vector().ok_or("runtime error: expected vector")?;
+                    if vec.len == 0 {
+                        return Err("runtime error: cannot pop from empty vector".to_string());
+                    }
+                    (vec.ptr, vec.len)
+                };
+
+                let data_ptr = data_ptr.ok_or("runtime error: vector has length but no data")?;
+
+                // Get the value
+                let value = {
+                    let data_obj = self.heap.get(data_ptr).ok_or("runtime error: invalid reference")?;
+                    let slots = data_obj.as_slots().ok_or("runtime error: expected slots")?;
+                    slots.slots[(len - 1) as usize].clone()
+                };
+
+                // Update length
+                {
+                    let vec_obj = self.heap.get_mut(vec_ref).ok_or("runtime error: invalid reference")?;
+                    let vec = vec_obj.as_vector_mut().ok_or("runtime error: expected vector")?;
+                    vec.len = len - 1;
+                }
+
+                self.stack.push(value);
             }
         }
 
