@@ -113,6 +113,11 @@ enum Commands {
         /// The source file to check (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
     },
+    /// Run tests in the project
+    Test {
+        /// Directory to search for tests (defaults to src/ or pkg.toml entry directory)
+        dir: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -209,6 +214,51 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             println!("Type check passed.");
+        }
+        Commands::Test { dir } => {
+            let test_dir = match dir {
+                Some(d) => d,
+                None => {
+                    // Try to find pkg.toml and use entry directory
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    match package::PackageManifest::load(&cwd) {
+                        Ok(manifest) => {
+                            // Get directory of entry point
+                            let entry_path = Path::new(&manifest.package.entry);
+                            cwd.join(entry_path.parent().unwrap_or(Path::new("src")))
+                        }
+                        Err(_) => cwd.join("src"),
+                    }
+                }
+            };
+
+            let config = RuntimeConfig::default();
+
+            match compiler::run_tests(&test_dir, &config) {
+                Ok(results) => {
+                    // Print individual test results
+                    for result in &results.results {
+                        if result.passed {
+                            println!("\u{2713} {} passed", result.name);
+                        } else {
+                            let error_msg = result.error.as_deref().unwrap_or("unknown error");
+                            println!("\u{2717} {} failed: {}", result.name, error_msg);
+                        }
+                    }
+
+                    // Print summary
+                    println!();
+                    println!("{} passed, {} failed", results.passed, results.failed);
+
+                    if !results.all_passed() {
+                        return ExitCode::FAILURE;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            }
         }
     }
 

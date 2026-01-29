@@ -420,6 +420,204 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
     Ok(dump::format_bytecode(&chunk))
 }
 
+// ============================================================================
+// Test Runner API
+// ============================================================================
+
+/// Result of a single test execution.
+#[derive(Debug, Clone)]
+pub struct TestResult {
+    /// Name of the test function (e.g., "_test_add")
+    pub name: String,
+    /// File path where the test is defined
+    pub file: PathBuf,
+    /// Whether the test passed
+    pub passed: bool,
+    /// Error message if the test failed
+    pub error: Option<String>,
+}
+
+/// Results of running all tests.
+#[derive(Debug, Clone, Default)]
+pub struct TestResults {
+    /// Individual test results
+    pub results: Vec<TestResult>,
+    /// Number of passed tests
+    pub passed: usize,
+    /// Number of failed tests
+    pub failed: usize,
+}
+
+impl TestResults {
+    /// Create a new empty TestResults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a test result.
+    pub fn add(&mut self, result: TestResult) {
+        if result.passed {
+            self.passed += 1;
+        } else {
+            self.failed += 1;
+        }
+        self.results.push(result);
+    }
+
+    /// Check if all tests passed.
+    pub fn all_passed(&self) -> bool {
+        self.failed == 0
+    }
+}
+
+/// Information about a discovered test function.
+#[derive(Debug, Clone)]
+pub struct TestInfo {
+    /// Name of the test function
+    pub name: String,
+    /// File path where the test is defined
+    pub file: PathBuf,
+}
+
+/// Discover all test functions in a directory.
+///
+/// Scans all .mc files recursively and finds functions with `_test_` prefix.
+pub fn discover_tests(dir: &Path) -> Result<Vec<TestInfo>, String> {
+    let mut tests = Vec::new();
+    collect_test_files(dir, &mut tests)?;
+    Ok(tests)
+}
+
+/// Recursively collect test functions from .mc files.
+fn collect_test_files(dir: &Path, tests: &mut Vec<TestInfo>) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("failed to read directory '{}': {}", dir.display(), e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("failed to read directory entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_test_files(&path, tests)?;
+        } else if path.extension().is_some_and(|ext| ext == "mc") {
+            collect_tests_from_file(&path, tests)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract test functions from a single .mc file.
+fn collect_tests_from_file(path: &Path, tests: &mut Vec<TestInfo>) -> Result<(), String> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read file '{}': {}", path.display(), e))?;
+
+    let filename = path.to_string_lossy().to_string();
+
+    // Parse the file
+    let mut lexer = Lexer::new(&filename, &source);
+    let tokens = match lexer.scan_tokens() {
+        Ok(tokens) => tokens,
+        Err(_) => return Ok(()), // Skip files with lexer errors
+    };
+
+    let mut parser = Parser::new(&filename, tokens);
+    let program = match parser.parse() {
+        Ok(program) => program,
+        Err(_) => return Ok(()), // Skip files with parser errors
+    };
+
+    // Find functions with _test_ prefix
+    for item in &program.items {
+        if let Item::FnDef(fn_def) = item
+            && fn_def.name.starts_with("_test_")
+        {
+            tests.push(TestInfo {
+                name: fn_def.name.clone(),
+                file: path.to_path_buf(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Run all tests in a directory.
+///
+/// Returns TestResults with information about each test execution.
+pub fn run_tests(dir: &Path, config: &RuntimeConfig) -> Result<TestResults, String> {
+    let tests = discover_tests(dir)?;
+    let mut results = TestResults::new();
+
+    for test in tests {
+        let result = run_single_test(&test, config);
+        results.add(result);
+    }
+
+    Ok(results)
+}
+
+/// Run a single test function.
+fn run_single_test(test: &TestInfo, config: &RuntimeConfig) -> TestResult {
+    // Read the test file
+    let source = match std::fs::read_to_string(&test.file) {
+        Ok(s) => s,
+        Err(e) => {
+            return TestResult {
+                name: test.name.clone(),
+                file: test.file.clone(),
+                passed: false,
+                error: Some(format!("failed to read file: {}", e)),
+            };
+        }
+    };
+
+    // Append a call to the test function
+    let source_with_call = format!("{}\n{}();", source, test.name);
+
+    // Create a temporary file with the test call
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("moca_test_{}.mc", test.name));
+
+    if let Err(e) = std::fs::write(&temp_file, &source_with_call) {
+        return TestResult {
+            name: test.name.clone(),
+            file: test.file.clone(),
+            passed: false,
+            error: Some(format!("failed to write temp file: {}", e)),
+        };
+    }
+
+    // Run the test
+    let (_, result) = run_file_capturing_output(&temp_file, config);
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+
+    match result {
+        Ok(()) => TestResult {
+            name: test.name.clone(),
+            file: test.file.clone(),
+            passed: true,
+            error: None,
+        },
+        Err(e) => TestResult {
+            name: test.name.clone(),
+            file: test.file.clone(),
+            passed: false,
+            error: Some(e),
+        },
+    }
+}
+
+// ============================================================================
+// Error Formatting
+// ============================================================================
+
 /// Format type errors for display.
 fn format_type_errors(filename: &str, errors: &[typechecker::TypeError]) -> String {
     let mut output = String::new();
