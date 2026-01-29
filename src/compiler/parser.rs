@@ -2,6 +2,11 @@ use crate::compiler::ast::*;
 use crate::compiler::lexer::{Span, Token, TokenKind};
 use crate::compiler::types::TypeAnnotation;
 
+/// Identifiers for asm block built-in functions.
+const ASM_EMIT: &str = "__emit";
+const ASM_SAFEPOINT: &str = "__safepoint";
+const ASM_GC_HINT: &str = "__gc_hint";
+
 /// A recursive descent parser for moca.
 pub struct Parser<'a> {
     filename: &'a str,
@@ -869,7 +874,143 @@ impl<'a> Parser<'a> {
             return Ok(Expr::Object { fields, span });
         }
 
+        // Inline assembly block: asm { ... } or asm(inputs) { ... } or asm(inputs) -> type { ... }
+        if self.match_token(&TokenKind::Asm) {
+            return self.asm_block(span);
+        }
+
         Err(self.error("expected expression"))
+    }
+
+    /// Parse an inline assembly block.
+    /// asm { ... }
+    /// asm(inputs) { ... }
+    /// asm(inputs) -> type { ... }
+    fn asm_block(&mut self, span: Span) -> Result<Expr, String> {
+        // Parse optional inputs: asm(x, y)
+        let inputs = if self.match_token(&TokenKind::LParen) {
+            let mut inputs = Vec::new();
+            if !self.check(&TokenKind::RParen) {
+                inputs.push(self.expect_ident()?);
+                while self.match_token(&TokenKind::Comma) {
+                    inputs.push(self.expect_ident()?);
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            inputs
+        } else {
+            Vec::new()
+        };
+
+        // Parse optional output type: -> type
+        let output_type = if self.match_token(&TokenKind::Arrow) {
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+
+        // Parse body: { ... }
+        self.expect(&TokenKind::LBrace)?;
+        let mut body = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            body.push(self.asm_instruction()?);
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(Expr::Asm(AsmBlock {
+            inputs,
+            output_type,
+            body,
+            span,
+        }))
+    }
+
+    /// Parse a single asm instruction.
+    /// __emit("OpName", args...);
+    /// __safepoint();
+    /// __gc_hint(size);
+    fn asm_instruction(&mut self) -> Result<AsmInstruction, String> {
+        let span = self.current_span();
+
+        // Check for identifier (must be one of the asm builtins)
+        let name = self.expect_ident()?;
+
+        match name.as_str() {
+            ASM_EMIT => {
+                self.expect(&TokenKind::LParen)?;
+
+                // First argument must be a string (op name)
+                let op_name = match self.peek_kind() {
+                    Some(TokenKind::Str(s)) => {
+                        let s = s.clone();
+                        self.advance();
+                        s
+                    }
+                    _ => return Err(self.error("__emit requires a string as first argument")),
+                };
+
+                // Optional additional arguments
+                let mut args = Vec::new();
+                while self.match_token(&TokenKind::Comma) {
+                    args.push(self.asm_arg()?);
+                }
+
+                self.expect(&TokenKind::RParen)?;
+                self.expect(&TokenKind::Semi)?;
+
+                Ok(AsmInstruction::Emit { op_name, args, span })
+            }
+            ASM_SAFEPOINT => {
+                self.expect(&TokenKind::LParen)?;
+                self.expect(&TokenKind::RParen)?;
+                self.expect(&TokenKind::Semi)?;
+                Ok(AsmInstruction::Safepoint { span })
+            }
+            ASM_GC_HINT => {
+                self.expect(&TokenKind::LParen)?;
+
+                // Expect an integer argument
+                let size = match self.peek_kind() {
+                    Some(TokenKind::Int(n)) => {
+                        let n = *n;
+                        self.advance();
+                        n
+                    }
+                    _ => return Err(self.error("__gc_hint requires an integer argument")),
+                };
+
+                self.expect(&TokenKind::RParen)?;
+                self.expect(&TokenKind::Semi)?;
+
+                Ok(AsmInstruction::GcHint { size, span })
+            }
+            _ => Err(self.error(&format!(
+                "unknown asm instruction '{}' (expected __emit, __safepoint, or __gc_hint)",
+                name
+            ))),
+        }
+    }
+
+    /// Parse an asm argument (int, float, or string).
+    fn asm_arg(&mut self) -> Result<AsmArg, String> {
+        match self.peek_kind() {
+            Some(TokenKind::Int(n)) => {
+                let n = *n;
+                self.advance();
+                Ok(AsmArg::Int(n))
+            }
+            Some(TokenKind::Float(f)) => {
+                let f = *f;
+                self.advance();
+                Ok(AsmArg::Float(f))
+            }
+            Some(TokenKind::Str(s)) => {
+                let s = s.clone();
+                self.advance();
+                Ok(AsmArg::String(s))
+            }
+            _ => Err(self.error("expected int, float, or string as asm argument")),
+        }
     }
 
     // Helper methods

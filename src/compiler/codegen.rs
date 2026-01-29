@@ -1,6 +1,7 @@
-use crate::compiler::ast::{BinaryOp, UnaryOp};
+use crate::compiler::ast::{AsmArg, BinaryOp, UnaryOp};
 use crate::compiler::resolver::{
-    ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct,
+    ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement,
+    ResolvedStruct,
 };
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
 use std::collections::HashMap;
@@ -621,9 +622,219 @@ impl Codegen {
                 // Call the resolved method function (self + args)
                 ops.push(Op::Call(*func_index, args.len() + 1));
             }
+            ResolvedExpr::AsmBlock {
+                input_slots,
+                output_type: _,
+                body,
+            } => {
+                // Push input variables onto the stack (left to right)
+                for slot in input_slots {
+                    ops.push(Op::GetL(*slot));
+                }
+
+                // Compile each asm instruction
+                for inst in body {
+                    self.compile_asm_instruction(inst, ops)?;
+                }
+
+                // If no output type, the result is whatever is on the stack
+                // The caller is responsible for handling the stack state
+            }
         }
 
         Ok(())
+    }
+
+    /// Compile a single asm instruction.
+    fn compile_asm_instruction(
+        &mut self,
+        inst: &ResolvedAsmInstruction,
+        ops: &mut Vec<Op>,
+    ) -> Result<(), String> {
+        match inst {
+            ResolvedAsmInstruction::Emit { op_name, args } => {
+                let op = self.parse_asm_op(op_name, args)?;
+                ops.push(op);
+            }
+            ResolvedAsmInstruction::Safepoint => {
+                // Safepoint: allow GC to run here
+                // We emit a GcHint(0) to mark this as a safepoint
+                ops.push(Op::GcHint(0));
+            }
+            ResolvedAsmInstruction::GcHint { size } => {
+                ops.push(Op::GcHint(*size as usize));
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse an asm op name and arguments into a VM Op.
+    fn parse_asm_op(&mut self, op_name: &str, args: &[AsmArg]) -> Result<Op, String> {
+        match op_name {
+            // Constants & Stack
+            "PushInt" => {
+                let value = self.expect_int_arg(args, 0, "PushInt")?;
+                Ok(Op::PushInt(value))
+            }
+            "PushFloat" => {
+                let value = self.expect_float_arg(args, 0, "PushFloat")?;
+                Ok(Op::PushFloat(value))
+            }
+            "PushTrue" => Ok(Op::PushTrue),
+            "PushFalse" => Ok(Op::PushFalse),
+            "PushNull" => Ok(Op::PushNull),
+            "PushString" => {
+                let value = self.expect_string_arg(args, 0, "PushString")?;
+                let idx = self.add_string(value);
+                Ok(Op::PushString(idx))
+            }
+            "Pop" => Ok(Op::Pop),
+            "Dup" => Ok(Op::Dup),
+
+            // Local Variables
+            "GetL" => {
+                let slot = self.expect_int_arg(args, 0, "GetL")? as usize;
+                Ok(Op::GetL(slot))
+            }
+            "SetL" => {
+                let slot = self.expect_int_arg(args, 0, "SetL")? as usize;
+                Ok(Op::SetL(slot))
+            }
+
+            // Arithmetic
+            "Add" => Ok(Op::Add),
+            "Sub" => Ok(Op::Sub),
+            "Mul" => Ok(Op::Mul),
+            "Div" => Ok(Op::Div),
+            "Mod" => Ok(Op::Mod),
+            "Neg" => Ok(Op::Neg),
+
+            // Comparison
+            "Eq" => Ok(Op::Eq),
+            "Ne" => Ok(Op::Ne),
+            "Lt" => Ok(Op::Lt),
+            "Le" => Ok(Op::Le),
+            "Gt" => Ok(Op::Gt),
+            "Ge" => Ok(Op::Ge),
+
+            // Logical
+            "Not" => Ok(Op::Not),
+
+            // Control Flow - Jmp instructions (allowed within asm block)
+            "Jmp" => {
+                let target = self.expect_int_arg(args, 0, "Jmp")? as usize;
+                Ok(Op::Jmp(target))
+            }
+            "JmpIfFalse" => {
+                let target = self.expect_int_arg(args, 0, "JmpIfFalse")? as usize;
+                Ok(Op::JmpIfFalse(target))
+            }
+            "JmpIfTrue" => {
+                let target = self.expect_int_arg(args, 0, "JmpIfTrue")? as usize;
+                Ok(Op::JmpIfTrue(target))
+            }
+
+            // Functions - FORBIDDEN
+            "Call" => Err("Call instruction is forbidden in asm block".to_string()),
+            "Ret" => Err("Ret instruction is forbidden in asm block".to_string()),
+
+            // Heap & Objects
+            "New" => {
+                let n = self.expect_int_arg(args, 0, "New")? as usize;
+                Ok(Op::New(n))
+            }
+            "GetF" => {
+                let field = self.expect_string_arg(args, 0, "GetF")?;
+                let idx = self.add_string(field);
+                Ok(Op::GetF(idx))
+            }
+            "SetF" => {
+                let field = self.expect_string_arg(args, 0, "SetF")?;
+                let idx = self.add_string(field);
+                Ok(Op::SetF(idx))
+            }
+
+            // Array operations
+            "AllocArray" => {
+                let n = self.expect_int_arg(args, 0, "AllocArray")? as usize;
+                Ok(Op::AllocArray(n))
+            }
+            "ArrayLen" => Ok(Op::ArrayLen),
+            "ArrayGet" => Ok(Op::ArrayGet),
+            "ArraySet" => Ok(Op::ArraySet),
+            "ArrayPush" => Ok(Op::ArrayPush),
+            "ArrayPop" => Ok(Op::ArrayPop),
+
+            // Type operations
+            "TypeOf" => Ok(Op::TypeOf),
+            "ToString" => Ok(Op::ToString),
+            "ParseInt" => Ok(Op::ParseInt),
+
+            // Exception handling
+            "Throw" => Ok(Op::Throw),
+            "TryBegin" => {
+                let target = self.expect_int_arg(args, 0, "TryBegin")? as usize;
+                Ok(Op::TryBegin(target))
+            }
+            "TryEnd" => Ok(Op::TryEnd),
+
+            // Builtins
+            "Print" => Ok(Op::Print),
+
+            // GC hint
+            "GcHint" => {
+                let size = self.expect_int_arg(args, 0, "GcHint")? as usize;
+                Ok(Op::GcHint(size))
+            }
+
+            // Thread operations
+            "ThreadSpawn" => {
+                let func_index = self.expect_int_arg(args, 0, "ThreadSpawn")? as usize;
+                Ok(Op::ThreadSpawn(func_index))
+            }
+            "ChannelCreate" => Ok(Op::ChannelCreate),
+            "ChannelSend" => Ok(Op::ChannelSend),
+            "ChannelRecv" => Ok(Op::ChannelRecv),
+            "ThreadJoin" => Ok(Op::ThreadJoin),
+
+            _ => Err(format!("unknown asm instruction '{}'", op_name)),
+        }
+    }
+
+    /// Extract an integer argument from asm args.
+    fn expect_int_arg(&self, args: &[AsmArg], index: usize, op_name: &str) -> Result<i64, String> {
+        args.get(index)
+            .and_then(|arg| match arg {
+                AsmArg::Int(n) => Some(*n),
+                _ => None,
+            })
+            .ok_or_else(|| format!("{} requires an integer argument at position {}", op_name, index))
+    }
+
+    /// Extract a float argument from asm args.
+    fn expect_float_arg(&self, args: &[AsmArg], index: usize, op_name: &str) -> Result<f64, String> {
+        args.get(index)
+            .and_then(|arg| match arg {
+                AsmArg::Float(f) => Some(*f),
+                AsmArg::Int(n) => Some(*n as f64), // Allow int as float
+                _ => None,
+            })
+            .ok_or_else(|| format!("{} requires a float argument at position {}", op_name, index))
+    }
+
+    /// Extract a string argument from asm args.
+    fn expect_string_arg(
+        &self,
+        args: &[AsmArg],
+        index: usize,
+        op_name: &str,
+    ) -> Result<String, String> {
+        args.get(index)
+            .and_then(|arg| match arg {
+                AsmArg::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| format!("{} requires a string argument at position {}", op_name, index))
     }
 }
 

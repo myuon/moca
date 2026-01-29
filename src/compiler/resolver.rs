@@ -3,6 +3,19 @@ use crate::compiler::lexer::Span;
 use crate::compiler::types::TypeAnnotation;
 use std::collections::HashMap;
 
+/// A resolved asm instruction.
+#[derive(Debug, Clone)]
+pub enum ResolvedAsmInstruction {
+    Emit {
+        op_name: String,
+        args: Vec<AsmArg>,
+    },
+    Safepoint,
+    GcHint {
+        size: i64,
+    },
+}
+
 /// Resolved program with variable indices and function references.
 #[derive(Debug, Clone)]
 pub struct ResolvedProgram {
@@ -136,6 +149,15 @@ pub enum ResolvedExpr {
         args: Vec<ResolvedExpr>,
         /// If the method returns a struct, the struct name
         return_struct_name: Option<String>,
+    },
+    /// Inline assembly block.
+    AsmBlock {
+        /// Resolved input variable slots.
+        input_slots: Vec<usize>,
+        /// Output type name (for validation).
+        output_type: Option<String>,
+        /// Resolved asm instructions.
+        body: Vec<ResolvedAsmInstruction>,
     },
 }
 
@@ -772,6 +794,40 @@ impl<'a> Resolver<'a> {
                     func_index,
                     args: resolved_args,
                     return_struct_name,
+                })
+            }
+            Expr::Asm(asm_block) => {
+                // Resolve input variable names to slots
+                let mut input_slots = Vec::new();
+                for input_name in &asm_block.inputs {
+                    let (slot, _) = scope.lookup(input_name).ok_or_else(|| {
+                        self.error(
+                            &format!("undefined variable '{}' in asm block", input_name),
+                            asm_block.span,
+                        )
+                    })?;
+                    input_slots.push(slot);
+                }
+
+                // Resolve asm instructions (just copy, no variable resolution needed)
+                let body: Vec<ResolvedAsmInstruction> = asm_block
+                    .body
+                    .into_iter()
+                    .map(|inst| match inst {
+                        AsmInstruction::Emit { op_name, args, .. } => {
+                            ResolvedAsmInstruction::Emit { op_name, args }
+                        }
+                        AsmInstruction::Safepoint { .. } => ResolvedAsmInstruction::Safepoint,
+                        AsmInstruction::GcHint { size, .. } => {
+                            ResolvedAsmInstruction::GcHint { size }
+                        }
+                    })
+                    .collect();
+
+                Ok(ResolvedExpr::AsmBlock {
+                    input_slots,
+                    output_type: asm_block.output_type,
+                    body,
                 })
             }
         }

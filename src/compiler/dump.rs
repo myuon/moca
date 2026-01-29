@@ -517,6 +517,22 @@ impl<'a> AstPrinter<'a> {
                     );
                 }
             }
+            Expr::Asm(asm_block) => {
+                let output_str = asm_block
+                    .output_type
+                    .as_ref()
+                    .map(|t| format!(" -> {}", t))
+                    .unwrap_or_default();
+                self.write(&format!(
+                    "{}AsmBlock({} inputs, {} instructions){}",
+                    prefix,
+                    asm_block.inputs.len(),
+                    asm_block.body.len(),
+                    output_str
+                ));
+                self.write_type_suffix(expr);
+                self.newline();
+            }
         }
     }
 
@@ -1113,6 +1129,24 @@ impl ResolvedProgramPrinter {
                     self.write_indent_with(parent_prefix);
                     self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
                 }
+            }
+            ResolvedExpr::AsmBlock {
+                input_slots,
+                output_type,
+                body,
+            } => {
+                let output_str = output_type
+                    .as_ref()
+                    .map(|t| format!(" -> {}", t))
+                    .unwrap_or_default();
+                self.write(&format!(
+                    "{}AsmBlock(inputs: {:?}, {} instructions){}",
+                    prefix,
+                    input_slots,
+                    body.len(),
+                    output_str
+                ));
+                self.newline();
             }
         }
     }

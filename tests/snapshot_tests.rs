@@ -194,6 +194,11 @@ fn snapshot_basic() {
 }
 
 #[test]
+fn snapshot_asm() {
+    run_snapshot_dir("asm");
+}
+
+#[test]
 fn snapshot_errors() {
     run_snapshot_dir("errors");
 }
