@@ -119,7 +119,8 @@ pub enum Op {
     /// System call instruction
     /// - syscall_num: syscall number (1 = write)
     /// - argc: number of arguments on stack
-    /// Stack: [..., arg1, arg2, ..., argN] -> [..., result]
+    ///
+    /// Stack: `[..., arg1, arg2, ..., argN] -> [..., result]`
     Syscall(usize, usize),
 
     // ========================================
