@@ -1,136 +1,187 @@
-# Spec.md
+# Spec.md - Vector型の実装
 
 ## 1. Goal
-- VM配列プリミティブ（AllocArray, ArrayGet, ArraySet, ArrayLen）を削除し、汎用的な低レベルプリミティブ（HeapLoad, HeapStore）を使ってコンパイラ側で配列操作を実装する
+- moca言語にVector型（動的配列）を追加し、`ArrayPush`/`ArrayPop`/`ArrayLen` VMプリミティブを削除してコンパイラ側でVector操作を実装する
 
 ## 2. Non-Goals
-- push/pop対応（可変長配列は後回し、VMプリミティブを残す）
-- 文字列操作の変更（ArrayLen/ArrayGetの文字列対応は現状維持）
-- Vector型の新規実装
-- パフォーマンス最適化（機能維持が優先）
+- 固定長配列の削除（既存の `[1,2,3]` 構文は維持）
+- ジェネリクスや型パラメータの導入
+- イテレータの実装
+- スライス操作
 
 ## 3. Target Users
-- mocaコンパイラ/VM開発者
-- 将来的にmocaを拡張する開発者
+- moca言語のユーザー（動的にサイズが変わる配列が必要な場面）
 
 ## 4. Core User Flow
-1. moca言語で配列リテラル `[1, 2, 3]` を記述
-2. コンパイラが新しいヒープレイアウトで配列を割り当てるコードを生成
-3. 配列アクセス `arr[i]` が `HeapLoad` にコンパイルされる
-4. 配列代入 `arr[i] = v` が `HeapStore` にコンパイルされる
-5. `len(arr)` がヘッダフィールドアクセス（HeapLoad）にコンパイルされる
-6. 既存のmocaプログラムが変更なしで動作する
+1. `Vec::new()` または `Vec::with_capacity(n)` でVectorを生成
+2. `vec.push(value)` で要素を追加
+3. `vec.pop()` で要素を取り出し
+4. `vec[i]` でインデックスアクセス
+5. `vec[i] = value` でインデックス代入
+6. `len(vec)` で長さ取得
+7. `vec.capacity()` で容量取得
 
 ## 5. Inputs & Outputs
-### Inputs
-- 既存のmocaソースコード（配列操作を含む）
 
-### Outputs
-- 新しいバイトコード（HeapLoad/HeapStoreベース）
-- 変更されたVM実行結果（既存と同一の出力）
+### 入力
+- Vector生成: `Vec::new()`, `Vec::with_capacity(n)`
+- 要素追加: `vec.push(value)`
+- 要素取り出し: `vec.pop()`
+- インデックス: `vec[i]`, `vec[i] = value`
+
+### 出力
+- Vectorオブジェクト（ヒープ上）
+- 各操作の戻り値
 
 ## 6. Tech Stack
-- 言語: Rust（既存）
-- 対象モジュール:
-  - `src/vm/ops.rs` - 新プリミティブ定義
-  - `src/vm/vm.rs` - 新プリミティブ実行
-  - `src/vm/heap.rs` - 配列レイアウト変更
-  - `src/vm/bytecode.rs` - オペコード追加
-  - `src/compiler/codegen.rs` - 配列コンパイル変更
-- テスト: 既存スナップショットテスト
+- 言語: Rust
+- 変更対象ファイル:
+  - `src/vm/ops.rs` - ArrayPush/ArrayPop/ArrayLen削除、StrLen追加
+  - `src/vm/heap.rs` - MocaVector型追加
+  - `src/vm/vm.rs` - Vector用VM操作削除
+  - `src/vm/bytecode.rs` - シリアライズ更新
+  - `src/compiler/codegen.rs` - Vector操作のコード生成
+  - `src/compiler/parser.rs` - Vec::new()構文パース
+  - `src/compiler/resolver.rs` - Vector組み込み関数解決
+  - `src/compiler/typechecker.rs` - Vector型チェック
+- テスト: cargo test + snapshot tests
 
 ## 7. Rules & Constraints
 
-### 新しい配列メモリレイアウト（インライン型）
+### メモリレイアウト
 ```
-┌─────────────────┬────────┬────────┬────────┬────────┬─────┐
-│  ObjectHeader   │  len   │ elem0  │ elem1  │ elem2  │ ... │
-│  (型情報, GC)   │ (i64)  │(Value) │(Value) │(Value) │     │
-└─────────────────┴────────┴────────┴────────┴────────┴─────┘
-      slot 0        slot 1   slot 2   slot 3   slot 4
+Vector本体（3スロット）:
+┌─────────────────┬─────────────┬─────────────┬─────────────┐
+│  ObjectHeader   │     ptr     │     len     │     cap     │
+│  (MocaVector)   │   (GcRef)   │    (i64)    │    (i64)    │
+└─────────────────┴─────────────┴─────────────┴─────────────┘
+      slot 0          slot 1        slot 2        slot 3
+
+データ領域（Slots型、ptrが指す先）:
+┌─────────────────┬─────────────┬─────────────┬─────────────┬─────┐
+│  ObjectHeader   │   slot 0    │   slot 1    │   slot 2    │ ... │
+│   (MocaSlots)   │   (Value)   │   (Value)   │   (Value)   │     │
+└─────────────────┴─────────────┴─────────────┴─────────────┴─────┘
 ```
 
-### 新しいVMプリミティブ
-| プリミティブ | スタック効果 | 説明 |
-|-------------|-------------|------|
-| `HeapLoad(offset)` | `[ref] → [value]` | ヒープオブジェクトのslot[offset]を読む |
-| `HeapStore(offset)` | `[ref, value] → []` | ヒープオブジェクトのslot[offset]に書く |
-| `HeapLoadDyn` | `[ref, index] → [value]` | 動的インデックスでslotを読む |
-| `HeapStoreDyn` | `[ref, index, value] → []` | 動的インデックスでslotに書く |
-| `AllocHeap(n)` | `[v1, v2, ..., vn] → [ref]` | n個のslotを持つヒープオブジェクトを割り当て |
+### 成長戦略
+- 容量不足時: 現在の容量の2倍に拡張（最小4）
+- 初期容量: 0（最初のpushで4に拡張）
 
-### コンパイル変換ルール
-| 元の操作 | 新しいコンパイル結果 |
-|---------|---------------------|
-| `[e1, e2, e3]` (配列リテラル) | `push len; push e1; push e2; push e3; AllocHeap(4)` |
-| `arr[i]` (動的インデックス) | `push arr; push i+2; HeapLoadDyn` |
-| `arr[i] = v` (動的代入) | `push arr; push i+2; push v; HeapStoreDyn` |
-| `len(arr)` | `push arr; HeapLoad(1)` |
+### Vector操作のコンパイル
+| moca構文 | コンパイル結果 |
+|---------|---------------|
+| `Vec::new()` | `PushNull; PushInt 0; PushInt 0; AllocHeap 3` (ptr=null, len=0, cap=0) |
+| `Vec::with_capacity(n)` | `AllocHeap(n); PushInt 0; PushInt n; AllocHeap 3` |
+| `vec.push(val)` | 組み込み関数呼び出し（容量チェック・拡張含む） |
+| `vec.pop()` | 組み込み関数呼び出し（境界チェック含む） |
+| `vec[i]` | `HeapLoad 0`(ptr取得) → `HeapLoadDyn`(データアクセス) |
+| `vec[i] = v` | `HeapLoad 0`(ptr取得) → `HeapStoreDyn`(データ書き込み) |
+| `len(vec)` | `HeapLoad 1` (Vectorのlenフィールド) |
+| `vec.capacity()` | `HeapLoad 2` (capフィールド) |
 
-※ `i+2` はヘッダ(slot0) + len(slot1) のオフセット
+### 固定長配列のlen()
+| moca構文 | コンパイル結果 |
+|---------|---------------|
+| `len(arr)` | `HeapLoad 0` (Slotsのslot[0]に格納されたlen) |
 
-### 維持するVMプリミティブ（今回削除しない）
-- `ArrayPush` - 可変長配列用（後回し）
-- `ArrayPop` - 可変長配列用（後回し）
-- `ArrayLen`, `ArrayGet` - 文字列用に一時的に残す（文字列対応は別タスク）
+※ 固定長配列は `[len, elem0, elem1, ...]` のレイアウト（前回実装済み）
 
-### GCとの整合性
-- `ObjectHeader`は維持し、GCのマーキング機構は変更しない
-- `HeapObject::trace()` を更新して新レイアウトの配列要素を走査
-- slot 2以降の要素が`Value::Ref`の場合にトレース
+### 文字列のlen()
+| moca構文 | コンパイル結果 |
+|---------|---------------|
+| `len(str)` | `StrLen` (新規プリミティブ) |
+
+※ 文字列は別のメモリレイアウトのため、専用プリミティブが必要
+
+### GC対応
+- MocaVector型を追加（ObjectType::Vector）
+- trace()でptrフィールド（slot 0）をトレース
+- データ領域は既存のSlots型を使用（既にGC対応済み）
+
+### 境界チェック
+- インデックスアクセス: 0 <= index < len
+- pop: len > 0 を確認
+- 違反時はランタイムエラー
+
+### 組み込み関数として実装するもの
+- `vec_push(vec, value)` - push操作（容量拡張ロジック含む）
+- `vec_pop(vec)` - pop操作（境界チェック含む）
+
+これらは複雑なロジックを含むためVMプリミティブではなく組み込み関数として実装。
 
 ## 8. Open Questions
-- 文字列を将来的に同じHeapLoad/HeapStore方式に移行するか
-- push/pop対応時にcapacityフィールドを追加するか、別のVector型にするか
+なし
 
-## 9. Acceptance Criteria（最大10個）
-1. [ ] `HeapLoad(offset)` プリミティブが実装され、ヒープオブジェクトのslotを読める
-2. [ ] `HeapStore(offset)` プリミティブが実装され、ヒープオブジェクトのslotに書ける
-3. [ ] `HeapLoadDyn` / `HeapStoreDyn` が動的インデックスで動作する
-4. [ ] `AllocHeap(n)` が新レイアウトでヒープオブジェクトを割り当てる
-5. [ ] 配列リテラルが新方式（AllocHeap）でコンパイルされる
-6. [ ] 配列インデックスアクセスが `HeapLoadDyn` にコンパイルされる
-7. [ ] 配列インデックス代入が `HeapStoreDyn` にコンパイルされる
-8. [ ] `len(arr)` が `HeapLoad(1)` にコンパイルされる
-9. [ ] 既存の配列関連テスト（array_operations.mc, array_mutation.mc等）がすべてパスする
-10. [ ] GCが新レイアウトの配列要素を正しくトレースする
+## 9. Acceptance Criteria
+
+1. `Vec::new()` で空のVectorが生成できる
+2. `Vec::with_capacity(n)` で指定容量のVectorが生成できる
+3. `vec.push(value)` で要素を追加できる
+4. `vec.pop()` で末尾要素を取り出せる
+5. `vec[i]` でインデックスアクセスできる
+6. `vec[i] = value` でインデックス代入できる
+7. `len(vec)` でVectorの長さを取得できる
+8. `vec.capacity()` でVectorの容量を取得できる
+9. `ArrayPush` / `ArrayPop` / `ArrayLen` がops.rsから削除されている
+10. 全既存テスト（219 unit + 10 snapshot）がパスする
 
 ## 10. Verification Strategy
 
 ### 進捗検証
-- 各フェーズ完了時に該当するテストを実行
-- 新プリミティブ追加後、簡単なバイトコードを手動実行して動作確認
-- `cargo test` で既存テストの破壊がないことを確認
+- 各フェーズ完了時に `cargo check` でコンパイル確認
+- 各フェーズ完了時に `cargo test` でテスト通過確認
 
 ### 達成検証
 - 全Acceptance Criteriaをチェックリストで確認
-- 生成されるバイトコードを目視確認（配列操作がHeapLoad/HeapStoreになっている）
-- `tests/snapshots/basic/array_*.mc` のテストがすべてパス
+- Vector操作のバイトコード出力を目視確認
 
 ### 漏れ検出
-- for-inループのテストが通ることを確認（内部でArrayLen/ArrayGetを使用していた箇所）
-- GCテスト（heap_pressure.mc）が通ることを確認
-- エラーケース（index out of bounds等）が正しく動作することを確認
+- 既存のpush/pop使用テストがVector構文に書き換えられているか確認
+- `grep -r "ArrayPush\|ArrayPop\|ArrayLen"` で残存コードがないか確認
 
 ## 11. Test Plan
 
-### E2E シナリオ 1: 基本的な配列操作
+### E2E シナリオ 1: Vector基本操作
 ```
-Given: 配列リテラルとインデックスアクセスを含むmocaプログラム
-When: コンパイル・実行する
-Then: 既存と同じ出力が得られ、バイトコードにHeapLoad/HeapStoreが含まれる
+Given: 空のプログラム
+When: 以下を実行
+  let v = Vec::new()
+  v.push(1)
+  v.push(2)
+  v.push(3)
+  print(len(v))
+  print(v[1])
+  print(v.pop())
+  print(len(v))
+Then: 出力が "3", "2", "3", "2" となる
 ```
 
-### E2E シナリオ 2: for-inループ
+### E2E シナリオ 2: Vector容量拡張
 ```
-Given: 配列をfor-inでイテレートするmocaプログラム
-When: コンパイル・実行する
-Then: 既存と同じ出力が得られる（内部的にHeapLoad/HeapLoadDynを使用）
+Given: 空のプログラム
+When: 以下を実行
+  let v = Vec::with_capacity(2)
+  print(v.capacity())
+  v.push(1)
+  v.push(2)
+  v.push(3)  // 容量拡張発生
+  print(v.capacity())
+  print(len(v))
+Then: 出力が "2", "4", "3" となる（容量が2倍に拡張）
 ```
 
-### E2E シナリオ 3: GCとの連携
+### E2E シナリオ 3: Vectorインデックス代入
 ```
-Given: 配列内にオブジェクト参照を持ち、GCが発生するmocaプログラム
-When: 実行してGCが発生する
-Then: 配列内の参照が正しく保持され、メモリリークやダングリング参照がない
+Given: 空のプログラム
+When: 以下を実行
+  let v = Vec::new()
+  v.push(10)
+  v.push(20)
+  v.push(30)
+  v[1] = 99
+  print(v[0])
+  print(v[1])
+  print(v[2])
+Then: 出力が "10", "99", "30" となる
 ```
