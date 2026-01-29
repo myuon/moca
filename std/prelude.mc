@@ -2,6 +2,39 @@
 // This file is automatically loaded when running Moca programs.
 
 // ============================================================================
+// Testing / Assertion Functions
+// ============================================================================
+
+// Assert that a condition is true. If false, throws an error with the given message.
+fun assert(condition: bool, msg: string) {
+    if !condition {
+        throw msg;
+    }
+}
+
+// Assert that two values are equal. If not equal, throws an error with the given message.
+// Uses to_string for comparison, so works with any type that can be converted to string.
+fun assert_eq(actual: int, expected: int, msg: string) {
+    if actual != expected {
+        throw msg + " (expected: " + to_string(expected) + ", actual: " + to_string(actual) + ")";
+    }
+}
+
+// Assert that two strings are equal.
+fun assert_eq_str(actual: string, expected: string, msg: string) {
+    if actual != expected {
+        throw msg + " (expected: " + expected + ", actual: " + actual + ")";
+    }
+}
+
+// Assert that two booleans are equal.
+fun assert_eq_bool(actual: bool, expected: bool, msg: string) {
+    if actual != expected {
+        throw msg + " (expected: " + to_string(expected) + ", actual: " + to_string(actual) + ")";
+    }
+}
+
+// ============================================================================
 // Math Functions
 // ============================================================================
 

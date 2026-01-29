@@ -173,7 +173,8 @@ pub struct JitCallContext {
     /// Pointer to the chunk (bytecode)
     pub chunk: *const u8,
     /// Function call helper: (ctx, func_index, argc, args_ptr) -> JitReturn
-    pub call_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
+    pub call_helper:
+        unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
 }
 
 /// Type signature for call helper function.
@@ -184,7 +185,8 @@ pub struct JitCallContext {
 ///   - argc: u64 - number of arguments
 ///   - args: *const JitValue - pointer to arguments array (argc values)
 /// Returns: JitReturn with the function's return value
-pub type CallHelperFn = unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn;
+pub type CallHelperFn =
+    unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn;
 
 #[cfg(test)]
 mod tests {
