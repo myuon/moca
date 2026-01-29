@@ -837,6 +837,11 @@ impl Codegen {
             }
             "Pop" => Ok(Op::Pop),
             "Dup" => Ok(Op::Dup),
+            "Swap" => Ok(Op::Swap),
+            "Pick" => {
+                let n = self.expect_int_arg(args, 0, "Pick")? as usize;
+                Ok(Op::Pick(n))
+            }
 
             // Local Variables
             "GetL" => {

@@ -290,6 +290,8 @@ const OP_STR_LEN: u8 = 73;
 // Legacy opcodes 74, 75 removed (AllocVector, AllocVectorCap)
 const OP_VECTOR_PUSH: u8 = 76;
 const OP_VECTOR_POP: u8 = 77;
+const OP_SWAP: u8 = 78;
+const OP_PICK: u8 = 79;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -310,6 +312,11 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::Pop => w.write_all(&[OP_POP])?,
         Op::Dup => w.write_all(&[OP_DUP])?,
+        Op::Swap => w.write_all(&[OP_SWAP])?,
+        Op::Pick(n) => {
+            w.write_all(&[OP_PICK])?;
+            write_u32(w, *n as u32)?;
+        }
         Op::GetL(idx) => {
             w.write_all(&[OP_GET_L])?;
             write_u32(w, *idx as u32)?;
@@ -416,6 +423,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_PUSH_STRING => Op::PushString(read_u32(r)? as usize),
         OP_POP => Op::Pop,
         OP_DUP => Op::Dup,
+        OP_SWAP => Op::Swap,
+        OP_PICK => Op::Pick(read_u32(r)? as usize),
         OP_GET_L => Op::GetL(read_u32(r)? as usize),
         OP_SET_L => Op::SetL(read_u32(r)? as usize),
         OP_ADD => Op::Add,
@@ -689,6 +698,8 @@ mod tests {
             Op::PushString(42),
             Op::Pop,
             Op::Dup,
+            Op::Swap,
+            Op::Pick(3),
             Op::GetL(100),
             Op::SetL(200),
             Op::Add,

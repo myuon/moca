@@ -21,6 +21,8 @@ pub enum Op {
     PushString(usize), // CONST (string index)
     Pop,               // POP: Discard top of stack
     Dup,               // DUP: Duplicate top of stack
+    Swap,              // SWAP: Swap top two stack elements
+    Pick(usize),       // PICK(n): Copy n-th element (0=top) to top
 
     // ========================================
     // Local Variables

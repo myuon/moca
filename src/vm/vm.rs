@@ -508,6 +508,21 @@ impl VM {
                 let value = self.stack.last().copied().ok_or("stack underflow")?;
                 self.stack.push(value);
             }
+            Op::Swap => {
+                let len = self.stack.len();
+                if len < 2 {
+                    return Err("stack underflow".to_string());
+                }
+                self.stack.swap(len - 1, len - 2);
+            }
+            Op::Pick(n) => {
+                let len = self.stack.len();
+                if n >= len {
+                    return Err("stack underflow".to_string());
+                }
+                let value = self.stack[len - 1 - n];
+                self.stack.push(value);
+            }
             Op::GetL(slot) => {
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;

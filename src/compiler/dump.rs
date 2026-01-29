@@ -1276,6 +1276,8 @@ impl<'a> Disassembler<'a> {
             }
             Op::Pop => self.output.push_str("Pop"),
             Op::Dup => self.output.push_str("Dup"),
+            Op::Swap => self.output.push_str("Swap"),
+            Op::Pick(n) => self.output.push_str(&format!("Pick {}", n)),
 
             // Local variables
             Op::GetL(slot) => self.output.push_str(&format!("GetL {}", slot)),
