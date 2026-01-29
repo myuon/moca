@@ -7,15 +7,14 @@
 ## 2. Non-Goals
 - 新しい型システムの設計（既存のtypecheckerを活用）
 - `vec_get`/`vec_set`の削除（後方互換性のため残す）
-- 新しいAST構造の設計（既存ASTに型マップを追加）
 
 ## 3. Target Users
 - Moca言語のユーザー（配列と同じ構文でVectorを扱いたい）
 
 ## 4. Core User Flow
 1. ユーザーが `vec[i]` または `vec[i] = value` を含むコードを書く
-2. typecheckerが型を推論し、NodeId→Type のマップを生成
-3. codegenが型マップを参照し、Vector/配列で異なるコードを生成
+2. typecheckerが型を推論し、ASTノードの`inferred_type`フィールドに型を設定
+3. codegenがASTの型情報を参照し、Vector/配列で異なるコードを生成
 4. VMが適切なオペコードを実行
 
 ## 5. Inputs & Outputs
@@ -36,15 +35,16 @@ vec[0] = 20;        // Vector書き込み
 ## 6. Tech Stack
 - 言語: Rust（既存プロジェクト）
 - 変更対象:
-  - `src/compiler/typechecker.rs` — 型マップ生成
-  - `src/compiler/codegen.rs` — 型マップ参照・コード生成分岐
-  - `src/compiler/ast.rs` — NodeId追加（必要に応じて）
+  - `src/compiler/ast.rs` — Exprに`inferred_type`フィールド追加
+  - `src/compiler/typechecker.rs` — 型推論結果をASTに設定
+  - `src/compiler/codegen.rs` — ASTの型情報を参照してコード生成分岐
 
 ## 7. Rules & Constraints
 
 ### 型情報の管理
-- `HashMap<NodeId, Type>` で管理（ASTノード自体は変更しない）
-- typecheckerが型マップを生成し、codegenに渡す
+- `Expr`に`inferred_type: Option<Type>`フィールドを追加
+- typecheckerが型推論時にASTノードの`inferred_type`を設定
+- codegenが`inferred_type`を参照してコード生成を切り替え
 
 ### コード生成ルール
 - `expr[index]` の `expr` の型が `Vector<T>` → Vector用コード生成
