@@ -1278,6 +1278,7 @@ impl<'a> Disassembler<'a> {
             Op::Dup => self.output.push_str("Dup"),
             Op::Swap => self.output.push_str("Swap"),
             Op::Pick(n) => self.output.push_str(&format!("Pick {}", n)),
+            Op::PickDyn => self.output.push_str("PickDyn"),
 
             // Local variables
             Op::GetL(slot) => self.output.push_str(&format!("GetL {}", slot)),
@@ -1381,6 +1382,7 @@ impl<'a> Disassembler<'a> {
 
             // Heap slot operations
             Op::AllocHeap(n) => self.output.push_str(&format!("AllocHeap {}", n)),
+            Op::AllocHeapDyn => self.output.push_str("AllocHeapDyn"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),

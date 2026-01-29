@@ -292,6 +292,8 @@ const OP_VECTOR_PUSH: u8 = 76;
 const OP_VECTOR_POP: u8 = 77;
 const OP_SWAP: u8 = 78;
 const OP_PICK: u8 = 79;
+const OP_ALLOC_HEAP_DYN: u8 = 80;
+const OP_PICK_DYN: u8 = 81;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -317,6 +319,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_PICK])?;
             write_u32(w, *n as u32)?;
         }
+        Op::PickDyn => w.write_all(&[OP_PICK_DYN])?,
         Op::GetL(idx) => {
             w.write_all(&[OP_GET_L])?;
             write_u32(w, *idx as u32)?;
@@ -396,6 +399,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_ALLOC_HEAP])?;
             write_u32(w, *size as u32)?;
         }
+        Op::AllocHeapDyn => w.write_all(&[OP_ALLOC_HEAP_DYN])?,
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -425,6 +429,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_DUP => Op::Dup,
         OP_SWAP => Op::Swap,
         OP_PICK => Op::Pick(read_u32(r)? as usize),
+        OP_PICK_DYN => Op::PickDyn,
         OP_GET_L => Op::GetL(read_u32(r)? as usize),
         OP_SET_L => Op::SetL(read_u32(r)? as usize),
         OP_ADD => Op::Add,
@@ -468,6 +473,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_CHANNEL_RECV => Op::ChannelRecv,
         OP_THREAD_JOIN => Op::ThreadJoin,
         OP_ALLOC_HEAP => Op::AllocHeap(read_u32(r)? as usize),
+        OP_ALLOC_HEAP_DYN => Op::AllocHeapDyn,
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
@@ -700,6 +706,7 @@ mod tests {
             Op::Dup,
             Op::Swap,
             Op::Pick(3),
+            Op::PickDyn,
             Op::GetL(100),
             Op::SetL(200),
             Op::Add,
@@ -739,6 +746,7 @@ mod tests {
             Op::ChannelRecv,
             Op::ThreadJoin,
             Op::AllocHeap(5),
+            Op::AllocHeapDyn,
             Op::HeapLoad(1),
             Op::HeapStore(2),
             Op::HeapLoadDyn,

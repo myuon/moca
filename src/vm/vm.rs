@@ -523,6 +523,19 @@ impl VM {
                 let value = self.stack[len - 1 - n];
                 self.stack.push(value);
             }
+            Op::PickDyn => {
+                let depth_val = self.stack.pop().ok_or("stack underflow")?;
+                let depth = depth_val
+                    .as_i64()
+                    .ok_or("runtime error: PickDyn requires integer depth")?
+                    as usize;
+                let len = self.stack.len();
+                if depth >= len {
+                    return Err("stack underflow".to_string());
+                }
+                let value = self.stack[len - 1 - depth];
+                self.stack.push(value);
+            }
             Op::GetL(slot) => {
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;
@@ -977,6 +990,22 @@ impl VM {
             Op::AllocHeap(n) => {
                 let mut slots = Vec::with_capacity(n);
                 for _ in 0..n {
+                    slots.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                slots.reverse();
+                let r = self.heap.alloc_slots(slots)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::AllocHeapDyn => {
+                // Dynamic allocation: size is on stack
+                // Stack: [v1, v2, ..., vN, size] where N = size
+                let size_val = self.stack.pop().ok_or("stack underflow")?;
+                let size = size_val
+                    .as_i64()
+                    .ok_or("runtime error: AllocHeapDyn size must be integer")?
+                    as usize;
+                let mut slots = Vec::with_capacity(size);
+                for _ in 0..size {
                     slots.push(self.stack.pop().ok_or("stack underflow")?);
                 }
                 slots.reverse();

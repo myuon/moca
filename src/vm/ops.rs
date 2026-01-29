@@ -23,6 +23,7 @@ pub enum Op {
     Dup,               // DUP: Duplicate top of stack
     Swap,              // SWAP: Swap top two stack elements
     Pick(usize),       // PICK(n): Copy n-th element (0=top) to top
+    PickDyn,           // PICKDYN: [depth] -> [value], copy element at dynamic depth
 
     // ========================================
     // Local Variables
@@ -88,6 +89,11 @@ pub enum Op {
     HeapStore(usize), // Store to slot at static offset: [ref, value] -> []
     HeapLoadDyn,      // Load slot at dynamic index: [ref, index] -> [value]
     HeapStoreDyn,     // Store to slot at dynamic index: [ref, index, value] -> []
+
+    // ========================================
+    // Dynamic heap allocation
+    // ========================================
+    AllocHeapDyn, // Allocate heap with dynamic size: [size, v1..vN] -> [ref]
 
     // ========================================
     // Vector operations (Vector = Slots[ptr, len, cap])
