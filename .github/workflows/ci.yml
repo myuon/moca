@@ -49,6 +49,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -69,18 +71,39 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Generate coverage report
+      - name: Get base branch coverage
         run: |
+          git checkout ${{ github.base_ref }}
           cargo llvm-cov --no-report > /dev/null 2>&1
-          echo "| File | Coverage | |" > coverage.md
-          echo "|------|----------|---|" >> coverage.md
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
             file = $1
-            # Line coverage is the 9th column (after Lines, Missed Lines)
+            pct_count = 0
             for (i=1; i<=NF; i++) {
-              if ($i ~ /%$/) { lastpct = $i }
+              if ($i ~ /%$/) {
+                pct_count++
+                if (pct_count == 3) { cov = $i; break }
+              }
             }
-            # Find the coverage after "Lines" columns - its the 3rd percentage
+            gsub(/%/, "", cov)
+            print file, cov
+          }' > base_coverage.txt
+          git checkout ${{ github.head_ref }}
+          cargo clean
+
+      - name: Generate coverage report with diff
+        run: |
+          cargo llvm-cov --no-report > /dev/null 2>&1
+          echo "| File | Coverage | Diff | |" > coverage.md
+          echo "|------|----------|------|---|" >> coverage.md
+          cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '
+          BEGIN {
+            while ((getline line < "base_coverage.txt") > 0) {
+              split(line, a, " ")
+              base[a[1]] = a[2]
+            }
+          }
+          {
+            file = $1
             pct_count = 0
             for (i=1; i<=NF; i++) {
               if ($i ~ /%$/) {
@@ -92,7 +115,16 @@ jobs:
             if (cov+0 >= 80) icon = "🟢"
             else if (cov+0 >= 60) icon = "🟡"
             else icon = "🔴"
-            printf "| %s | %s%% | %s |\n", file, cov, icon
+
+            if (file in base) {
+              diff = cov - base[file]
+              if (diff > 0) diff_str = sprintf("+%.2f%%", diff)
+              else if (diff < 0) diff_str = sprintf("%.2f%%", diff)
+              else diff_str = "±0%"
+            } else {
+              diff_str = "new"
+            }
+            printf "| %s | %s%% | %s | %s |\n", file, cov, diff_str, icon
           }' >> coverage.md
 
       - name: Post coverage comment
