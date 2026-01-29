@@ -98,8 +98,10 @@ impl Substitution {
                     .map(|(n, t)| (n.clone(), self.apply(t)))
                     .collect(),
             },
-            // Primitive types are unchanged
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => ty.clone(),
+            // Primitive types and Any are unchanged
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
+                ty.clone()
+            }
         }
     }
 

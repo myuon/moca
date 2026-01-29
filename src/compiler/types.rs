@@ -43,6 +43,9 @@ pub enum Type {
     /// Type variable for inference (unresolved type).
     /// These are resolved during unification in Algorithm W.
     Var(TypeVarId),
+    /// Any type: bypasses type checking, unifies with any other type.
+    /// When unified with another type T, the result is T.
+    Any,
 }
 
 impl Type {
@@ -82,7 +85,7 @@ impl Type {
     /// Check if this type contains any type variables.
     pub fn has_type_vars(&self) -> bool {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => false,
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => false,
             Type::Var(_) => true,
             Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
@@ -103,7 +106,7 @@ impl Type {
 
     fn collect_type_vars(&self, vars: &mut Vec<TypeVarId>) {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => {}
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {}
             Type::Var(id) => {
                 if !vars.contains(id) {
                     vars.push(*id);
@@ -166,6 +169,7 @@ impl fmt::Display for Type {
             }
             Type::Struct { name, .. } => write!(f, "{}", name),
             Type::Var(id) => write!(f, "?T{}", id),
+            Type::Any => write!(f, "any"),
         }
     }
 }
@@ -200,6 +204,7 @@ impl TypeAnnotation {
                 "bool" => Ok(Type::Bool),
                 "string" => Ok(Type::String),
                 "nil" => Ok(Type::Nil),
+                "any" => Ok(Type::Any),
                 _ => Err(format!("unknown type: {}", name)),
             },
             TypeAnnotation::Array(elem) => Ok(Type::array(elem.to_type()?)),
@@ -262,6 +267,7 @@ mod tests {
         assert_eq!(Type::Bool.to_string(), "bool");
         assert_eq!(Type::String.to_string(), "string");
         assert_eq!(Type::Nil.to_string(), "nil");
+        assert_eq!(Type::Any.to_string(), "any");
         assert_eq!(Type::array(Type::Int).to_string(), "array<int>");
         assert_eq!(Type::nullable(Type::String).to_string(), "string?");
         assert_eq!(Type::Var(0).to_string(), "?T0");
@@ -289,6 +295,10 @@ mod tests {
             Type::String
         );
         assert_eq!(
+            TypeAnnotation::Named("any".to_string()).to_type().unwrap(),
+            Type::Any
+        );
+        assert_eq!(
             TypeAnnotation::Array(Box::new(TypeAnnotation::Named("int".to_string())))
                 .to_type()
                 .unwrap(),
@@ -312,6 +322,7 @@ mod tests {
     #[test]
     fn test_has_type_vars() {
         assert!(!Type::Int.has_type_vars());
+        assert!(!Type::Any.has_type_vars());
         assert!(!Type::array(Type::Int).has_type_vars());
         assert!(Type::Var(0).has_type_vars());
         assert!(Type::array(Type::Var(0)).has_type_vars());
