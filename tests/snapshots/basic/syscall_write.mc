@@ -18,3 +18,11 @@ let truncated = syscall_write(1, "hi", 100);
 print(truncated);
 
 syscall_write(1, "\n", 1);
+
+// Test stderr with syscall_write
+syscall_write(2, "stderr_test", 11);
+syscall_write(2, "\n", 1);
+
+// Test eprint_str from stdlib
+eprint_str("eprint_works");
+eprint_str("\n");

@@ -140,19 +140,23 @@ pub fn run_file(path: &Path) -> Result<(), String> {
 pub struct CapturedOutput {
     /// Standard output from print statements
     pub stdout: String,
+    /// Standard error output
+    pub stderr: String,
 }
 
 /// Compile and run a file, capturing output for testing.
 ///
-/// Returns (stdout_content, Ok(())) on success, or (stdout_content, Err(msg)) on error.
+/// Returns (CapturedOutput, Ok(())) on success, or (CapturedOutput, Err(msg)) on error.
 /// This allows tests to check both the output and any error messages.
 pub fn run_file_capturing_output(
     path: &Path,
     config: &RuntimeConfig,
 ) -> (CapturedOutput, Result<(), String>) {
-    // Use Arc<Mutex<Cursor>> to allow shared ownership of the buffer
+    // Use Arc<Mutex<Cursor>> to allow shared ownership of the buffers
     let stdout_buffer = Arc::new(Mutex::new(Cursor::new(Vec::new())));
-    let buffer_clone = Arc::clone(&stdout_buffer);
+    let stderr_buffer = Arc::new(Mutex::new(Cursor::new(Vec::new())));
+    let stdout_clone = Arc::clone(&stdout_buffer);
+    let stderr_clone = Arc::clone(&stderr_buffer);
 
     let result = (|| {
         let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -182,11 +186,12 @@ pub fn run_file_capturing_output(
         codegen.set_index_object_types(index_object_types);
         let chunk = codegen.compile(resolved)?;
 
-        // Execution with output capture using a wrapper that writes to the shared buffer
+        // Execution with output capture using wrappers that write to shared buffers
         let mut vm = VM::new_with_config(
             config.heap_limit,
             config.gc_enabled,
-            Box::new(SharedWriter(buffer_clone)),
+            Box::new(SharedWriter(stdout_clone)),
+            Box::new(SharedWriter(stderr_clone)),
         );
         vm.set_jit_config(config.jit_threshold, config.trace_jit);
 
@@ -195,11 +200,13 @@ pub fn run_file_capturing_output(
         Ok(())
     })();
 
-    // Extract the output from the buffer
+    // Extract the output from the buffers
     let output = {
-        let buffer = stdout_buffer.lock().unwrap();
+        let stdout = stdout_buffer.lock().unwrap();
+        let stderr = stderr_buffer.lock().unwrap();
         CapturedOutput {
-            stdout: String::from_utf8_lossy(buffer.get_ref()).to_string(),
+            stdout: String::from_utf8_lossy(stdout.get_ref()).to_string(),
+            stderr: String::from_utf8_lossy(stderr.get_ref()).to_string(),
         }
     };
 

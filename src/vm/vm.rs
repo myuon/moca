@@ -70,18 +70,20 @@ pub struct VM {
     jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
-    /// Output stream for print statements
+    /// Output stream for print statements (stdout)
     output: Box<dyn Write>,
+    /// Output stream for stderr
+    stderr: Box<dyn Write>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self::new_with_config(None, true, Box::new(io::stdout()))
+        Self::new_with_config(None, true, Box::new(io::stdout()), Box::new(io::stderr()))
     }
 
     /// Create a VM with a custom output stream.
     pub fn with_output(output: Box<dyn Write>) -> Self {
-        Self::new_with_config(None, true, output)
+        Self::new_with_config(None, true, output, Box::new(io::stderr()))
     }
 
     /// Create a new VM with custom heap configuration.
@@ -90,7 +92,7 @@ impl VM {
     /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
     /// * `gc_enabled` - Whether GC is enabled
     pub fn new_with_heap_config(heap_limit: Option<usize>, gc_enabled: bool) -> Self {
-        Self::new_with_config(heap_limit, gc_enabled, Box::new(io::stdout()))
+        Self::new_with_config(heap_limit, gc_enabled, Box::new(io::stdout()), Box::new(io::stderr()))
     }
 
     /// Create a new VM with full configuration.
@@ -98,11 +100,13 @@ impl VM {
     /// # Arguments
     /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
     /// * `gc_enabled` - Whether GC is enabled
-    /// * `output` - Output stream for print statements
+    /// * `output` - Output stream for print statements (stdout)
+    /// * `stderr` - Output stream for stderr
     pub fn new_with_config(
         heap_limit: Option<usize>,
         gc_enabled: bool,
         output: Box<dyn Write>,
+        stderr: Box<dyn Write>,
     ) -> Self {
         Self {
             stack: Vec::with_capacity(1024),
@@ -121,6 +125,7 @@ impl VM {
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
             output,
+            stderr,
         }
     }
 
@@ -1498,8 +1503,7 @@ impl VM {
                         .unwrap_or(-1)
                 } else {
                     // stderr
-                    use std::io::Write;
-                    std::io::stderr()
+                    self.stderr
                         .write_all(bytes_to_write)
                         .map(|_| actual_count as i64)
                         .unwrap_or(-1)
