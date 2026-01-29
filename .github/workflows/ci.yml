@@ -118,14 +118,20 @@ jobs:
 
             if (file in base) {
               diff = cov - base[file]
+              if (diff == 0) next
               if (diff > 0) diff_str = sprintf("+%.2f%%", diff)
-              else if (diff < 0) diff_str = sprintf("%.2f%%", diff)
-              else diff_str = "±0%"
+              else diff_str = sprintf("%.2f%%", diff)
             } else {
               diff_str = "new"
             }
             printf "| %s | %s%% | %s | %s |\n", file, cov, diff_str, icon
           }' >> coverage.md
+
+          # If no changes, add a message
+          if [ $(wc -l < coverage.md) -eq 2 ]; then
+            echo "" >> coverage.md
+            echo "_No coverage changes detected._" >> coverage.md
+          fi
 
       - name: Post coverage comment
         uses: actions/github-script@v7
