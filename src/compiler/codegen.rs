@@ -589,8 +589,7 @@ impl Codegen {
                         if args.len() != 1 {
                             return Err("pop takes exactly 1 argument".to_string());
                         }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::VectorPop);
+                        self.compile_vector_pop(&args[0], ops)?;
                     }
                     "type_of" => {
                         if args.len() != 1 {
@@ -690,8 +689,7 @@ impl Codegen {
                         if args.len() != 1 {
                             return Err("vec_pop takes exactly 1 argument (vector)".to_string());
                         }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::VectorPop);
+                        self.compile_vector_pop(&args[0], ops)?;
                     }
                     "vec_len" => {
                         if args.len() != 1 {
@@ -1017,6 +1015,65 @@ impl Codegen {
                     op_name, index
                 )
             })
+    }
+
+    /// Compile vector pop operation to low-level operations.
+    /// Vector layout: [ptr, len, cap]
+    /// Stack effect: [] -> [value]
+    fn compile_vector_pop(
+        &mut self,
+        vec_expr: &ResolvedExpr,
+        ops: &mut Vec<Op>,
+    ) -> Result<(), String> {
+        // 1. Get vec reference
+        self.compile_expr(vec_expr, ops)?; // [vec]
+
+        // 2. Get ptr and len
+        ops.push(Op::Dup);          // [vec, vec]
+        ops.push(Op::HeapLoad(0));  // [vec, ptr]
+        ops.push(Op::Swap);         // [ptr, vec]
+        ops.push(Op::Dup);          // [ptr, vec, vec]
+        ops.push(Op::HeapLoad(1));  // [ptr, vec, len]
+
+        // 3. Check if len == 0
+        ops.push(Op::Dup);          // [ptr, vec, len, len]
+        ops.push(Op::PushInt(0));   // [ptr, vec, len, len, 0]
+        ops.push(Op::Eq);           // [ptr, vec, len, is_empty]
+        let jmp_not_empty = ops.len();
+        ops.push(Op::JmpIfFalse(0)); // [ptr, vec, len] placeholder
+
+        // Error path: pop from empty vector
+        ops.push(Op::Pop);          // [ptr, vec]
+        ops.push(Op::Pop);          // [ptr]
+        ops.push(Op::Pop);          // []
+        let err_idx = self.add_string("cannot pop from empty vector".to_string());
+        ops.push(Op::PushString(err_idx)); // [error]
+        ops.push(Op::Throw);
+
+        // Success path: is_empty == false
+        ops[jmp_not_empty] = Op::JmpIfFalse(ops.len());
+
+        // Stack: [ptr, vec, len]
+        // 4. Calculate new_len = len - 1 and get value
+        ops.push(Op::PushInt(1));   // [ptr, vec, len, 1]
+        ops.push(Op::Sub);          // [ptr, vec, new_len]
+        ops.push(Op::Pick(2));      // [ptr, vec, new_len, ptr]
+        ops.push(Op::Pick(1));      // [ptr, vec, new_len, ptr, new_len]
+        ops.push(Op::HeapLoadDyn);  // [ptr, vec, new_len, value]
+
+        // 5. Update vec.len = new_len
+        ops.push(Op::Swap);         // [ptr, vec, value, new_len]
+        ops.push(Op::Pick(2));      // [ptr, vec, value, new_len, vec]
+        ops.push(Op::Swap);         // [ptr, vec, value, vec, new_len]
+        ops.push(Op::HeapStore(1)); // [ptr, vec, value]
+
+        // 6. Cleanup: keep only value
+        ops.push(Op::Swap);         // [ptr, value, vec]
+        ops.push(Op::Pop);          // [ptr, value]
+        ops.push(Op::Swap);         // [value, ptr]
+        ops.push(Op::Pop);          // [value]
+
+        Ok(())
     }
 }
 
