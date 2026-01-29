@@ -93,8 +93,6 @@ jobs:
       - name: Generate coverage report with diff
         run: |
           cargo llvm-cov --no-report > /dev/null 2>&1
-          echo "| File | Coverage | Diff | |" > coverage.md
-          echo "|------|----------|------|---|" >> coverage.md
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '
           BEGIN {
             while ((getline line < "base_coverage.txt") > 0) {
@@ -125,12 +123,14 @@ jobs:
               diff_str = "new"
             }
             printf "| %s | %s%% | %s | %s |\n", file, cov, diff_str, icon
-          }' >> coverage.md
+          }' > coverage_rows.txt
 
-          # If no changes, add a message
-          if [ $(wc -l < coverage.md) -eq 2 ]; then
-            echo "" >> coverage.md
-            echo "_No coverage changes detected._" >> coverage.md
+          if [ -s coverage_rows.txt ]; then
+            echo "| File | Coverage | Diff | |" > coverage.md
+            echo "|------|----------|------|---|" >> coverage.md
+            cat coverage_rows.txt >> coverage.md
+          else
+            echo "_No coverage changes detected._" > coverage.md
           fi
 
       - name: Post coverage comment
