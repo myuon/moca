@@ -1,0 +1,10 @@
+✓ _test_add_negative passed
+✓ _test_add_positive passed
+✓ _test_add_zero passed
+✓ _test_assert_condition passed
+✓ _test_assert_eq_bool passed
+✓ _test_assert_eq_ints passed
+✓ _test_assert_eq_str passed
+✓ _test_assert_true passed
+
+8 passed, 0 failed
