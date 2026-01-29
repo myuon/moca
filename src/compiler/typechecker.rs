@@ -1357,12 +1357,36 @@ impl TypeChecker {
         span: Span,
     ) -> Option<Type> {
         match name {
-            "print" => {
+            "print" | "print_debug" => {
                 // print accepts any type
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
                 Some(Type::Nil)
+            }
+            "syscall_write" => {
+                // syscall_write(fd: Int, buf: String, count: Int) -> Int
+                if args.len() != 3 {
+                    self.errors.push(TypeError::new(
+                        "syscall_write expects 3 arguments (fd, buf, count)",
+                        span,
+                    ));
+                    return Some(Type::Int);
+                }
+                let fd_type = self.infer_expr(&args[0], env);
+                let buf_type = self.infer_expr(&args[1], env);
+                let count_type = self.infer_expr(&args[2], env);
+
+                if let Err(e) = self.unify(&fd_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                if let Err(e) = self.unify(&buf_type, &Type::String, span) {
+                    self.errors.push(e);
+                }
+                if let Err(e) = self.unify(&count_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                Some(Type::Int) // Returns bytes written or -1
             }
             "len" => {
                 if args.len() != 1 {

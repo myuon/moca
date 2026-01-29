@@ -188,6 +188,7 @@ impl<'a> Resolver<'a> {
             functions: HashMap::new(),
             builtins: vec![
                 "print".to_string(),
+                "print_debug".to_string(),
                 "len".to_string(),
                 "push".to_string(),
                 "pop".to_string(),
@@ -209,6 +210,8 @@ impl<'a> Resolver<'a> {
                 "vec_capacity".to_string(),
                 "vec_get".to_string(),
                 "vec_set".to_string(),
+                // Syscall operations
+                "syscall_write".to_string(),
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),

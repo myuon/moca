@@ -435,6 +435,9 @@ impl Verifier {
             // Vector operations
             Op::VectorPush => (2, 0), // pops vector and value
             Op::VectorPop => (1, 1),  // pops vector, pushes value
+
+            // Syscall
+            Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
         }
     }
 }

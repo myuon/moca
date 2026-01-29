@@ -114,6 +114,15 @@ pub enum Op {
     PrintDebug,
 
     // ========================================
+    // Syscall
+    // ========================================
+    /// System call instruction
+    /// - syscall_num: syscall number (1 = write)
+    /// - argc: number of arguments on stack
+    /// Stack: [..., arg1, arg2, ..., argN] -> [..., result]
+    Syscall(usize, usize),
+
+    // ========================================
     // GC hint
     // ========================================
     GcHint(usize), // Hint about upcoming allocation size

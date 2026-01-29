@@ -290,6 +290,7 @@ const OP_STR_LEN: u8 = 73;
 // Legacy opcodes 74, 75 removed (AllocVector, AllocVectorCap)
 const OP_VECTOR_PUSH: u8 = 76;
 const OP_VECTOR_POP: u8 = 77;
+const OP_SYSCALL: u8 = 78;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -401,6 +402,11 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
         Op::VectorPush => w.write_all(&[OP_VECTOR_PUSH])?,
         Op::VectorPop => w.write_all(&[OP_VECTOR_POP])?,
+        Op::Syscall(num, argc) => {
+            w.write_all(&[OP_SYSCALL])?;
+            write_u32(w, *num as u32)?;
+            write_u32(w, *argc as u32)?;
+        }
     }
     Ok(())
 }
@@ -465,6 +471,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
         OP_VECTOR_PUSH => Op::VectorPush,
         OP_VECTOR_POP => Op::VectorPop,
+        OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)

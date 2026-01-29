@@ -566,6 +566,21 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::PrintDebug);
                     }
+                    "syscall_write" => {
+                        // syscall_write(fd, buf, count) -> bytes_written
+                        if args.len() != 3 {
+                            return Err(
+                                "syscall_write takes exactly 3 arguments (fd, buf, count)"
+                                    .to_string(),
+                            );
+                        }
+                        // Push arguments in order: fd, buf, count
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        self.compile_expr(&args[2], ops)?;
+                        // Syscall 1 = write, 3 arguments
+                        ops.push(Op::Syscall(1, 3));
+                    }
                     "len" => {
                         if args.len() != 1 {
                             return Err("len takes exactly 1 argument".to_string());
@@ -936,7 +951,7 @@ impl Codegen {
             "TryEnd" => Ok(Op::TryEnd),
 
             // Builtins
-            "Print" => Ok(Op::Print),
+            "PrintDebug" => Ok(Op::PrintDebug),
 
             // GC hint
             "GcHint" => {

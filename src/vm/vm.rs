@@ -1208,6 +1208,17 @@ impl VM {
 
                 self.stack.push(value);
             }
+            Op::Syscall(syscall_num, argc) => {
+                // Collect arguments from stack
+                let mut args = Vec::with_capacity(argc);
+                for _ in 0..argc {
+                    args.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                args.reverse(); // Arguments were popped in reverse order
+
+                let result = self.handle_syscall(syscall_num, &args)?;
+                self.stack.push(result);
+            }
         }
 
         Ok(ControlFlow::Continue)
@@ -1430,6 +1441,74 @@ impl VM {
         // Collect all roots from the stack
         let roots: Vec<Value> = self.stack.clone();
         self.heap.collect(&roots);
+    }
+
+    /// Handle syscall instructions
+    /// Syscall numbers:
+    /// - 1: write(fd, buf, count) -> bytes_written
+    fn handle_syscall(&mut self, syscall_num: usize, args: &[Value]) -> Result<Value, String> {
+        const SYSCALL_WRITE: usize = 1;
+
+        match syscall_num {
+            SYSCALL_WRITE => {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "write syscall expects 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "write: fd must be an integer".to_string())?;
+                let buf_ref = match &args[1] {
+                    Value::Ref(r) => *r,
+                    _ => return Err("write: buf must be a string".to_string()),
+                };
+                let count = args[2]
+                    .as_i64()
+                    .ok_or_else(|| "write: count must be an integer".to_string())?;
+
+                // Get the string from heap
+                let heap_obj = self
+                    .heap
+                    .get(buf_ref)
+                    .ok_or_else(|| "write: invalid reference".to_string())?;
+                let moca_str = heap_obj
+                    .as_string()
+                    .ok_or_else(|| "write: buf must be a string".to_string())?;
+                let buf_str = &moca_str.value;
+
+                // Validate fd (only 1=stdout, 2=stderr allowed)
+                if fd != 1 && fd != 2 {
+                    return Ok(Value::I64(-1)); // Invalid fd
+                }
+
+                // Calculate actual bytes to write
+                let buf_bytes = buf_str.as_bytes();
+                let actual_count = (count as usize).min(buf_bytes.len());
+                let bytes_to_write = &buf_bytes[..actual_count];
+
+                // Write to the appropriate output
+                let result = if fd == 1 {
+                    // stdout
+                    self.output
+                        .write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(-1)
+                } else {
+                    // stderr
+                    use std::io::Write;
+                    std::io::stderr()
+                        .write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(-1)
+                };
+
+                Ok(Value::I64(result))
+            }
+            _ => Err(format!("unknown syscall: {}", syscall_num)),
+        }
     }
 }
 
