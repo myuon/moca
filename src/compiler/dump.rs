@@ -1315,6 +1315,7 @@ impl<'a> Disassembler<'a> {
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::ToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
+            Op::StrLen => self.output.push_str("StrLen"),
 
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),

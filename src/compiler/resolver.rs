@@ -181,6 +181,12 @@ impl<'a> Resolver<'a> {
                 "send".to_string(),
                 "recv".to_string(),
                 "join".to_string(),
+                // Vector operations
+                "vec_new".to_string(),
+                "vec_with_capacity".to_string(),
+                "vec_push".to_string(),
+                "vec_pop".to_string(),
+                "vec_capacity".to_string(),
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),

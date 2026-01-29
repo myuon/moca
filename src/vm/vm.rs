@@ -846,6 +846,7 @@ impl VM {
                                 super::ObjectType::Array => "array",
                                 super::ObjectType::Object => "object",
                                 super::ObjectType::Slots => "array", // Slots is new array representation
+                                super::ObjectType::Vector => "vector",
                             }
                         } else {
                             "unknown"
@@ -876,6 +877,18 @@ impl VM {
                     .parse()
                     .map_err(|_| format!("runtime error: cannot parse '{}' as int", s.value))?;
                 self.stack.push(Value::I64(n));
+            }
+            Op::StrLen => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let r = value
+                    .as_ref()
+                    .ok_or("runtime error: str_len expects string")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let s = obj
+                    .as_string()
+                    .ok_or("runtime error: str_len expects string")?;
+                let len = s.value.chars().count() as i64;
+                self.stack.push(Value::I64(len));
             }
             Op::Throw => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -1226,6 +1239,23 @@ impl VM {
                             parts.push(self.value_to_string(elem)?);
                         }
                         Ok(format!("[{}]", parts.join(", ")))
+                    }
+                    super::HeapObject::Vector(v) => {
+                        // Vector: need to read from the data pointer
+                        if let Some(data_ref) = v.ptr {
+                            if let Some(data_obj) = self.heap.get(data_ref) {
+                                if let Some(slots) = data_obj.as_slots() {
+                                    let mut parts = Vec::new();
+                                    for i in 0..v.len as usize {
+                                        if i < slots.slots.len() {
+                                            parts.push(self.value_to_string(&slots.slots[i])?);
+                                        }
+                                    }
+                                    return Ok(format!("[{}]", parts.join(", ")));
+                                }
+                            }
+                        }
+                        Ok("[]".to_string())
                     }
                 }
             }

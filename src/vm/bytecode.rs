@@ -288,6 +288,7 @@ const OP_HEAP_LOAD: u8 = 69;
 const OP_HEAP_STORE: u8 = 70;
 const OP_HEAP_LOAD_DYN: u8 = 71;
 const OP_HEAP_STORE_DYN: u8 = 72;
+const OP_STR_LEN: u8 = 73;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -365,6 +366,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::ToString => w.write_all(&[OP_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
+        Op::StrLen => w.write_all(&[OP_STR_LEN])?,
         Op::Throw => w.write_all(&[OP_THROW])?,
         Op::TryBegin(target) => {
             w.write_all(&[OP_TRY_BEGIN])?;
@@ -446,6 +448,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
         OP_PARSE_INT => Op::ParseInt,
+        OP_STR_LEN => Op::StrLen,
         OP_THROW => Op::Throw,
         OP_TRY_BEGIN => Op::TryBegin(read_u32(r)? as usize),
         OP_TRY_END => Op::TryEnd,
@@ -714,6 +717,7 @@ mod tests {
             Op::TypeOf,
             Op::ToString,
             Op::ParseInt,
+            Op::StrLen,
             Op::Throw,
             Op::TryBegin(100),
             Op::TryEnd,

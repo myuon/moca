@@ -11,6 +11,8 @@ pub enum ObjectType {
     Object,
     /// Generic slot-based heap object (for new array implementation)
     Slots,
+    /// Dynamic array with capacity management
+    Vector,
 }
 
 /// Header for all heap objects.
@@ -53,12 +55,29 @@ pub struct MocaSlots {
     pub slots: Vec<Value>,
 }
 
+/// A dynamic array (Vector) with capacity management.
+/// Layout:
+/// - ptr: GcRef to a Slots object containing the data
+/// - len: current number of elements (as i64)
+/// - cap: capacity (as i64)
+#[derive(Debug)]
+pub struct MocaVector {
+    pub header: ObjectHeader,
+    /// Reference to the data storage (a Slots object), or None if empty
+    pub ptr: Option<GcRef>,
+    /// Current number of elements
+    pub len: i64,
+    /// Current capacity
+    pub cap: i64,
+}
+
 /// A heap object can be any of the heap-allocated types.
 pub enum HeapObject {
     String(MocaString),
     Array(MocaArray),
     Object(MocaObject),
     Slots(MocaSlots),
+    Vector(MocaVector),
 }
 
 impl HeapObject {
@@ -68,6 +87,7 @@ impl HeapObject {
             HeapObject::Array(_) => ObjectType::Array,
             HeapObject::Object(_) => ObjectType::Object,
             HeapObject::Slots(_) => ObjectType::Slots,
+            HeapObject::Vector(_) => ObjectType::Vector,
         }
     }
 
@@ -77,6 +97,7 @@ impl HeapObject {
             HeapObject::Array(a) => &a.header,
             HeapObject::Object(o) => &o.header,
             HeapObject::Slots(s) => &s.header,
+            HeapObject::Vector(v) => &v.header,
         }
     }
 
@@ -86,6 +107,7 @@ impl HeapObject {
             HeapObject::Array(a) => &mut a.header,
             HeapObject::Object(o) => &mut o.header,
             HeapObject::Slots(s) => &mut s.header,
+            HeapObject::Vector(v) => &mut v.header,
         }
     }
 
@@ -138,6 +160,20 @@ impl HeapObject {
         }
     }
 
+    pub fn as_vector(&self) -> Option<&MocaVector> {
+        match self {
+            HeapObject::Vector(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_vector_mut(&mut self) -> Option<&mut MocaVector> {
+        match self {
+            HeapObject::Vector(v) => Some(v),
+            _ => None,
+        }
+    }
+
     /// Get all Value references in this object for GC tracing.
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
@@ -146,6 +182,8 @@ impl HeapObject {
             HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ref()).collect(),
             // For Slots, skip slot 0 (length) and trace the rest
             HeapObject::Slots(slots) => slots.slots.iter().skip(1).filter_map(|v| v.as_ref()).collect(),
+            // For Vector, trace the data pointer (the Slots object will trace its contents)
+            HeapObject::Vector(vec) => vec.ptr.into_iter().collect(),
         }
     }
 }
@@ -157,6 +195,7 @@ impl fmt::Debug for HeapObject {
             HeapObject::Array(a) => write!(f, "Array({:?})", a.elements),
             HeapObject::Object(o) => write!(f, "Object({:?})", o.fields),
             HeapObject::Slots(s) => write!(f, "Slots({:?})", s.slots),
+            HeapObject::Vector(v) => write!(f, "Vector(ptr={:?}, len={}, cap={})", v.ptr, v.len, v.cap),
         }
     }
 }
@@ -306,6 +345,25 @@ impl Heap {
         Ok(self.alloc_object(obj))
     }
 
+    /// Allocate a new Vector object.
+    /// The Vector contains a pointer to data (Slots), length, and capacity.
+    pub fn alloc_vector(&mut self, ptr: Option<GcRef>, len: i64, cap: i64) -> Result<GcRef, String> {
+        let size = std::mem::size_of::<MocaVector>();
+        self.check_heap_limit(size)?;
+        self.bytes_allocated += size;
+
+        let obj = HeapObject::Vector(MocaVector {
+            header: ObjectHeader {
+                obj_type: ObjectType::Vector,
+                marked: false,
+            },
+            ptr,
+            len,
+            cap,
+        });
+        Ok(self.alloc_object(obj))
+    }
+
     fn alloc_object(&mut self, obj: HeapObject) -> GcRef {
         if let Some(index) = self.free_list.pop() {
             self.objects[index] = Some(obj);
@@ -387,6 +445,7 @@ impl Heap {
                     std::mem::size_of::<MocaSlots>()
                         + s.slots.len() * std::mem::size_of::<Value>()
                 }
+                HeapObject::Vector(_) => std::mem::size_of::<MocaVector>(),
             };
         }
 

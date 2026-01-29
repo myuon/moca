@@ -600,6 +600,62 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ThreadJoin);
                     }
+                    // Vector builtins
+                    "vec_new" => {
+                        if !args.is_empty() {
+                            return Err("vec_new takes no arguments".to_string());
+                        }
+                        // Create empty vector: [ptr=null, len=0, cap=0]
+                        ops.push(Op::PushNull);   // ptr = null
+                        ops.push(Op::PushInt(0)); // len = 0
+                        ops.push(Op::PushInt(0)); // cap = 0
+                        ops.push(Op::AllocHeap(3));
+                    }
+                    "vec_with_capacity" => {
+                        if args.len() != 1 {
+                            return Err("vec_with_capacity takes exactly 1 argument (capacity)".to_string());
+                        }
+                        // Create vector with capacity: allocate data slots, then vector header
+                        // First, allocate data storage with the given capacity
+                        self.compile_expr(&args[0], ops)?;  // capacity value
+                        ops.push(Op::Dup);                   // keep capacity for AllocHeap and for header
+
+                        // Create data slots - we need to push 'capacity' number of nulls
+                        // For simplicity, we'll use a fixed allocation for now
+                        // and let vec_push handle resizing
+                        // Actually, we need dynamic allocation - let's simplify:
+                        // Just create empty vector, capacity is informational
+                        ops.push(Op::Pop);  // discard the duplicated capacity
+
+                        // For now, create empty data storage
+                        ops.push(Op::PushNull);   // ptr = null (will be allocated on first push)
+                        ops.push(Op::PushInt(0)); // len = 0
+                        self.compile_expr(&args[0], ops)?;  // cap = user specified
+                        ops.push(Op::AllocHeap(3));
+                    }
+                    "vec_push" => {
+                        if args.len() != 2 {
+                            return Err("vec_push takes exactly 2 arguments (vector, value)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::ArrayPush);
+                        ops.push(Op::PushNull);
+                    }
+                    "vec_pop" => {
+                        if args.len() != 1 {
+                            return Err("vec_pop takes exactly 1 argument (vector)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ArrayPop);
+                    }
+                    "vec_capacity" => {
+                        if args.len() != 1 {
+                            return Err("vec_capacity takes exactly 1 argument (vector)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapLoad(2)); // slot 2 is capacity
+                    }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }
             }

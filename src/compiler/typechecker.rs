@@ -1401,6 +1401,55 @@ impl TypeChecker {
                 }
                 Some(self.fresh_var())
             }
+            // Vector operations
+            "vec_new" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("vec_new expects 0 arguments", span));
+                }
+                // Returns a vector type (for now, represented as a type variable)
+                Some(self.fresh_var())
+            }
+            "vec_with_capacity" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_with_capacity expects 1 argument", span));
+                    return Some(self.fresh_var());
+                }
+                let arg_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                Some(self.fresh_var())
+            }
+            "vec_push" => {
+                if args.len() != 2 {
+                    self.errors
+                        .push(TypeError::new("vec_push expects 2 arguments", span));
+                    return Some(Type::Nil);
+                }
+                self.infer_expr(&args[0], env);
+                self.infer_expr(&args[1], env);
+                Some(Type::Nil)
+            }
+            "vec_pop" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_pop expects 1 argument", span));
+                    return Some(self.fresh_var());
+                }
+                self.infer_expr(&args[0], env);
+                Some(self.fresh_var())
+            }
+            "vec_capacity" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_capacity expects 1 argument", span));
+                    return Some(Type::Int);
+                }
+                self.infer_expr(&args[0], env);
+                Some(Type::Int)
+            }
             _ => None,
         }
     }

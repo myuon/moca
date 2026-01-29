@@ -95,6 +95,7 @@ pub enum Op {
     TypeOf,   // Push type name as string
     ToString, // Convert any value to string
     ParseInt, // Parse string to int
+    StrLen,   // Get string length: [string] -> [length]
 
     // ========================================
     // Exception handling
