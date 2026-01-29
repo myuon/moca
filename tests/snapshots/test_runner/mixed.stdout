@@ -1,0 +1,5 @@
+✗ _test_should_fail failed: runtime error: this should fail
+✓ _test_should_pass_1 passed
+✓ _test_should_pass_2 passed
+
+2 passed, 1 failed

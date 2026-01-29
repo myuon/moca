@@ -108,11 +108,7 @@ impl JitCompiler {
     /// # Arguments
     /// * `func` - The function to compile
     /// * `func_index` - The index of this function (for self-recursion optimization)
-    pub fn compile(
-        mut self,
-        func: &Function,
-        func_index: usize,
-    ) -> Result<CompiledCode, String> {
+    pub fn compile(mut self, func: &Function, func_index: usize) -> Result<CompiledCode, String> {
         // Store function info for self-recursion detection
         self.self_func_index = Some(func_index);
         self.self_locals_count = func.locals_count;
@@ -614,7 +610,7 @@ impl JitCompiler {
         let locals_size = (self.self_locals_count as i32) * VALUE_SIZE;
 
         // Save callee-saved registers
-        asm.push(regs::VM_CTX);  // R12
+        asm.push(regs::VM_CTX); // R12
         asm.push(regs::VSTACK); // R13
         asm.push(regs::LOCALS); // R14
 
@@ -636,12 +632,12 @@ impl JitCompiler {
             let dst_offset = (i as i32) * VALUE_SIZE; // Relative to RSP
 
             // Load tag and payload from VSTACK
-            asm.mov_rm(regs::TMP0, regs::VSTACK, src_offset);      // tag
-            asm.mov_rm(regs::TMP1, regs::VSTACK, src_offset + 8);  // payload
+            asm.mov_rm(regs::TMP0, regs::VSTACK, src_offset); // tag
+            asm.mov_rm(regs::TMP1, regs::VSTACK, src_offset + 8); // payload
 
             // Store to new locals on stack
-            asm.mov_mr(Reg::Rsp, dst_offset, regs::TMP0);      // tag
-            asm.mov_mr(Reg::Rsp, dst_offset + 8, regs::TMP1);  // payload
+            asm.mov_mr(Reg::Rsp, dst_offset, regs::TMP0); // tag
+            asm.mov_mr(Reg::Rsp, dst_offset + 8, regs::TMP1); // payload
         }
 
         // DON'T adjust VSTACK here - callee starts at our current VSTACK position
@@ -697,8 +693,8 @@ impl JitCompiler {
 
             // Return value is in RAX (tag) and RDX (payload)
             // Store it where the first arg was, then advance VSTACK by one slot
-            asm.mov_mr(regs::VSTACK, 0, Reg::Rax);  // store tag
-            asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);  // store payload
+            asm.mov_mr(regs::VSTACK, 0, Reg::Rax); // store tag
+            asm.mov_mr(regs::VSTACK, 8, Reg::Rdx); // store payload
             asm.add_ri32(regs::VSTACK, VALUE_SIZE);
         }
 
@@ -730,9 +726,9 @@ impl JitCompiler {
         // when calling into other JIT functions.
         // We push 3 registers for 16-byte stack alignment (6 in prologue + 3 = 9 total = 72 bytes)
         // After return address (8 bytes), 72 + 8 = 80, which is 16-byte aligned.
-        asm.push(regs::VM_CTX);   // R12 - save our JitCallContext pointer
-        asm.push(regs::VSTACK);   // R13 - save our value stack pointer (CRITICAL!)
-        asm.push(regs::LOCALS);   // R14 - save our locals pointer
+        asm.push(regs::VM_CTX); // R12 - save our JitCallContext pointer
+        asm.push(regs::VSTACK); // R13 - save our value stack pointer (CRITICAL!)
+        asm.push(regs::LOCALS); // R14 - save our locals pointer
 
         // Calculate args pointer: RCX = VSTACK - argc * VALUE_SIZE
         // Note: VSTACK (R13) still has original value, we just pushed a copy
@@ -778,8 +774,8 @@ impl JitCompiler {
 
         // Push the return value onto the JIT stack
         // Return value is in RAX (tag) and RDX (payload)
-        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);  // store tag
-        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);  // store payload
+        asm.mov_mr(regs::VSTACK, 0, Reg::Rax); // store tag
+        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx); // store payload
         asm.add_ri32(regs::VSTACK, VALUE_SIZE);
 
         // Update stack depth: -argc + 1 (pop args, push result)

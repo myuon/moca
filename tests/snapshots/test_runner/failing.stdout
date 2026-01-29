@@ -1,0 +1,6 @@
+✗ _test_assert_false failed: runtime error: this assertion should fail
+✗ _test_bool_mismatch failed: runtime error: bools should match (expected: false, actual: true)
+✗ _test_int_mismatch failed: runtime error: values should match (expected: 2, actual: 1)
+✗ _test_str_mismatch failed: runtime error: strings should match (expected: world, actual: hello)
+
+0 passed, 4 failed

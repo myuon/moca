@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::Path;
 
-use moca::compiler::{dump_ast, dump_bytecode, run_file_capturing_output};
+use moca::compiler::{dump_ast, dump_bytecode, run_file_capturing_output, run_tests};
 use moca::config::{JitMode, RuntimeConfig};
 
 /// Run a .mc file in-process and return (stdout, stderr, exit_code)
@@ -335,4 +335,99 @@ fn run_gc_snapshot_test(test_path: &Path) {
             );
         }
     }
+}
+
+// ============================================================================
+// Test Runner Snapshot Tests
+// ============================================================================
+
+/// Format test results as CLI output (same format as `moca test` command).
+fn format_test_results(results: &moca::compiler::TestResults) -> String {
+    let mut output = String::new();
+
+    // Sort results by name for deterministic output
+    let mut sorted_results = results.results.clone();
+    sorted_results.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for result in &sorted_results {
+        if result.passed {
+            output.push_str(&format!("\u{2713} {} passed\n", result.name));
+        } else {
+            let error_msg = result.error.as_deref().unwrap_or("unknown error");
+            output.push_str(&format!("\u{2717} {} failed: {}\n", result.name, error_msg));
+        }
+    }
+
+    output.push('\n');
+    output.push_str(&format!(
+        "{} passed, {} failed\n",
+        results.passed, results.failed
+    ));
+
+    output
+}
+
+/// Run test runner snapshot test for a given subdirectory.
+fn run_test_runner_snapshot(subdir: &str) {
+    let base_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("test_runner")
+        .join(subdir);
+
+    let config = RuntimeConfig::default();
+    let results = run_tests(&base_path, &config).expect("run_tests should succeed");
+
+    let actual_output = format_test_results(&results);
+
+    // Check expected stdout
+    let stdout_path = base_path.with_extension("stdout");
+    if stdout_path.exists() {
+        let expected_output = fs::read_to_string(&stdout_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
+        assert_eq!(
+            actual_output, expected_output,
+            "Test runner output mismatch for {:?}\n--- expected ---\n{}\n--- actual ---\n{}",
+            subdir, expected_output, actual_output
+        );
+    } else {
+        panic!(
+            "Expected stdout file not found: {:?}\nActual output:\n{}",
+            stdout_path, actual_output
+        );
+    }
+
+    // Check expected exit code (0 = all pass, 1 = some fail)
+    let exitcode_path = base_path.with_extension("exitcode");
+    let expected_exitcode = if exitcode_path.exists() {
+        fs::read_to_string(&exitcode_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", exitcode_path, e))
+            .trim()
+            .parse::<i32>()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let actual_exitcode = if results.all_passed() { 0 } else { 1 };
+    assert_eq!(
+        actual_exitcode, expected_exitcode,
+        "Exit code mismatch for {:?}: expected {}, got {}",
+        subdir, expected_exitcode, actual_exitcode
+    );
+}
+
+#[test]
+fn snapshot_test_runner_passing() {
+    run_test_runner_snapshot("passing");
+}
+
+#[test]
+fn snapshot_test_runner_failing() {
+    run_test_runner_snapshot("failing");
+}
+
+#[test]
+fn snapshot_test_runner_mixed() {
+    run_test_runner_snapshot("mixed");
 }
