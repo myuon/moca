@@ -64,7 +64,7 @@ pub enum TokenKind {
 }
 
 /// Source location information.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub line: usize,
     pub column: usize,

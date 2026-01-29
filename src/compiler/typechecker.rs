@@ -78,6 +78,7 @@ impl Substitution {
                 }
             }
             Type::Array(elem) => Type::Array(Box::new(self.apply(elem))),
+            Type::Vector(elem) => Type::Vector(Box::new(self.apply(elem))),
             Type::Nullable(inner) => Type::Nullable(Box::new(self.apply(inner))),
             Type::Object(fields) => {
                 let new_fields: BTreeMap<String, Type> = fields
@@ -182,6 +183,9 @@ pub struct TypeChecker {
     structs: HashMap<String, StructInfo>,
     /// Substitution accumulated during inference
     substitution: Substitution,
+    /// Type of objects in index expressions (Span -> Type)
+    /// Used by codegen to differentiate between array and vector access
+    index_object_types: HashMap<Span, Type>,
 }
 
 impl TypeChecker {
@@ -193,7 +197,13 @@ impl TypeChecker {
             functions: HashMap::new(),
             structs: HashMap::new(),
             substitution: Substitution::new(),
+            index_object_types: HashMap::new(),
         }
+    }
+
+    /// Get the index object types map (for codegen)
+    pub fn index_object_types(&self) -> &HashMap<Span, Type> {
+        &self.index_object_types
     }
 
     /// Generate a fresh type variable.
@@ -752,23 +762,40 @@ impl TypeChecker {
                 index,
                 value,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Object should be array<T>
-                let elem_type = self.fresh_var();
-                let arr_type = Type::Array(Box::new(elem_type.clone()));
-                if let Err(e) = self.unify(&obj_type, &arr_type, *span) {
-                    self.errors.push(e);
-                }
+                // Index should be int
                 if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
                     self.errors.push(e);
                 }
-                if let Err(e) = self.unify(&val_type, &elem_type, *span) {
-                    self.errors.push(e);
+
+                // Record the object type for codegen
+                let resolved_obj_type = self.substitution.apply(&obj_type);
+                self.index_object_types
+                    .insert(*span, resolved_obj_type.clone());
+
+                // Object can be array<T> or Vector<T>, extract element type and unify with value
+                match resolved_obj_type {
+                    Type::Array(elem) | Type::Vector(elem) => {
+                        if let Err(e) = self.unify(&val_type, &elem, *span) {
+                            self.errors.push(e);
+                        }
+                    }
+                    _ => {
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "cannot index assign to `{}`",
+                                self.substitution.apply(&obj_type)
+                            ),
+                            *span,
+                        ));
+                    }
                 }
+
                 Type::Nil
             }
 
@@ -897,6 +924,7 @@ impl TypeChecker {
                 object,
                 index,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
@@ -906,9 +934,15 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
 
-                // Object can be array<T>, string, or struct (structs are compiled as arrays)
-                match self.substitution.apply(&obj_type) {
+                // Record the object type for codegen
+                let resolved_obj_type = self.substitution.apply(&obj_type);
+                self.index_object_types
+                    .insert(*span, resolved_obj_type.clone());
+
+                // Object can be array<T>, Vector<T>, string, or struct (structs are compiled as arrays)
+                match resolved_obj_type {
                     Type::Array(elem) => self.substitution.apply(&elem),
+                    Type::Vector(elem) => self.substitution.apply(&elem),
                     Type::String => Type::Int, // String index returns byte value as int
                     Type::Struct { fields, .. } => {
                         // For structs, index access returns a type variable
@@ -927,7 +961,10 @@ impl TypeChecker {
                     }
                     _ => {
                         self.errors.push(TypeError::new(
-                            format!("expected array, string or struct, found `{}`", obj_type),
+                            format!(
+                                "expected array, Vector, string or struct, found `{}`",
+                                obj_type
+                            ),
                             *span,
                         ));
                         self.fresh_var()
@@ -1418,6 +1455,89 @@ impl TypeChecker {
                     self.infer_expr(arg, env);
                 }
                 Some(self.fresh_var())
+            }
+            // Vector operations
+            "vec_new" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("vec_new expects 0 arguments", span));
+                }
+                // Returns Vector<T> where T is a fresh type variable
+                Some(Type::Vector(Box::new(self.fresh_var())))
+            }
+            "vec_with_capacity" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_with_capacity expects 1 argument", span));
+                    return Some(Type::Vector(Box::new(self.fresh_var())));
+                }
+                let arg_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                Some(Type::Vector(Box::new(self.fresh_var())))
+            }
+            "vec_push" => {
+                if args.len() != 2 {
+                    self.errors
+                        .push(TypeError::new("vec_push expects 2 arguments", span));
+                    return Some(Type::Nil);
+                }
+                self.infer_expr(&args[0], env);
+                self.infer_expr(&args[1], env);
+                Some(Type::Nil)
+            }
+            "vec_pop" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_pop expects 1 argument", span));
+                    return Some(self.fresh_var());
+                }
+                self.infer_expr(&args[0], env);
+                Some(self.fresh_var())
+            }
+            "vec_len" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_len expects 1 argument", span));
+                    return Some(Type::Int);
+                }
+                self.infer_expr(&args[0], env);
+                Some(Type::Int)
+            }
+            "vec_capacity" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("vec_capacity expects 1 argument", span));
+                    return Some(Type::Int);
+                }
+                self.infer_expr(&args[0], env);
+                Some(Type::Int)
+            }
+            "vec_get" => {
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        "vec_get expects 2 arguments (vector, index)",
+                        span,
+                    ));
+                    return Some(self.fresh_var());
+                }
+                self.infer_expr(&args[0], env);
+                self.infer_expr(&args[1], env);
+                Some(self.fresh_var())
+            }
+            "vec_set" => {
+                if args.len() != 3 {
+                    self.errors.push(TypeError::new(
+                        "vec_set expects 3 arguments (vector, index, value)",
+                        span,
+                    ));
+                    return Some(Type::Nil);
+                }
+                self.infer_expr(&args[0], env);
+                self.infer_expr(&args[1], env);
+                self.infer_expr(&args[2], env);
+                Some(Type::Nil)
             }
             _ => None,
         }

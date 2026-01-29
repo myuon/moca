@@ -175,8 +175,8 @@ pub fn is_safepoint(op: &super::ops::Op, pc: usize) -> bool {
         // NEW (object allocation) is a safepoint
         Op::New(_) => true,
 
-        // Array allocation is also a safepoint
-        Op::AllocArray(_) => true,
+        // Heap allocation is also a safepoint
+        Op::AllocHeap(_) => true,
 
         // Backward jumps are safepoints
         Op::Jmp(target) => *target < pc,
@@ -359,13 +359,13 @@ mod tests {
         assert!(entry.locals_ref_bits.is_set(0));
     }
 
-    /// Test: Spec 7.3 - AllocArray is also a safepoint (GC may trigger)
+    /// Test: Spec 7.3 - AllocHeap is also a safepoint (GC may trigger)
     #[test]
-    fn test_spec_alloc_array_safepoint() {
+    fn test_spec_alloc_heap_safepoint() {
         use super::super::ops::Op;
 
-        // Array allocation can trigger GC
-        assert!(is_safepoint(&Op::AllocArray(10), 5));
+        // Heap allocation can trigger GC
+        assert!(is_safepoint(&Op::AllocHeap(10), 5));
     }
 
     /// Test: Spec 7.4 - FunctionStackMap lookup by PC
@@ -403,9 +403,9 @@ mod tests {
         assert!(is_safepoint(&Op::New(0), 0));
         assert!(is_safepoint(&Op::New(5), 0));
 
-        // Array allocation
-        assert!(is_safepoint(&Op::AllocArray(0), 0));
-        assert!(is_safepoint(&Op::AllocArray(100), 0));
+        // Heap allocation
+        assert!(is_safepoint(&Op::AllocHeap(0), 0));
+        assert!(is_safepoint(&Op::AllocHeap(100), 0));
 
         // Function call (may allocate)
         assert!(is_safepoint(&Op::Call(0, 0), 0));

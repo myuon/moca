@@ -74,14 +74,24 @@ pub enum Op {
     SetF(usize), // SETF: Set field with write barrier
 
     // ========================================
-    // Array operations
+    // Array operations (legacy, kept for len() on multiple types)
     // ========================================
-    AllocArray(usize), // Allocate array with n elements from stack
-    ArrayLen,
-    ArrayGet,  // stack: [array, index] -> [value]
-    ArraySet,  // stack: [array, index, value] -> []
-    ArrayPush, // stack: [array, value] -> []
-    ArrayPop,  // stack: [array] -> [value]
+    ArrayLen, // Works on Array, Slots, Vector, and String types
+
+    // ========================================
+    // Heap slot operations (low-level array support)
+    // ========================================
+    AllocHeap(usize), // Allocate heap object with n slots from stack: [v1..vn] -> [ref]
+    HeapLoad(usize),  // Load slot at static offset: [ref] -> [value]
+    HeapStore(usize), // Store to slot at static offset: [ref, value] -> []
+    HeapLoadDyn,      // Load slot at dynamic index: [ref, index] -> [value]
+    HeapStoreDyn,     // Store to slot at dynamic index: [ref, index, value] -> []
+
+    // ========================================
+    // Vector operations (Vector = Slots[ptr, len, cap])
+    // ========================================
+    VectorPush, // Push value to vector: [vec, value] -> []
+    VectorPop,  // Pop value from vector: [vec] -> [value]
 
     // ========================================
     // Type operations
@@ -89,6 +99,7 @@ pub enum Op {
     TypeOf,   // Push type name as string
     ToString, // Convert any value to string
     ParseInt, // Parse string to int
+    StrLen,   // Get string length: [string] -> [length]
 
     // ========================================
     // Exception handling

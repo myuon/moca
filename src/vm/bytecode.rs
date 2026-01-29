@@ -266,12 +266,8 @@ const OP_RET: u8 = 40;
 const OP_NEW: u8 = 41;
 const OP_GET_F: u8 = 42;
 const OP_SET_F: u8 = 43;
-const OP_ALLOC_ARRAY: u8 = 46;
+// Legacy opcodes 46, 48, 49, 50, 51 removed (AllocArray, ArrayGet, ArraySet, ArrayPush, ArrayPop)
 const OP_ARRAY_LEN: u8 = 47;
-const OP_ARRAY_GET: u8 = 48;
-const OP_ARRAY_SET: u8 = 49;
-const OP_ARRAY_PUSH: u8 = 50;
-const OP_ARRAY_POP: u8 = 51;
 const OP_TYPE_OF: u8 = 55;
 const OP_TO_STRING: u8 = 56;
 const OP_PARSE_INT: u8 = 57;
@@ -285,6 +281,15 @@ const OP_CHANNEL_CREATE: u8 = 64;
 const OP_CHANNEL_SEND: u8 = 65;
 const OP_CHANNEL_RECV: u8 = 66;
 const OP_THREAD_JOIN: u8 = 67;
+const OP_ALLOC_HEAP: u8 = 68;
+const OP_HEAP_LOAD: u8 = 69;
+const OP_HEAP_STORE: u8 = 70;
+const OP_HEAP_LOAD_DYN: u8 = 71;
+const OP_HEAP_STORE_DYN: u8 = 72;
+const OP_STR_LEN: u8 = 73;
+// Legacy opcodes 74, 75 removed (AllocVector, AllocVectorCap)
+const OP_VECTOR_PUSH: u8 = 76;
+const OP_VECTOR_POP: u8 = 77;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -356,18 +361,11 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_SET_F])?;
             write_u32(w, *idx as u32)?;
         }
-        Op::AllocArray(size) => {
-            w.write_all(&[OP_ALLOC_ARRAY])?;
-            write_u32(w, *size as u32)?;
-        }
         Op::ArrayLen => w.write_all(&[OP_ARRAY_LEN])?,
-        Op::ArrayGet => w.write_all(&[OP_ARRAY_GET])?,
-        Op::ArraySet => w.write_all(&[OP_ARRAY_SET])?,
-        Op::ArrayPush => w.write_all(&[OP_ARRAY_PUSH])?,
-        Op::ArrayPop => w.write_all(&[OP_ARRAY_POP])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::ToString => w.write_all(&[OP_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
+        Op::StrLen => w.write_all(&[OP_STR_LEN])?,
         Op::Throw => w.write_all(&[OP_THROW])?,
         Op::TryBegin(target) => {
             w.write_all(&[OP_TRY_BEGIN])?;
@@ -387,6 +385,22 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::ChannelSend => w.write_all(&[OP_CHANNEL_SEND])?,
         Op::ChannelRecv => w.write_all(&[OP_CHANNEL_RECV])?,
         Op::ThreadJoin => w.write_all(&[OP_THREAD_JOIN])?,
+        Op::AllocHeap(size) => {
+            w.write_all(&[OP_ALLOC_HEAP])?;
+            write_u32(w, *size as u32)?;
+        }
+        Op::HeapLoad(offset) => {
+            w.write_all(&[OP_HEAP_LOAD])?;
+            write_u32(w, *offset as u32)?;
+        }
+        Op::HeapStore(offset) => {
+            w.write_all(&[OP_HEAP_STORE])?;
+            write_u32(w, *offset as u32)?;
+        }
+        Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
+        Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
+        Op::VectorPush => w.write_all(&[OP_VECTOR_PUSH])?,
+        Op::VectorPop => w.write_all(&[OP_VECTOR_POP])?,
     }
     Ok(())
 }
@@ -429,15 +443,11 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_NEW => Op::New(read_u32(r)? as usize),
         OP_GET_F => Op::GetF(read_u32(r)? as usize),
         OP_SET_F => Op::SetF(read_u32(r)? as usize),
-        OP_ALLOC_ARRAY => Op::AllocArray(read_u32(r)? as usize),
         OP_ARRAY_LEN => Op::ArrayLen,
-        OP_ARRAY_GET => Op::ArrayGet,
-        OP_ARRAY_SET => Op::ArraySet,
-        OP_ARRAY_PUSH => Op::ArrayPush,
-        OP_ARRAY_POP => Op::ArrayPop,
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
         OP_PARSE_INT => Op::ParseInt,
+        OP_STR_LEN => Op::StrLen,
         OP_THROW => Op::Throw,
         OP_TRY_BEGIN => Op::TryBegin(read_u32(r)? as usize),
         OP_TRY_END => Op::TryEnd,
@@ -448,6 +458,13 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_CHANNEL_SEND => Op::ChannelSend,
         OP_CHANNEL_RECV => Op::ChannelRecv,
         OP_THREAD_JOIN => Op::ThreadJoin,
+        OP_ALLOC_HEAP => Op::AllocHeap(read_u32(r)? as usize),
+        OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
+        OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
+        OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
+        OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
+        OP_VECTOR_PUSH => Op::VectorPush,
+        OP_VECTOR_POP => Op::VectorPop,
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
@@ -695,15 +712,11 @@ mod tests {
             Op::New(10),
             Op::GetF(1),
             Op::SetF(2),
-            Op::AllocArray(7),
             Op::ArrayLen,
-            Op::ArrayGet,
-            Op::ArraySet,
-            Op::ArrayPush,
-            Op::ArrayPop,
             Op::TypeOf,
             Op::ToString,
             Op::ParseInt,
+            Op::StrLen,
             Op::Throw,
             Op::TryBegin(100),
             Op::TryEnd,
@@ -714,6 +727,13 @@ mod tests {
             Op::ChannelSend,
             Op::ChannelRecv,
             Op::ThreadJoin,
+            Op::AllocHeap(5),
+            Op::HeapLoad(1),
+            Op::HeapStore(2),
+            Op::HeapLoadDyn,
+            Op::HeapStoreDyn,
+            Op::VectorPush,
+            Op::VectorPop,
         ];
 
         let chunk = Chunk {
