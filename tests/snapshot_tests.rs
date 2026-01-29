@@ -431,3 +431,38 @@ fn snapshot_test_runner_failing() {
 fn snapshot_test_runner_mixed() {
     run_test_runner_snapshot("mixed");
 }
+
+// ============================================================================
+// Standard Library Tests
+// ============================================================================
+
+/// Run tests for the standard library using the test runner.
+/// This ensures all stdlib functions work correctly.
+#[test]
+fn snapshot_stdlib() {
+    let std_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("std");
+
+    let config = RuntimeConfig::default();
+    let results = run_tests(&std_path, &config).expect("run_tests should succeed for stdlib");
+
+    // All stdlib tests should pass
+    assert!(
+        results.all_passed(),
+        "All stdlib tests should pass.\n\
+         Passed: {}, Failed: {}\n\
+         Failed tests:\n{}",
+        results.passed,
+        results.failed,
+        results
+            .results
+            .iter()
+            .filter(|r| !r.passed)
+            .map(|r| format!(
+                "  - {}: {}",
+                r.name,
+                r.error.as_deref().unwrap_or("unknown error")
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
