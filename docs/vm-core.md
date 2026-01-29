@@ -112,7 +112,28 @@ enum Value {
 | `GETF field` | 0 |
 | `SETF field` | -2 |
 
-### 5.8 Extended Instructions (仕様外、既存維持)
+### 5.8 Heap Slot Operations
+
+Low-level operations for heap-allocated objects with indexed slots.
+
+| Instruction | Stack Effect | Description |
+|-------------|--------------|-------------|
+| `ALLOC_HEAP n` | -n + 1 | Allocate n slots, push ref |
+| `ALLOC_HEAP_DYN` | -1 + 1 | Pop size, allocate dynamically |
+| `HEAP_LOAD idx` | 0 | Pop ref, push slots[idx] |
+| `HEAP_STORE idx` | -2 | Pop ref and value, write slot |
+| `HEAP_LOAD_DYN` | -1 | Pop ref and index, push value |
+| `HEAP_STORE_DYN` | -3 | Pop ref, index, value |
+
+### 5.9 Stack Operations (Extended)
+
+| Instruction | Stack Effect | Description |
+|-------------|--------------|-------------|
+| `SWAP` | 0 | Swap top two elements |
+| `PICK n` | +1 | Copy element at depth n |
+| `PICK_DYN` | 0 | Pop depth, copy element at that depth |
+
+### 5.10 Extended Instructions (仕様外、既存維持)
 
 以下の命令は仕様外として削除せず維持：
 - Exception: `Throw`, `TryBegin`, `TryEnd`
