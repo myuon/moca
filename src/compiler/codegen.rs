@@ -20,6 +20,8 @@ pub struct Codegen {
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
     /// Index expression object types (from typechecker)
     index_object_types: HashMap<Span, Type>,
+    /// Map function name -> function index (for calling stdlib functions)
+    function_indices: HashMap<String, usize>,
 }
 
 impl Default for Codegen {
@@ -38,6 +40,7 @@ impl Codegen {
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
+            function_indices: HashMap::new(),
         }
     }
 
@@ -51,6 +54,7 @@ impl Codegen {
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
+            function_indices: HashMap::new(),
         }
     }
 
@@ -97,6 +101,11 @@ impl Codegen {
     pub fn compile(&mut self, program: ResolvedProgram) -> Result<Chunk, String> {
         // Initialize struct field indices for field access resolution
         self.init_structs(program.structs);
+
+        // Build function name -> index map for stdlib function calls
+        for (idx, func) in program.functions.iter().enumerate() {
+            self.function_indices.insert(func.name.clone(), idx);
+        }
 
         // Compile all user-defined functions first
         for func in &program.functions {
@@ -563,23 +572,23 @@ impl Codegen {
                         if args.len() != 1 {
                             return Err("print/print_debug takes exactly 1 argument".to_string());
                         }
-                        // If argument is a string literal, use syscall_write directly
-                        if let ResolvedExpr::Str(s) = &args[0] {
-                            let str_len = s.len();
-                            // Push: fd=1, string, count
-                            ops.push(Op::PushInt(1)); // stdout
-                            self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::PushInt(str_len as i64));
-                            ops.push(Op::Syscall(1, 3)); // write syscall
-                            ops.push(Op::Pop); // discard syscall return value
-                            // Print newline
-                            let newline_idx = self.add_string("\n".to_string());
-                            ops.push(Op::PushInt(1)); // stdout
-                            ops.push(Op::PushString(newline_idx));
-                            ops.push(Op::PushInt(1)); // count=1
-                            ops.push(Op::Syscall(1, 3));
-                            ops.push(Op::Pop); // discard return value
-                            ops.push(Op::PushNull); // print returns nil
+                        // If argument is a string literal, call print_str from stdlib
+                        if matches!(&args[0], ResolvedExpr::Str(_)) {
+                            if let Some(&func_idx) = self.function_indices.get("print_str") {
+                                // Call print_str(s)
+                                self.compile_expr(&args[0], ops)?;
+                                ops.push(Op::Call(func_idx, 1));
+                                ops.push(Op::Pop); // discard return value
+                                // Call print_str("\n")
+                                let newline_idx = self.add_string("\n".to_string());
+                                ops.push(Op::PushString(newline_idx));
+                                ops.push(Op::Call(func_idx, 1));
+                                // print_str returns nil, which is what print should return
+                            } else {
+                                // Fallback if print_str not available
+                                self.compile_expr(&args[0], ops)?;
+                                ops.push(Op::PrintDebug);
+                            }
                         } else {
                             self.compile_expr(&args[0], ops)?;
                             ops.push(Op::PrintDebug);
