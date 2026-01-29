@@ -245,12 +245,13 @@ impl SymbolTable {
                     self.collect_expr(arg);
                 }
             }
-            // Literals have no references
+            // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }
             | Expr::Float { .. }
             | Expr::Bool { .. }
             | Expr::Str { .. }
-            | Expr::Nil { .. } => {}
+            | Expr::Nil { .. }
+            | Expr::Asm(_) => {}
         }
     }
 

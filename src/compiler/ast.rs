@@ -213,6 +213,8 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Inline assembly block: `asm(inputs) -> type { ... }`
+    Asm(AsmBlock),
 }
 
 impl Expr {
@@ -233,6 +235,7 @@ impl Expr {
             Expr::Call { span, .. } => *span,
             Expr::StructLiteral { span, .. } => *span,
             Expr::MethodCall { span, .. } => *span,
+            Expr::Asm(asm_block) => asm_block.span,
         }
     }
 }
@@ -260,4 +263,39 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+}
+
+/// An inline assembly block.
+#[derive(Debug, Clone)]
+pub struct AsmBlock {
+    /// Input variable names to push onto the stack.
+    pub inputs: Vec<String>,
+    /// Output type name (e.g., "i64", "f64", "bool").
+    pub output_type: Option<String>,
+    /// Assembly instructions.
+    pub body: Vec<AsmInstruction>,
+    pub span: Span,
+}
+
+/// An instruction within an asm block.
+#[derive(Debug, Clone)]
+pub enum AsmInstruction {
+    /// `__emit("OpName", args...)`
+    Emit {
+        op_name: String,
+        args: Vec<AsmArg>,
+        span: Span,
+    },
+    /// `__safepoint()`
+    Safepoint { span: Span },
+    /// `__gc_hint(size)`
+    GcHint { size: i64, span: Span },
+}
+
+/// An argument to an asm instruction.
+#[derive(Debug, Clone)]
+pub enum AsmArg {
+    Int(i64),
+    Float(f64),
+    String(String),
 }

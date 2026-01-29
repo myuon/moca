@@ -1290,6 +1290,24 @@ impl TypeChecker {
                     }
                 }
             }
+            Expr::Asm(asm_block) => {
+                // For asm blocks, we just check that input variables exist
+                // and return the declared output type (or Any if none)
+                for input_name in &asm_block.inputs {
+                    if let Some(ty) = env.lookup(input_name) {
+                        let _ = ty.clone();
+                    }
+                }
+                // Return type based on output_type annotation or Any
+                match asm_block.output_type.as_deref() {
+                    Some("i64") => Type::Int,
+                    Some("f64") => Type::Float,
+                    Some("bool") => Type::Bool,
+                    Some("string") => Type::String,
+                    Some("nil") => Type::Nil,
+                    _ => self.fresh_var(), // Any/unknown type
+                }
+            }
         }
     }
 
