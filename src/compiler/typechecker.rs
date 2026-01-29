@@ -281,6 +281,11 @@ impl TypeChecker {
             | (Type::String, Type::String)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
 
+            // Any type unifies with any other type
+            // any ~ T -> T (any adapts to the other type)
+            // any ~ any -> any
+            (Type::Any, _) | (_, Type::Any) => Ok(Substitution::new()),
+
             // Type variable unification
             (Type::Var(id), other) | (other, Type::Var(id)) => {
                 if let Type::Var(other_id) = other
