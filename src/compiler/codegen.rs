@@ -918,10 +918,8 @@ impl Codegen {
             "HeapLoadDyn" => Ok(Op::HeapLoadDyn),
             "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
 
-            // Array/Vector operations
+            // Array operations
             "ArrayLen" => Ok(Op::ArrayLen),
-            "VectorPush" => Ok(Op::VectorPush),
-            "VectorPop" => Ok(Op::VectorPop),
 
             // Type operations
             "TypeOf" => Ok(Op::TypeOf),

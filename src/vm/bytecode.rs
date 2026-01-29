@@ -287,9 +287,7 @@ const OP_HEAP_STORE: u8 = 70;
 const OP_HEAP_LOAD_DYN: u8 = 71;
 const OP_HEAP_STORE_DYN: u8 = 72;
 const OP_STR_LEN: u8 = 73;
-// Legacy opcodes 74, 75 removed (AllocVector, AllocVectorCap)
-const OP_VECTOR_PUSH: u8 = 76;
-const OP_VECTOR_POP: u8 = 77;
+// Legacy opcodes 74, 75, 76, 77 removed (AllocVector, AllocVectorCap, VectorPush, VectorPop)
 const OP_SWAP: u8 = 78;
 const OP_PICK: u8 = 79;
 const OP_ALLOC_HEAP_DYN: u8 = 80;
@@ -410,8 +408,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
-        Op::VectorPush => w.write_all(&[OP_VECTOR_PUSH])?,
-        Op::VectorPop => w.write_all(&[OP_VECTOR_POP])?,
     }
     Ok(())
 }
@@ -478,8 +474,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
-        OP_VECTOR_PUSH => Op::VectorPush,
-        OP_VECTOR_POP => Op::VectorPop,
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
@@ -751,8 +745,6 @@ mod tests {
             Op::HeapStore(2),
             Op::HeapLoadDyn,
             Op::HeapStoreDyn,
-            Op::VectorPush,
-            Op::VectorPop,
         ];
 
         let chunk = Chunk {

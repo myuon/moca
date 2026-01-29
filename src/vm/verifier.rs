@@ -436,9 +436,6 @@ impl Verifier {
             Op::HeapLoadDyn => (2, 1),   // pops ref and index, pushes value
             Op::HeapStoreDyn => (3, 0),  // pops ref, index, and value
 
-            // Vector operations
-            Op::VectorPush => (2, 0), // pops vector and value
-            Op::VectorPop => (1, 1),  // pops vector, pushes value
         }
     }
 }

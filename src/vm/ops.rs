@@ -95,11 +95,7 @@ pub enum Op {
     // ========================================
     AllocHeapDyn, // Allocate heap with dynamic size: [size, v1..vN] -> [ref]
 
-    // ========================================
-    // Vector operations (Vector = Slots[ptr, len, cap])
-    // ========================================
-    VectorPush, // Push value to vector: [vec, value] -> []
-    VectorPop,  // Pop value from vector: [vec] -> [value]
+    // VectorPush and VectorPop removed - now expanded by compiler to low-level ops
 
     // ========================================
     // Type operations
