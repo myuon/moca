@@ -881,6 +881,7 @@ impl VM {
                                 super::ObjectType::String => "string",
                                 super::ObjectType::Array => "array",
                                 super::ObjectType::Object => "object",
+                                super::ObjectType::Slots => "array", // Slots is new array representation
                             }
                         } else {
                             "unknown"
@@ -1027,9 +1028,59 @@ impl VM {
                 self.stack.push(result);
             }
 
-            // Heap slot operations (to be implemented in Phase2)
-            Op::AllocHeap(_) | Op::HeapLoad(_) | Op::HeapStore(_) | Op::HeapLoadDyn | Op::HeapStoreDyn => {
-                todo!("Heap slot operations will be implemented in Phase2")
+            // Heap slot operations
+            Op::AllocHeap(n) => {
+                let mut slots = Vec::with_capacity(n);
+                for _ in 0..n {
+                    slots.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                slots.reverse();
+                let r = self.heap.alloc_slots(slots)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::HeapLoad(offset) => {
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ref().ok_or("runtime error: expected reference")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let slots = obj.as_slots().ok_or("runtime error: expected slots object")?;
+                if offset >= slots.slots.len() {
+                    return Err(format!("runtime error: slot index {} out of bounds", offset));
+                }
+                self.stack.push(slots.slots[offset]);
+            }
+            Op::HeapStore(offset) => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ref().ok_or("runtime error: expected reference")?;
+                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let slots = obj.as_slots_mut().ok_or("runtime error: expected slots object")?;
+                if offset >= slots.slots.len() {
+                    return Err(format!("runtime error: slot index {} out of bounds", offset));
+                }
+                slots.slots[offset] = value;
+            }
+            Op::HeapLoadDyn => {
+                let index = self.pop_int()?;
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ref().ok_or("runtime error: expected reference")?;
+                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
+                let slots = obj.as_slots().ok_or("runtime error: expected slots object")?;
+                if index < 0 || index as usize >= slots.slots.len() {
+                    return Err(format!("runtime error: slot index {} out of bounds", index));
+                }
+                self.stack.push(slots.slots[index as usize]);
+            }
+            Op::HeapStoreDyn => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let index = self.pop_int()?;
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ref().ok_or("runtime error: expected reference")?;
+                let obj = self.heap.get_mut(r).ok_or("runtime error: invalid reference")?;
+                let slots = obj.as_slots_mut().ok_or("runtime error: expected slots object")?;
+                if index < 0 || index as usize >= slots.slots.len() {
+                    return Err(format!("runtime error: slot index {} out of bounds", index));
+                }
+                slots.slots[index as usize] = value;
             }
         }
 
@@ -1185,6 +1236,14 @@ impl VM {
                             parts.push(format!("{}: {}", k, self.value_to_string(v)?));
                         }
                         Ok(format!("{{{}}}", parts.join(", ")))
+                    }
+                    super::HeapObject::Slots(s) => {
+                        // Slots: slot[0] is length, slot[1..] are elements
+                        let mut parts = Vec::new();
+                        for elem in s.slots.iter().skip(1) {
+                            parts.push(self.value_to_string(elem)?);
+                        }
+                        Ok(format!("[{}]", parts.join(", ")))
                     }
                 }
             }

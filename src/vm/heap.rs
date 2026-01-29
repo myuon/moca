@@ -9,6 +9,8 @@ pub enum ObjectType {
     String,
     Array,
     Object,
+    /// Generic slot-based heap object (for new array implementation)
+    Slots,
 }
 
 /// Header for all heap objects.
@@ -41,11 +43,22 @@ pub struct MocaObject {
     pub shape_id: u32,
 }
 
+/// A generic slot-based heap object.
+/// Used for the new array implementation where:
+/// - slot 0: length (as Value::I64)
+/// - slot 1..n: elements
+#[derive(Debug)]
+pub struct MocaSlots {
+    pub header: ObjectHeader,
+    pub slots: Vec<Value>,
+}
+
 /// A heap object can be any of the heap-allocated types.
 pub enum HeapObject {
     String(MocaString),
     Array(MocaArray),
     Object(MocaObject),
+    Slots(MocaSlots),
 }
 
 impl HeapObject {
@@ -54,6 +67,7 @@ impl HeapObject {
             HeapObject::String(_) => ObjectType::String,
             HeapObject::Array(_) => ObjectType::Array,
             HeapObject::Object(_) => ObjectType::Object,
+            HeapObject::Slots(_) => ObjectType::Slots,
         }
     }
 
@@ -62,6 +76,7 @@ impl HeapObject {
             HeapObject::String(s) => &s.header,
             HeapObject::Array(a) => &a.header,
             HeapObject::Object(o) => &o.header,
+            HeapObject::Slots(s) => &s.header,
         }
     }
 
@@ -70,6 +85,7 @@ impl HeapObject {
             HeapObject::String(s) => &mut s.header,
             HeapObject::Array(a) => &mut a.header,
             HeapObject::Object(o) => &mut o.header,
+            HeapObject::Slots(s) => &mut s.header,
         }
     }
 
@@ -108,12 +124,28 @@ impl HeapObject {
         }
     }
 
+    pub fn as_slots(&self) -> Option<&MocaSlots> {
+        match self {
+            HeapObject::Slots(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_slots_mut(&mut self) -> Option<&mut MocaSlots> {
+        match self {
+            HeapObject::Slots(s) => Some(s),
+            _ => None,
+        }
+    }
+
     /// Get all Value references in this object for GC tracing.
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
             HeapObject::String(_) => vec![],
             HeapObject::Array(arr) => arr.elements.iter().filter_map(|v| v.as_ref()).collect(),
             HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ref()).collect(),
+            // For Slots, skip slot 0 (length) and trace the rest
+            HeapObject::Slots(slots) => slots.slots.iter().skip(1).filter_map(|v| v.as_ref()).collect(),
         }
     }
 }
@@ -124,6 +156,7 @@ impl fmt::Debug for HeapObject {
             HeapObject::String(s) => write!(f, "String({:?})", s.value),
             HeapObject::Array(a) => write!(f, "Array({:?})", a.elements),
             HeapObject::Object(o) => write!(f, "Object({:?})", o.fields),
+            HeapObject::Slots(s) => write!(f, "Slots({:?})", s.slots),
         }
     }
 }
@@ -256,6 +289,23 @@ impl Heap {
         Ok(self.alloc_object(obj))
     }
 
+    /// Allocate a new slot-based heap object.
+    /// This is used for the new array implementation where slots[0] is length.
+    pub fn alloc_slots(&mut self, slots: Vec<Value>) -> Result<GcRef, String> {
+        let size = std::mem::size_of::<MocaSlots>() + slots.len() * std::mem::size_of::<Value>();
+        self.check_heap_limit(size)?;
+        self.bytes_allocated += size;
+
+        let obj = HeapObject::Slots(MocaSlots {
+            header: ObjectHeader {
+                obj_type: ObjectType::Slots,
+                marked: false,
+            },
+            slots,
+        });
+        Ok(self.alloc_object(obj))
+    }
+
     fn alloc_object(&mut self, obj: HeapObject) -> GcRef {
         if let Some(index) = self.free_list.pop() {
             self.objects[index] = Some(obj);
@@ -332,6 +382,10 @@ impl Heap {
                     std::mem::size_of::<MocaObject>()
                         + o.fields.len()
                             * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+                }
+                HeapObject::Slots(s) => {
+                    std::mem::size_of::<MocaSlots>()
+                        + s.slots.len() * std::mem::size_of::<Value>()
                 }
             };
         }
