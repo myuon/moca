@@ -716,6 +716,11 @@ impl VM {
                     arr.elements.len() as i64
                 } else if let Some(s) = obj.as_string() {
                     s.value.chars().count() as i64
+                } else if let Some(slots) = obj.as_slots() {
+                    // For Slots, slot[0] contains the length
+                    slots.slots.first()
+                        .and_then(|v| v.as_i64())
+                        .ok_or("runtime error: invalid slots length")?
                 } else {
                     return Err("runtime error: len expects array or string".to_string());
                 };
@@ -785,8 +790,18 @@ impl VM {
                     .heap
                     .get_mut(r)
                     .ok_or("runtime error: invalid reference")?;
-                let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
-                arr.elements.push(value);
+
+                // Support both Array and Slots types
+                if let Some(arr) = obj.as_array_mut() {
+                    arr.elements.push(value);
+                } else if let Some(slots) = obj.as_slots_mut() {
+                    // For Slots: push value and update length in slot[0]
+                    slots.slots.push(value);
+                    let new_len = (slots.slots.len() - 1) as i64; // -1 because slot[0] is length
+                    slots.slots[0] = Value::I64(new_len);
+                } else {
+                    return Err("runtime error: expected array".to_string());
+                }
             }
             Op::ArrayPop => {
                 let arr = self.stack.pop().ok_or("stack underflow")?;
@@ -796,13 +811,26 @@ impl VM {
                     .heap
                     .get_mut(r)
                     .ok_or("runtime error: invalid reference")?;
-                let arr = obj.as_array_mut().ok_or("runtime error: expected array")?;
 
-                let value = arr
-                    .elements
-                    .pop()
-                    .ok_or("runtime error: cannot pop from empty array")?;
-                self.stack.push(value);
+                // Support both Array and Slots types
+                if let Some(arr) = obj.as_array_mut() {
+                    let value = arr
+                        .elements
+                        .pop()
+                        .ok_or("runtime error: cannot pop from empty array")?;
+                    self.stack.push(value);
+                } else if let Some(slots) = obj.as_slots_mut() {
+                    // For Slots: pop value and update length in slot[0]
+                    if slots.slots.len() <= 1 {
+                        return Err("runtime error: cannot pop from empty array".to_string());
+                    }
+                    let value = slots.slots.pop().ok_or("runtime error: cannot pop from empty array")?;
+                    let new_len = (slots.slots.len() - 1) as i64; // -1 because slot[0] is length
+                    slots.slots[0] = Value::I64(new_len);
+                    self.stack.push(value);
+                } else {
+                    return Err("runtime error: expected array".to_string());
+                }
             }
             Op::New(n) => {
                 let mut fields = HashMap::new();
@@ -989,10 +1017,10 @@ impl VM {
                 let id = self.channels.len();
                 self.channels.push(channel);
 
-                // Create an array with [id, id] (sender and receiver share the channel)
+                // Create slots with [len=2, sender_id, receiver_id] layout
                 let arr = self
                     .heap
-                    .alloc_array(vec![Value::I64(id as i64), Value::I64(id as i64)])?;
+                    .alloc_slots(vec![Value::I64(2), Value::I64(id as i64), Value::I64(id as i64)])?;
                 self.stack.push(Value::Ref(arr));
             }
             Op::ChannelSend => {
@@ -1064,11 +1092,29 @@ impl VM {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let slots = obj.as_slots().ok_or("runtime error: expected slots object")?;
-                if index < 0 || index as usize >= slots.slots.len() {
-                    return Err(format!("runtime error: slot index {} out of bounds", index));
+
+                // Support both Slots and String types
+                if let Some(slots) = obj.as_slots() {
+                    if index < 0 || index as usize >= slots.slots.len() {
+                        return Err(format!("runtime error: slot index {} out of bounds", index));
+                    }
+                    self.stack.push(slots.slots[index as usize]);
+                } else if let Some(s) = obj.as_string() {
+                    // String indexing: return ASCII code at index (adjusted for +1 offset from codegen)
+                    let actual_index = index - 1; // codegen adds +1, so subtract it back
+                    let bytes = s.value.as_bytes();
+                    if actual_index < 0 || actual_index as usize >= bytes.len() {
+                        return Err(format!(
+                            "runtime error: string index {} out of bounds (length {})",
+                            actual_index,
+                            bytes.len()
+                        ));
+                    }
+                    let byte_value = bytes[actual_index as usize] as i64;
+                    self.stack.push(Value::I64(byte_value));
+                } else {
+                    return Err("runtime error: expected slots or string".to_string());
                 }
-                self.stack.push(slots.slots[index as usize]);
             }
             Op::HeapStoreDyn => {
                 let value = self.stack.pop().ok_or("stack underflow")?;

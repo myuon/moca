@@ -169,9 +169,12 @@ impl Codegen {
                 value,
             } => {
                 self.compile_expr(object, ops)?;
+                // Index needs +1 offset because slot[0] is length
                 self.compile_expr(index, ops)?;
+                ops.push(Op::PushInt(1));
+                ops.push(Op::Add);
                 self.compile_expr(value, ops)?;
-                ops.push(Op::ArraySet);
+                ops.push(Op::HeapStoreDyn);
             }
             ResolvedStatement::FieldAssign {
                 object,
@@ -180,11 +183,11 @@ impl Codegen {
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
-                    // Known struct field - use array index assignment
+                    // Known struct field - use heap slot assignment with +1 offset for length
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::PushInt(idx as i64));
+                    ops.push(Op::PushInt((idx + 1) as i64));
                     self.compile_expr(value, ops)?;
-                    ops.push(Op::ArraySet);
+                    ops.push(Op::HeapStoreDyn);
                 } else {
                     // Regular object field assignment
                     self.compile_expr(object, ops)?;
@@ -289,10 +292,12 @@ impl Codegen {
                 let jump_to_end = ops.len();
                 ops.push(Op::JmpIfFalse(0)); // Placeholder
 
-                // x = arr[idx]
+                // x = arr[idx] (with +1 offset for length slot)
                 ops.push(Op::GetL(arr_slot));
                 ops.push(Op::GetL(idx_slot));
-                ops.push(Op::ArrayGet);
+                ops.push(Op::PushInt(1));
+                ops.push(Op::Add);
+                ops.push(Op::HeapLoadDyn);
                 ops.push(Op::SetL(var_slot));
 
                 // Body
@@ -395,11 +400,14 @@ impl Codegen {
                 ops.push(Op::GetL(*slot));
             }
             ResolvedExpr::Array { elements } => {
-                // Push all elements, then allocate array
+                // New array layout: [len, elem0, elem1, ...]
+                // Push length first, then all elements
+                ops.push(Op::PushInt(elements.len() as i64));
                 for elem in elements {
                     self.compile_expr(elem, ops)?;
                 }
-                ops.push(Op::AllocArray(elements.len()));
+                // AllocHeap(n+1) for length + elements
+                ops.push(Op::AllocHeap(elements.len() + 1));
             }
             ResolvedExpr::Object { fields } => {
                 // Push field names and values as pairs
@@ -412,16 +420,19 @@ impl Codegen {
             }
             ResolvedExpr::Index { object, index } => {
                 self.compile_expr(object, ops)?;
+                // Index needs +1 offset because slot[0] is length
                 self.compile_expr(index, ops)?;
-                ops.push(Op::ArrayGet);
+                ops.push(Op::PushInt(1));
+                ops.push(Op::Add);
+                ops.push(Op::HeapLoadDyn);
             }
             ResolvedExpr::Field { object, field } => {
                 self.compile_expr(object, ops)?;
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
-                    // Known struct field - use array index access
-                    ops.push(Op::PushInt(idx as i64));
-                    ops.push(Op::ArrayGet);
+                    // Known struct field - use heap slot access with +1 offset for length
+                    ops.push(Op::PushInt((idx + 1) as i64));
+                    ops.push(Op::HeapLoadDyn);
                 } else {
                     // Regular object field access
                     let field_idx = self.add_string(field.clone());
@@ -599,11 +610,12 @@ impl Codegen {
                 struct_index: _,
                 fields,
             } => {
-                // Compile struct as an array (tuple) with field values in declaration order
+                // Compile struct as slots with [len, field0, field1, ...] layout
+                ops.push(Op::PushInt(fields.len() as i64));
                 for value in fields {
                     self.compile_expr(value, ops)?;
                 }
-                ops.push(Op::AllocArray(fields.len()));
+                ops.push(Op::AllocHeap(fields.len() + 1));
             }
             ResolvedExpr::MethodCall {
                 object,
