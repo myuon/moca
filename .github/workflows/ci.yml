@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run checks
+        run: just check
+
+  coverage-report:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Get base branch coverage
+        run: |
+          git checkout ${{ github.base_ref }}
+          cargo llvm-cov --no-report > /dev/null 2>&1
+          cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
+            file = $1
+            pct_count = 0
+            for (i=1; i<=NF; i++) {
+              if ($i ~ /%$/) {
+                pct_count++
+                if (pct_count == 3) { cov = $i; break }
+              }
+            }
+            gsub(/%/, "", cov)
+            print file, cov
+          }' > base_coverage.txt
+          git checkout ${{ github.head_ref }}
+          cargo clean
+
+      - name: Generate coverage report with diff
+        run: |
+          cargo llvm-cov --no-report > /dev/null 2>&1
+          cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '
+          BEGIN {
+            while ((getline line < "base_coverage.txt") > 0) {
+              split(line, a, " ")
+              base[a[1]] = a[2]
+            }
+          }
+          {
+            file = $1
+            pct_count = 0
+            for (i=1; i<=NF; i++) {
+              if ($i ~ /%$/) {
+                pct_count++
+                if (pct_count == 3) { cov = $i; break }
+              }
+            }
+            gsub(/%/, "", cov)
+            if (cov+0 >= 80) icon = "🟢"
+            else if (cov+0 >= 60) icon = "🟡"
+            else icon = "🔴"
+
+            if (file in base) {
+              diff = cov - base[file]
+              if (diff == 0) next
+              if (diff > 0) diff_str = sprintf("+%.2f%%", diff)
+              else diff_str = sprintf("%.2f%%", diff)
+            } else {
+              diff_str = "new"
+            }
+            printf "| %s | %s%% | %s | %s |\n", file, cov, diff_str, icon
+          }' > coverage_rows.txt
+
+          if [ -s coverage_rows.txt ]; then
+            echo "| File | Coverage | Diff | |" > coverage.md
+            echo "|------|----------|------|---|" >> coverage.md
+            cat coverage_rows.txt >> coverage.md
+          else
+            echo "_No coverage changes detected._" > coverage.md
+          fi
+
+      - name: Post coverage comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const coverage = fs.readFileSync('coverage.md', 'utf8');
+            const body = `## 📊 Coverage Report\n\n${coverage}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('## Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
