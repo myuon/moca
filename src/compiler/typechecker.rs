@@ -98,8 +98,10 @@ impl Substitution {
                     .map(|(n, t)| (n.clone(), self.apply(t)))
                     .collect(),
             },
-            // Primitive types are unchanged
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil => ty.clone(),
+            // Primitive types and Any are unchanged
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
+                ty.clone()
+            }
         }
     }
 
@@ -224,6 +226,7 @@ impl TypeChecker {
                     "bool" => Ok(Type::Bool),
                     "string" => Ok(Type::String),
                     "nil" => Ok(Type::Nil),
+                    "any" => Ok(Type::Any),
                     _ => {
                         // Try to find a struct with this name
                         if let Some(info) = self.structs.get(name) {
@@ -277,6 +280,11 @@ impl TypeChecker {
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
+
+            // Any type unifies with any other type
+            // any ~ T -> T (any adapts to the other type)
+            // any ~ any -> any
+            (Type::Any, _) | (_, Type::Any) => Ok(Substitution::new()),
 
             // Type variable unification
             (Type::Var(id), other) | (other, Type::Var(id)) => {
