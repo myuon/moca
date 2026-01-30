@@ -286,9 +286,47 @@ SYSCALL <num> <argc>  // Execute system call
 
 #### Syscall Numbers
 
-| Number | Name  | Arguments               | Return Value        |
-|--------|-------|-------------------------|---------------------|
-| 1      | write | fd, buf (string), count | bytes written or -1 |
+| Number | Name  | Arguments               | Return Value               |
+|--------|-------|-------------------------|----------------------------|
+| 1      | write | fd, buf (string), count | bytes written or error     |
+| 2      | open  | path (string), flags    | fd (>=3) or error          |
+| 3      | close | fd                      | 0 on success or error      |
+
+#### Error Codes
+
+| Value | Name   | Description                    |
+|-------|--------|--------------------------------|
+| -1    | EBADF  | Bad file descriptor            |
+| -2    | ENOENT | No such file or directory      |
+| -3    | EACCES | Permission denied              |
+
+#### Open Flags
+
+| Value | Name     | Description                    |
+|-------|----------|--------------------------------|
+| 1     | O_WRONLY | Write only                     |
+| 64    | O_CREAT  | Create file if not exists      |
+| 512   | O_TRUNC  | Truncate existing file         |
+
+Flags can be combined with bitwise OR (e.g., `1 | 64 | 512` = 577).
+
+#### open Syscall
+
+```
+syscall_open(path: string, flags: int) -> int
+```
+
+- **path**: File path (relative or absolute)
+- **flags**: Open flags (O_WRONLY, O_CREAT, O_TRUNC)
+- **Returns**: File descriptor (>=3) on success, or negative error code
+
+**Example:**
+```moca
+let fd = syscall_open("output.txt", 1 | 64 | 512);  // O_WRONLY | O_CREAT | O_TRUNC
+if fd < 0 {
+    print("Failed to open file");
+}
+```
 
 #### write Syscall
 
@@ -296,20 +334,32 @@ SYSCALL <num> <argc>  // Execute system call
 syscall_write(fd: int, buf: string, count: int) -> int
 ```
 
-- **fd**: File descriptor (1 = stdout, 2 = stderr)
+- **fd**: File descriptor (1 = stdout, 2 = stderr, >=3 = file)
 - **buf**: String buffer to write
 - **count**: Number of bytes to write (truncated to string length if larger)
-- **Returns**: Number of bytes written, or -1 if fd is invalid
+- **Returns**: Number of bytes written, or negative error code
 
 **Example:**
 ```moca
-let n = syscall_write(1, "hello", 5);  // writes "hello" to stdout, returns 5
-syscall_write(2, "error\n", 6);        // writes to stderr
+// Write to stdout
+syscall_write(1, "hello", 5);
+
+// Write to file
+let fd = syscall_open("test.txt", 577);
+syscall_write(fd, "content", 7);
+syscall_close(fd);
 ```
 
-**Constraints:**
-- Only fd=1 (stdout) and fd=2 (stderr) are supported
-- Other fd values return -1 without writing
+#### close Syscall
+
+```
+syscall_close(fd: int) -> int
+```
+
+- **fd**: File descriptor to close (must be >=3)
+- **Returns**: 0 on success, or negative error code
+
+**Note:** fd=0, 1, 2 (stdin, stdout, stderr) cannot be closed and will return EBADF.
 
 ## Garbage Collection
 
