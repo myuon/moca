@@ -120,7 +120,7 @@ fun str_contains(haystack: string, needle: string) -> bool {
 
 // VectorAny struct - compatible with vector internal layout.
 // This allows treating vectors as structs for more natural field access.
-// Layout: [field_count=3, ptr, len, cap]
+// Layout: [ptr, len, cap]
 struct VectorAny {
     ptr: int,
     len: int,

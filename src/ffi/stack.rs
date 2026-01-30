@@ -158,7 +158,7 @@ pub unsafe extern "C" fn moca_is_string(vm: *mut MocaVm, index: i32) -> bool {
         if let Some(idx) = resolve_index(wrapper.ffi_stack.len(), index) {
             if let Value::Ref(r) = wrapper.ffi_stack[idx] {
                 if let Some(obj) = wrapper.vm.heap().get(r) {
-                    return obj.as_string_slots().is_some();
+                    return obj.as_slots().is_some();
                 }
             }
         }
@@ -239,7 +239,7 @@ pub unsafe extern "C" fn moca_to_string(
         if let Some(idx) = resolve_index(wrapper.ffi_stack.len(), index) {
             if let Value::Ref(r) = wrapper.ffi_stack[idx] {
                 if let Some(obj) = wrapper.vm.heap().get(r) {
-                    if let Some(str_value) = obj.string_value() {
+                    if let Some(str_value) = obj.slots_to_string() {
                         return FFI_STRING_BUFFER.with(|buf| {
                             let mut b = buf.borrow_mut();
                             *b = str_value;
