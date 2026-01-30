@@ -713,9 +713,7 @@ impl VM {
                     .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                let len = if let Some(arr) = obj.as_array() {
-                    arr.elements.len() as i64
-                } else if let Some(s) = obj.as_string() {
+                let len = if let Some(s) = obj.as_string() {
                     s.value.chars().count() as i64
                 } else if let Some(slots) = obj.as_slots() {
                     // For fixed arrays (Slots), slot[0] contains the length
@@ -805,7 +803,6 @@ impl VM {
                         if let Some(obj) = self.heap.get(*r) {
                             match obj.obj_type() {
                                 super::ObjectType::String => "string",
-                                super::ObjectType::Array => "array",
                                 super::ObjectType::Object => "object",
                                 super::ObjectType::Slots => "array", // Slots is used for arrays and vectors
                             }
@@ -1265,13 +1262,6 @@ impl VM {
                     .ok_or("runtime error: invalid reference")?;
                 match obj {
                     super::HeapObject::String(s) => Ok(s.value.clone()),
-                    super::HeapObject::Array(a) => {
-                        let mut parts = Vec::new();
-                        for elem in &a.elements {
-                            parts.push(self.value_to_string(elem)?);
-                        }
-                        Ok(format!("[{}]", parts.join(", ")))
-                    }
                     super::HeapObject::Object(o) => {
                         let mut parts = Vec::new();
                         for (k, v) in &o.fields {

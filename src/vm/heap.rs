@@ -7,7 +7,6 @@ use super::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectType {
     String,
-    Array,
     Object,
     /// Generic slot-based heap object (for arrays and vectors)
     Slots,
@@ -25,13 +24,6 @@ pub struct ObjectHeader {
 pub struct MocaString {
     pub header: ObjectHeader,
     pub value: String,
-}
-
-/// A heap-allocated array.
-#[derive(Debug)]
-pub struct MocaArray {
-    pub header: ObjectHeader,
-    pub elements: Vec<Value>,
 }
 
 /// A heap-allocated object (key-value map).
@@ -56,7 +48,6 @@ pub struct MocaSlots {
 /// A heap object can be any of the heap-allocated types.
 pub enum HeapObject {
     String(MocaString),
-    Array(MocaArray),
     Object(MocaObject),
     Slots(MocaSlots),
 }
@@ -65,7 +56,6 @@ impl HeapObject {
     pub fn obj_type(&self) -> ObjectType {
         match self {
             HeapObject::String(_) => ObjectType::String,
-            HeapObject::Array(_) => ObjectType::Array,
             HeapObject::Object(_) => ObjectType::Object,
             HeapObject::Slots(_) => ObjectType::Slots,
         }
@@ -74,7 +64,6 @@ impl HeapObject {
     pub fn header(&self) -> &ObjectHeader {
         match self {
             HeapObject::String(s) => &s.header,
-            HeapObject::Array(a) => &a.header,
             HeapObject::Object(o) => &o.header,
             HeapObject::Slots(s) => &s.header,
         }
@@ -83,7 +72,6 @@ impl HeapObject {
     pub fn header_mut(&mut self) -> &mut ObjectHeader {
         match self {
             HeapObject::String(s) => &mut s.header,
-            HeapObject::Array(a) => &mut a.header,
             HeapObject::Object(o) => &mut o.header,
             HeapObject::Slots(s) => &mut s.header,
         }
@@ -92,20 +80,6 @@ impl HeapObject {
     pub fn as_string(&self) -> Option<&MocaString> {
         match self {
             HeapObject::String(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_array(&self) -> Option<&MocaArray> {
-        match self {
-            HeapObject::Array(a) => Some(a),
-            _ => None,
-        }
-    }
-
-    pub fn as_array_mut(&mut self) -> Option<&mut MocaArray> {
-        match self {
-            HeapObject::Array(a) => Some(a),
             _ => None,
         }
     }
@@ -142,7 +116,6 @@ impl HeapObject {
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
             HeapObject::String(_) => vec![],
-            HeapObject::Array(arr) => arr.elements.iter().filter_map(|v| v.as_ref()).collect(),
             HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ref()).collect(),
             // For Slots, trace all references (including slot 0 which may be a vector data ptr)
             HeapObject::Slots(slots) => slots.slots.iter().filter_map(|v| v.as_ref()).collect(),
@@ -154,7 +127,6 @@ impl fmt::Debug for HeapObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HeapObject::String(s) => write!(f, "String({:?})", s.value),
-            HeapObject::Array(a) => write!(f, "Array({:?})", a.elements),
             HeapObject::Object(o) => write!(f, "Object({:?})", o.fields),
             HeapObject::Slots(s) => write!(f, "Slots({:?})", s.slots),
         }
@@ -247,22 +219,6 @@ impl Heap {
                 marked: false,
             },
             value,
-        });
-        Ok(self.alloc_object(obj))
-    }
-
-    /// Allocate a new array on the heap.
-    pub fn alloc_array(&mut self, elements: Vec<Value>) -> Result<GcRef, String> {
-        let size = std::mem::size_of::<MocaArray>() + elements.len() * std::mem::size_of::<Value>();
-        self.check_heap_limit(size)?;
-        self.bytes_allocated += size;
-
-        let obj = HeapObject::Array(MocaArray {
-            header: ObjectHeader {
-                obj_type: ObjectType::Array,
-                marked: false,
-            },
-            elements,
         });
         Ok(self.alloc_object(obj))
     }
@@ -374,10 +330,6 @@ impl Heap {
         for o in self.objects.iter().flatten() {
             self.bytes_allocated += match o {
                 HeapObject::String(s) => std::mem::size_of::<MocaString>() + s.value.len(),
-                HeapObject::Array(a) => {
-                    std::mem::size_of::<MocaArray>()
-                        + a.elements.len() * std::mem::size_of::<Value>()
-                }
                 HeapObject::Object(o) => {
                     std::mem::size_of::<MocaObject>()
                         + o.fields.len()
@@ -424,16 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn test_alloc_array() {
-        let mut heap = Heap::new();
-        let r = heap
-            .alloc_array(vec![Value::I64(1), Value::I64(2), Value::I64(3)])
-            .unwrap();
-        let obj = heap.get(r).unwrap();
-        assert_eq!(obj.as_array().unwrap().elements.len(), 3);
-    }
-
-    #[test]
     fn test_gc_collects_unreachable() {
         let mut heap = Heap::new();
 
@@ -451,22 +393,22 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_traces_arrays() {
+    fn test_gc_traces_slots() {
         let mut heap = Heap::new();
 
         // Create a string
-        let str_ref = heap.alloc_string("inside array".to_string()).unwrap();
+        let str_ref = heap.alloc_string("inside slots".to_string()).unwrap();
 
-        // Create an array containing the string
-        let arr_ref = heap.alloc_array(vec![Value::Ref(str_ref)]).unwrap();
+        // Create a slots object containing the string
+        let slots_ref = heap.alloc_slots(vec![Value::Ref(str_ref)]).unwrap();
 
         assert_eq!(heap.object_count(), 2);
 
-        // Only array is in roots, but string should be kept via tracing
-        heap.collect(&[Value::Ref(arr_ref)]);
+        // Only slots is in roots, but string should be kept via tracing
+        heap.collect(&[Value::Ref(slots_ref)]);
 
         assert_eq!(heap.object_count(), 2);
         assert!(heap.get(str_ref).is_some());
-        assert!(heap.get(arr_ref).is_some());
+        assert!(heap.get(slots_ref).is_some());
     }
 }
