@@ -155,6 +155,26 @@ fun vec_push_any(v, value) {
     __heap_store(v, 1, current_len + 1);
 }
 
+// Internal implementation of vec_pop. The vec_pop builtin calls this function.
+// Vector layout: [ptr, len, cap]
+// Returns the popped value, throws if vector is empty.
+fun vec_pop_any(v) {
+    let current_len = __heap_load(v, 1);
+
+    if current_len == 0 {
+        throw "cannot pop from empty vector";
+    }
+
+    let new_len = current_len - 1;
+    let data_ptr = __heap_load(v, 0);
+    let value = __heap_load(data_ptr, new_len);
+
+    // Update len
+    __heap_store(v, 1, new_len);
+
+    return value;
+}
+
 // ============================================================================
 // Parsing Functions
 // ============================================================================
