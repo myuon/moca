@@ -2037,4 +2037,176 @@ mod tests {
         // Clean up
         let _ = std::fs::remove_file(&temp_path);
     }
+
+    #[test]
+    fn test_syscall_read_invalid_fd() {
+        // Test reading from invalid fd returns EBADF (-1)
+        let stack = run_code(vec![
+            Op::PushInt(99),   // invalid fd
+            Op::PushInt(10),   // count
+            Op::Syscall(4, 2), // syscall_read
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_read_reserved_fd() {
+        // Test reading from reserved fd (stdout) returns EBADF
+        let stack = run_code(vec![
+            Op::PushInt(1),    // stdout
+            Op::PushInt(10),   // count
+            Op::Syscall(4, 2), // syscall_read
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_read_from_file() {
+        use std::io::Write;
+
+        // Create a temporary file with content
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("moca_test_read.txt");
+        let path_str = temp_path.to_str().unwrap().to_string();
+
+        // Write content to file using Rust
+        {
+            let mut file = std::fs::File::create(&temp_path).unwrap();
+            file.write_all(b"hello world").unwrap();
+        }
+
+        // O_RDONLY = 0
+        let flags = 0i64;
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 2,
+                code: vec![
+                    // fd = open(path, O_RDONLY)
+                    Op::PushString(0),  // path
+                    Op::PushInt(flags), // flags
+                    Op::Syscall(2, 2),  // syscall_open
+                    Op::SetL(0),        // store fd at stack[0]
+                    // content = read(fd, 100)
+                    Op::GetL(0),       // push fd from stack[0]
+                    Op::PushInt(100),  // count
+                    Op::Syscall(4, 2), // syscall_read -> returns string ref
+                    Op::SetL(1),       // store content at stack[1]
+                    // close(fd)
+                    Op::GetL(0),       // push fd
+                    Op::Syscall(3, 1), // syscall_close
+                    Op::Pop,           // discard close result
+                    // return content
+                    Op::GetL(1), // push content ref
+                ],
+                stackmap: None,
+            },
+            strings: vec![path_str.clone()],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(result.is_ok(), "syscall read test failed: {:?}", result);
+
+        // Find the content ref in the stack (last Ref value)
+        let content_ref = vm
+            .stack
+            .iter()
+            .rev()
+            .find_map(|v| {
+                if let Value::Ref(r) = v {
+                    Some(*r)
+                } else {
+                    None
+                }
+            })
+            .expect("Expected to find a Ref value in stack");
+        let content = vm.heap.get(content_ref).unwrap().slots_to_string().unwrap();
+        assert_eq!(content, "hello world");
+
+        // Clean up
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn test_syscall_read_partial() {
+        use std::io::Write;
+
+        // Create a temporary file with content
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("moca_test_read_partial.txt");
+        let path_str = temp_path.to_str().unwrap().to_string();
+
+        // Write content to file using Rust
+        {
+            let mut file = std::fs::File::create(&temp_path).unwrap();
+            file.write_all(b"hello world").unwrap();
+        }
+
+        // O_RDONLY = 0
+        let flags = 0i64;
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 2,
+                code: vec![
+                    // fd = open(path, O_RDONLY)
+                    Op::PushString(0),  // path
+                    Op::PushInt(flags), // flags
+                    Op::Syscall(2, 2),  // syscall_open
+                    Op::SetL(0),        // store fd at stack[0]
+                    // content = read(fd, 5) - only read first 5 bytes
+                    Op::GetL(0),       // push fd
+                    Op::PushInt(5),    // count
+                    Op::Syscall(4, 2), // syscall_read -> returns string ref
+                    Op::SetL(1),       // store content at stack[1]
+                    // close(fd)
+                    Op::GetL(0),       // push fd
+                    Op::Syscall(3, 1), // syscall_close
+                    Op::Pop,           // discard close result
+                    // return content
+                    Op::GetL(1), // push content ref
+                ],
+                stackmap: None,
+            },
+            strings: vec![path_str.clone()],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(
+            result.is_ok(),
+            "syscall read partial test failed: {:?}",
+            result
+        );
+
+        // Find the content ref in the stack (last Ref value)
+        let content_ref = vm
+            .stack
+            .iter()
+            .rev()
+            .find_map(|v| {
+                if let Value::Ref(r) = v {
+                    Some(*r)
+                } else {
+                    None
+                }
+            })
+            .expect("Expected to find a Ref value in stack");
+        let content = vm.heap.get(content_ref).unwrap().slots_to_string().unwrap();
+        assert_eq!(content, "hello");
+
+        // Clean up
+        let _ = std::fs::remove_file(&temp_path);
+    }
 }
