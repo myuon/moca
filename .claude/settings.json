@@ -18,9 +18,23 @@
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(mkdir:*)",
+      "Bash(cargo fmt:*)",
       "Skill(commit)",
       "Skill(impl)",
       "Skill(spec)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q '\"command\":.*git commit'; then cargo fmt; fi"
+          }
+        ]
+      }
     ]
   }
 }
