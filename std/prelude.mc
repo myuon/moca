@@ -118,12 +118,21 @@ fun str_contains(haystack: string, needle: string) -> bool {
 // Vector Functions (low-level implementation using heap intrinsics)
 // ============================================================================
 
+// VectorAny struct - compatible with vector internal layout.
+// This allows treating vectors as structs for more natural field access.
+// Layout: [field_count=3, ptr, len, cap]
+struct VectorAny {
+    ptr: int,
+    len: int,
+    cap: int
+}
+
 // Internal implementation of vec_push. The vec_push builtin calls this function.
-// Vector layout: [ptr, len, cap]
+// Vector layout: [field_count=3, ptr, len, cap] (struct-compatible)
 fun vec_push_any(v, value) {
-    var data_ptr = __heap_load(v, 0);
-    var current_len = __heap_load(v, 1);
-    var current_cap = __heap_load(v, 2);
+    var data_ptr = __heap_load(v, 1);
+    var current_len = __heap_load(v, 2);
+    var current_cap = __heap_load(v, 3);
 
     if current_len >= current_cap {
         // Need to grow
@@ -144,33 +153,33 @@ fun vec_push_any(v, value) {
         }
 
         // Update vector header
-        __heap_store(v, 0, new_data);
-        __heap_store(v, 2, new_cap);
+        __heap_store(v, 1, new_data);
+        __heap_store(v, 3, new_cap);
         data_ptr = new_data;
     }
 
     // Store the value at data_ptr[current_len]
     __heap_store(data_ptr, current_len, value);
     // Increment len
-    __heap_store(v, 1, current_len + 1);
+    __heap_store(v, 2, current_len + 1);
 }
 
 // Internal implementation of vec_pop. The vec_pop builtin calls this function.
-// Vector layout: [ptr, len, cap]
+// Vector layout: [field_count=3, ptr, len, cap] (struct-compatible)
 // Returns the popped value, throws if vector is empty.
 fun vec_pop_any(v) {
-    let current_len = __heap_load(v, 1);
+    let current_len = __heap_load(v, 2);
 
     if current_len == 0 {
         throw "cannot pop from empty vector";
     }
 
     let new_len = current_len - 1;
-    let data_ptr = __heap_load(v, 0);
+    let data_ptr = __heap_load(v, 1);
     let value = __heap_load(data_ptr, new_len);
 
     // Update len
-    __heap_store(v, 1, new_len);
+    __heap_store(v, 2, new_len);
 
     return value;
 }

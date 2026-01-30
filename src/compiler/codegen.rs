@@ -198,10 +198,10 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector assign: vec[i] = v -> HeapLoad(0) to get data ptr, then HeapStoreDyn
-                    // Vector data layout: [elem0, elem1, ...] - no length prefix
+                    // Vector assign: vec[i] = v -> HeapLoad(1) to get data ptr, then HeapStoreDyn
+                    // Vector layout: [field_count=3, ptr, len, cap] - data ptr at slot 1
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(0)); // Get data pointer
+                    ops.push(Op::HeapLoad(1)); // Get data pointer (slot 1)
                     self.compile_expr(index, ops)?;
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStoreDyn);
@@ -470,10 +470,10 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector access: vec[i] -> HeapLoad(0) to get data ptr, then HeapLoadDyn
-                    // Vector data layout: [elem0, elem1, ...] - no length prefix
+                    // Vector access: vec[i] -> HeapLoad(1) to get data ptr, then HeapLoadDyn
+                    // Vector layout: [field_count=3, ptr, len, cap] - data ptr at slot 1
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(0)); // Get data pointer
+                    ops.push(Op::HeapLoad(1)); // Get data pointer (slot 1)
                     self.compile_expr(index, ops)?;
                     ops.push(Op::HeapLoadDyn);
                 } else {
@@ -701,16 +701,17 @@ impl Codegen {
                         ops.push(Op::ThreadJoin);
                     }
                     // Vector builtins
-                    // Vector layout: Slots[ptr, len, cap]
+                    // Vector layout: Slots[field_count=3, ptr, len, cap] (struct-compatible)
                     "vec_new" => {
                         if !args.is_empty() {
                             return Err("vec_new takes no arguments".to_string());
                         }
-                        // Create empty vector: [ptr=null, len=0, cap=0]
+                        // Create empty vector: [field_count=3, ptr=null, len=0, cap=0]
+                        ops.push(Op::PushInt(3)); // field_count = 3
                         ops.push(Op::PushNull); // ptr = null
                         ops.push(Op::PushInt(0)); // len = 0
                         ops.push(Op::PushInt(0)); // cap = 0
-                        ops.push(Op::AllocHeap(3));
+                        ops.push(Op::AllocHeap(4));
                     }
                     "vec_with_capacity" => {
                         if args.len() != 1 {
@@ -718,12 +719,13 @@ impl Codegen {
                                 "vec_with_capacity takes exactly 1 argument (capacity)".to_string()
                             );
                         }
-                        // Create vector with capacity: [ptr=null, len=0, cap=n]
+                        // Create vector with capacity: [field_count=3, ptr=null, len=0, cap=n]
                         // Note: data is not pre-allocated, will be allocated on first push
+                        ops.push(Op::PushInt(3)); // field_count = 3
                         ops.push(Op::PushNull); // ptr = null
                         ops.push(Op::PushInt(0)); // len = 0
                         self.compile_expr(&args[0], ops)?; // cap = user specified
-                        ops.push(Op::AllocHeap(3));
+                        ops.push(Op::AllocHeap(4));
                     }
                     "vec_push" => {
                         if args.len() != 2 {
@@ -760,7 +762,7 @@ impl Codegen {
                             return Err("vec_len takes exactly 1 argument (vector)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(1)); // slot 1 is length
+                        ops.push(Op::HeapLoad(2)); // slot 2 is length (after field_count, ptr)
                     }
                     "vec_capacity" => {
                         if args.len() != 1 {
@@ -769,7 +771,7 @@ impl Codegen {
                             );
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(2)); // slot 2 is capacity
+                        ops.push(Op::HeapLoad(3)); // slot 3 is capacity
                     }
                     "vec_get" => {
                         if args.len() != 2 {
@@ -777,10 +779,10 @@ impl Codegen {
                                 "vec_get takes exactly 2 arguments (vector, index)".to_string()
                             );
                         }
-                        // Vector layout: [ptr, len, cap]
+                        // Vector layout: [field_count=3, ptr, len, cap]
                         // Load data ptr, then index into it
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        ops.push(Op::HeapLoad(1)); // get data ptr (slot 1)
                         self.compile_expr(&args[1], ops)?;
                         ops.push(Op::HeapLoadDyn);
                     }
@@ -789,10 +791,10 @@ impl Codegen {
                             return Err("vec_set takes exactly 3 arguments (vector, index, value)"
                                 .to_string());
                         }
-                        // Vector layout: [ptr, len, cap]
+                        // Vector layout: [field_count=3, ptr, len, cap]
                         // Load data ptr, then store at index
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        ops.push(Op::HeapLoad(1)); // get data ptr (slot 1)
                         self.compile_expr(&args[1], ops)?;
                         self.compile_expr(&args[2], ops)?;
                         ops.push(Op::HeapStoreDyn);
