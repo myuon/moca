@@ -210,8 +210,8 @@ impl<'a> Resolver<'a> {
                 "vec_capacity".to_string(),
                 "vec_get".to_string(),
                 "vec_set".to_string(),
-                // Syscall operations
-                "syscall_write".to_string(),
+                // Syscall operations (generic syscall builtin)
+                "__syscall".to_string(),
                 // Low-level heap intrinsics (for stdlib implementation)
                 "__heap_load".to_string(),
                 "__heap_store".to_string(),

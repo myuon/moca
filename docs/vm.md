@@ -286,20 +286,26 @@ SYSCALL <num> <argc>  // Execute system call
 
 #### Syscall Numbers
 
-| Number | Name  | Arguments               | Return Value               |
-|--------|-------|-------------------------|----------------------------|
-| 1      | write | fd, buf (string), count | bytes written or error     |
-| 2      | open  | path (string), flags    | fd (>=3) or error          |
-| 3      | close | fd                      | 0 on success or error      |
-| 4      | read  | fd, count               | string (heap ref) or error |
+| Number | Name    | Arguments                 | Return Value                 |
+|--------|---------|---------------------------|------------------------------|
+| 1      | write   | fd, buf (string), count   | bytes written or error       |
+| 2      | open    | path (string), flags      | fd (>=3) or error            |
+| 3      | close   | fd                        | 0 on success or error        |
+| 4      | read    | fd, count                 | string (heap ref) or error   |
+| 5      | socket  | domain, type              | socket fd (>=3) or error     |
+| 6      | connect | fd, host (string), port   | 0 on success or error        |
 
 #### Error Codes
 
-| Value | Name   | Description                    |
-|-------|--------|--------------------------------|
-| -1    | EBADF  | Bad file descriptor            |
-| -2    | ENOENT | No such file or directory      |
-| -3    | EACCES | Permission denied              |
+| Value | Name            | Description                    |
+|-------|-----------------|--------------------------------|
+| -1    | EBADF           | Bad file descriptor            |
+| -2    | ENOENT          | No such file or directory      |
+| -3    | EACCES          | Permission denied              |
+| -4    | ECONNREFUSED    | Connection refused             |
+| -5    | ETIMEDOUT       | Connection timed out           |
+| -6    | EAFNOSUPPORT    | Address family not supported   |
+| -7    | ESOCKTNOSUPPORT | Socket type not supported      |
 
 #### Open Flags
 
@@ -311,6 +317,13 @@ SYSCALL <num> <argc>  // Execute system call
 | 512   | O_TRUNC  | Truncate existing file         |
 
 Flags can be combined with bitwise OR (e.g., `1 | 64 | 512` = 577).
+
+#### Socket Constants
+
+| Value | Name        | Description                    |
+|-------|-------------|--------------------------------|
+| 2     | AF_INET     | IPv4 address family            |
+| 1     | SOCK_STREAM | TCP socket type                |
 
 #### open Syscall
 
@@ -380,6 +393,66 @@ syscall_read(fd: int, count: int) -> string | int
 // Read from file
 let fd = syscall_open("input.txt", 0);  // O_RDONLY
 let content = syscall_read(fd, 1024);   // Read up to 1024 bytes
+syscall_close(fd);
+```
+
+#### socket Syscall
+
+```
+syscall_socket(domain: int, type: int) -> int
+```
+
+- **domain**: Address family (AF_INET = 2 for IPv4)
+- **type**: Socket type (SOCK_STREAM = 1 for TCP)
+- **Returns**: Socket file descriptor (>=3) on success, or negative error code
+
+**Note:** Only AF_INET (IPv4) and SOCK_STREAM (TCP) are currently supported.
+
+**Example:**
+```moca
+let fd = syscall_socket(2, 1);  // AF_INET, SOCK_STREAM
+if fd < 0 {
+    print("Failed to create socket");
+}
+```
+
+#### connect Syscall
+
+```
+syscall_connect(fd: int, host: string, port: int) -> int
+```
+
+- **fd**: Socket file descriptor (from syscall_socket)
+- **host**: Hostname or IP address
+- **port**: Port number
+- **Returns**: 0 on success, or negative error code
+
+**Example:**
+```moca
+let fd = syscall_socket(2, 1);  // AF_INET, SOCK_STREAM
+let result = syscall_connect(fd, "example.com", 80);
+if result < 0 {
+    print("Connection failed");
+}
+```
+
+#### Socket I/O
+
+Once connected, sockets can use the same `read`, `write`, and `close` syscalls as files:
+
+```moca
+// Create and connect socket
+let fd = syscall_socket(2, 1);
+syscall_connect(fd, "example.com", 80);
+
+// Send HTTP request
+let request = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
+syscall_write(fd, request, 38);
+
+// Read response
+let response = syscall_read(fd, 4096);
+
+// Close socket
 syscall_close(fd);
 ```
 

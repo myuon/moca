@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
@@ -77,6 +78,10 @@ pub struct VM {
     stderr: Box<dyn Write>,
     /// File descriptor table for open files (fd >= 3)
     file_descriptors: HashMap<i64, File>,
+    /// Socket descriptor table for TCP connections (fd >= 3)
+    socket_descriptors: HashMap<i64, TcpStream>,
+    /// Pending socket fds (created by socket() but not yet connected)
+    pending_sockets: HashSet<i64>,
     /// Next available file descriptor
     next_fd: i64,
 }
@@ -137,6 +142,8 @@ impl VM {
             output,
             stderr,
             file_descriptors: HashMap::new(),
+            socket_descriptors: HashMap::new(),
+            pending_sockets: HashSet::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
         }
     }
@@ -1363,17 +1370,27 @@ impl VM {
         const SYSCALL_OPEN: usize = 2;
         const SYSCALL_CLOSE: usize = 3;
         const SYSCALL_READ: usize = 4;
+        const SYSCALL_SOCKET: usize = 5;
+        const SYSCALL_CONNECT: usize = 6;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
         const ENOENT: i64 = -2; // No such file or directory
         const EACCES: i64 = -3; // Permission denied
+        const ECONNREFUSED: i64 = -4; // Connection refused
+        const ETIMEDOUT: i64 = -5; // Connection timed out
+        const EAFNOSUPPORT: i64 = -6; // Address family not supported
+        const ESOCKTNOSUPPORT: i64 = -7; // Socket type not supported
 
         // Open flags (Linux-compatible values)
         const O_RDONLY: i64 = 0;
         const O_WRONLY: i64 = 1;
         const O_CREAT: i64 = 64;
         const O_TRUNC: i64 = 512;
+
+        // Socket constants (Linux-compatible values)
+        const AF_INET: i64 = 2;
+        const SOCK_STREAM: i64 = 1;
 
         match syscall_num {
             SYSCALL_OPEN => {
@@ -1456,8 +1473,12 @@ impl VM {
                     return Ok(Value::I64(EBADF));
                 }
 
-                // Remove from fd table (File is dropped automatically)
-                if self.file_descriptors.remove(&fd).is_some() {
+                // Remove from fd table (File/TcpStream is dropped automatically)
+                let closed = self.file_descriptors.remove(&fd).is_some()
+                    || self.socket_descriptors.remove(&fd).is_some()
+                    || self.pending_sockets.remove(&fd);
+
+                if closed {
                     Ok(Value::I64(0)) // Success
                 } else {
                     Ok(Value::I64(EBADF)) // Invalid fd
@@ -1514,6 +1535,12 @@ impl VM {
                     file.write_all(bytes_to_write)
                         .map(|_| actual_count as i64)
                         .unwrap_or(EBADF)
+                } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
+                    // Socket from socket_descriptors table
+                    socket
+                        .write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(EBADF)
                 } else {
                     // Invalid fd
                     EBADF
@@ -1541,17 +1568,20 @@ impl VM {
                     return Ok(Value::I64(EBADF));
                 }
 
-                // Get file from fd table
-                let file = match self.file_descriptors.get_mut(&fd) {
-                    Some(f) => f,
-                    None => return Ok(Value::I64(EBADF)),
-                };
-
-                // Read up to count bytes
+                // Read up to count bytes from file or socket
                 let mut buffer = vec![0u8; count as usize];
-                let bytes_read = match file.read(&mut buffer) {
-                    Ok(n) => n,
-                    Err(_) => return Ok(Value::I64(EBADF)),
+                let bytes_read = if let Some(file) = self.file_descriptors.get_mut(&fd) {
+                    match file.read(&mut buffer) {
+                        Ok(n) => n,
+                        Err(_) => return Ok(Value::I64(EBADF)),
+                    }
+                } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
+                    match socket.read(&mut buffer) {
+                        Ok(n) => n,
+                        Err(_) => return Ok(Value::I64(EBADF)),
+                    }
+                } else {
+                    return Ok(Value::I64(EBADF));
                 };
 
                 // Truncate buffer to actual bytes read
@@ -1569,6 +1599,92 @@ impl VM {
                 // Allocate string on heap and return reference
                 let heap_ref = self.heap.alloc_string(content)?;
                 Ok(Value::Ref(heap_ref))
+            }
+            SYSCALL_SOCKET => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "socket syscall expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let domain = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "socket: domain must be an integer".to_string())?;
+                let sock_type = args[1]
+                    .as_i64()
+                    .ok_or_else(|| "socket: type must be an integer".to_string())?;
+
+                // Only support AF_INET (2)
+                if domain != AF_INET {
+                    return Ok(Value::I64(EAFNOSUPPORT));
+                }
+
+                // Only support SOCK_STREAM (1) for TCP
+                if sock_type != SOCK_STREAM {
+                    return Ok(Value::I64(ESOCKTNOSUPPORT));
+                }
+
+                // Allocate fd and mark as pending socket
+                let fd = self.next_fd;
+                self.next_fd += 1;
+                self.pending_sockets.insert(fd);
+
+                Ok(Value::I64(fd))
+            }
+            SYSCALL_CONNECT => {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "connect syscall expects 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "connect: fd must be an integer".to_string())?;
+
+                // Get host string
+                let host_ref = match &args[1] {
+                    Value::Ref(r) => *r,
+                    _ => return Err("connect: host must be a string".to_string()),
+                };
+                let heap_obj = self
+                    .heap
+                    .get(host_ref)
+                    .ok_or_else(|| "connect: invalid reference".to_string())?;
+                let host = heap_obj
+                    .slots_to_string()
+                    .ok_or_else(|| "connect: host must be a string".to_string())?;
+
+                let port = args[2]
+                    .as_i64()
+                    .ok_or_else(|| "connect: port must be an integer".to_string())?;
+
+                // Check fd is a pending socket
+                if !self.pending_sockets.remove(&fd) {
+                    return Ok(Value::I64(EBADF));
+                }
+
+                // Try to connect
+                let addr = format!("{}:{}", host, port);
+                match TcpStream::connect(&addr) {
+                    Ok(stream) => {
+                        self.socket_descriptors.insert(fd, stream);
+                        Ok(Value::I64(0)) // Success
+                    }
+                    Err(e) => {
+                        // Map IO errors to our error codes
+                        let error_code = match e.kind() {
+                            std::io::ErrorKind::ConnectionRefused => ECONNREFUSED,
+                            std::io::ErrorKind::TimedOut => ETIMEDOUT,
+                            std::io::ErrorKind::NotFound => ENOENT,
+                            std::io::ErrorKind::PermissionDenied => EACCES,
+                            _ => ECONNREFUSED, // Default to connection refused
+                        };
+                        Ok(Value::I64(error_code))
+                    }
+                }
             }
             _ => Err(format!("unknown syscall: {}", syscall_num)),
         }
@@ -2208,5 +2324,188 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn test_syscall_socket_valid() {
+        // socket(AF_INET=2, SOCK_STREAM=1) should return fd >= 3
+        let stack = run_code(vec![
+            Op::PushInt(2),    // AF_INET
+            Op::PushInt(1),    // SOCK_STREAM
+            Op::Syscall(5, 2), // syscall_socket
+        ])
+        .unwrap();
+        assert_eq!(stack.len(), 1);
+        let fd = stack[0].as_i64().unwrap();
+        assert!(fd >= 3, "socket fd should be >= 3, got {}", fd);
+    }
+
+    #[test]
+    fn test_syscall_socket_invalid_domain() {
+        // socket(999, SOCK_STREAM=1) should return EAFNOSUPPORT (-6)
+        let stack = run_code(vec![
+            Op::PushInt(999),  // Invalid domain
+            Op::PushInt(1),    // SOCK_STREAM
+            Op::Syscall(5, 2), // syscall_socket
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-6)]); // EAFNOSUPPORT
+    }
+
+    #[test]
+    fn test_syscall_socket_invalid_type() {
+        // socket(AF_INET=2, 999) should return ESOCKTNOSUPPORT (-7)
+        let stack = run_code(vec![
+            Op::PushInt(2),    // AF_INET
+            Op::PushInt(999),  // Invalid socket type
+            Op::Syscall(5, 2), // syscall_socket
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-7)]); // ESOCKTNOSUPPORT
+    }
+
+    #[test]
+    fn test_syscall_connect_invalid_fd() {
+        // connect(999, "example.com", 80) should return EBADF (-1)
+        let stack = run_code_with_strings(
+            vec![
+                Op::PushInt(999),  // Invalid fd
+                Op::PushString(0), // host
+                Op::PushInt(80),   // port
+                Op::Syscall(6, 3), // syscall_connect
+            ],
+            vec!["example.com".to_string()],
+        )
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_close_pending_socket() {
+        // socket() then close() should work
+        let stack = run_code(vec![
+            Op::PushInt(2),    // AF_INET
+            Op::PushInt(1),    // SOCK_STREAM
+            Op::Syscall(5, 2), // syscall_socket -> fd
+            Op::SetL(0),       // store fd
+            Op::GetL(0),       // push fd
+            Op::Syscall(3, 1), // syscall_close
+        ])
+        .unwrap();
+        // Last value should be 0 (success)
+        assert!(stack.iter().any(|v| *v == Value::I64(0)));
+    }
+
+    #[test]
+    fn test_syscall_http_get_local_server() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        // Start a simple HTTP server on a random port
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server_handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Read request
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+
+                // Send HTTP response
+                let response =
+                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from test server!";
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        // Give server time to start
+        thread::sleep(std::time::Duration::from_millis(50));
+
+        // E2E test: socket -> connect -> write(HTTP GET) -> read -> close
+        let http_request = format!("GET / HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", port);
+        let request_len = http_request.len() as i64;
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 2,
+                code: vec![
+                    // fd = socket(AF_INET=2, SOCK_STREAM=1)
+                    Op::PushInt(2),    // AF_INET
+                    Op::PushInt(1),    // SOCK_STREAM
+                    Op::Syscall(5, 2), // syscall_socket
+                    Op::SetL(0),       // store fd at local 0
+                    // connect(fd, "127.0.0.1", port)
+                    Op::GetL(0),              // push fd
+                    Op::PushString(0),        // host = "127.0.0.1"
+                    Op::PushInt(port as i64), // port
+                    Op::Syscall(6, 3),        // syscall_connect
+                    Op::Pop,                  // discard connect result
+                    // write(fd, request, len)
+                    Op::GetL(0),              // push fd
+                    Op::PushString(1),        // request string
+                    Op::PushInt(request_len), // count
+                    Op::Syscall(1, 3),        // syscall_write
+                    Op::Pop,                  // discard write result
+                    // response = read(fd, 4096)
+                    Op::GetL(0),       // push fd
+                    Op::PushInt(4096), // count
+                    Op::Syscall(4, 2), // syscall_read
+                    Op::SetL(1),       // store response at local 1
+                    // close(fd)
+                    Op::GetL(0),       // push fd
+                    Op::Syscall(3, 1), // syscall_close
+                    Op::Pop,           // discard close result
+                    // return response
+                    Op::GetL(1), // push response ref
+                ],
+                stackmap: None,
+            },
+            strings: vec!["127.0.0.1".to_string(), http_request],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(result.is_ok(), "HTTP GET test failed: {:?}", result);
+
+        // Find the response ref in the stack
+        let response_ref = vm
+            .stack
+            .iter()
+            .rev()
+            .find_map(|v| {
+                if let Value::Ref(r) = v {
+                    Some(*r)
+                } else {
+                    None
+                }
+            })
+            .expect("Expected to find a Ref value in stack");
+
+        let response = vm
+            .heap
+            .get(response_ref)
+            .unwrap()
+            .slots_to_string()
+            .unwrap();
+
+        // Response should contain HTTP status and our test message
+        assert!(
+            response.contains("HTTP/1.0 200 OK"),
+            "Response should contain HTTP status: {}",
+            response
+        );
+        assert!(
+            response.contains("Hello from test server!"),
+            "Response should contain test message: {}",
+            response
+        );
+
+        // Wait for server thread to finish
+        let _ = server_handle.join();
     }
 }
