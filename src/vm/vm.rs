@@ -1885,4 +1885,99 @@ mod tests {
             "Expected to find updated value 2 in stack"
         );
     }
+
+    #[test]
+    fn test_syscall_write_invalid_fd() {
+        // Test writing to invalid fd returns EBADF (-1)
+        let stack = run_code_with_strings(
+            vec![
+                Op::PushInt(99),   // invalid fd
+                Op::PushString(0), // buffer
+                Op::PushInt(5),    // count
+                Op::Syscall(1, 3), // syscall_write
+            ],
+            vec!["hello".to_string()],
+        )
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_close_invalid_fd() {
+        // Test closing invalid fd returns EBADF (-1)
+        let stack = run_code(vec![
+            Op::PushInt(99),   // invalid fd
+            Op::Syscall(3, 1), // syscall_close
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_close_reserved_fd() {
+        // Test closing reserved fd (stdin/stdout/stderr) returns EBADF
+        let stack = run_code(vec![
+            Op::PushInt(1),    // stdout
+            Op::Syscall(3, 1), // syscall_close
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_open_write_close() {
+        use std::io::Read;
+
+        // Create a temporary file path
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("moca_test_syscall.txt");
+        let path_str = temp_path.to_str().unwrap().to_string();
+
+        // Clean up any existing file
+        let _ = std::fs::remove_file(&temp_path);
+
+        // O_WRONLY | O_CREAT | O_TRUNC = 1 | 64 | 512 = 577
+        let flags = 1 | 64 | 512;
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 1,
+                code: vec![
+                    // fd = open(path, flags)
+                    Op::PushString(0),  // path
+                    Op::PushInt(flags), // flags
+                    Op::Syscall(2, 2),  // syscall_open
+                    Op::SetL(0),        // store fd in local 0
+                    // write(fd, "hello", 5)
+                    Op::GetL(0),       // fd
+                    Op::PushString(1), // buffer
+                    Op::PushInt(5),    // count
+                    Op::Syscall(1, 3), // syscall_write
+                    Op::Pop,           // discard write result
+                    // close(fd)
+                    Op::GetL(0),       // fd
+                    Op::Syscall(3, 1), // syscall_close
+                ],
+                stackmap: None,
+            },
+            strings: vec![path_str.clone(), "hello".to_string()],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(result.is_ok(), "syscall test failed: {:?}", result);
+
+        // Verify file contents
+        let mut contents = String::new();
+        let mut file = std::fs::File::open(&temp_path).expect("file should exist");
+        file.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "hello");
+
+        // Clean up
+        let _ = std::fs::remove_file(&temp_path);
+    }
 }
