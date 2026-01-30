@@ -1619,6 +1619,60 @@ impl VM {
 
                 Ok(Value::I64(fd))
             }
+            SYSCALL_CONNECT => {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "connect syscall expects 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "connect: fd must be an integer".to_string())?;
+
+                // Get host string
+                let host_ref = match &args[1] {
+                    Value::Ref(r) => *r,
+                    _ => return Err("connect: host must be a string".to_string()),
+                };
+                let heap_obj = self
+                    .heap
+                    .get(host_ref)
+                    .ok_or_else(|| "connect: invalid reference".to_string())?;
+                let host = heap_obj
+                    .slots_to_string()
+                    .ok_or_else(|| "connect: host must be a string".to_string())?;
+
+                let port = args[2]
+                    .as_i64()
+                    .ok_or_else(|| "connect: port must be an integer".to_string())?;
+
+                // Check fd is a pending socket
+                if !self.pending_sockets.remove(&fd) {
+                    return Ok(Value::I64(EBADF));
+                }
+
+                // Try to connect
+                let addr = format!("{}:{}", host, port);
+                match TcpStream::connect(&addr) {
+                    Ok(stream) => {
+                        self.socket_descriptors.insert(fd, stream);
+                        Ok(Value::I64(0)) // Success
+                    }
+                    Err(e) => {
+                        // Map IO errors to our error codes
+                        let error_code = match e.kind() {
+                            std::io::ErrorKind::ConnectionRefused => ECONNREFUSED,
+                            std::io::ErrorKind::TimedOut => ETIMEDOUT,
+                            std::io::ErrorKind::NotFound => ENOENT,
+                            std::io::ErrorKind::PermissionDenied => EACCES,
+                            _ => ECONNREFUSED, // Default to connection refused
+                        };
+                        Ok(Value::I64(error_code))
+                    }
+                }
+            }
             _ => Err(format!("unknown syscall: {}", syscall_num)),
         }
     }
