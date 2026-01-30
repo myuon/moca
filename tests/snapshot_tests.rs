@@ -531,9 +531,13 @@ fn snapshot_http() {
                 let mut buf = [0u8; 1024];
                 let _ = stream.read(&mut buf);
 
-                // Send HTTP response
-                let response =
-                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from test server!";
+                // Send HTTP response with proper headers
+                let body = "Hello from test server!";
+                let response = format!(
+                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
                 let _ = stream.write_all(response.as_bytes());
             }
         });
