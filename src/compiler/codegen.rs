@@ -705,18 +705,17 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ThreadJoin);
                     }
-                    // Vector builtins
-                    // Vector layout: Slots[field_count=3, ptr, len, cap] (struct-compatible)
+                    // Vector builtins - delegate to stdlib functions
                     "vec_new" => {
                         if !args.is_empty() {
                             return Err("vec_new takes no arguments".to_string());
                         }
-                        // Create empty vector: [field_count=3, ptr=null, len=0, cap=0]
-                        ops.push(Op::PushInt(3)); // field_count = 3
-                        ops.push(Op::PushNull); // ptr = null
-                        ops.push(Op::PushInt(0)); // len = 0
-                        ops.push(Op::PushInt(0)); // cap = 0
-                        ops.push(Op::AllocHeap(4));
+                        // Call vec_new_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_new_any") {
+                            ops.push(Op::Call(func_idx, 0));
+                        } else {
+                            return Err("vec_new_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_with_capacity" => {
                         if args.len() != 1 {
@@ -724,13 +723,14 @@ impl Codegen {
                                 "vec_with_capacity takes exactly 1 argument (capacity)".to_string()
                             );
                         }
-                        // Create vector with capacity: [field_count=3, ptr=null, len=0, cap=n]
-                        // Note: data is not pre-allocated, will be allocated on first push
-                        ops.push(Op::PushInt(3)); // field_count = 3
-                        ops.push(Op::PushNull); // ptr = null
-                        ops.push(Op::PushInt(0)); // len = 0
-                        self.compile_expr(&args[0], ops)?; // cap = user specified
-                        ops.push(Op::AllocHeap(4));
+                        // Call vec_with_capacity_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_with_capacity_any")
+                        {
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::Call(func_idx, 1));
+                        } else {
+                            return Err("vec_with_capacity_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_push" => {
                         if args.len() != 2 {
