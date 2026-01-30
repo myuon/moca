@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
@@ -1356,11 +1356,13 @@ impl VM {
     /// - 1: write(fd, buf, count) -> bytes_written
     /// - 2: open(path, flags) -> fd
     /// - 3: close(fd) -> 0 on success
+    /// - 4: read(fd, count) -> string (heap ref) or error
     fn handle_syscall(&mut self, syscall_num: usize, args: &[Value]) -> Result<Value, String> {
         // Syscall numbers
         const SYSCALL_WRITE: usize = 1;
         const SYSCALL_OPEN: usize = 2;
         const SYSCALL_CLOSE: usize = 3;
+        const SYSCALL_READ: usize = 4;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
@@ -1368,6 +1370,7 @@ impl VM {
         const EACCES: i64 = -3; // Permission denied
 
         // Open flags (Linux-compatible values)
+        const O_RDONLY: i64 = 0;
         const O_WRONLY: i64 = 1;
         const O_CREAT: i64 = 64;
         const O_TRUNC: i64 = 512;
@@ -1402,9 +1405,14 @@ impl VM {
                 // Build OpenOptions based on flags
                 let mut options = OpenOptions::new();
 
+                // O_RDONLY (0) means read-only if O_WRONLY is not set
                 if flags & O_WRONLY != 0 {
                     options.write(true);
+                } else {
+                    // O_RDONLY: read-only mode
+                    options.read(true);
                 }
+                let _ = O_RDONLY; // suppress unused warning
                 if flags & O_CREAT != 0 {
                     options.create(true);
                 }
@@ -1512,6 +1520,55 @@ impl VM {
                 };
 
                 Ok(Value::I64(result))
+            }
+            SYSCALL_READ => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "read syscall expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "read: fd must be an integer".to_string())?;
+                let count = args[1]
+                    .as_i64()
+                    .ok_or_else(|| "read: count must be an integer".to_string())?;
+
+                // Validate arguments
+                if fd <= 2 || count < 0 {
+                    return Ok(Value::I64(EBADF));
+                }
+
+                // Get file from fd table
+                let file = match self.file_descriptors.get_mut(&fd) {
+                    Some(f) => f,
+                    None => return Ok(Value::I64(EBADF)),
+                };
+
+                // Read up to count bytes
+                let mut buffer = vec![0u8; count as usize];
+                let bytes_read = match file.read(&mut buffer) {
+                    Ok(n) => n,
+                    Err(_) => return Ok(Value::I64(EBADF)),
+                };
+
+                // Truncate buffer to actual bytes read
+                buffer.truncate(bytes_read);
+
+                // Convert to string (assuming UTF-8)
+                let content = match String::from_utf8(buffer) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // Fall back to lossy conversion for non-UTF8 data
+                        String::from_utf8_lossy(&e.into_bytes()).into_owned()
+                    }
+                };
+
+                // Allocate string on heap and return reference
+                let heap_ref = self.heap.alloc_string(content)?;
+                Ok(Value::Ref(heap_ref))
             }
             _ => Err(format!("unknown syscall: {}", syscall_num)),
         }
