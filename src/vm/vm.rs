@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -74,6 +75,10 @@ pub struct VM {
     output: Box<dyn Write>,
     /// Output stream for stderr
     stderr: Box<dyn Write>,
+    /// File descriptor table for open files (fd >= 3)
+    file_descriptors: HashMap<i64, File>,
+    /// Next available file descriptor
+    next_fd: i64,
 }
 
 impl VM {
@@ -131,6 +136,8 @@ impl VM {
             jit_compile_count: 0,
             output,
             stderr,
+            file_descriptors: HashMap::new(),
+            next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
         }
     }
 
@@ -1347,10 +1354,107 @@ impl VM {
     /// Handle syscall instructions
     /// Syscall numbers:
     /// - 1: write(fd, buf, count) -> bytes_written
+    /// - 2: open(path, flags) -> fd
+    /// - 3: close(fd) -> 0 on success
     fn handle_syscall(&mut self, syscall_num: usize, args: &[Value]) -> Result<Value, String> {
+        // Syscall numbers
         const SYSCALL_WRITE: usize = 1;
+        const SYSCALL_OPEN: usize = 2;
+        const SYSCALL_CLOSE: usize = 3;
+
+        // Error codes (negative return values)
+        const EBADF: i64 = -1; // Bad file descriptor
+        const ENOENT: i64 = -2; // No such file or directory
+        const EACCES: i64 = -3; // Permission denied
+
+        // Open flags (Linux-compatible values)
+        const O_WRONLY: i64 = 1;
+        const O_CREAT: i64 = 64;
+        const O_TRUNC: i64 = 512;
 
         match syscall_num {
+            SYSCALL_OPEN => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "open syscall expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                // Get path string
+                let path_ref = match &args[0] {
+                    Value::Ref(r) => *r,
+                    _ => return Err("open: path must be a string".to_string()),
+                };
+                let heap_obj = self
+                    .heap
+                    .get(path_ref)
+                    .ok_or_else(|| "open: invalid reference".to_string())?;
+                let path = heap_obj
+                    .slots_to_string()
+                    .ok_or_else(|| "open: path must be a string".to_string())?;
+
+                // Get flags
+                let flags = args[1]
+                    .as_i64()
+                    .ok_or_else(|| "open: flags must be an integer".to_string())?;
+
+                // Build OpenOptions based on flags
+                let mut options = OpenOptions::new();
+
+                if flags & O_WRONLY != 0 {
+                    options.write(true);
+                }
+                if flags & O_CREAT != 0 {
+                    options.create(true);
+                }
+                if flags & O_TRUNC != 0 {
+                    options.truncate(true);
+                }
+
+                // Try to open the file
+                match options.open(&path) {
+                    Ok(file) => {
+                        let fd = self.next_fd;
+                        self.next_fd += 1;
+                        self.file_descriptors.insert(fd, file);
+                        Ok(Value::I64(fd))
+                    }
+                    Err(e) => {
+                        // Map IO errors to our error codes
+                        let error_code = match e.kind() {
+                            std::io::ErrorKind::NotFound => ENOENT,
+                            std::io::ErrorKind::PermissionDenied => EACCES,
+                            _ => EBADF,
+                        };
+                        Ok(Value::I64(error_code))
+                    }
+                }
+            }
+            SYSCALL_CLOSE => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "close syscall expects 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "close: fd must be an integer".to_string())?;
+
+                // Cannot close stdin/stdout/stderr
+                if fd <= 2 {
+                    return Ok(Value::I64(EBADF));
+                }
+
+                // Remove from fd table (File is dropped automatically)
+                if self.file_descriptors.remove(&fd).is_some() {
+                    Ok(Value::I64(0)) // Success
+                } else {
+                    Ok(Value::I64(EBADF)) // Invalid fd
+                }
+            }
             SYSCALL_WRITE => {
                 if args.len() != 3 {
                     return Err(format!(
@@ -1379,29 +1483,32 @@ impl VM {
                     .slots_to_string()
                     .ok_or_else(|| "write: buf must be a string".to_string())?;
 
-                // Validate fd (only 1=stdout, 2=stderr allowed)
-                if fd != 1 && fd != 2 {
-                    return Ok(Value::I64(-1)); // Invalid fd
-                }
-
                 // Calculate actual bytes to write
                 let buf_bytes = buf_str.as_bytes();
                 let actual_count = (count as usize).min(buf_bytes.len());
                 let bytes_to_write = &buf_bytes[..actual_count];
 
-                // Write to the appropriate output
+                // Write to the appropriate output based on fd
                 let result = if fd == 1 {
                     // stdout
                     self.output
                         .write_all(bytes_to_write)
                         .map(|_| actual_count as i64)
-                        .unwrap_or(-1)
-                } else {
+                        .unwrap_or(EBADF)
+                } else if fd == 2 {
                     // stderr
                     self.stderr
                         .write_all(bytes_to_write)
                         .map(|_| actual_count as i64)
-                        .unwrap_or(-1)
+                        .unwrap_or(EBADF)
+                } else if let Some(file) = self.file_descriptors.get_mut(&fd) {
+                    // File from fd table
+                    file.write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(EBADF)
+                } else {
+                    // Invalid fd
+                    EBADF
                 };
 
                 Ok(Value::I64(result))
@@ -1777,5 +1884,100 @@ mod tests {
             vm.stack.iter().any(|v| *v == Value::I64(2)),
             "Expected to find updated value 2 in stack"
         );
+    }
+
+    #[test]
+    fn test_syscall_write_invalid_fd() {
+        // Test writing to invalid fd returns EBADF (-1)
+        let stack = run_code_with_strings(
+            vec![
+                Op::PushInt(99),   // invalid fd
+                Op::PushString(0), // buffer
+                Op::PushInt(5),    // count
+                Op::Syscall(1, 3), // syscall_write
+            ],
+            vec!["hello".to_string()],
+        )
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_close_invalid_fd() {
+        // Test closing invalid fd returns EBADF (-1)
+        let stack = run_code(vec![
+            Op::PushInt(99),   // invalid fd
+            Op::Syscall(3, 1), // syscall_close
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_close_reserved_fd() {
+        // Test closing reserved fd (stdin/stdout/stderr) returns EBADF
+        let stack = run_code(vec![
+            Op::PushInt(1),    // stdout
+            Op::Syscall(3, 1), // syscall_close
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_open_write_close() {
+        use std::io::Read;
+
+        // Create a temporary file path
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("moca_test_syscall.txt");
+        let path_str = temp_path.to_str().unwrap().to_string();
+
+        // Clean up any existing file
+        let _ = std::fs::remove_file(&temp_path);
+
+        // O_WRONLY | O_CREAT | O_TRUNC = 1 | 64 | 512 = 577
+        let flags = 1 | 64 | 512;
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 1,
+                code: vec![
+                    // fd = open(path, flags)
+                    Op::PushString(0),  // path
+                    Op::PushInt(flags), // flags
+                    Op::Syscall(2, 2),  // syscall_open
+                    Op::SetL(0),        // store fd in local 0
+                    // write(fd, "hello", 5)
+                    Op::GetL(0),       // fd
+                    Op::PushString(1), // buffer
+                    Op::PushInt(5),    // count
+                    Op::Syscall(1, 3), // syscall_write
+                    Op::Pop,           // discard write result
+                    // close(fd)
+                    Op::GetL(0),       // fd
+                    Op::Syscall(3, 1), // syscall_close
+                ],
+                stackmap: None,
+            },
+            strings: vec![path_str.clone(), "hello".to_string()],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(result.is_ok(), "syscall test failed: {:?}", result);
+
+        // Verify file contents
+        let mut contents = String::new();
+        let mut file = std::fs::File::open(&temp_path).expect("file should exist");
+        file.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "hello");
+
+        // Clean up
+        let _ = std::fs::remove_file(&temp_path);
     }
 }
