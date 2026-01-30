@@ -291,6 +291,7 @@ SYSCALL <num> <argc>  // Execute system call
 | 1      | write | fd, buf (string), count | bytes written or error     |
 | 2      | open  | path (string), flags    | fd (>=3) or error          |
 | 3      | close | fd                      | 0 on success or error      |
+| 4      | read  | fd, count               | string (heap ref) or error |
 
 #### Error Codes
 
@@ -304,6 +305,7 @@ SYSCALL <num> <argc>  // Execute system call
 
 | Value | Name     | Description                    |
 |-------|----------|--------------------------------|
+| 0     | O_RDONLY | Read only                      |
 | 1     | O_WRONLY | Write only                     |
 | 64    | O_CREAT  | Create file if not exists      |
 | 512   | O_TRUNC  | Truncate existing file         |
@@ -360,6 +362,26 @@ syscall_close(fd: int) -> int
 - **Returns**: 0 on success, or negative error code
 
 **Note:** fd=0, 1, 2 (stdin, stdout, stderr) cannot be closed and will return EBADF.
+
+#### read Syscall
+
+```
+syscall_read(fd: int, count: int) -> string | int
+```
+
+- **fd**: File descriptor to read from (must be >=3, opened with O_RDONLY)
+- **count**: Maximum number of bytes to read
+- **Returns**: String (heap reference) on success, or negative error code
+
+**Note:** Returns empty string at EOF. fd=0, 1, 2 cannot be read from.
+
+**Example:**
+```moca
+// Read from file
+let fd = syscall_open("input.txt", 0);  // O_RDONLY
+let content = syscall_read(fd, 1024);   // Read up to 1024 bytes
+syscall_close(fd);
+```
 
 ## Garbage Collection
 
