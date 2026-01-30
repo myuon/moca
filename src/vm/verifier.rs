@@ -370,8 +370,8 @@ impl Verifier {
 
             // Stack operations
             Op::Pop => (1, 0),
-            Op::Dup => (0, 1), // Technically reads 1, but doesn't pop
-            Op::Swap => (2, 2), // Swaps top two elements
+            Op::Dup => (0, 1),     // Technically reads 1, but doesn't pop
+            Op::Swap => (2, 2),    // Swaps top two elements
             Op::Pick(_) => (0, 1), // Copies n-th element to top
             Op::PickDyn => (1, 1), // Pops depth, pushes value at that depth
 
