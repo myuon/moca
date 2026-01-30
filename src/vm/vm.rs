@@ -2397,25 +2397,33 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires network access
-    fn test_syscall_http_get_example_com() {
-        // First, check if network is available by trying to connect
-        use std::net::TcpStream;
-        use std::time::Duration;
+    fn test_syscall_http_get_local_server() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
 
-        let can_connect = TcpStream::connect_timeout(
-            &"93.184.216.34:80".parse().unwrap(), // example.com IP
-            Duration::from_secs(5),
-        )
-        .is_ok();
+        // Start a simple HTTP server on a random port
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind");
+        let port = listener.local_addr().unwrap().port();
 
-        if !can_connect {
-            eprintln!("Skipping test: cannot connect to example.com (network unavailable)");
-            return;
-        }
+        let server_handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Read request
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+
+                // Send HTTP response
+                let response =
+                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from test server!";
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        // Give server time to start
+        thread::sleep(std::time::Duration::from_millis(50));
 
         // E2E test: socket -> connect -> write(HTTP GET) -> read -> close
-        let http_request = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
+        let http_request = format!("GET / HTTP/1.0\r\nHost: 127.0.0.1:{}\r\n\r\n", port);
         let request_len = http_request.len() as i64;
 
         let chunk = Chunk {
@@ -2430,12 +2438,12 @@ mod tests {
                     Op::PushInt(1),    // SOCK_STREAM
                     Op::Syscall(5, 2), // syscall_socket
                     Op::SetL(0),       // store fd at local 0
-                    // connect(fd, "example.com", 80)
-                    Op::GetL(0),       // push fd
-                    Op::PushString(0), // host = "example.com"
-                    Op::PushInt(80),   // port
-                    Op::Syscall(6, 3), // syscall_connect
-                    Op::Pop,           // discard connect result
+                    // connect(fd, "127.0.0.1", port)
+                    Op::GetL(0),              // push fd
+                    Op::PushString(0),        // host = "127.0.0.1"
+                    Op::PushInt(port as i64), // port
+                    Op::Syscall(6, 3),        // syscall_connect
+                    Op::Pop,                  // discard connect result
                     // write(fd, request, len)
                     Op::GetL(0),              // push fd
                     Op::PushString(1),        // request string
@@ -2456,16 +2464,13 @@ mod tests {
                 ],
                 stackmap: None,
             },
-            strings: vec!["example.com".to_string(), http_request.to_string()],
+            strings: vec!["127.0.0.1".to_string(), http_request],
             debug: None,
         };
 
         let mut vm = VM::new();
         let result = vm.run(&chunk);
         assert!(result.is_ok(), "HTTP GET test failed: {:?}", result);
-
-        // Debug: print stack contents
-        eprintln!("Stack after run: {:?}", vm.stack);
 
         // Find the response ref in the stack
         let response_ref = vm
@@ -2488,11 +2493,19 @@ mod tests {
             .slots_to_string()
             .unwrap();
 
-        // Response should contain HTTP status and HTML
+        // Response should contain HTTP status and our test message
         assert!(
-            response.contains("HTTP/1") || response.contains("<!doctype html>"),
-            "Response should contain HTTP or HTML: {}",
-            &response[..response.len().min(200)]
+            response.contains("HTTP/1.0 200 OK"),
+            "Response should contain HTTP status: {}",
+            response
         );
+        assert!(
+            response.contains("Hello from test server!"),
+            "Response should contain test message: {}",
+            response
+        );
+
+        // Wait for server thread to finish
+        let _ = server_handle.join();
     }
 }
