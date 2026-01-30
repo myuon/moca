@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -80,6 +80,8 @@ pub struct VM {
     file_descriptors: HashMap<i64, File>,
     /// Socket descriptor table for TCP connections (fd >= 3)
     socket_descriptors: HashMap<i64, TcpStream>,
+    /// Pending socket fds (created by socket() but not yet connected)
+    pending_sockets: HashSet<i64>,
     /// Next available file descriptor
     next_fd: i64,
 }
@@ -141,6 +143,7 @@ impl VM {
             stderr,
             file_descriptors: HashMap::new(),
             socket_descriptors: HashMap::new(),
+            pending_sockets: HashSet::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
         }
     }
@@ -1367,17 +1370,27 @@ impl VM {
         const SYSCALL_OPEN: usize = 2;
         const SYSCALL_CLOSE: usize = 3;
         const SYSCALL_READ: usize = 4;
+        const SYSCALL_SOCKET: usize = 5;
+        const SYSCALL_CONNECT: usize = 6;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
         const ENOENT: i64 = -2; // No such file or directory
         const EACCES: i64 = -3; // Permission denied
+        const ECONNREFUSED: i64 = -4; // Connection refused
+        const ETIMEDOUT: i64 = -5; // Connection timed out
+        const EAFNOSUPPORT: i64 = -6; // Address family not supported
+        const ESOCKTNOSUPPORT: i64 = -7; // Socket type not supported
 
         // Open flags (Linux-compatible values)
         const O_RDONLY: i64 = 0;
         const O_WRONLY: i64 = 1;
         const O_CREAT: i64 = 64;
         const O_TRUNC: i64 = 512;
+
+        // Socket constants (Linux-compatible values)
+        const AF_INET: i64 = 2;
+        const SOCK_STREAM: i64 = 1;
 
         match syscall_num {
             SYSCALL_OPEN => {
@@ -1573,6 +1586,38 @@ impl VM {
                 // Allocate string on heap and return reference
                 let heap_ref = self.heap.alloc_string(content)?;
                 Ok(Value::Ref(heap_ref))
+            }
+            SYSCALL_SOCKET => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "socket syscall expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let domain = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "socket: domain must be an integer".to_string())?;
+                let sock_type = args[1]
+                    .as_i64()
+                    .ok_or_else(|| "socket: type must be an integer".to_string())?;
+
+                // Only support AF_INET (2)
+                if domain != AF_INET {
+                    return Ok(Value::I64(EAFNOSUPPORT));
+                }
+
+                // Only support SOCK_STREAM (1) for TCP
+                if sock_type != SOCK_STREAM {
+                    return Ok(Value::I64(ESOCKTNOSUPPORT));
+                }
+
+                // Allocate fd and mark as pending socket
+                let fd = self.next_fd;
+                self.next_fd += 1;
+                self.pending_sockets.insert(fd);
+
+                Ok(Value::I64(fd))
             }
             _ => Err(format!("unknown syscall: {}", syscall_num)),
         }
