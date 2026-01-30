@@ -1102,6 +1102,17 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
+            Op::AllocHeapDynSimple => {
+                // Pop size from stack, allocate that many null-initialized slots
+                let size_val = self.stack.pop().ok_or("stack underflow")?;
+                let size = size_val
+                    .as_i64()
+                    .ok_or("runtime error: AllocHeapDynSimple requires integer size")?
+                    as usize;
+                let slots = vec![Value::Null; size];
+                let r = self.heap.alloc_slots(slots)?;
+                self.stack.push(Value::Ref(r));
+            }
             Op::Syscall(syscall_num, argc) => {
                 // Collect arguments from stack
                 let mut args = Vec::with_capacity(argc);

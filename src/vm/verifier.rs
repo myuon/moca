@@ -430,7 +430,8 @@ impl Verifier {
 
             // Heap slot operations
             Op::AllocHeap(n) => (*n, 1), // pops n slots, pushes ref
-            Op::AllocHeapDyn => (1, 1),  // pops size + size values, pushes ref (simplified)
+            Op::AllocHeapDyn => (1, 1),       // pops size + size values, pushes ref (simplified)
+            Op::AllocHeapDynSimple => (1, 1), // pops size, pushes ref (null-initialized)
             Op::HeapLoad(_) => (1, 1),   // pops ref, pushes value
             Op::HeapStore(_) => (2, 0),  // pops ref and value
             Op::HeapLoadDyn => (2, 1),   // pops ref and index, pushes value

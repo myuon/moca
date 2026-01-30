@@ -115,6 +115,47 @@ fun str_contains(haystack: string, needle: string) -> bool {
 }
 
 // ============================================================================
+// Vector Functions (low-level implementation using heap intrinsics)
+// ============================================================================
+
+// Internal implementation of vec_push. The vec_push builtin calls this function.
+// Vector layout: [ptr, len, cap]
+fun vec_push_any(v, value) {
+    var data_ptr = __heap_load(v, 0);
+    var current_len = __heap_load(v, 1);
+    var current_cap = __heap_load(v, 2);
+
+    if current_len >= current_cap {
+        // Need to grow
+        var new_cap = current_cap * 2;
+        if new_cap < 8 {
+            new_cap = 8;
+        }
+        let new_data = __alloc_heap(new_cap);
+
+        // Copy old data if data_ptr is not null
+        if data_ptr != nil {
+            var i = 0;
+            while i < current_len {
+                let val = __heap_load(data_ptr, i);
+                __heap_store(new_data, i, val);
+                i = i + 1;
+            }
+        }
+
+        // Update vector header
+        __heap_store(v, 0, new_data);
+        __heap_store(v, 2, new_cap);
+        data_ptr = new_data;
+    }
+
+    // Store the value at data_ptr[current_len]
+    __heap_store(data_ptr, current_len, value);
+    // Increment len
+    __heap_store(v, 1, current_len + 1);
+}
+
+// ============================================================================
 // Parsing Functions
 // ============================================================================
 
