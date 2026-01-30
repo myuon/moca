@@ -2395,4 +2395,104 @@ mod tests {
         // Last value should be 0 (success)
         assert!(stack.iter().any(|v| *v == Value::I64(0)));
     }
+
+    #[test]
+    #[ignore] // Requires network access
+    fn test_syscall_http_get_example_com() {
+        // First, check if network is available by trying to connect
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let can_connect = TcpStream::connect_timeout(
+            &"93.184.216.34:80".parse().unwrap(), // example.com IP
+            Duration::from_secs(5),
+        )
+        .is_ok();
+
+        if !can_connect {
+            eprintln!("Skipping test: cannot connect to example.com (network unavailable)");
+            return;
+        }
+
+        // E2E test: socket -> connect -> write(HTTP GET) -> read -> close
+        let http_request = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
+        let request_len = http_request.len() as i64;
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "__main__".to_string(),
+                arity: 0,
+                locals_count: 2,
+                code: vec![
+                    // fd = socket(AF_INET=2, SOCK_STREAM=1)
+                    Op::PushInt(2),    // AF_INET
+                    Op::PushInt(1),    // SOCK_STREAM
+                    Op::Syscall(5, 2), // syscall_socket
+                    Op::SetL(0),       // store fd at local 0
+                    // connect(fd, "example.com", 80)
+                    Op::GetL(0),       // push fd
+                    Op::PushString(0), // host = "example.com"
+                    Op::PushInt(80),   // port
+                    Op::Syscall(6, 3), // syscall_connect
+                    Op::Pop,           // discard connect result
+                    // write(fd, request, len)
+                    Op::GetL(0),              // push fd
+                    Op::PushString(1),        // request string
+                    Op::PushInt(request_len), // count
+                    Op::Syscall(1, 3),        // syscall_write
+                    Op::Pop,                  // discard write result
+                    // response = read(fd, 4096)
+                    Op::GetL(0),       // push fd
+                    Op::PushInt(4096), // count
+                    Op::Syscall(4, 2), // syscall_read
+                    Op::SetL(1),       // store response at local 1
+                    // close(fd)
+                    Op::GetL(0),       // push fd
+                    Op::Syscall(3, 1), // syscall_close
+                    Op::Pop,           // discard close result
+                    // return response
+                    Op::GetL(1), // push response ref
+                ],
+                stackmap: None,
+            },
+            strings: vec!["example.com".to_string(), http_request.to_string()],
+            debug: None,
+        };
+
+        let mut vm = VM::new();
+        let result = vm.run(&chunk);
+        assert!(result.is_ok(), "HTTP GET test failed: {:?}", result);
+
+        // Debug: print stack contents
+        eprintln!("Stack after run: {:?}", vm.stack);
+
+        // Find the response ref in the stack
+        let response_ref = vm
+            .stack
+            .iter()
+            .rev()
+            .find_map(|v| {
+                if let Value::Ref(r) = v {
+                    Some(*r)
+                } else {
+                    None
+                }
+            })
+            .expect("Expected to find a Ref value in stack");
+
+        let response = vm
+            .heap
+            .get(response_ref)
+            .unwrap()
+            .slots_to_string()
+            .unwrap();
+
+        // Response should contain HTTP status and HTML
+        assert!(
+            response.contains("HTTP/1") || response.contains("<!doctype html>"),
+            "Response should contain HTTP or HTML: {}",
+            &response[..response.len().min(200)]
+        );
+    }
 }
