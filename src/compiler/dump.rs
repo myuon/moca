@@ -1383,6 +1383,7 @@ impl<'a> Disassembler<'a> {
             // Heap slot operations
             Op::AllocHeap(n) => self.output.push_str(&format!("AllocHeap {}", n)),
             Op::AllocHeapDyn => self.output.push_str("AllocHeapDyn"),
+            Op::AllocHeapDynSimple => self.output.push_str("AllocHeapDynSimple"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),

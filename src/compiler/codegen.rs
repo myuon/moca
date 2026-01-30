@@ -198,13 +198,16 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector assign: vec[i] = v -> HeapLoad(0) to get data ptr, then HeapStoreDyn
-                    // Vector data layout: [elem0, elem1, ...] - no length prefix
-                    self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(0)); // Get data pointer
-                    self.compile_expr(index, ops)?;
-                    self.compile_expr(value, ops)?;
-                    ops.push(Op::HeapStoreDyn);
+                    // Vector assign: call vec_set_any from stdlib
+                    if let Some(&func_idx) = self.function_indices.get("vec_set_any") {
+                        self.compile_expr(object, ops)?;
+                        self.compile_expr(index, ops)?;
+                        self.compile_expr(value, ops)?;
+                        ops.push(Op::Call(func_idx, 3));
+                        ops.push(Op::Pop); // Discard nil return value
+                    } else {
+                        return Err("vec_set_any not found in stdlib".to_string());
+                    }
                 } else {
                     // Array/struct assign: direct HeapStoreDyn with +1 offset for length
                     self.compile_expr(object, ops)?;
@@ -470,12 +473,14 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector access: vec[i] -> HeapLoad(0) to get data ptr, then HeapLoadDyn
-                    // Vector data layout: [elem0, elem1, ...] - no length prefix
-                    self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(0)); // Get data pointer
-                    self.compile_expr(index, ops)?;
-                    ops.push(Op::HeapLoadDyn);
+                    // Vector access: call vec_get_any from stdlib
+                    if let Some(&func_idx) = self.function_indices.get("vec_get_any") {
+                        self.compile_expr(object, ops)?;
+                        self.compile_expr(index, ops)?;
+                        ops.push(Op::Call(func_idx, 2));
+                    } else {
+                        return Err("vec_get_any not found in stdlib".to_string());
+                    }
                 } else {
                     // Array/struct access: direct HeapLoadDyn with +1 offset for length
                     self.compile_expr(object, ops)?;
@@ -620,15 +625,27 @@ impl Codegen {
                         if args.len() != 2 {
                             return Err("push takes exactly 2 arguments".to_string());
                         }
-                        self.compile_vector_push(&args[0], &args[1], ops)?;
-                        // push returns nil
-                        ops.push(Op::PushNull);
+                        // Call vec_push_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_push_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            self.compile_expr(&args[1], ops)?;
+                            ops.push(Op::Call(func_idx, 2));
+                            // vec_push_any returns nil implicitly
+                        } else {
+                            return Err("vec_push_any not found in stdlib".to_string());
+                        }
                     }
                     "pop" => {
                         if args.len() != 1 {
                             return Err("pop takes exactly 1 argument".to_string());
                         }
-                        self.compile_vector_pop(&args[0], ops)?;
+                        // Call vec_pop_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_pop_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::Call(func_idx, 1));
+                        } else {
+                            return Err("vec_pop_any not found in stdlib".to_string());
+                        }
                     }
                     "type_of" => {
                         if args.len() != 1 {
@@ -688,17 +705,17 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ThreadJoin);
                     }
-                    // Vector builtins
-                    // Vector layout: Slots[ptr, len, cap]
+                    // Vector builtins - delegate to stdlib functions
                     "vec_new" => {
                         if !args.is_empty() {
                             return Err("vec_new takes no arguments".to_string());
                         }
-                        // Create empty vector: [ptr=null, len=0, cap=0]
-                        ops.push(Op::PushNull); // ptr = null
-                        ops.push(Op::PushInt(0)); // len = 0
-                        ops.push(Op::PushInt(0)); // cap = 0
-                        ops.push(Op::AllocHeap(3));
+                        // Call vec_new_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_new_any") {
+                            ops.push(Op::Call(func_idx, 0));
+                        } else {
+                            return Err("vec_new_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_with_capacity" => {
                         if args.len() != 1 {
@@ -706,12 +723,14 @@ impl Codegen {
                                 "vec_with_capacity takes exactly 1 argument (capacity)".to_string()
                             );
                         }
-                        // Create vector with capacity: [ptr=null, len=0, cap=n]
-                        // Note: data is not pre-allocated, will be allocated on first push
-                        ops.push(Op::PushNull); // ptr = null
-                        ops.push(Op::PushInt(0)); // len = 0
-                        self.compile_expr(&args[0], ops)?; // cap = user specified
-                        ops.push(Op::AllocHeap(3));
+                        // Call vec_with_capacity_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_with_capacity_any")
+                        {
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::Call(func_idx, 1));
+                        } else {
+                            return Err("vec_with_capacity_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_push" => {
                         if args.len() != 2 {
@@ -719,21 +738,34 @@ impl Codegen {
                                 "vec_push takes exactly 2 arguments (vector, value)".to_string()
                             );
                         }
-                        self.compile_vector_push(&args[0], &args[1], ops)?;
-                        ops.push(Op::PushNull); // vec_push returns nil
+                        // Call vec_push_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_push_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            self.compile_expr(&args[1], ops)?;
+                            ops.push(Op::Call(func_idx, 2));
+                            // vec_push_any returns nil implicitly, no need to push
+                        } else {
+                            return Err("vec_push_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_pop" => {
                         if args.len() != 1 {
                             return Err("vec_pop takes exactly 1 argument (vector)".to_string());
                         }
-                        self.compile_vector_pop(&args[0], ops)?;
+                        // Call vec_pop_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_pop_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            ops.push(Op::Call(func_idx, 1));
+                        } else {
+                            return Err("vec_pop_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_len" => {
                         if args.len() != 1 {
                             return Err("vec_len takes exactly 1 argument (vector)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(1)); // slot 1 is length
+                        ops.push(Op::HeapLoad(2)); // slot 2 is length (after field_count, ptr)
                     }
                     "vec_capacity" => {
                         if args.len() != 1 {
@@ -742,7 +774,7 @@ impl Codegen {
                             );
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(2)); // slot 2 is capacity
+                        ops.push(Op::HeapLoad(3)); // slot 3 is capacity
                     }
                     "vec_get" => {
                         if args.len() != 2 {
@@ -750,26 +782,64 @@ impl Codegen {
                                 "vec_get takes exactly 2 arguments (vector, index)".to_string()
                             );
                         }
-                        // Vector layout: [ptr, len, cap]
-                        // Load data ptr, then index into it
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(0)); // get data ptr
-                        self.compile_expr(&args[1], ops)?;
-                        ops.push(Op::HeapLoadDyn);
+                        // Call vec_get_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_get_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            self.compile_expr(&args[1], ops)?;
+                            ops.push(Op::Call(func_idx, 2));
+                        } else {
+                            return Err("vec_get_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_set" => {
                         if args.len() != 3 {
                             return Err("vec_set takes exactly 3 arguments (vector, index, value)"
                                 .to_string());
                         }
-                        // Vector layout: [ptr, len, cap]
-                        // Load data ptr, then store at index
+                        // Call vec_set_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_set_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            self.compile_expr(&args[1], ops)?;
+                            self.compile_expr(&args[2], ops)?;
+                            ops.push(Op::Call(func_idx, 3));
+                            // vec_set_any returns nil implicitly
+                        } else {
+                            return Err("vec_set_any not found in stdlib".to_string());
+                        }
+                    }
+                    // Low-level heap intrinsics (for stdlib implementation)
+                    "__heap_load" => {
+                        // __heap_load(ref, idx) -> value at ref[idx]
+                        if args.len() != 2 {
+                            return Err(
+                                "__heap_load takes exactly 2 arguments (ref, index)".to_string()
+                            );
+                        }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(0)); // get data ptr
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::HeapLoadDyn);
+                    }
+                    "__heap_store" => {
+                        // __heap_store(ref, idx, val) -> nil, stores val at ref[idx]
+                        if args.len() != 3 {
+                            return Err(
+                                "__heap_store takes exactly 3 arguments (ref, index, value)"
+                                    .to_string(),
+                            );
+                        }
+                        self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
                         self.compile_expr(&args[2], ops)?;
                         ops.push(Op::HeapStoreDyn);
-                        ops.push(Op::PushNull); // vec_set returns nil
+                        ops.push(Op::PushNull); // returns nil
+                    }
+                    "__alloc_heap" => {
+                        // __alloc_heap(size) -> ref to newly allocated heap object with size slots
+                        if args.len() != 1 {
+                            return Err("__alloc_heap takes exactly 1 argument (size)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::AllocHeapDynSimple);
                     }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }
@@ -1054,258 +1124,8 @@ impl Codegen {
             })
     }
 
-    /// Compile vector pop operation to low-level operations.
-    /// Vector layout: [ptr, len, cap]
-    /// Stack effect: [] -> [value]
-    fn compile_vector_pop(
-        &mut self,
-        vec_expr: &ResolvedExpr,
-        ops: &mut Vec<Op>,
-    ) -> Result<(), String> {
-        // 1. Get vec reference
-        self.compile_expr(vec_expr, ops)?; // [vec]
-
-        // 2. Get ptr and len
-        ops.push(Op::Dup); // [vec, vec]
-        ops.push(Op::HeapLoad(0)); // [vec, ptr]
-        ops.push(Op::Swap); // [ptr, vec]
-        ops.push(Op::Dup); // [ptr, vec, vec]
-        ops.push(Op::HeapLoad(1)); // [ptr, vec, len]
-
-        // 3. Check if len == 0
-        ops.push(Op::Dup); // [ptr, vec, len, len]
-        ops.push(Op::PushInt(0)); // [ptr, vec, len, len, 0]
-        ops.push(Op::Eq); // [ptr, vec, len, is_empty]
-        let jmp_not_empty = ops.len();
-        ops.push(Op::JmpIfFalse(0)); // [ptr, vec, len] placeholder
-
-        // Error path: pop from empty vector
-        ops.push(Op::Pop); // [ptr, vec]
-        ops.push(Op::Pop); // [ptr]
-        ops.push(Op::Pop); // []
-        let err_idx = self.add_string("cannot pop from empty vector".to_string());
-        ops.push(Op::PushString(err_idx)); // [error]
-        ops.push(Op::Throw);
-
-        // Success path: is_empty == false
-        ops[jmp_not_empty] = Op::JmpIfFalse(ops.len());
-
-        // Stack: [ptr, vec, len]
-        // 4. Calculate new_len = len - 1 and get value
-        ops.push(Op::PushInt(1)); // [ptr, vec, len, 1]
-        ops.push(Op::Sub); // [ptr, vec, new_len]
-        ops.push(Op::Pick(2)); // [ptr, vec, new_len, ptr]
-        ops.push(Op::Pick(1)); // [ptr, vec, new_len, ptr, new_len]
-        ops.push(Op::HeapLoadDyn); // [ptr, vec, new_len, value]
-
-        // 5. Update vec.len = new_len
-        ops.push(Op::Swap); // [ptr, vec, value, new_len]
-        ops.push(Op::Pick(2)); // [ptr, vec, value, new_len, vec]
-        ops.push(Op::Swap); // [ptr, vec, value, vec, new_len]
-        ops.push(Op::HeapStore(1)); // [ptr, vec, value]
-
-        // 6. Cleanup: keep only value
-        ops.push(Op::Swap); // [ptr, value, vec]
-        ops.push(Op::Pop); // [ptr, value]
-        ops.push(Op::Swap); // [value, ptr]
-        ops.push(Op::Pop); // [value]
-
-        Ok(())
-    }
-
-    /// Compile vector push operation to low-level operations.
-    /// Vector layout: [ptr, len, cap]
-    /// Stack effect: [] -> []
-    fn compile_vector_push(
-        &mut self,
-        vec_expr: &ResolvedExpr,
-        value_expr: &ResolvedExpr,
-        ops: &mut Vec<Op>,
-    ) -> Result<(), String> {
-        // 1. Get vec and value
-        self.compile_expr(vec_expr, ops)?; // [vec]
-        self.compile_expr(value_expr, ops)?; // [vec, value]
-
-        // 2. Get len and cap from vec
-        ops.push(Op::Pick(1)); // [vec, value, vec]
-        ops.push(Op::HeapLoad(1)); // [vec, value, len]
-        ops.push(Op::Pick(2)); // [vec, value, len, vec]
-        ops.push(Op::HeapLoad(2)); // [vec, value, len, cap]
-
-        // 3. Check if len >= cap (need to grow)
-        ops.push(Op::Pick(1)); // [vec, value, len, cap, len]
-        ops.push(Op::Pick(1)); // [vec, value, len, cap, len, cap]
-        ops.push(Op::Ge); // [vec, value, len, cap, need_grow]
-        let jmp_no_grow = ops.len();
-        ops.push(Op::JmpIfFalse(0)); // [vec, value, len, cap] placeholder
-
-        // === GROW PATH ===
-        // Stack: [vec, value, len, cap]
-
-        // Calculate new_cap = max(8, cap * 2)
-        ops.push(Op::Dup); // [vec, value, len, cap, cap]
-        ops.push(Op::PushInt(2)); // [vec, value, len, cap, cap, 2]
-        ops.push(Op::Mul); // [vec, value, len, cap, cap*2]
-        ops.push(Op::PushInt(8)); // [vec, value, len, cap, cap*2, 8]
-        // max(cap*2, 8): if cap*2 >= 8 use cap*2, else use 8
-        ops.push(Op::Pick(1)); // [vec, value, len, cap, cap*2, 8, cap*2]
-        ops.push(Op::Pick(1)); // [vec, value, len, cap, cap*2, 8, cap*2, 8]
-        ops.push(Op::Ge); // [vec, value, len, cap, cap*2, 8, cap*2>=8]
-        let jmp_use_doubled = ops.len();
-        ops.push(Op::JmpIfTrue(0)); // placeholder
-        // use 8
-        ops.push(Op::Swap); // [vec, value, len, cap, 8, cap*2]
-        ops.push(Op::Pop); // [vec, value, len, cap, 8]
-        let jmp_after_max = ops.len();
-        ops.push(Op::Jmp(0)); // placeholder
-        // use cap*2
-        ops[jmp_use_doubled] = Op::JmpIfTrue(ops.len());
-        ops.push(Op::Pop); // [vec, value, len, cap, cap*2]
-        ops[jmp_after_max] = Op::Jmp(ops.len());
-        // Stack: [vec, value, len, cap, new_cap]
-
-        // Drop old cap, we don't need it anymore
-        ops.push(Op::Swap); // [vec, value, len, new_cap, cap]
-        ops.push(Op::Pop); // [vec, value, len, new_cap]
-
-        // STRATEGY: Count UP from 0 to new_cap using PickDyn to access new_cap
-        // Stack layout during loop: [vec, value, len, new_cap, null*i, i]
-        // new_cap is at depth (i + 1) which changes as we push nulls
-
-        // Stack: [vec, value, len, new_cap]
-        ops.push(Op::PushInt(0)); // [vec, value, len, new_cap, i=0]
-
-        let alloc_loop_start = ops.len();
-        // Check: i < new_cap?
-        // new_cap is at depth (i + 1) from top
-        // Stack: [vec, value, len, new_cap, null*i, i]
-        ops.push(Op::Dup); // [..., i, i]
-        ops.push(Op::Dup); // [..., i, i, i]
-        ops.push(Op::PushInt(2)); // [..., i, i, i, 2]
-        ops.push(Op::Add); // [..., i, i, i+2]
-        ops.push(Op::PickDyn); // [..., i, i, new_cap]
-        ops.push(Op::Lt); // [..., i, i<new_cap]
-        let alloc_loop_exit = ops.len();
-        ops.push(Op::JmpIfFalse(0)); // placeholder
-        // i < new_cap: push null below i, increment i
-        ops.push(Op::PushNull); // [..., i, null]
-        ops.push(Op::Swap); // [..., null, i]
-        ops.push(Op::PushInt(1)); // [..., null, i, 1]
-        ops.push(Op::Add); // [..., null, i+1]
-        ops.push(Op::Jmp(alloc_loop_start));
-        ops[alloc_loop_exit] = Op::JmpIfFalse(ops.len());
-        // Stack: [vec, value, len, new_cap, null*new_cap, i=new_cap]
-        // This is exactly what AllocHeapDyn expects: [elements..., size]
-
-        // Now call AllocHeapDyn
-        ops.push(Op::AllocHeapDyn); // [vec, value, len, new_cap, new_ptr]
-
-        // Copy old data if exists
-        // Stack: [vec, value, len, new_cap, new_ptr]
-        // Get old ptr
-        ops.push(Op::Pick(4)); // [vec, value, len, new_cap, new_ptr, vec]
-        ops.push(Op::HeapLoad(0)); // [vec, value, len, new_cap, new_ptr, old_ptr]
-
-        // Check if old_ptr is null
-        ops.push(Op::Dup); // [vec, value, len, new_cap, new_ptr, old_ptr, old_ptr]
-        ops.push(Op::PushNull); // [vec, value, len, new_cap, new_ptr, old_ptr, old_ptr, null]
-        ops.push(Op::Eq); // [vec, value, len, new_cap, new_ptr, old_ptr, is_null]
-        let jmp_skip_copy = ops.len();
-        ops.push(Op::JmpIfTrue(0)); // placeholder
-
-        // Copy loop: i = 0; while i < len, new_ptr[i] = old_ptr[i], i++
-        // Stack: [vec, value, len, new_cap, new_ptr, old_ptr]
-        ops.push(Op::PushInt(0)); // [vec, value, len, new_cap, new_ptr, old_ptr, i=0]
-        let copy_loop_start = ops.len();
-        ops.push(Op::Dup); // [..., old_ptr, i, i]
-        ops.push(Op::Pick(5)); // [..., old_ptr, i, i, len]
-        ops.push(Op::Lt); // [..., old_ptr, i, i<len]
-        let copy_loop_exit = ops.len();
-        ops.push(Op::JmpIfFalse(0)); // placeholder
-
-        // new_ptr[i] = old_ptr[i]
-        ops.push(Op::Pick(2)); // [..., old_ptr, i, new_ptr]
-        ops.push(Op::Pick(1)); // [..., old_ptr, i, new_ptr, i]
-        ops.push(Op::Pick(3)); // [..., old_ptr, i, new_ptr, i, old_ptr]
-        ops.push(Op::Pick(1)); // [..., old_ptr, i, new_ptr, i, old_ptr, i]
-        ops.push(Op::HeapLoadDyn); // [..., old_ptr, i, new_ptr, i, val]
-        ops.push(Op::HeapStoreDyn); // [..., old_ptr, i]
-
-        ops.push(Op::PushInt(1)); // [..., old_ptr, i, 1]
-        ops.push(Op::Add); // [..., old_ptr, i+1]
-        ops.push(Op::Jmp(copy_loop_start));
-        ops[copy_loop_exit] = Op::JmpIfFalse(ops.len());
-        // Stack: [vec, value, len, new_cap, new_ptr, old_ptr, i]
-        ops.push(Op::Pop); // [vec, value, len, new_cap, new_ptr, old_ptr]
-
-        ops[jmp_skip_copy] = Op::JmpIfTrue(ops.len());
-        // Stack: [vec, value, len, new_cap, new_ptr, old_ptr]
-        ops.push(Op::Pop); // [vec, value, len, new_cap, new_ptr]
-
-        // Store new value at new_ptr[len]
-        ops.push(Op::Dup); // [vec, value, len, new_cap, new_ptr, new_ptr]
-        ops.push(Op::Pick(3)); // [vec, value, len, new_cap, new_ptr, new_ptr, len]
-        ops.push(Op::Pick(5)); // [vec, value, len, new_cap, new_ptr, new_ptr, len, value]
-        ops.push(Op::HeapStoreDyn); // [vec, value, len, new_cap, new_ptr]
-
-        // Update vec header: ptr, len+1, new_cap
-        // vec.slots[0] = new_ptr
-        ops.push(Op::Pick(4)); // [vec, value, len, new_cap, new_ptr, vec]
-        ops.push(Op::Pick(1)); // [vec, value, len, new_cap, new_ptr, vec, new_ptr]
-        ops.push(Op::HeapStore(0)); // [vec, value, len, new_cap, new_ptr]
-
-        // vec.slots[1] = len + 1
-        ops.push(Op::Pick(4)); // [vec, value, len, new_cap, new_ptr, vec]
-        ops.push(Op::Pick(3)); // [vec, value, len, new_cap, new_ptr, vec, len]
-        ops.push(Op::PushInt(1)); // [vec, value, len, new_cap, new_ptr, vec, len, 1]
-        ops.push(Op::Add); // [vec, value, len, new_cap, new_ptr, vec, len+1]
-        ops.push(Op::HeapStore(1)); // [vec, value, len, new_cap, new_ptr]
-
-        // vec.slots[2] = new_cap
-        ops.push(Op::Pick(4)); // [vec, value, len, new_cap, new_ptr, vec]
-        ops.push(Op::Pick(2)); // [vec, value, len, new_cap, new_ptr, vec, new_cap]
-        ops.push(Op::HeapStore(2)); // [vec, value, len, new_cap, new_ptr]
-
-        // Cleanup grow path
-        ops.push(Op::Pop); // [vec, value, len, new_cap]
-        ops.push(Op::Pop); // [vec, value, len]
-        ops.push(Op::Pop); // [vec, value]
-        ops.push(Op::Pop); // [vec]
-        ops.push(Op::Pop); // []
-        let jmp_end = ops.len();
-        ops.push(Op::Jmp(0)); // placeholder
-
-        // === NO GROW PATH ===
-        ops[jmp_no_grow] = Op::JmpIfFalse(ops.len());
-        // Stack: [vec, value, len, cap]
-        ops.push(Op::Pop); // [vec, value, len] - drop cap
-
-        // Get ptr
-        ops.push(Op::Pick(2)); // [vec, value, len, vec]
-        ops.push(Op::HeapLoad(0)); // [vec, value, len, ptr]
-
-        // Store value at ptr[len]
-        ops.push(Op::Dup); // [vec, value, len, ptr, ptr]
-        ops.push(Op::Pick(2)); // [vec, value, len, ptr, ptr, len]
-        ops.push(Op::Pick(4)); // [vec, value, len, ptr, ptr, len, value]
-        ops.push(Op::HeapStoreDyn); // [vec, value, len, ptr]
-        ops.push(Op::Pop); // [vec, value, len]
-
-        // Update vec.slots[1] = len + 1
-        ops.push(Op::PushInt(1)); // [vec, value, len, 1]
-        ops.push(Op::Add); // [vec, value, len+1]
-        ops.push(Op::Pick(2)); // [vec, value, len+1, vec]
-        ops.push(Op::Swap); // [vec, value, vec, len+1]
-        ops.push(Op::HeapStore(1)); // [vec, value]
-
-        // Cleanup
-        ops.push(Op::Pop); // [vec]
-        ops.push(Op::Pop); // []
-
-        ops[jmp_end] = Op::Jmp(ops.len());
-
-        Ok(())
-    }
+    // compile_vector_push and compile_vector_pop have been removed
+    // vec_push/vec_pop now call vec_push_any/vec_pop_any from stdlib
 }
 
 #[cfg(test)]

@@ -1571,6 +1571,43 @@ impl TypeChecker {
                 self.infer_expr(&args[2], env);
                 Some(Type::Nil)
             }
+            // Low-level heap intrinsics (for stdlib implementation)
+            "__heap_load" => {
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        "__heap_load expects 2 arguments (ref, index)",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Any)
+            }
+            "__heap_store" => {
+                if args.len() != 3 {
+                    self.errors.push(TypeError::new(
+                        "__heap_store expects 3 arguments (ref, index, value)",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Nil)
+            }
+            "__alloc_heap" => {
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        "__alloc_heap expects 1 argument (size)",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Any) // Returns a reference (opaque)
+            }
             _ => None,
         }
     }

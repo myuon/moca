@@ -293,6 +293,7 @@ const OP_SWAP: u8 = 79;
 const OP_PICK: u8 = 80;
 const OP_ALLOC_HEAP_DYN: u8 = 81;
 const OP_PICK_DYN: u8 = 82;
+const OP_ALLOC_HEAP_DYN_SIMPLE: u8 = 83;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -399,6 +400,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *size as u32)?;
         }
         Op::AllocHeapDyn => w.write_all(&[OP_ALLOC_HEAP_DYN])?,
+        Op::AllocHeapDynSimple => w.write_all(&[OP_ALLOC_HEAP_DYN_SIMPLE])?,
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -476,6 +478,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_THREAD_JOIN => Op::ThreadJoin,
         OP_ALLOC_HEAP => Op::AllocHeap(read_u32(r)? as usize),
         OP_ALLOC_HEAP_DYN => Op::AllocHeapDyn,
+        OP_ALLOC_HEAP_DYN_SIMPLE => Op::AllocHeapDynSimple,
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,

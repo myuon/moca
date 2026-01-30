@@ -93,7 +93,8 @@ pub enum Op {
     // ========================================
     // Dynamic heap allocation
     // ========================================
-    AllocHeapDyn, // Allocate heap with dynamic size: [size, v1..vN] -> [ref]
+    AllocHeapDyn,       // Allocate heap with dynamic size: [size, v1..vN] -> [ref]
+    AllocHeapDynSimple, // Allocate heap with dynamic size, null-initialized: [size] -> [ref]
 
     // VectorPush and VectorPop removed - now expanded by compiler to low-level ops
 

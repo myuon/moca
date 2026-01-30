@@ -115,6 +115,100 @@ fun str_contains(haystack: string, needle: string) -> bool {
 }
 
 // ============================================================================
+// Vector Functions (low-level implementation using heap intrinsics)
+// ============================================================================
+
+// VectorAny struct - compatible with vector internal layout.
+// This allows treating vectors as structs for more natural field access.
+// Layout: [field_count=3, ptr, len, cap]
+struct VectorAny {
+    ptr: int,
+    len: int,
+    cap: int
+}
+
+// Internal implementation of vec_new. Creates an empty vector.
+// Uses VectorAny struct literal for cleaner code.
+fun vec_new_any() {
+    return VectorAny { ptr: 0, len: 0, cap: 0 };
+}
+
+// Internal implementation of vec_with_capacity. Creates a vector with pre-set capacity.
+// Uses VectorAny struct literal for cleaner code.
+fun vec_with_capacity_any(cap) {
+    return VectorAny { ptr: 0, len: 0, cap: cap };
+}
+
+// Internal implementation of vec_push. The vec_push builtin calls this function.
+// Uses VectorAny-compatible field access (v.ptr, v.len, v.cap).
+fun vec_push_any(v, value) {
+    var data_ptr = v.ptr;
+    var current_len = v.len;
+    var current_cap = v.cap;
+
+    if current_len >= current_cap {
+        // Need to grow
+        var new_cap = current_cap * 2;
+        if new_cap < 8 {
+            new_cap = 8;
+        }
+        let new_data = __alloc_heap(new_cap);
+
+        // Copy old data if data_ptr is not null
+        if data_ptr != nil {
+            var i = 0;
+            while i < current_len {
+                let val = __heap_load(data_ptr, i);
+                __heap_store(new_data, i, val);
+                i = i + 1;
+            }
+        }
+
+        // Update vector header
+        v.ptr = new_data;
+        v.cap = new_cap;
+        data_ptr = new_data;
+    }
+
+    // Store the value at data_ptr[current_len]
+    __heap_store(data_ptr, current_len, value);
+    // Increment len
+    v.len = current_len + 1;
+}
+
+// Internal implementation of vec_pop. The vec_pop builtin calls this function.
+// Uses VectorAny-compatible field access.
+// Returns the popped value, throws if vector is empty.
+fun vec_pop_any(v) {
+    let current_len = v.len;
+
+    if current_len == 0 {
+        throw "cannot pop from empty vector";
+    }
+
+    let new_len = current_len - 1;
+    let data_ptr = v.ptr;
+    let value = __heap_load(data_ptr, new_len);
+
+    // Update len
+    v.len = new_len;
+
+    return value;
+}
+
+// Internal implementation of vec_get. The vec_get builtin calls this function.
+// Uses VectorAny-compatible field access.
+fun vec_get_any(v, index) {
+    return __heap_load(v.ptr, index);
+}
+
+// Internal implementation of vec_set. The vec_set builtin calls this function.
+// Uses VectorAny-compatible field access.
+fun vec_set_any(v, index, value) {
+    __heap_store(v.ptr, index, value);
+}
+
+// ============================================================================
 // Parsing Functions
 // ============================================================================
 
