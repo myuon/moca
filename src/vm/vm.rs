@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -74,6 +75,10 @@ pub struct VM {
     output: Box<dyn Write>,
     /// Output stream for stderr
     stderr: Box<dyn Write>,
+    /// File descriptor table for open files (fd >= 3)
+    file_descriptors: HashMap<i64, File>,
+    /// Next available file descriptor
+    next_fd: i64,
 }
 
 impl VM {
@@ -131,6 +136,8 @@ impl VM {
             jit_compile_count: 0,
             output,
             stderr,
+            file_descriptors: HashMap::new(),
+            next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
         }
     }
 
