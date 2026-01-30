@@ -128,25 +128,15 @@ struct VectorAny {
 }
 
 // Internal implementation of vec_new. Creates an empty vector.
-// Vector layout: [field_count=3, ptr, len, cap] (struct-compatible)
+// Uses VectorAny struct literal for cleaner code.
 fun vec_new_any() {
-    let v = __alloc_heap(4);
-    __heap_store(v, 0, 3);   // field_count = 3
-    // ptr is already nil (null-initialized by __alloc_heap)
-    __heap_store(v, 2, 0);   // len = 0
-    __heap_store(v, 3, 0);   // cap = 0
-    return v;
+    return VectorAny { ptr: 0, len: 0, cap: 0 };
 }
 
 // Internal implementation of vec_with_capacity. Creates a vector with pre-set capacity.
-// Vector layout: [field_count=3, ptr, len, cap] (struct-compatible)
+// Uses VectorAny struct literal for cleaner code.
 fun vec_with_capacity_any(cap) {
-    let v = __alloc_heap(4);
-    __heap_store(v, 0, 3);   // field_count = 3
-    // ptr is nil - data will be allocated on first push
-    __heap_store(v, 2, 0);   // len = 0
-    __heap_store(v, 3, cap); // cap = user specified
-    return v;
+    return VectorAny { ptr: 0, len: 0, cap: cap };
 }
 
 // Internal implementation of vec_push. The vec_push builtin calls this function.
