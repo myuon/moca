@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
@@ -77,6 +78,8 @@ pub struct VM {
     stderr: Box<dyn Write>,
     /// File descriptor table for open files (fd >= 3)
     file_descriptors: HashMap<i64, File>,
+    /// Socket descriptor table for TCP connections (fd >= 3)
+    socket_descriptors: HashMap<i64, TcpStream>,
     /// Next available file descriptor
     next_fd: i64,
 }
@@ -137,6 +140,7 @@ impl VM {
             output,
             stderr,
             file_descriptors: HashMap::new(),
+            socket_descriptors: HashMap::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
         }
     }
