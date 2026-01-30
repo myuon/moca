@@ -745,9 +745,7 @@ impl Codegen {
                             ops.push(Op::Call(func_idx, 2));
                             // vec_push_any returns nil implicitly, no need to push
                         } else {
-                            return Err(
-                                "vec_push_any not found in stdlib".to_string()
-                            );
+                            return Err("vec_push_any not found in stdlib".to_string());
                         }
                     }
                     "vec_pop" => {
@@ -826,7 +824,7 @@ impl Codegen {
                         if args.len() != 3 {
                             return Err(
                                 "__heap_store takes exactly 3 arguments (ref, index, value)"
-                                    .to_string()
+                                    .to_string(),
                             );
                         }
                         self.compile_expr(&args[0], ops)?;
@@ -838,9 +836,7 @@ impl Codegen {
                     "__alloc_heap" => {
                         // __alloc_heap(size) -> ref to newly allocated heap object with size slots
                         if args.len() != 1 {
-                            return Err(
-                                "__alloc_heap takes exactly 1 argument (size)".to_string()
-                            );
+                            return Err("__alloc_heap takes exactly 1 argument (size)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::AllocHeapDynSimple);
