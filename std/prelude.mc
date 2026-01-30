@@ -184,6 +184,20 @@ fun vec_pop_any(v) {
     return value;
 }
 
+// Internal implementation of vec_get. The vec_get builtin calls this function.
+// Vector layout: [field_count=3, ptr, len, cap] (struct-compatible)
+fun vec_get_any(v, index) {
+    let data_ptr = __heap_load(v, 1);
+    return __heap_load(data_ptr, index);
+}
+
+// Internal implementation of vec_set. The vec_set builtin calls this function.
+// Vector layout: [field_count=3, ptr, len, cap] (struct-compatible)
+fun vec_set_any(v, index, value) {
+    let data_ptr = __heap_load(v, 1);
+    __heap_store(data_ptr, index, value);
+}
+
 // ============================================================================
 // Parsing Functions
 // ============================================================================

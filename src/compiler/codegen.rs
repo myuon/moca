@@ -198,13 +198,16 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector assign: vec[i] = v -> HeapLoad(1) to get data ptr, then HeapStoreDyn
-                    // Vector layout: [field_count=3, ptr, len, cap] - data ptr at slot 1
-                    self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(1)); // Get data pointer (slot 1)
-                    self.compile_expr(index, ops)?;
-                    self.compile_expr(value, ops)?;
-                    ops.push(Op::HeapStoreDyn);
+                    // Vector assign: call vec_set_any from stdlib
+                    if let Some(&func_idx) = self.function_indices.get("vec_set_any") {
+                        self.compile_expr(object, ops)?;
+                        self.compile_expr(index, ops)?;
+                        self.compile_expr(value, ops)?;
+                        ops.push(Op::Call(func_idx, 3));
+                        ops.push(Op::Pop); // Discard nil return value
+                    } else {
+                        return Err("vec_set_any not found in stdlib".to_string());
+                    }
                 } else {
                     // Array/struct assign: direct HeapStoreDyn with +1 offset for length
                     self.compile_expr(object, ops)?;
@@ -470,12 +473,14 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector access: vec[i] -> HeapLoad(1) to get data ptr, then HeapLoadDyn
-                    // Vector layout: [field_count=3, ptr, len, cap] - data ptr at slot 1
-                    self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(1)); // Get data pointer (slot 1)
-                    self.compile_expr(index, ops)?;
-                    ops.push(Op::HeapLoadDyn);
+                    // Vector access: call vec_get_any from stdlib
+                    if let Some(&func_idx) = self.function_indices.get("vec_get_any") {
+                        self.compile_expr(object, ops)?;
+                        self.compile_expr(index, ops)?;
+                        ops.push(Op::Call(func_idx, 2));
+                    } else {
+                        return Err("vec_get_any not found in stdlib".to_string());
+                    }
                 } else {
                     // Array/struct access: direct HeapLoadDyn with +1 offset for length
                     self.compile_expr(object, ops)?;
@@ -779,26 +784,30 @@ impl Codegen {
                                 "vec_get takes exactly 2 arguments (vector, index)".to_string()
                             );
                         }
-                        // Vector layout: [field_count=3, ptr, len, cap]
-                        // Load data ptr, then index into it
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(1)); // get data ptr (slot 1)
-                        self.compile_expr(&args[1], ops)?;
-                        ops.push(Op::HeapLoadDyn);
+                        // Call vec_get_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_get_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            self.compile_expr(&args[1], ops)?;
+                            ops.push(Op::Call(func_idx, 2));
+                        } else {
+                            return Err("vec_get_any not found in stdlib".to_string());
+                        }
                     }
                     "vec_set" => {
                         if args.len() != 3 {
                             return Err("vec_set takes exactly 3 arguments (vector, index, value)"
                                 .to_string());
                         }
-                        // Vector layout: [field_count=3, ptr, len, cap]
-                        // Load data ptr, then store at index
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(1)); // get data ptr (slot 1)
-                        self.compile_expr(&args[1], ops)?;
-                        self.compile_expr(&args[2], ops)?;
-                        ops.push(Op::HeapStoreDyn);
-                        ops.push(Op::PushNull); // vec_set returns nil
+                        // Call vec_set_any from stdlib
+                        if let Some(&func_idx) = self.function_indices.get("vec_set_any") {
+                            self.compile_expr(&args[0], ops)?;
+                            self.compile_expr(&args[1], ops)?;
+                            self.compile_expr(&args[2], ops)?;
+                            ops.push(Op::Call(func_idx, 3));
+                            // vec_set_any returns nil implicitly
+                        } else {
+                            return Err("vec_set_any not found in stdlib".to_string());
+                        }
                     }
                     // Low-level heap intrinsics (for stdlib implementation)
                     "__heap_load" => {
