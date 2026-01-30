@@ -590,18 +590,28 @@ impl Codegen {
                             ops.push(Op::PrintDebug);
                         }
                     }
-                    "syscall_write" => {
-                        // syscall_write(fd, buf, count) -> bytes_written
-                        if args.len() != 3 {
-                            return Err("syscall_write takes exactly 3 arguments (fd, buf, count)"
+                    "__syscall" => {
+                        // __syscall(num, ...args) -> result
+                        // First argument must be a compile-time constant (syscall number)
+                        if args.is_empty() {
+                            return Err("__syscall requires at least 1 argument (syscall number)"
                                 .to_string());
                         }
-                        // Push arguments in order: fd, buf, count
-                        self.compile_expr(&args[0], ops)?;
-                        self.compile_expr(&args[1], ops)?;
-                        self.compile_expr(&args[2], ops)?;
-                        // Syscall 1 = write, 3 arguments
-                        ops.push(Op::Syscall(1, 3));
+                        // Extract syscall number from first argument (must be integer literal)
+                        let syscall_num = match &args[0] {
+                            ResolvedExpr::Int(n) => *n as usize,
+                            _ => {
+                                return Err("__syscall first argument must be an integer literal"
+                                    .to_string());
+                            }
+                        };
+                        // Compile remaining arguments (syscall-specific args)
+                        for arg in args.iter().skip(1) {
+                            self.compile_expr(arg, ops)?;
+                        }
+                        // argc is the number of syscall-specific arguments (excluding syscall number)
+                        let argc = args.len() - 1;
+                        ops.push(Op::Syscall(syscall_num, argc));
                     }
                     "len" => {
                         if args.len() != 1 {

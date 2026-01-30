@@ -1372,29 +1372,27 @@ impl TypeChecker {
                 }
                 Some(Type::Nil)
             }
-            "syscall_write" => {
-                // syscall_write(fd: Int, buf: String, count: Int) -> Int
-                if args.len() != 3 {
+            "__syscall" => {
+                // __syscall(num, ...args) -> Int | String
+                // First argument must be syscall number (Int), rest depends on syscall
+                if args.is_empty() {
                     self.errors.push(TypeError::new(
-                        "syscall_write expects 3 arguments (fd, buf, count)",
+                        "__syscall expects at least 1 argument (syscall number)",
                         span,
                     ));
-                    return Some(Type::Int);
+                    return Some(self.fresh_var());
                 }
-                let fd_type = self.infer_expr(&args[0], env);
-                let buf_type = self.infer_expr(&args[1], env);
-                let count_type = self.infer_expr(&args[2], env);
-
-                if let Err(e) = self.unify(&fd_type, &Type::Int, span) {
+                // First arg must be Int (syscall number)
+                let num_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&num_type, &Type::Int, span) {
                     self.errors.push(e);
                 }
-                if let Err(e) = self.unify(&buf_type, &Type::String, span) {
-                    self.errors.push(e);
+                // Infer types for remaining arguments (no strict checking)
+                for arg in args.iter().skip(1) {
+                    self.infer_expr(arg, env);
                 }
-                if let Err(e) = self.unify(&count_type, &Type::Int, span) {
-                    self.errors.push(e);
-                }
-                Some(Type::Int) // Returns bytes written or -1
+                // Return type depends on syscall (can be Int or String for read)
+                Some(self.fresh_var())
             }
             "len" => {
                 if args.len() != 1 {

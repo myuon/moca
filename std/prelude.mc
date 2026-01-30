@@ -2,19 +2,96 @@
 // This file is automatically loaded when running Moca programs.
 
 // ============================================================================
-// I/O Functions (using syscall_write)
+// Syscall Numbers (internal use)
+// ============================================================================
+// Syscall 1: write(fd, buf, count) -> bytes_written
+// Syscall 2: open(path, flags) -> fd
+// Syscall 3: close(fd) -> status
+// Syscall 4: read(fd, count) -> string
+// Syscall 5: socket(domain, type) -> fd
+// Syscall 6: connect(fd, host, port) -> status
+
+// ============================================================================
+// POSIX-like Constants (as functions to avoid polluting the stack)
+// ============================================================================
+
+// File open flags (Linux-compatible values)
+fun O_RDONLY() -> int { return 0; }    // Read only
+fun O_WRONLY() -> int { return 1; }    // Write only
+fun O_CREAT() -> int { return 64; }    // Create file if not exists
+fun O_TRUNC() -> int { return 512; }   // Truncate existing file
+
+// Socket constants (Linux-compatible values)
+fun AF_INET() -> int { return 2; }     // IPv4 address family
+fun SOCK_STREAM() -> int { return 1; } // TCP socket type
+
+// Error codes (negative return values)
+fun EBADF() -> int { return -1; }           // Bad file descriptor
+fun ENOENT() -> int { return -2; }          // No such file or directory
+fun EACCES() -> int { return -3; }          // Permission denied
+fun ECONNREFUSED() -> int { return -4; }    // Connection refused
+fun ETIMEDOUT() -> int { return -5; }       // Connection timed out
+fun EAFNOSUPPORT() -> int { return -6; }    // Address family not supported
+fun ESOCKTNOSUPPORT() -> int { return -7; } // Socket type not supported
+
+// ============================================================================
+// Low-level I/O Functions (using __syscall)
+// ============================================================================
+
+// Open a file and return a file descriptor.
+// flags: O_RDONLY(), O_WRONLY(), O_CREAT(), O_TRUNC() (can be combined with |)
+// Returns: fd (>=3) on success, negative error code on failure
+fun open(path: string, flags: int) -> int {
+    return __syscall(2, path, flags);
+}
+
+// Write to a file descriptor.
+// fd: 1 = stdout, 2 = stderr, >=3 = file/socket
+// Returns: bytes written on success, negative error code on failure
+fun write(fd: int, buf: string, count: int) -> int {
+    return __syscall(1, fd, buf, count);
+}
+
+// Read from a file descriptor.
+// Returns: string on success, or throws on error
+fun read(fd: int, count: int) -> string {
+    return __syscall(4, fd, count);
+}
+
+// Close a file descriptor.
+// Returns: 0 on success, negative error code on failure
+fun close(fd: int) -> int {
+    return __syscall(3, fd);
+}
+
+// Create a socket.
+// domain: AF_INET() (2) for IPv4
+// typ: SOCK_STREAM() (1) for TCP
+// Returns: socket fd on success, negative error code on failure
+fun socket(domain: int, typ: int) -> int {
+    return __syscall(5, domain, typ);
+}
+
+// Connect a socket to a remote host.
+// Returns: 0 on success, negative error code on failure
+fun connect(fd: int, host: string, port: int) -> int {
+    return __syscall(6, fd, host, port);
+}
+
+// ============================================================================
+// High-level I/O Functions
 // ============================================================================
 
 // Print a string to stdout without a newline.
 fun print_str(s: string) {
     let n = len(s);
-    syscall_write(1, s, n);
+    write(1, s, n);
 }
 
 // Print a string to stderr without a newline.
 fun eprint_str(s: string) {
     let n = len(s);
-    syscall_write(2, s, n);
+    write(2, s, n);
 }
 
 // ============================================================================
