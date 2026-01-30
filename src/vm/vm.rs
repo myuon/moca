@@ -1473,8 +1473,12 @@ impl VM {
                     return Ok(Value::I64(EBADF));
                 }
 
-                // Remove from fd table (File is dropped automatically)
-                if self.file_descriptors.remove(&fd).is_some() {
+                // Remove from fd table (File/TcpStream is dropped automatically)
+                let closed = self.file_descriptors.remove(&fd).is_some()
+                    || self.socket_descriptors.remove(&fd).is_some()
+                    || self.pending_sockets.remove(&fd);
+
+                if closed {
                     Ok(Value::I64(0)) // Success
                 } else {
                     Ok(Value::I64(EBADF)) // Invalid fd
@@ -1531,6 +1535,12 @@ impl VM {
                     file.write_all(bytes_to_write)
                         .map(|_| actual_count as i64)
                         .unwrap_or(EBADF)
+                } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
+                    // Socket from socket_descriptors table
+                    socket
+                        .write_all(bytes_to_write)
+                        .map(|_| actual_count as i64)
+                        .unwrap_or(EBADF)
                 } else {
                     // Invalid fd
                     EBADF
@@ -1558,17 +1568,20 @@ impl VM {
                     return Ok(Value::I64(EBADF));
                 }
 
-                // Get file from fd table
-                let file = match self.file_descriptors.get_mut(&fd) {
-                    Some(f) => f,
-                    None => return Ok(Value::I64(EBADF)),
-                };
-
-                // Read up to count bytes
+                // Read up to count bytes from file or socket
                 let mut buffer = vec![0u8; count as usize];
-                let bytes_read = match file.read(&mut buffer) {
-                    Ok(n) => n,
-                    Err(_) => return Ok(Value::I64(EBADF)),
+                let bytes_read = if let Some(file) = self.file_descriptors.get_mut(&fd) {
+                    match file.read(&mut buffer) {
+                        Ok(n) => n,
+                        Err(_) => return Ok(Value::I64(EBADF)),
+                    }
+                } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
+                    match socket.read(&mut buffer) {
+                        Ok(n) => n,
+                        Err(_) => return Ok(Value::I64(EBADF)),
+                    }
+                } else {
+                    return Ok(Value::I64(EBADF));
                 };
 
                 // Truncate buffer to actual bytes read
