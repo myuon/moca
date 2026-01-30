@@ -2325,4 +2325,74 @@ mod tests {
         // Clean up
         let _ = std::fs::remove_file(&temp_path);
     }
+
+    #[test]
+    fn test_syscall_socket_valid() {
+        // socket(AF_INET=2, SOCK_STREAM=1) should return fd >= 3
+        let stack = run_code(vec![
+            Op::PushInt(2),    // AF_INET
+            Op::PushInt(1),    // SOCK_STREAM
+            Op::Syscall(5, 2), // syscall_socket
+        ])
+        .unwrap();
+        assert_eq!(stack.len(), 1);
+        let fd = stack[0].as_i64().unwrap();
+        assert!(fd >= 3, "socket fd should be >= 3, got {}", fd);
+    }
+
+    #[test]
+    fn test_syscall_socket_invalid_domain() {
+        // socket(999, SOCK_STREAM=1) should return EAFNOSUPPORT (-6)
+        let stack = run_code(vec![
+            Op::PushInt(999),  // Invalid domain
+            Op::PushInt(1),    // SOCK_STREAM
+            Op::Syscall(5, 2), // syscall_socket
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-6)]); // EAFNOSUPPORT
+    }
+
+    #[test]
+    fn test_syscall_socket_invalid_type() {
+        // socket(AF_INET=2, 999) should return ESOCKTNOSUPPORT (-7)
+        let stack = run_code(vec![
+            Op::PushInt(2),    // AF_INET
+            Op::PushInt(999),  // Invalid socket type
+            Op::Syscall(5, 2), // syscall_socket
+        ])
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-7)]); // ESOCKTNOSUPPORT
+    }
+
+    #[test]
+    fn test_syscall_connect_invalid_fd() {
+        // connect(999, "example.com", 80) should return EBADF (-1)
+        let stack = run_code_with_strings(
+            vec![
+                Op::PushInt(999),  // Invalid fd
+                Op::PushString(0), // host
+                Op::PushInt(80),   // port
+                Op::Syscall(6, 3), // syscall_connect
+            ],
+            vec!["example.com".to_string()],
+        )
+        .unwrap();
+        assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
+    }
+
+    #[test]
+    fn test_syscall_close_pending_socket() {
+        // socket() then close() should work
+        let stack = run_code(vec![
+            Op::PushInt(2),    // AF_INET
+            Op::PushInt(1),    // SOCK_STREAM
+            Op::Syscall(5, 2), // syscall_socket -> fd
+            Op::SetL(0),       // store fd
+            Op::GetL(0),       // push fd
+            Op::Syscall(3, 1), // syscall_close
+        ])
+        .unwrap();
+        // Last value should be 0 (success)
+        assert!(stack.iter().any(|v| *v == Value::I64(0)));
+    }
 }
