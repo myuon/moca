@@ -10,7 +10,13 @@
 use super::types::MocaVm;
 use super::vm_ffi::get_wrapper_mut;
 use crate::vm::Value;
+use std::cell::RefCell;
 use std::ffi::c_char;
+
+// Thread-local buffer for FFI string conversion
+thread_local! {
+    static FFI_STRING_BUFFER: RefCell<String> = const { RefCell::new(String::new()) };
+}
 
 // =============================================================================
 // Push Functions
@@ -152,7 +158,7 @@ pub unsafe extern "C" fn moca_is_string(vm: *mut MocaVm, index: i32) -> bool {
         if let Some(idx) = resolve_index(wrapper.ffi_stack.len(), index) {
             if let Value::Ref(r) = wrapper.ffi_stack[idx] {
                 if let Some(obj) = wrapper.vm.heap().get(r) {
-                    return obj.as_string().is_some();
+                    return obj.as_slots().is_some();
                 }
             }
         }
@@ -233,11 +239,15 @@ pub unsafe extern "C" fn moca_to_string(
         if let Some(idx) = resolve_index(wrapper.ffi_stack.len(), index) {
             if let Value::Ref(r) = wrapper.ffi_stack[idx] {
                 if let Some(obj) = wrapper.vm.heap().get(r) {
-                    if let Some(s) = obj.as_string() {
-                        if !len.is_null() {
-                            *len = s.value.len();
-                        }
-                        return s.value.as_ptr() as *const c_char;
+                    if let Some(str_value) = obj.slots_to_string() {
+                        return FFI_STRING_BUFFER.with(|buf| {
+                            let mut b = buf.borrow_mut();
+                            *b = str_value;
+                            if !len.is_null() {
+                                *len = b.len();
+                            }
+                            b.as_ptr() as *const c_char
+                        });
                     }
                 }
             }

@@ -209,11 +209,9 @@ impl Codegen {
                         return Err("vec_set_any not found in stdlib".to_string());
                     }
                 } else {
-                    // Array/struct assign: direct HeapStoreDyn with +1 offset for length
+                    // Array/struct assign: direct HeapStoreDyn
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
-                    ops.push(Op::PushInt(1));
-                    ops.push(Op::Add);
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStoreDyn);
                 }
@@ -225,9 +223,9 @@ impl Codegen {
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
-                    // Known struct field - use heap slot assignment with +1 offset for length
+                    // Known struct field - use heap slot assignment
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::PushInt((idx + 1) as i64));
+                    ops.push(Op::PushInt(idx as i64));
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStoreDyn);
                 } else {
@@ -334,11 +332,9 @@ impl Codegen {
                 let jump_to_end = ops.len();
                 ops.push(Op::JmpIfFalse(0)); // Placeholder
 
-                // x = arr[idx] (with +1 offset for length slot)
+                // x = arr[idx]
                 ops.push(Op::GetL(arr_slot));
                 ops.push(Op::GetL(idx_slot));
-                ops.push(Op::PushInt(1));
-                ops.push(Op::Add);
                 ops.push(Op::HeapLoadDyn);
                 ops.push(Op::SetL(var_slot));
 
@@ -442,14 +438,11 @@ impl Codegen {
                 ops.push(Op::GetL(*slot));
             }
             ResolvedExpr::Array { elements } => {
-                // New array layout: [len, elem0, elem1, ...]
-                // Push length first, then all elements
-                ops.push(Op::PushInt(elements.len() as i64));
+                // Array layout: [elem0, elem1, ...] (length is slots.len())
                 for elem in elements {
                     self.compile_expr(elem, ops)?;
                 }
-                // AllocHeap(n+1) for length + elements
-                ops.push(Op::AllocHeap(elements.len() + 1));
+                ops.push(Op::AllocHeap(elements.len()));
             }
             ResolvedExpr::Object { fields } => {
                 // Push field names and values as pairs
@@ -482,11 +475,9 @@ impl Codegen {
                         return Err("vec_get_any not found in stdlib".to_string());
                     }
                 } else {
-                    // Array/struct access: direct HeapLoadDyn with +1 offset for length
+                    // Array/struct access: direct HeapLoadDyn
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
-                    ops.push(Op::PushInt(1));
-                    ops.push(Op::Add);
                     ops.push(Op::HeapLoadDyn);
                 }
             }
@@ -494,8 +485,8 @@ impl Codegen {
                 self.compile_expr(object, ops)?;
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
-                    // Known struct field - use heap slot access with +1 offset for length
-                    ops.push(Op::PushInt((idx + 1) as i64));
+                    // Known struct field - use heap slot access
+                    ops.push(Op::PushInt(idx as i64));
                     ops.push(Op::HeapLoadDyn);
                 } else {
                     // Regular object field access
@@ -765,7 +756,7 @@ impl Codegen {
                             return Err("vec_len takes exactly 1 argument (vector)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(2)); // slot 2 is length (after field_count, ptr)
+                        ops.push(Op::HeapLoad(1)); // slot 1 is length [ptr, len, cap]
                     }
                     "vec_capacity" => {
                         if args.len() != 1 {
@@ -774,7 +765,7 @@ impl Codegen {
                             );
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(3)); // slot 3 is capacity
+                        ops.push(Op::HeapLoad(2)); // slot 2 is capacity [ptr, len, cap]
                     }
                     "vec_get" => {
                         if args.len() != 2 {
@@ -851,12 +842,11 @@ impl Codegen {
                 struct_index: _,
                 fields,
             } => {
-                // Compile struct as slots with [len, field0, field1, ...] layout
-                ops.push(Op::PushInt(fields.len() as i64));
+                // Compile struct as slots with [field0, field1, ...] layout
                 for value in fields {
                     self.compile_expr(value, ops)?;
                 }
-                ops.push(Op::AllocHeap(fields.len() + 1));
+                ops.push(Op::AllocHeap(fields.len()));
             }
             ResolvedExpr::MethodCall {
                 object,

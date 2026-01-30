@@ -29,15 +29,76 @@ Lower 3 bits    Type
 
 ## Heap Object Layout
 
+Heap objects are allocated on the managed heap and tracked by the garbage collector.
+
+### HeapObject Types
+
+```rust
+enum HeapObject {
+    Object(MocaObject),  // Key-value map (JavaScript-like objects)
+    Slots(MocaSlots),    // Indexed slots (arrays, strings, structs, vectors)
+}
+```
+
+### MocaSlots Layout
+
+All slot-based types (arrays, strings, structs, vectors) use the unified `MocaSlots` format:
+
 ```
 +----------------+
-| header (64bit) |  - type_id (16bit) + gc_mark (1bit) + flags
+| header (64bit) |  - obj_type + gc_mark + flags
 +----------------+
-| field_count    |  - Number of fields for objects
-+----------------+
-| fields[]       |  - Array of Values
+| slots: Vec<Value> |  - Variable-length array of values
 +----------------+
 ```
+
+**Key Design**: Length is derived from `slots.len()`, not stored redundantly.
+
+#### Array Layout
+```
+Array [1, 2, 3] → slots: [1, 2, 3]
+- len = slots.len() = 3
+- arr[i] = slots[i]
+```
+
+#### String Layout
+```
+"hello" → slots: [104, 101, 108, 108, 111]  // Unicode code points
+- len = slots.len() = 5
+- str[i] = slots[i] (returns character code)
+```
+
+Strings are stored as arrays of Unicode code points (i64 values). This allows:
+- O(1) length access via `slots.len()`
+- O(1) character access via index
+- Full Unicode support (not just ASCII)
+
+#### Struct Layout
+```
+Point { x: 10, y: 20 } → slots: [10, 20]
+- field_count = slots.len() = 2
+- p.x = slots[0], p.y = slots[1]
+```
+
+#### Vector Layout
+```
+Vector<T> → slots: [ptr, len, cap]
+- slots[0]: Pointer to data storage (separate heap object)
+- slots[1]: Current length
+- slots[2]: Capacity
+```
+
+### MocaObject Layout (Key-Value Maps)
+
+```
++----------------+
+| header (64bit) |
++----------------+
+| fields: HashMap<String, Value> |
++----------------+
+```
+
+Used for JavaScript-like objects with string keys: `{ name: "Alice", age: 30 }`
 
 ## Call Frame
 
@@ -125,12 +186,16 @@ WRITE_FIELD <field_idx>         // Write object field
 
 ### Array Operations
 
+Arrays are stored as `MocaSlots` with elements directly in slots (no length prefix).
+
 ```
-ALLOC_ARR <len>     // Allocate array
-ARR_LEN             // Get array length
-ARR_GET             // arr[index]
-ARR_SET             // arr[index] = value
+ALLOC_HEAP <n>      // Allocate array with n elements
+ARRAY_LEN           // Get array length via slots.len()
+HEAP_LOAD_DYN       // arr[index] - direct slot access
+HEAP_STORE_DYN      // arr[index] = value - direct slot store
 ```
+
+**Note**: `typeof(array)` returns `"slots"` (arrays and strings share the same type).
 
 ### Heap Slot Operations
 
@@ -147,29 +212,38 @@ HEAP_STORE_DYN      // Pop ref, index, and value, store to slots[index]
 
 ### Vector Operations
 
-Vectors use a 3-slot header structure: `[ptr, len, cap]`
+Vectors use a 3-slot structure: `[ptr, len, cap]`
 
-- Slot 0: Pointer to data storage (separate heap object)
-- Slot 1: Current length
-- Slot 2: Capacity
+- `slots[0]`: Pointer to data storage (separate heap object)
+- `slots[1]`: Current length
+- `slots[2]`: Capacity
 
-Vector operations (`push`, `pop`, `vec_len`) are expanded by the compiler to low-level heap operations:
+Vector operations use a combination of builtins and stdlib functions:
 
 ```
-// vec_len(vec) expands to:
-//   SlotGet(1) - get length from slot 1
+// vec_len(vec) - builtin
+//   HeapLoad(1) - get length from slot 1
 
-// push(vec, value) expands to:
+// vec_capacity(vec) - builtin
+//   HeapLoad(2) - get capacity from slot 2
+
+// vec_push(vec, value) - calls vec_push_any from std/prelude.mc
 //   1. Check if len >= cap
 //   2. If capacity exceeded: allocate new storage (max(8, cap*2))
 //   3. Copy old data to new storage
 //   4. Store value at data[len]
 //   5. Increment len
 
-// pop(vec) expands to:
+// vec_pop(vec) - calls vec_pop_any from std/prelude.mc
 //   1. Check if len > 0 (error if empty)
 //   2. Decrement len
 //   3. Load and return data[len]
+
+// vec_get(vec, index) - calls vec_get_any from std/prelude.mc
+//   Load data[index] via __heap_load intrinsic
+
+// vec_set(vec, index, value) - calls vec_set_any from std/prelude.mc
+//   Store value at data[index] via __heap_store intrinsic
 ```
 
 ### Stack Operations (Extended)

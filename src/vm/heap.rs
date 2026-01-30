@@ -6,9 +6,8 @@ use super::Value;
 /// Type ID for heap objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectType {
-    String,
     Object,
-    /// Generic slot-based heap object (for arrays and vectors)
+    /// Generic slot-based heap object (for arrays, vectors, and strings)
     Slots,
 }
 
@@ -17,13 +16,6 @@ pub enum ObjectType {
 pub struct ObjectHeader {
     pub obj_type: ObjectType,
     pub marked: bool,
-}
-
-/// A heap-allocated string.
-#[derive(Debug)]
-pub struct MocaString {
-    pub header: ObjectHeader,
-    pub value: String,
 }
 
 /// A heap-allocated object (key-value map).
@@ -47,15 +39,14 @@ pub struct MocaSlots {
 
 /// A heap object can be any of the heap-allocated types.
 pub enum HeapObject {
-    String(MocaString),
     Object(MocaObject),
+    /// Generic slot-based heap object (for arrays, vectors, and strings)
     Slots(MocaSlots),
 }
 
 impl HeapObject {
     pub fn obj_type(&self) -> ObjectType {
         match self {
-            HeapObject::String(_) => ObjectType::String,
             HeapObject::Object(_) => ObjectType::Object,
             HeapObject::Slots(_) => ObjectType::Slots,
         }
@@ -63,7 +54,6 @@ impl HeapObject {
 
     pub fn header(&self) -> &ObjectHeader {
         match self {
-            HeapObject::String(s) => &s.header,
             HeapObject::Object(o) => &o.header,
             HeapObject::Slots(s) => &s.header,
         }
@@ -71,15 +61,23 @@ impl HeapObject {
 
     pub fn header_mut(&mut self) -> &mut ObjectHeader {
         match self {
-            HeapObject::String(s) => &mut s.header,
             HeapObject::Object(o) => &mut o.header,
             HeapObject::Slots(s) => &mut s.header,
         }
     }
 
-    pub fn as_string(&self) -> Option<&MocaString> {
+    /// Convert slots to a Rust String (interpreting slots as Unicode code points)
+    pub fn slots_to_string(&self) -> Option<String> {
         match self {
-            HeapObject::String(s) => Some(s),
+            HeapObject::Slots(s) => {
+                let chars: String = s
+                    .slots
+                    .iter()
+                    .filter_map(|v| v.as_i64())
+                    .filter_map(|c| char::from_u32(c as u32))
+                    .collect();
+                Some(chars)
+            }
             _ => None,
         }
     }
@@ -115,9 +113,7 @@ impl HeapObject {
     /// Get all Value references in this object for GC tracing.
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
-            HeapObject::String(_) => vec![],
             HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ref()).collect(),
-            // For Slots, trace all references (including slot 0 which may be a vector data ptr)
             HeapObject::Slots(slots) => slots.slots.iter().filter_map(|v| v.as_ref()).collect(),
         }
     }
@@ -126,7 +122,6 @@ impl HeapObject {
 impl fmt::Debug for HeapObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HeapObject::String(s) => write!(f, "String({:?})", s.value),
             HeapObject::Object(o) => write!(f, "Object({:?})", o.fields),
             HeapObject::Slots(s) => write!(f, "Slots({:?})", s.slots),
         }
@@ -208,19 +203,11 @@ impl Heap {
     }
 
     /// Allocate a new string on the heap.
+    /// String is stored as MocaSlots with each character as Value::I64 (Unicode code point).
     pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
-        let size = std::mem::size_of::<MocaString>() + value.len();
-        self.check_heap_limit(size)?;
-        self.bytes_allocated += size;
-
-        let obj = HeapObject::String(MocaString {
-            header: ObjectHeader {
-                obj_type: ObjectType::String,
-                marked: false,
-            },
-            value,
-        });
-        Ok(self.alloc_object(obj))
+        // Convert string to slots of Unicode code points (not bytes)
+        let slots: Vec<Value> = value.chars().map(|c| Value::I64(c as i64)).collect();
+        self.alloc_slots(slots)
     }
 
     /// Allocate a new object on the heap.
@@ -329,7 +316,6 @@ impl Heap {
         self.bytes_allocated = 0;
         for o in self.objects.iter().flatten() {
             self.bytes_allocated += match o {
-                HeapObject::String(s) => std::mem::size_of::<MocaString>() + s.value.len(),
                 HeapObject::Object(o) => {
                     std::mem::size_of::<MocaObject>()
                         + o.fields.len()
@@ -372,7 +358,9 @@ mod tests {
         let mut heap = Heap::new();
         let r = heap.alloc_string("hello".to_string()).unwrap();
         let obj = heap.get(r).unwrap();
-        assert_eq!(obj.as_string().unwrap().value, "hello");
+        // String is now stored as slots of Unicode code points
+        let str_value = obj.slots_to_string().unwrap();
+        assert_eq!(str_value, "hello");
     }
 
     #[test]

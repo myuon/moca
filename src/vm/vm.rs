@@ -713,18 +713,11 @@ impl VM {
                     .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                let len = if let Some(s) = obj.as_string() {
-                    s.value.chars().count() as i64
-                } else if let Some(slots) = obj.as_slots() {
-                    // For fixed arrays (Slots), slot[0] contains the length
-                    // Note: For vectors, use vec_len() which reads slots[1]
-                    slots
-                        .slots
-                        .first()
-                        .and_then(|v| v.as_i64())
-                        .ok_or("runtime error: invalid slots length")?
+                let len = if let Some(slots) = obj.as_slots() {
+                    // All slots-based objects use slots.len() for length
+                    slots.slots.len() as i64
                 } else {
-                    return Err("runtime error: len expects array or string".to_string());
+                    return Err("runtime error: len expects slots".to_string());
                 };
                 self.stack.push(Value::I64(len));
             }
@@ -743,9 +736,9 @@ impl VM {
                         .get(key_ref)
                         .ok_or("runtime error: invalid reference")?;
                     let key_str = key_obj
-                        .as_string()
+                        .slots_to_string()
                         .ok_or("runtime error: object key must be a string")?;
-                    fields.insert(key_str.value.clone(), value);
+                    fields.insert(key_str, value);
                 }
                 let r = self.heap.alloc_object_map(fields)?;
                 self.stack.push(Value::Ref(r));
@@ -802,9 +795,8 @@ impl VM {
                     Value::Ref(r) => {
                         if let Some(obj) = self.heap.get(*r) {
                             match obj.obj_type() {
-                                super::ObjectType::String => "string",
                                 super::ObjectType::Object => "object",
-                                super::ObjectType::Slots => "array", // Slots is used for arrays and vectors
+                                super::ObjectType::Slots => "slots",
                             }
                         } else {
                             "unknown"
@@ -827,13 +819,12 @@ impl VM {
                     .ok_or("runtime error: parse_int expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let s = obj
-                    .as_string()
+                    .slots_to_string()
                     .ok_or("runtime error: parse_int expects string")?;
                 let n: i64 = s
-                    .value
                     .trim()
                     .parse()
-                    .map_err(|_| format!("runtime error: cannot parse '{}' as int", s.value))?;
+                    .map_err(|_| format!("runtime error: cannot parse '{}' as int", s))?;
                 self.stack.push(Value::I64(n));
             }
             Op::StrLen => {
@@ -843,9 +834,10 @@ impl VM {
                     .ok_or("runtime error: str_len expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let s = obj
-                    .as_string()
-                    .ok_or("runtime error: str_len expects string")?;
-                let len = s.value.chars().count() as i64;
+                    .as_slots()
+                    .ok_or("runtime error: str_len expects slots")?;
+                // Length is the number of slots
+                let len = s.slots.len() as i64;
                 self.stack.push(Value::I64(len));
             }
             Op::Throw => {
@@ -924,12 +916,10 @@ impl VM {
                 let id = self.channels.len();
                 self.channels.push(channel);
 
-                // Create slots with [len=2, sender_id, receiver_id] layout
-                let arr = self.heap.alloc_slots(vec![
-                    Value::I64(2),
-                    Value::I64(id as i64),
-                    Value::I64(id as i64),
-                ])?;
+                // Create slots with [sender_id, receiver_id] layout
+                let arr = self
+                    .heap
+                    .alloc_slots(vec![Value::I64(id as i64), Value::I64(id as i64)])?;
                 self.stack.push(Value::Ref(arr));
             }
             Op::ChannelSend => {
@@ -1015,27 +1005,14 @@ impl VM {
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                // Support Slots and String types
+                // Support Slots types (arrays, strings, etc.)
                 if let Some(slots) = obj.as_slots() {
                     if index < 0 || index as usize >= slots.slots.len() {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
                     self.stack.push(slots.slots[index as usize]);
-                } else if let Some(s) = obj.as_string() {
-                    // String indexing: return ASCII code at index (adjusted for +1 offset from codegen)
-                    let actual_index = index - 1; // codegen adds +1, so subtract it back
-                    let bytes = s.value.as_bytes();
-                    if actual_index < 0 || actual_index as usize >= bytes.len() {
-                        return Err(format!(
-                            "runtime error: string index {} out of bounds (length {})",
-                            actual_index,
-                            bytes.len()
-                        ));
-                    }
-                    let byte_value = bytes[actual_index as usize] as i64;
-                    self.stack.push(Value::I64(byte_value));
                 } else {
-                    return Err("runtime error: expected slots or string".to_string());
+                    return Err("runtime error: expected slots".to_string());
                 }
             }
             Op::HeapStoreDyn => {
@@ -1137,8 +1114,10 @@ impl VM {
                 let a_obj = self.heap.get(a).ok_or("runtime error: invalid reference")?;
                 let b_obj = self.heap.get(b).ok_or("runtime error: invalid reference")?;
 
-                if let (Some(a_str), Some(b_str)) = (a_obj.as_string(), b_obj.as_string()) {
-                    let result = format!("{}{}", a_str.value, b_str.value);
+                if let (Some(a_str), Some(b_str)) =
+                    (a_obj.slots_to_string(), b_obj.slots_to_string())
+                {
+                    let result = format!("{}{}", a_str, b_str);
                     let r = self.heap.alloc_string(result)?;
                     return Ok(Value::Ref(r));
                 }
@@ -1230,8 +1209,10 @@ impl VM {
 
                 match (a_obj, b_obj) {
                     (Some(a), Some(b)) => {
-                        if let (Some(a_str), Some(b_str)) = (a.as_string(), b.as_string()) {
-                            return a_str.value == b_str.value;
+                        if let (Some(a_str), Some(b_str)) =
+                            (a.slots_to_string(), b.slots_to_string())
+                        {
+                            return a_str == b_str;
                         }
                         // For arrays and objects, compare by reference
                         a_ref.index == b_ref.index
@@ -1261,7 +1242,6 @@ impl VM {
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
                 match obj {
-                    super::HeapObject::String(s) => Ok(s.value.clone()),
                     super::HeapObject::Object(o) => {
                         let mut parts = Vec::new();
                         for (k, v) in &o.fields {
@@ -1270,13 +1250,39 @@ impl VM {
                         Ok(format!("{{{}}}", parts.join(", ")))
                     }
                     super::HeapObject::Slots(s) => {
-                        // Slots: slot[0] is length, slot[1..] are elements (for fixed arrays)
-                        // Note: For vectors (Slots[ptr, len, cap]), this will show raw values
-                        let mut parts = Vec::new();
-                        for elem in s.slots.iter().skip(1) {
-                            parts.push(self.value_to_string(elem)?);
+                        // Try to interpret as string first
+                        // Only treat as string if all slots are printable Unicode characters
+                        // (not control characters 0-31, except tab/newline/carriage return)
+                        let is_printable_string = !s.slots.is_empty()
+                            && s.slots.iter().all(|v| {
+                                if let Some(c) = v.as_i64() {
+                                    if let Some(ch) = char::from_u32(c as u32) {
+                                        // Allow printable chars, tab, newline, carriage return
+                                        ch >= ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            });
+                        if is_printable_string {
+                            // Interpret as string
+                            let chars: String = s
+                                .slots
+                                .iter()
+                                .filter_map(|v| v.as_i64())
+                                .filter_map(|c| char::from_u32(c as u32))
+                                .collect();
+                            Ok(chars)
+                        } else {
+                            // Interpret as array/struct - show all elements
+                            let mut parts = Vec::new();
+                            for elem in s.slots.iter() {
+                                parts.push(self.value_to_string(elem)?);
+                            }
+                            Ok(format!("[{}]", parts.join(", ")))
                         }
-                        Ok(format!("[{}]", parts.join(", ")))
                     }
                 }
             }
@@ -1369,10 +1375,9 @@ impl VM {
                     .heap
                     .get(buf_ref)
                     .ok_or_else(|| "write: invalid reference".to_string())?;
-                let moca_str = heap_obj
-                    .as_string()
+                let buf_str = heap_obj
+                    .slots_to_string()
                     .ok_or_else(|| "write: buf must be a string".to_string())?;
-                let buf_str = &moca_str.value;
 
                 // Validate fd (only 1=stdout, 2=stderr allowed)
                 if fd != 1 && fd != 2 {
@@ -1664,13 +1669,13 @@ mod tests {
 
     #[test]
     fn test_array_operations() {
-        // AllocHeap takes slots from stack: [len, e1, e2, e3] -> creates Slots object
+        // AllocHeap takes slots from stack: [e0, e1, e2] -> creates Slots object
+        // Length is now slots.len(), no length prefix
         let stack = run_code(vec![
-            Op::PushInt(3),   // length
             Op::PushInt(1),   // element 0
             Op::PushInt(2),   // element 1
             Op::PushInt(3),   // element 2
-            Op::AllocHeap(4), // 1 len + 3 elements
+            Op::AllocHeap(3), // 3 elements
             Op::ArrayLen,
         ])
         .unwrap();
@@ -1701,15 +1706,13 @@ mod tests {
         // 2. Overwrites local 0 with a new array (triggers write barrier)
         // 3. Verifies execution completes successfully
         let result = run_code(vec![
-            // Allocate array [len=1, elem] and store in local 0
-            Op::PushInt(1), // length
+            // Allocate array [elem] and store in local 0
             Op::PushInt(1), // element
-            Op::AllocHeap(2),
+            Op::AllocHeap(1),
             Op::SetL(0),
-            // Allocate another array [len=1, elem]
-            Op::PushInt(1), // length
+            // Allocate another array [elem]
             Op::PushInt(2), // element
-            Op::AllocHeap(2),
+            Op::AllocHeap(1),
             // Overwrite local 0 (triggers write barrier, old value was array ref)
             Op::SetL(0),
             // Get local 0 to verify it's still a valid reference
