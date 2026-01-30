@@ -713,8 +713,9 @@ impl VM {
                     .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                let len = if let Some(s) = obj.as_string() {
-                    s.value.chars().count() as i64
+                let len = if let Some(s) = obj.as_string_slots() {
+                    // String length is the number of slots (each slot is one ASCII char)
+                    s.slots.len() as i64
                 } else if let Some(slots) = obj.as_slots() {
                     // For fixed arrays (Slots), slot[0] contains the length
                     // Note: For vectors, use vec_len() which reads slots[1]
@@ -743,9 +744,9 @@ impl VM {
                         .get(key_ref)
                         .ok_or("runtime error: invalid reference")?;
                     let key_str = key_obj
-                        .as_string()
+                        .string_value()
                         .ok_or("runtime error: object key must be a string")?;
-                    fields.insert(key_str.value.clone(), value);
+                    fields.insert(key_str, value);
                 }
                 let r = self.heap.alloc_object_map(fields)?;
                 self.stack.push(Value::Ref(r));
@@ -827,13 +828,12 @@ impl VM {
                     .ok_or("runtime error: parse_int expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let s = obj
-                    .as_string()
+                    .string_value()
                     .ok_or("runtime error: parse_int expects string")?;
                 let n: i64 = s
-                    .value
                     .trim()
                     .parse()
-                    .map_err(|_| format!("runtime error: cannot parse '{}' as int", s.value))?;
+                    .map_err(|_| format!("runtime error: cannot parse '{}' as int", s))?;
                 self.stack.push(Value::I64(n));
             }
             Op::StrLen => {
@@ -843,9 +843,10 @@ impl VM {
                     .ok_or("runtime error: str_len expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
                 let s = obj
-                    .as_string()
+                    .as_string_slots()
                     .ok_or("runtime error: str_len expects string")?;
-                let len = s.value.chars().count() as i64;
+                // String length is the number of slots
+                let len = s.slots.len() as i64;
                 self.stack.push(Value::I64(len));
             }
             Op::Throw => {
@@ -1021,19 +1022,19 @@ impl VM {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
                     self.stack.push(slots.slots[index as usize]);
-                } else if let Some(s) = obj.as_string() {
+                } else if let Some(s) = obj.as_string_slots() {
                     // String indexing: return ASCII code at index (adjusted for +1 offset from codegen)
+                    // String slots: [char0, char1, ...] (no length prefix)
                     let actual_index = index - 1; // codegen adds +1, so subtract it back
-                    let bytes = s.value.as_bytes();
-                    if actual_index < 0 || actual_index as usize >= bytes.len() {
+                    if actual_index < 0 || actual_index as usize >= s.slots.len() {
                         return Err(format!(
                             "runtime error: string index {} out of bounds (length {})",
                             actual_index,
-                            bytes.len()
+                            s.slots.len()
                         ));
                     }
-                    let byte_value = bytes[actual_index as usize] as i64;
-                    self.stack.push(Value::I64(byte_value));
+                    // Each slot is already Value::I64 containing ASCII value
+                    self.stack.push(s.slots[actual_index as usize]);
                 } else {
                     return Err("runtime error: expected slots or string".to_string());
                 }
@@ -1137,8 +1138,8 @@ impl VM {
                 let a_obj = self.heap.get(a).ok_or("runtime error: invalid reference")?;
                 let b_obj = self.heap.get(b).ok_or("runtime error: invalid reference")?;
 
-                if let (Some(a_str), Some(b_str)) = (a_obj.as_string(), b_obj.as_string()) {
-                    let result = format!("{}{}", a_str.value, b_str.value);
+                if let (Some(a_str), Some(b_str)) = (a_obj.string_value(), b_obj.string_value()) {
+                    let result = format!("{}{}", a_str, b_str);
                     let r = self.heap.alloc_string(result)?;
                     return Ok(Value::Ref(r));
                 }
@@ -1230,8 +1231,8 @@ impl VM {
 
                 match (a_obj, b_obj) {
                     (Some(a), Some(b)) => {
-                        if let (Some(a_str), Some(b_str)) = (a.as_string(), b.as_string()) {
-                            return a_str.value == b_str.value;
+                        if let (Some(a_str), Some(b_str)) = (a.string_value(), b.string_value()) {
+                            return a_str == b_str;
                         }
                         // For arrays and objects, compare by reference
                         a_ref.index == b_ref.index
@@ -1261,7 +1262,16 @@ impl VM {
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
                 match obj {
-                    super::HeapObject::String(s) => Ok(s.value.clone()),
+                    super::HeapObject::String(s) => {
+                        // Convert slots (Unicode code points) back to string
+                        let chars: String = s
+                            .slots
+                            .iter()
+                            .filter_map(|v| v.as_i64())
+                            .filter_map(|c| char::from_u32(c as u32))
+                            .collect();
+                        Ok(chars)
+                    }
                     super::HeapObject::Object(o) => {
                         let mut parts = Vec::new();
                         for (k, v) in &o.fields {
@@ -1369,10 +1379,9 @@ impl VM {
                     .heap
                     .get(buf_ref)
                     .ok_or_else(|| "write: invalid reference".to_string())?;
-                let moca_str = heap_obj
-                    .as_string()
+                let buf_str = heap_obj
+                    .string_value()
                     .ok_or_else(|| "write: buf must be a string".to_string())?;
-                let buf_str = &moca_str.value;
 
                 // Validate fd (only 1=stdout, 2=stderr allowed)
                 if fd != 1 && fd != 2 {
