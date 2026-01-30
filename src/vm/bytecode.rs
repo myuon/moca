@@ -287,10 +287,12 @@ const OP_HEAP_STORE: u8 = 70;
 const OP_HEAP_LOAD_DYN: u8 = 71;
 const OP_HEAP_STORE_DYN: u8 = 72;
 const OP_STR_LEN: u8 = 73;
-// Legacy opcodes 74, 75 removed (AllocVector, AllocVectorCap)
-const OP_VECTOR_PUSH: u8 = 76;
-const OP_VECTOR_POP: u8 = 77;
+// Legacy opcodes 74, 75, 76, 77 removed (AllocVector, AllocVectorCap, VectorPush, VectorPop)
 const OP_SYSCALL: u8 = 78;
+const OP_SWAP: u8 = 79;
+const OP_PICK: u8 = 80;
+const OP_ALLOC_HEAP_DYN: u8 = 81;
+const OP_PICK_DYN: u8 = 82;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -311,6 +313,12 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::Pop => w.write_all(&[OP_POP])?,
         Op::Dup => w.write_all(&[OP_DUP])?,
+        Op::Swap => w.write_all(&[OP_SWAP])?,
+        Op::Pick(n) => {
+            w.write_all(&[OP_PICK])?;
+            write_u32(w, *n as u32)?;
+        }
+        Op::PickDyn => w.write_all(&[OP_PICK_DYN])?,
         Op::GetL(idx) => {
             w.write_all(&[OP_GET_L])?;
             write_u32(w, *idx as u32)?;
@@ -390,6 +398,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_ALLOC_HEAP])?;
             write_u32(w, *size as u32)?;
         }
+        Op::AllocHeapDyn => w.write_all(&[OP_ALLOC_HEAP_DYN])?,
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -400,8 +409,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
-        Op::VectorPush => w.write_all(&[OP_VECTOR_PUSH])?,
-        Op::VectorPop => w.write_all(&[OP_VECTOR_POP])?,
         Op::Syscall(num, argc) => {
             w.write_all(&[OP_SYSCALL])?;
             write_u32(w, *num as u32)?;
@@ -422,6 +429,9 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_PUSH_STRING => Op::PushString(read_u32(r)? as usize),
         OP_POP => Op::Pop,
         OP_DUP => Op::Dup,
+        OP_SWAP => Op::Swap,
+        OP_PICK => Op::Pick(read_u32(r)? as usize),
+        OP_PICK_DYN => Op::PickDyn,
         OP_GET_L => Op::GetL(read_u32(r)? as usize),
         OP_SET_L => Op::SetL(read_u32(r)? as usize),
         OP_ADD => Op::Add,
@@ -465,12 +475,11 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_CHANNEL_RECV => Op::ChannelRecv,
         OP_THREAD_JOIN => Op::ThreadJoin,
         OP_ALLOC_HEAP => Op::AllocHeap(read_u32(r)? as usize),
+        OP_ALLOC_HEAP_DYN => Op::AllocHeapDyn,
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
-        OP_VECTOR_PUSH => Op::VectorPush,
-        OP_VECTOR_POP => Op::VectorPop,
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
@@ -696,6 +705,9 @@ mod tests {
             Op::PushString(42),
             Op::Pop,
             Op::Dup,
+            Op::Swap,
+            Op::Pick(3),
+            Op::PickDyn,
             Op::GetL(100),
             Op::SetL(200),
             Op::Add,
@@ -735,12 +747,11 @@ mod tests {
             Op::ChannelRecv,
             Op::ThreadJoin,
             Op::AllocHeap(5),
+            Op::AllocHeapDyn,
             Op::HeapLoad(1),
             Op::HeapStore(2),
             Op::HeapLoadDyn,
             Op::HeapStoreDyn,
-            Op::VectorPush,
-            Op::VectorPop,
         ];
 
         let chunk = Chunk {

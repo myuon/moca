@@ -370,7 +370,10 @@ impl Verifier {
 
             // Stack operations
             Op::Pop => (1, 0),
-            Op::Dup => (0, 1), // Technically reads 1, but doesn't pop
+            Op::Dup => (0, 1),     // Technically reads 1, but doesn't pop
+            Op::Swap => (2, 2),    // Swaps top two elements
+            Op::Pick(_) => (0, 1), // Copies n-th element to top
+            Op::PickDyn => (1, 1), // Pops depth, pushes value at that depth
 
             // Local variables
             Op::GetL(_) => (0, 1),
@@ -427,14 +430,11 @@ impl Verifier {
 
             // Heap slot operations
             Op::AllocHeap(n) => (*n, 1), // pops n slots, pushes ref
+            Op::AllocHeapDyn => (1, 1),  // pops size + size values, pushes ref (simplified)
             Op::HeapLoad(_) => (1, 1),   // pops ref, pushes value
             Op::HeapStore(_) => (2, 0),  // pops ref and value
             Op::HeapLoadDyn => (2, 1),   // pops ref and index, pushes value
             Op::HeapStoreDyn => (3, 0),  // pops ref, index, and value
-
-            // Vector operations
-            Op::VectorPush => (2, 0), // pops vector and value
-            Op::VectorPop => (1, 1),  // pops vector, pushes value
 
             // Syscall
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result

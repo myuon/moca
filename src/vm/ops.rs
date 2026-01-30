@@ -21,6 +21,9 @@ pub enum Op {
     PushString(usize), // CONST (string index)
     Pop,               // POP: Discard top of stack
     Dup,               // DUP: Duplicate top of stack
+    Swap,              // SWAP: Swap top two stack elements
+    Pick(usize),       // PICK(n): Copy n-th element (0=top) to top
+    PickDyn,           // PICKDYN: [depth] -> [value], copy element at dynamic depth
 
     // ========================================
     // Local Variables
@@ -88,10 +91,11 @@ pub enum Op {
     HeapStoreDyn,     // Store to slot at dynamic index: [ref, index, value] -> []
 
     // ========================================
-    // Vector operations (Vector = Slots[ptr, len, cap])
+    // Dynamic heap allocation
     // ========================================
-    VectorPush, // Push value to vector: [vec, value] -> []
-    VectorPop,  // Pop value from vector: [vec] -> [value]
+    AllocHeapDyn, // Allocate heap with dynamic size: [size, v1..vN] -> [ref]
+
+    // VectorPush and VectorPop removed - now expanded by compiler to low-level ops
 
     // ========================================
     // Type operations

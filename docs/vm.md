@@ -132,6 +132,54 @@ ARR_GET             // arr[index]
 ARR_SET             // arr[index] = value
 ```
 
+### Heap Slot Operations
+
+Low-level operations for heap-allocated objects with indexed slots.
+
+```
+ALLOC_HEAP <n>      // Allocate object with n slots, push ref
+ALLOC_HEAP_DYN      // Pop size, allocate dynamically, push ref
+HEAP_LOAD <idx>     // Pop ref, push slots[idx]
+HEAP_STORE <idx>    // Pop ref and value, store to slots[idx]
+HEAP_LOAD_DYN       // Pop ref and index, push slots[index]
+HEAP_STORE_DYN      // Pop ref, index, and value, store to slots[index]
+```
+
+### Vector Operations
+
+Vectors use a 3-slot header structure: `[ptr, len, cap]`
+
+- Slot 0: Pointer to data storage (separate heap object)
+- Slot 1: Current length
+- Slot 2: Capacity
+
+Vector operations (`push`, `pop`, `vec_len`) are expanded by the compiler to low-level heap operations:
+
+```
+// vec_len(vec) expands to:
+//   SlotGet(1) - get length from slot 1
+
+// push(vec, value) expands to:
+//   1. Check if len >= cap
+//   2. If capacity exceeded: allocate new storage (max(8, cap*2))
+//   3. Copy old data to new storage
+//   4. Store value at data[len]
+//   5. Increment len
+
+// pop(vec) expands to:
+//   1. Check if len > 0 (error if empty)
+//   2. Decrement len
+//   3. Load and return data[len]
+```
+
+### Stack Operations (Extended)
+
+```
+SWAP                // Swap top two stack elements
+PICK <n>            // Copy element at depth n to top
+PICK_DYN            // Pop depth, copy element at that depth to top
+```
+
 ### Type Checking
 
 ```
