@@ -479,3 +479,132 @@ fn snapshot_stdlib() {
             .join("\n")
     );
 }
+
+// ============================================================================
+// HTTP Snapshot Tests
+// ============================================================================
+
+/// Run HTTP snapshot tests with a local test server.
+/// These tests require a running HTTP server and use template files
+/// with {{PORT}} placeholder that gets replaced with the actual port.
+#[test]
+fn snapshot_http() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let http_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("http");
+
+    if !http_dir.exists() {
+        return;
+    }
+
+    // Find all .mc.template files
+    let templates: Vec<_> = fs::read_dir(&http_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .map_or(false, |n| n.to_string_lossy().ends_with(".mc.template"))
+        })
+        .collect();
+
+    for entry in templates {
+        let template_path = entry.path();
+        let base_name = template_path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .replace(".mc", "");
+
+        // Start a simple HTTP server on a random port
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server_handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Read request
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+
+                // Send HTTP response
+                let response =
+                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from test server!";
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        // Give server time to start
+        thread::sleep(std::time::Duration::from_millis(50));
+
+        // Read template and replace {{PORT}} with actual port
+        let template_content = fs::read_to_string(&template_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", template_path, e));
+        let moca_content = template_content.replace("{{PORT}}", &port.to_string());
+
+        // Write to a temporary file
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join(format!("{}.mc", base_name));
+        fs::write(&temp_file, &moca_content)
+            .unwrap_or_else(|e| panic!("Failed to write temp file: {}", e));
+
+        // Run the moca file
+        let config = RuntimeConfig::default();
+        let (actual_stdout, actual_stderr, actual_exitcode) =
+            run_moca_file_inprocess(&temp_file, &config);
+
+        // Clean up temp file
+        let _ = fs::remove_file(&temp_file);
+
+        // Wait for server to finish
+        let _ = server_handle.join();
+
+        // Check expected stdout
+        let stdout_path = http_dir.join(format!("{}.stdout", base_name));
+        if stdout_path.exists() {
+            let expected_stdout = fs::read_to_string(&stdout_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
+            assert_eq!(
+                actual_stdout, expected_stdout,
+                "stdout mismatch for {:?}\n--- expected ---\n{}\n--- actual ---\n{}",
+                template_path, expected_stdout, actual_stdout
+            );
+        }
+
+        // Check expected stderr (partial match)
+        let stderr_path = http_dir.join(format!("{}.stderr", base_name));
+        if stderr_path.exists() {
+            let expected_stderr = fs::read_to_string(&stderr_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stderr_path, e));
+            assert!(
+                actual_stderr.contains(&expected_stderr),
+                "stderr mismatch for {:?}\n--- expected (substring) ---\n{}\n--- actual ---\n{}",
+                template_path,
+                expected_stderr,
+                actual_stderr
+            );
+        }
+
+        // Check exit code (default: 0)
+        let exitcode_path = http_dir.join(format!("{}.exitcode", base_name));
+        let expected_exitcode = if exitcode_path.exists() {
+            fs::read_to_string(&exitcode_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", exitcode_path, e))
+                .trim()
+                .parse::<i32>()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        assert_eq!(
+            actual_exitcode, expected_exitcode,
+            "exit code mismatch for {:?}: expected {}, got {}\nstderr: {}",
+            template_path, expected_exitcode, actual_exitcode, actual_stderr
+        );
+    }
+}
