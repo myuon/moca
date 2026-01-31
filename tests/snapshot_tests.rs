@@ -481,7 +481,149 @@ fn snapshot_stdlib() {
 }
 
 // ============================================================================
-// HTTP Snapshot Tests
+// HTTP Server Snapshot Tests
+// ============================================================================
+
+/// Test that a Moca HTTP server can accept connections and respond to requests.
+/// This test starts a Moca HTTP server in a background thread, sends a request,
+/// and verifies the response.
+#[test]
+fn snapshot_http_server() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Find an available port
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener); // Release the port so Moca can use it
+
+    // Create a simple Moca HTTP server script that handles one request
+    let moca_script = format!(
+        r#"
+// Simple HTTP server for testing
+fun main() {{
+    let fd = socket(AF_INET(), SOCK_STREAM());
+    if fd < 0 {{
+        print("Error: Failed to create socket");
+        return 1;
+    }}
+
+    let bind_result = bind(fd, "127.0.0.1", {port});
+    if bind_result < 0 {{
+        print("Error: Failed to bind");
+        close(fd);
+        return 1;
+    }}
+
+    let listen_result = listen(fd, 10);
+    if listen_result < 0 {{
+        print("Error: Failed to listen");
+        close(fd);
+        return 1;
+    }}
+
+    // Accept one connection
+    let client_fd = accept(fd);
+    if client_fd < 0 {{
+        print("Error: Failed to accept");
+        close(fd);
+        return 1;
+    }}
+
+    // Read the request
+    let request = read(client_fd, 4096);
+
+    // Send HTTP response
+    let body = "Hello from Moca!";
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 16\r\nConnection: close\r\n\r\n" + body;
+    write(client_fd, response, len(response));
+
+    // Close connections
+    close(client_fd);
+    close(fd);
+
+    print("Server handled one request");
+    return 0;
+}}
+
+main();
+"#,
+        port = port
+    );
+
+    // Write the script to a temp file
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join("moca_http_server_test.mc");
+    fs::write(&temp_file, &moca_script).expect("Failed to write temp file");
+
+    // Channel to receive server result
+    let (tx, rx) = mpsc::channel();
+
+    // Start the Moca server in a background thread
+    let temp_file_clone = temp_file.clone();
+    let server_thread = std::thread::spawn(move || {
+        let config = RuntimeConfig::default();
+        let result = run_moca_file_inprocess(&temp_file_clone, &config);
+        let _ = tx.send(result);
+    });
+
+    // Wait for server to start
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Send an HTTP request
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .expect("Failed to connect to Moca server");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let request = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    stream
+        .write_all(request.as_bytes())
+        .expect("Failed to send request");
+
+    // Read response
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("Failed to read response");
+
+    // Verify response
+    assert!(
+        response.contains("HTTP/1.1 200 OK"),
+        "Response should contain HTTP 200 OK status: {}",
+        response
+    );
+    assert!(
+        response.contains("Hello from Moca!"),
+        "Response should contain expected body: {}",
+        response
+    );
+
+    // Wait for server thread to finish
+    server_thread.join().expect("Server thread panicked");
+
+    // Verify server output
+    let (stdout, stderr, exit_code) = rx.recv().expect("Failed to receive server result");
+    assert_eq!(
+        exit_code, 0,
+        "Server should exit with code 0, stderr: {}",
+        stderr
+    );
+    assert!(
+        stdout.contains("Server handled one request"),
+        "Server should print success message, got: {}",
+        stdout
+    );
+
+    // Clean up
+    let _ = fs::remove_file(&temp_file);
+}
+
+// ============================================================================
+// HTTP Client Snapshot Tests
 // ============================================================================
 
 /// Run HTTP snapshot tests with a local hyper-based test server.
