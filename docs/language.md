@@ -285,6 +285,44 @@ obj_fields  = IDENT ":" expr { "," IDENT ":" expr } ;
 | `vec_get(vec, i)` | Get element at index (alternative to `vec[i]`) |
 | `vec_set(vec, i, v)` | Set element at index (alternative to `vec[i] = v`) |
 
+### Network Functions
+
+TCP socket operations for client and server networking.
+
+| Function | Description |
+|----------|-------------|
+| `socket(domain, type)` | Create a socket (use `AF_INET()`, `SOCK_STREAM()`) |
+| `connect(fd, host, port)` | Connect to a remote host |
+| `bind(fd, host, port)` | Bind socket to a local address |
+| `listen(fd, backlog)` | Start listening for connections |
+| `accept(fd)` | Accept an incoming connection, returns new fd |
+| `read(fd, count)` | Read up to count bytes from fd |
+| `write(fd, buf, count)` | Write buf to fd |
+| `close(fd)` | Close a file descriptor |
+
+**Constants:**
+- `AF_INET()` - IPv4 address family
+- `SOCK_STREAM()` - TCP socket type
+- Error codes: `EBADF()`, `ECONNREFUSED()`, `ETIMEDOUT()`, `EADDRINUSE()`, etc.
+
+**Example: HTTP Server**
+
+```
+fun main() {
+    let fd = socket(AF_INET(), SOCK_STREAM());
+    bind(fd, "0.0.0.0", 8080);
+    listen(fd, 10);
+
+    while true {
+        let client = accept(fd);
+        let request = read(client, 4096);
+        let response = "HTTP/1.1 200 OK\r\n\r\nHello!";
+        write(client, response, len(response));
+        close(client);
+    }
+}
+```
+
 ## Error Format
 
 ```
