@@ -13,9 +13,7 @@ let values = map_values(m);
 
 // Check counts
 print(keys.len);
-print("\n");
 print(values.len);
-print("\n");
 
 // Sum all keys and values to verify content (order is not guaranteed)
 var key_sum = 0;
@@ -25,7 +23,6 @@ while i < keys.len {
     i = i + 1;
 }
 print(key_sum);
-print("\n");
 
 var value_sum = 0;
 i = 0;
@@ -34,4 +31,3 @@ while i < values.len {
     i = i + 1;
 }
 print(value_sum);
-print("\n");

@@ -10,7 +10,6 @@ while i < 20 {
 }
 
 print(map_len(m));
-print("\n");
 
 // Verify all entries are still accessible after resize
 var all_ok = true;
@@ -24,7 +23,7 @@ while i < 20 {
 }
 
 if all_ok {
-    print("all entries ok\n");
+    print("all entries ok");
 }
 
 // Test contains for all keys
@@ -38,7 +37,7 @@ while i < 20 {
 }
 
 if contains_ok {
-    print("all contains ok\n");
+    print("all contains ok");
 }
 
 // Remove some entries
@@ -46,9 +45,8 @@ map_remove_int(m, 5);
 map_remove_int(m, 10);
 map_remove_int(m, 15);
 print(map_len(m));
-print("\n");
 
 // Verify removed entries are gone
 if !map_contains_int(m, 5) && !map_contains_int(m, 10) && !map_contains_int(m, 15) {
-    print("removed entries gone\n");
+    print("removed entries gone");
 }

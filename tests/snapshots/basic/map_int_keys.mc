@@ -8,38 +8,30 @@ map_put_int(m, 2, "two");
 map_put_int(m, 100, "hundred");
 
 print(map_get_int(m, 1));
-print("\n");
 print(map_get_int(m, 2));
-print("\n");
 print(map_get_int(m, 100));
-print("\n");
 print(map_len(m));
-print("\n");
 
 // Test map_contains_int
 if map_contains_int(m, 1) {
-    print("has 1\n");
+    print("has 1");
 }
 if !map_contains_int(m, 999) {
-    print("no 999\n");
+    print("no 999");
 }
 
 // Test overwrite
 map_put_int(m, 1, "ONE");
 print(map_get_int(m, 1));
-print("\n");
 print(map_len(m));
-print("\n");
 
 // Test map_remove_int
 let removed = map_remove_int(m, 2);
 if removed {
-    print("removed 2\n");
+    print("removed 2");
 }
 print(map_len(m));
-print("\n");
 
 // Test negative key
 map_put_int(m, -5, "negative");
 print(map_get_int(m, -5));
-print("\n");
