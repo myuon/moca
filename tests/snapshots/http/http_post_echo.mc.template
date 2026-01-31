@@ -17,9 +17,10 @@ if fd >= 0 {
     }
 
     if result >= 0 {
-        // Build HTTP POST request with body
-        let body = "Hello, Echo!";
-        let request = "POST /echo HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nHello, Echo!";
+        // Build HTTP POST request with JSON body
+        let body = "{\"x\":123}";
+        let headers = "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: " + to_string(len(body)) + "\r\nConnection: close\r\n\r\n";
+        let request = headers + body;
         let written = write(fd, request, len(request));
 
         // Read response
