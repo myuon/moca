@@ -357,30 +357,6 @@ impl<'a> AstPrinter<'a> {
                 }
             }
 
-            Expr::Object { fields, .. } => {
-                self.write(&format!("{}Object", prefix));
-                self.write_type_suffix(expr);
-                self.newline();
-                for (i, (name, value)) in fields.iter().enumerate() {
-                    let field_is_last = i == fields.len() - 1;
-                    let field_prefix = if field_is_last {
-                        "└── "
-                    } else {
-                        "├── "
-                    };
-                    self.write_indent_with(&child_prefix);
-                    self.write(&format!("{}{}: ", field_prefix, name));
-                    self.newline();
-                    let field_child = if field_is_last {
-                        format!("{}    ", child_prefix)
-                    } else {
-                        format!("{}│   ", child_prefix)
-                    };
-                    self.write_indent_with(&field_child);
-                    self.print_expr(value, "└── ", true, &field_child);
-                }
-            }
-
             Expr::Index { object, index, .. } => {
                 self.write(&format!("{}Index", prefix));
                 self.write_type_suffix(expr);
@@ -952,26 +928,6 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedExpr::Object { fields } => {
-                self.write(&format!("{}Object", prefix));
-                self.newline();
-                for (i, (name, value)) in fields.iter().enumerate() {
-                    let is_last = i == fields.len() - 1;
-                    let field_prefix = if is_last { "└── " } else { "├── " };
-                    let field_child = if is_last {
-                        format!("{}    ", parent_prefix)
-                    } else {
-                        format!("{}│   ", parent_prefix)
-                    };
-                    self.write_indent_with(parent_prefix);
-                    self.write(&format!("{}{}: ", field_prefix, name));
-                    self.newline();
-                    let value_child = format!("{}    ", field_child);
-                    self.write_indent_with(&field_child);
-                    self.print_expr(value, "└── ", &value_child);
-                }
-            }
-
             ResolvedExpr::Index { object, index, .. } => {
                 self.write(&format!("{}Index", prefix));
                 self.newline();
@@ -1323,29 +1279,6 @@ impl<'a> Disassembler<'a> {
 
             // Array operations (legacy)
             Op::ArrayLen => self.output.push_str("ArrayLen"),
-
-            // Object operations
-            Op::New(n) => self.output.push_str(&format!("AllocObject {}", n)),
-            Op::GetF(idx) => {
-                let field = self
-                    .chunk
-                    .strings
-                    .get(*idx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<?>");
-                self.output
-                    .push_str(&format!("GetField {} ; .{}", idx, field));
-            }
-            Op::SetF(idx) => {
-                let field = self
-                    .chunk
-                    .strings
-                    .get(*idx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<?>");
-                self.output
-                    .push_str(&format!("SetField {} ; .{}", idx, field));
-            }
 
             // Type operations
             Op::TypeOf => self.output.push_str("TypeOf"),

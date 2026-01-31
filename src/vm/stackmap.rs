@@ -172,9 +172,6 @@ pub fn is_safepoint(op: &super::ops::Op, pc: usize) -> bool {
         // CALL is always a safepoint
         Op::Call(_, _) => true,
 
-        // NEW (object allocation) is a safepoint
-        Op::New(_) => true,
-
         // Heap allocation is also a safepoint
         Op::AllocHeap(_) => true,
 
@@ -277,9 +274,6 @@ mod tests {
 
         // CALL is safepoint
         assert!(is_safepoint(&Op::Call(0, 2), 5));
-
-        // NEW is safepoint
-        assert!(is_safepoint(&Op::New(1), 5));
 
         // Backward jump is safepoint
         assert!(is_safepoint(&Op::Jmp(0), 5)); // 0 < 5, backward
@@ -398,10 +392,6 @@ mod tests {
     #[test]
     fn test_spec_all_allocation_safepoints() {
         use super::super::ops::Op;
-
-        // Object allocation (NEW)
-        assert!(is_safepoint(&Op::New(0), 0));
-        assert!(is_safepoint(&Op::New(5), 0));
 
         // Heap allocation
         assert!(is_safepoint(&Op::AllocHeap(0), 0));

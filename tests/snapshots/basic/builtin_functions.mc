@@ -5,7 +5,6 @@ print(type_of(true));
 print(type_of(nil));
 print(type_of("hello"));
 print(type_of([1, 2, 3]));
-print(type_of({ x: 1 }));
 
 // to_string
 print(to_string(42));

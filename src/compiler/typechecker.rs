@@ -920,14 +920,6 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Object { fields, .. } => {
-                let type_fields: BTreeMap<String, Type> = fields
-                    .iter()
-                    .map(|(name, expr)| (name.clone(), self.infer_expr(expr, env)))
-                    .collect();
-                Type::Object(type_fields)
-            }
-
             Expr::Index {
                 object,
                 index,
@@ -1722,11 +1714,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_object_type() {
-        assert!(check(r#"let obj = {x: 1, y: "a"};"#).is_ok());
-    }
-
     // Acceptance Criteria tests
 
     #[test]
@@ -1746,12 +1733,6 @@ mod tests {
         // AC4: `fun f(a, b) { a + b }` called with f(1, "x") is type error
         let result = check(r#"fun f(a, b) { return a + b; } f(1, "x");"#);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_ac7_object_type_inferred() {
-        // AC7: `{x: 1, y: "a"}` has type `{x: int, y: string}`
-        assert!(check(r#"let obj: {x: int, y: string} = {x: 1, y: "a"};"#).is_ok());
     }
 
     #[test]

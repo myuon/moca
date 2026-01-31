@@ -7,7 +7,7 @@
 /// - Comparison: Eq, Ne, Lt, Le, Gt, Ge
 /// - Control: Jmp, JmpIfTrue, JmpIfFalse
 /// - Calls: Call, Ret
-/// - Heap: New, GetF, SetF
+/// - Heap: AllocHeap, HeapLoad, HeapStore
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     // ========================================
@@ -68,13 +68,6 @@ pub enum Op {
     // ========================================
     Call(usize, usize), // CALL: (func_index, argc) -> -argc + 1
     Ret,                // RET: Return (stack height must be 1)
-
-    // ========================================
-    // Heap & Objects
-    // ========================================
-    New(usize),  // NEW: Allocate object
-    GetF(usize), // GETF: Get field by string index
-    SetF(usize), // SETF: Set field with write barrier
 
     // ========================================
     // Array operations (legacy, kept for len() on multiple types)

@@ -97,9 +97,6 @@ pub enum ResolvedExpr {
     Array {
         elements: Vec<ResolvedExpr>,
     },
-    Object {
-        fields: Vec<(String, ResolvedExpr)>,
-    },
     Index {
         object: Box<ResolvedExpr>,
         index: Box<ResolvedExpr>,
@@ -639,16 +636,6 @@ impl<'a> Resolver<'a> {
                     .map(|e| self.resolve_expr(e, scope))
                     .collect::<Result<_, _>>()?;
                 Ok(ResolvedExpr::Array { elements: resolved })
-            }
-            Expr::Object { fields, .. } => {
-                let resolved: Vec<_> = fields
-                    .into_iter()
-                    .map(|(name, expr)| {
-                        let resolved_expr = self.resolve_expr(expr, scope)?;
-                        Ok((name, resolved_expr))
-                    })
-                    .collect::<Result<_, String>>()?;
-                Ok(ResolvedExpr::Object { fields: resolved })
             }
             Expr::Index {
                 object,

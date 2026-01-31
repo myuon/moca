@@ -229,11 +229,10 @@ impl Codegen {
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStoreDyn);
                 } else {
-                    // Regular object field assignment
-                    self.compile_expr(object, ops)?;
-                    self.compile_expr(value, ops)?;
-                    let field_idx = self.add_string(field.clone());
-                    ops.push(Op::SetF(field_idx));
+                    return Err(format!(
+                        "unknown field '{}' - object type has been removed, use map functions instead",
+                        field
+                    ));
                 }
             }
             ResolvedStatement::If {
@@ -444,15 +443,6 @@ impl Codegen {
                 }
                 ops.push(Op::AllocHeap(elements.len()));
             }
-            ResolvedExpr::Object { fields } => {
-                // Push field names and values as pairs
-                for (name, value) in fields {
-                    let name_idx = self.add_string(name.clone());
-                    ops.push(Op::PushString(name_idx));
-                    self.compile_expr(value, ops)?;
-                }
-                ops.push(Op::New(fields.len()));
-            }
             ResolvedExpr::Index {
                 object,
                 index,
@@ -489,9 +479,10 @@ impl Codegen {
                     ops.push(Op::PushInt(idx as i64));
                     ops.push(Op::HeapLoadDyn);
                 } else {
-                    // Regular object field access
-                    let field_idx = self.add_string(field.clone());
-                    ops.push(Op::GetF(field_idx));
+                    return Err(format!(
+                        "unknown field '{}' - object type has been removed, use map functions instead",
+                        field
+                    ));
                 }
             }
             ResolvedExpr::Unary { op, operand } => {
@@ -1015,22 +1006,6 @@ impl Codegen {
             // Functions - FORBIDDEN
             "Call" => Err("Call instruction is forbidden in asm block".to_string()),
             "Ret" => Err("Ret instruction is forbidden in asm block".to_string()),
-
-            // Heap & Objects
-            "New" => {
-                let n = self.expect_int_arg(args, 0, "New")? as usize;
-                Ok(Op::New(n))
-            }
-            "GetF" => {
-                let field = self.expect_string_arg(args, 0, "GetF")?;
-                let idx = self.add_string(field);
-                Ok(Op::GetF(idx))
-            }
-            "SetF" => {
-                let field = self.expect_string_arg(args, 0, "SetF")?;
-                let idx = self.add_string(field);
-                Ok(Op::SetF(idx))
-            }
 
             // Heap slot operations
             "AllocHeap" => {
