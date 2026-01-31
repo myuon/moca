@@ -1,7 +1,7 @@
-# Spec.md - HashMap Standard Library Implementation
+# Spec.md - Map Standard Library Implementation
 
 ## 1. Goal
-- moca言語のstdライブラリにHashMap（キー・バリュー型のデータ構造）を追加し、ユーザーがO(1)でデータの格納・取得ができるようにする
+- moca言語のstdライブラリにMap（キー・バリュー型のデータ構造）を追加し、ユーザーがO(1)でデータの格納・取得ができるようにする
 
 ## 2. Non-Goals
 - HashDoS対策などのセキュリティ機能
@@ -13,12 +13,12 @@
 - 辞書型のデータ構造を使いたいユーザー
 
 ## 4. Core User Flow
-1. `hashmap_new()` でHashMapを作成
-2. `hashmap_put(map, key, value)` でキー・バリューを格納
-3. `hashmap_get(map, key)` で値を取得
-4. `hashmap_contains(map, key)` でキーの存在確認
-5. `hashmap_remove(map, key)` でエントリを削除
-6. `hashmap_len(map)` で要素数を取得
+1. `map_new()` でMapを作成
+2. `map_put(m, key, value)` でキー・バリューを格納
+3. `map_get(m, key)` で値を取得
+4. `map_contains(m, key)` でキーの存在確認
+5. `map_remove(m, key)` でエントリを削除
+6. `map_len(m)` で要素数を取得
 7. イテレーション機能で全要素を走査
 
 ## 5. Inputs & Outputs
@@ -28,10 +28,10 @@
 - バリュー: `any` 型（任意の値）
 
 ### Outputs
-- `hashmap_new()` → HashMap構造体
-- `hashmap_get()` → 格納された値（存在しない場合は0/nil）
-- `hashmap_contains()` → `bool`
-- `hashmap_len()` → `int`
+- `map_new()` → Map構造体
+- `map_get()` → 格納された値（存在しない場合は0/nil）
+- `map_contains()` → `bool`
+- `map_len()` → `int`
 
 ## 6. Tech Stack
 - **実装言語**: Moca (std/prelude.mc)
@@ -45,7 +45,7 @@
 
 ### データ構造
 ```
-HashMap: { buckets: int, size: int, capacity: int }
+Map: { buckets: int, size: int, capacity: int }
   - buckets: Entry配列へのポインタ
   - size: 現在の要素数
   - capacity: バケット数
@@ -83,21 +83,21 @@ return hash
 - キーが既に存在する場合、putは値を上書き
 
 ### イテレーション
-- `hashmap_keys(map)` - 全キーの配列を返す
-- `hashmap_values(map)` - 全バリューの配列を返す
-- または `hashmap_foreach(map, callback)` 形式
+- `map_keys(m)` - 全キーの配列を返す
+- `map_values(m)` - 全バリューの配列を返す
+- または `map_foreach(m, callback)` 形式
 
 ## 8. Open Questions
 なし
 
 ## 9. Acceptance Criteria
 
-1. `hashmap_new()` で空のHashMapが作成できる
-2. `hashmap_put(map, key, value)` でキー・バリューを格納できる（int/string両対応）
-3. `hashmap_get(map, key)` で格納した値を取得できる
-4. `hashmap_contains(map, key)` でキーの存在確認ができる
-5. `hashmap_remove(map, key)` でエントリを削除できる
-6. `hashmap_len(map)` で要素数を取得できる
+1. `map_new()` で空のMapが作成できる
+2. `map_put(m, key, value)` でキー・バリューを格納できる（int/string両対応）
+3. `map_get(m, key)` で格納した値を取得できる
+4. `map_contains(m, key)` でキーの存在確認ができる
+5. `map_remove(m, key)` でエントリを削除できる
+6. `map_len(m)` で要素数を取得できる
 7. 同一キーへのputは値を上書きする
 8. ハッシュ衝突時も正しく値を格納・取得できる
 9. 17個以上の要素を追加してもリサイズにより正常動作する
@@ -123,21 +123,21 @@ return hash
 
 ### E2E シナリオ 1: 基本操作（stringキー）
 ```
-Given: 空のHashMap
-When: put("name", "Alice"), put("age", 30) を実行
-Then: get("name") == "Alice", get("age") == 30, len == 2
+Given: 空のMap
+When: map_put(m, "name", "Alice"), map_put(m, "age", 30) を実行
+Then: map_get(m, "name") == "Alice", map_get(m, "age") == 30, map_len(m) == 2
 ```
 
 ### E2E シナリオ 2: 基本操作（intキー）
 ```
-Given: 空のHashMap
-When: put(1, "one"), put(2, "two") を実行
-Then: get(1) == "one", get(2) == "two", len == 2
+Given: 空のMap
+When: map_put(m, 1, "one"), map_put(m, 2, "two") を実行
+Then: map_get(m, 1) == "one", map_get(m, 2) == "two", map_len(m) == 2
 ```
 
 ### E2E シナリオ 3: リサイズとイテレーション
 ```
-Given: 空のHashMap（初期容量16）
+Given: 空のMap（初期容量16）
 When: 20個のエントリを追加
-Then: 全てのエントリが正しく取得でき、len == 20、イテレーションで全要素が取得できる
+Then: 全てのエントリが正しく取得でき、map_len(m) == 20、イテレーションで全要素が取得できる
 ```
