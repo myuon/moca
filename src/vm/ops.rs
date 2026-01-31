@@ -119,6 +119,13 @@ pub enum Op {
     PrintDebug,
 
     // ========================================
+    // CLI arguments
+    // ========================================
+    Argc, // Push argc (number of CLI arguments) onto stack
+    Argv, // stack: [index] -> [arg_string]
+    Args, // Push all CLI arguments as an array onto stack
+
+    // ========================================
     // Syscall
     // ========================================
     /// System call instruction

@@ -439,6 +439,11 @@ impl Verifier {
 
             // Syscall
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
+
+            // CLI arguments
+            Op::Argc => (0, 1), // pushes argc
+            Op::Argv => (1, 1), // pops index, pushes arg string
+            Op::Args => (0, 1), // pushes args array
         }
     }
 }

@@ -69,6 +69,10 @@ enum Commands {
         /// The source file to run (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
 
+        /// Arguments to pass to the script
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        script_args: Vec<String>,
+
         /// JIT compilation mode (off, on, auto)
         #[arg(long, value_enum, default_value = "auto")]
         jit: JitModeArg,
@@ -133,6 +137,7 @@ fn main() -> ExitCode {
         }
         Commands::Run {
             file,
+            script_args,
             jit,
             jit_threshold,
             trace_jit,
@@ -175,7 +180,11 @@ fn main() -> ExitCode {
                 dump_bytecode,
             };
 
-            if let Err(e) = run_file(&path, &config, &dump_opts) {
+            // Build CLI args: argv[0] = script path, argv[1..] = script_args
+            let mut cli_args = vec![path.to_string_lossy().to_string()];
+            cli_args.extend(script_args);
+
+            if let Err(e) = run_file(&path, &config, &dump_opts, cli_args) {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }
@@ -269,7 +278,8 @@ fn run_file(
     path: &Path,
     config: &RuntimeConfig,
     dump_opts: &compiler::DumpOptions,
+    cli_args: Vec<String>,
 ) -> Result<(), String> {
     // Use the module-aware run_file with dump support
-    compiler::run_file_with_dump(path, config, dump_opts)
+    compiler::run_file_with_dump(path, config, dump_opts, cli_args)
 }

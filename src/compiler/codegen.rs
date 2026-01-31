@@ -842,6 +842,26 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::AllocHeapDynSimple);
                     }
+                    // CLI argument builtins
+                    "argc" => {
+                        if !args.is_empty() {
+                            return Err("argc takes no arguments".to_string());
+                        }
+                        ops.push(Op::Argc);
+                    }
+                    "argv" => {
+                        if args.len() != 1 {
+                            return Err("argv takes exactly 1 argument (index)".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::Argv);
+                    }
+                    "args" => {
+                        if !args.is_empty() {
+                            return Err("args takes no arguments".to_string());
+                        }
+                        ops.push(Op::Args);
+                    }
                     _ => return Err(format!("unknown builtin '{}'", name)),
                 }
             }

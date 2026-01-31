@@ -66,6 +66,32 @@ moca clean              # Remove build artifacts
 複数同時指定可能。出力順序は AST → Resolved → Bytecode（パイプライン順）。
 ダンプ後もプログラムは通常実行される。
 
+## Accessing CLI Arguments
+
+Scripts can access command-line arguments using built-in functions:
+
+```bash
+moca run script.mc hello world 123
+```
+
+```moca
+// argc() - Returns the number of arguments (including script path)
+print(argc());      // 4
+
+// argv(index) - Returns the argument at the given index
+print(argv(0));     // "script.mc"
+print(argv(1));     // "hello"
+print(argv(2));     // "world"
+print(argv(3));     // "123"
+
+// args() - Returns all arguments as an array
+var all = args();   // ["script.mc", "hello", "world", "123"]
+```
+
+- `argv(0)` is always the script file path
+- `argv(n)` returns empty string for out-of-bounds index
+- Arguments are always strings; use `parse_int()` to convert to numbers
+
 ## Exit Codes
 
 - `0`: Success

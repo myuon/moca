@@ -294,6 +294,9 @@ const OP_PICK: u8 = 80;
 const OP_ALLOC_HEAP_DYN: u8 = 81;
 const OP_PICK_DYN: u8 = 82;
 const OP_ALLOC_HEAP_DYN_SIMPLE: u8 = 83;
+const OP_ARGC: u8 = 84;
+const OP_ARGV: u8 = 85;
+const OP_ARGS: u8 = 86;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -416,6 +419,9 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *num as u32)?;
             write_u32(w, *argc as u32)?;
         }
+        Op::Argc => w.write_all(&[OP_ARGC])?,
+        Op::Argv => w.write_all(&[OP_ARGV])?,
+        Op::Args => w.write_all(&[OP_ARGS])?,
     }
     Ok(())
 }
@@ -484,6 +490,9 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
+        OP_ARGC => Op::Argc,
+        OP_ARGV => Op::Argv,
+        OP_ARGS => Op::Args,
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)

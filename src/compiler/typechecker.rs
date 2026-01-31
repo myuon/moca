@@ -1606,6 +1606,33 @@ impl TypeChecker {
                 }
                 Some(Type::Any) // Returns a reference (opaque)
             }
+            // CLI argument operations
+            "argc" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("argc expects 0 arguments", span));
+                }
+                Some(Type::Int)
+            }
+            "argv" => {
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("argv expects 1 argument (index)", span));
+                    return Some(Type::String);
+                }
+                let arg_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
+                    self.errors.push(e);
+                }
+                Some(Type::String)
+            }
+            "args" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("args expects 0 arguments", span));
+                }
+                Some(Type::Array(Box::new(Type::String)))
+            }
             _ => None,
         }
     }
