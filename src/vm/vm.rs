@@ -84,6 +84,8 @@ pub struct VM {
     pending_sockets: HashSet<i64>,
     /// Next available file descriptor
     next_fd: i64,
+    /// Command-line arguments passed to the script
+    cli_args: Vec<String>,
 }
 
 impl VM {
@@ -145,6 +147,7 @@ impl VM {
             socket_descriptors: HashMap::new(),
             pending_sockets: HashSet::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
+            cli_args: Vec::new(),
         }
     }
 
@@ -152,6 +155,26 @@ impl VM {
     pub fn set_jit_config(&mut self, threshold: u32, trace: bool) {
         self.jit_threshold = threshold;
         self.trace_jit = trace;
+    }
+
+    /// Set command-line arguments for the script.
+    pub fn set_cli_args(&mut self, args: Vec<String>) {
+        self.cli_args = args;
+    }
+
+    /// Get the number of command-line arguments.
+    pub fn cli_argc(&self) -> usize {
+        self.cli_args.len()
+    }
+
+    /// Get a command-line argument by index.
+    pub fn cli_argv(&self, index: usize) -> &str {
+        self.cli_args.get(index).map(|s| s.as_str()).unwrap_or("")
+    }
+
+    /// Get all command-line arguments.
+    pub fn cli_args(&self) -> &[String] {
+        &self.cli_args
     }
 
     /// Get GC statistics.
@@ -1111,6 +1134,29 @@ impl VM {
 
                 let result = self.handle_syscall(syscall_num, &args)?;
                 self.stack.push(result);
+            }
+            Op::Argc => {
+                let count = self.cli_args.len() as i64;
+                self.stack.push(Value::I64(count));
+            }
+            Op::Argv => {
+                let idx = match self.stack.pop() {
+                    Some(Value::I64(i)) => i as usize,
+                    _ => return Err("argv: expected integer index".to_string()),
+                };
+                let arg = self.cli_argv(idx).to_string();
+                let r = self.heap.alloc_string(arg)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::Args => {
+                // Create an array of all CLI arguments
+                let mut slots = Vec::with_capacity(self.cli_args.len());
+                for arg in self.cli_args.clone() {
+                    let r = self.heap.alloc_string(arg)?;
+                    slots.push(Value::Ref(r));
+                }
+                let arr_ref = self.heap.alloc_slots(slots)?;
+                self.stack.push(Value::Ref(arr_ref));
             }
         }
 

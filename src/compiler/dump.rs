@@ -1391,6 +1391,11 @@ impl<'a> Disassembler<'a> {
 
             // Syscall operations
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
+
+            // CLI argument operations
+            Op::Argc => self.output.push_str("Argc"),
+            Op::Argv => self.output.push_str("Argv"),
+            Op::Args => self.output.push_str("Args"),
         }
     }
 }

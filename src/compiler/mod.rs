@@ -286,6 +286,7 @@ pub fn run_file_with_dump(
     path: &Path,
     config: &RuntimeConfig,
     dump_opts: &DumpOptions,
+    cli_args: Vec<String>,
 ) -> Result<(), String> {
     let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut loader = ModuleLoader::new(root_dir);
@@ -343,6 +344,7 @@ pub fn run_file_with_dump(
     // Execution with runtime configuration
     let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
     vm.set_jit_config(config.jit_threshold, config.trace_jit);
+    vm.set_cli_args(cli_args);
 
     vm.run(&chunk)?;
 

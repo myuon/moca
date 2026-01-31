@@ -216,6 +216,10 @@ impl<'a> Resolver<'a> {
                 "__heap_load".to_string(),
                 "__heap_store".to_string(),
                 "__alloc_heap".to_string(),
+                // CLI argument operations
+                "argc".to_string(),
+                "argv".to_string(),
+                "args".to_string(),
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),
