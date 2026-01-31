@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
@@ -82,6 +82,8 @@ pub struct VM {
     socket_descriptors: HashMap<i64, TcpStream>,
     /// Pending socket fds (created by socket() but not yet connected)
     pending_sockets: HashSet<i64>,
+    /// Listener descriptor table for TCP servers (fd >= 3)
+    listener_descriptors: HashMap<i64, TcpListener>,
     /// Next available file descriptor
     next_fd: i64,
     /// Command-line arguments passed to the script
@@ -146,6 +148,7 @@ impl VM {
             file_descriptors: HashMap::new(),
             socket_descriptors: HashMap::new(),
             pending_sockets: HashSet::new(),
+            listener_descriptors: HashMap::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
             cli_args: Vec::new(),
         }
@@ -1418,6 +1421,9 @@ impl VM {
         const SYSCALL_READ: usize = 4;
         const SYSCALL_SOCKET: usize = 5;
         const SYSCALL_CONNECT: usize = 6;
+        const SYSCALL_BIND: usize = 7;
+        const SYSCALL_LISTEN: usize = 8;
+        const SYSCALL_ACCEPT: usize = 9;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
@@ -1427,6 +1433,7 @@ impl VM {
         const ETIMEDOUT: i64 = -5; // Connection timed out
         const EAFNOSUPPORT: i64 = -6; // Address family not supported
         const ESOCKTNOSUPPORT: i64 = -7; // Socket type not supported
+        const EADDRINUSE: i64 = -8; // Address already in use
 
         // Open flags (Linux-compatible values)
         const O_RDONLY: i64 = 0;
@@ -1519,10 +1526,11 @@ impl VM {
                     return Ok(Value::I64(EBADF));
                 }
 
-                // Remove from fd table (File/TcpStream is dropped automatically)
+                // Remove from fd table (File/TcpStream/TcpListener is dropped automatically)
                 let closed = self.file_descriptors.remove(&fd).is_some()
                     || self.socket_descriptors.remove(&fd).is_some()
-                    || self.pending_sockets.remove(&fd);
+                    || self.pending_sockets.remove(&fd)
+                    || self.listener_descriptors.remove(&fd).is_some();
 
                 if closed {
                     Ok(Value::I64(0)) // Success
@@ -1730,6 +1738,110 @@ impl VM {
                         };
                         Ok(Value::I64(error_code))
                     }
+                }
+            }
+            SYSCALL_BIND => {
+                if args.len() != 3 {
+                    return Err(format!(
+                        "bind syscall expects 3 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "bind: fd must be an integer".to_string())?;
+
+                // Get host string
+                let host_ref = match &args[1] {
+                    Value::Ref(r) => *r,
+                    _ => return Err("bind: host must be a string".to_string()),
+                };
+                let heap_obj = self
+                    .heap
+                    .get(host_ref)
+                    .ok_or_else(|| "bind: invalid reference".to_string())?;
+                let host = heap_obj
+                    .slots_to_string()
+                    .ok_or_else(|| "bind: host must be a string".to_string())?;
+
+                let port = args[2]
+                    .as_i64()
+                    .ok_or_else(|| "bind: port must be an integer".to_string())?;
+
+                // Check fd is a pending socket
+                if !self.pending_sockets.remove(&fd) {
+                    return Ok(Value::I64(EBADF));
+                }
+
+                // Try to bind (creates TcpListener)
+                let addr = format!("{}:{}", host, port);
+                match TcpListener::bind(&addr) {
+                    Ok(listener) => {
+                        self.listener_descriptors.insert(fd, listener);
+                        Ok(Value::I64(0)) // Success
+                    }
+                    Err(e) => {
+                        // Map IO errors to our error codes
+                        let error_code = match e.kind() {
+                            std::io::ErrorKind::AddrInUse => EADDRINUSE,
+                            std::io::ErrorKind::PermissionDenied => EACCES,
+                            _ => EBADF,
+                        };
+                        Ok(Value::I64(error_code))
+                    }
+                }
+            }
+            SYSCALL_LISTEN => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "listen syscall expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "listen: fd must be an integer".to_string())?;
+
+                let _backlog = args[1]
+                    .as_i64()
+                    .ok_or_else(|| "listen: backlog must be an integer".to_string())?;
+
+                // Check fd is a valid listener (already listening after bind in Rust)
+                if self.listener_descriptors.contains_key(&fd) {
+                    Ok(Value::I64(0)) // Success - already listening
+                } else {
+                    Ok(Value::I64(EBADF)) // Not a valid listener
+                }
+            }
+            SYSCALL_ACCEPT => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "accept syscall expects 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+
+                let fd = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "accept: fd must be an integer".to_string())?;
+
+                // Get the listener
+                let listener = match self.listener_descriptors.get(&fd) {
+                    Some(l) => l,
+                    None => return Ok(Value::I64(EBADF)),
+                };
+
+                // Accept a connection
+                match listener.accept() {
+                    Ok((stream, _addr)) => {
+                        let client_fd = self.next_fd;
+                        self.next_fd += 1;
+                        self.socket_descriptors.insert(client_fd, stream);
+                        Ok(Value::I64(client_fd))
+                    }
+                    Err(_) => Ok(Value::I64(EBADF)),
                 }
             }
             _ => Err(format!("unknown syscall: {}", syscall_num)),

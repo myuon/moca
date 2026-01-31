@@ -481,7 +481,122 @@ fn snapshot_stdlib() {
 }
 
 // ============================================================================
-// HTTP Snapshot Tests
+// HTTP Server Snapshot Tests
+// ============================================================================
+
+/// Test that a Moca HTTP server can accept connections and respond to requests.
+/// This test starts a Moca HTTP server in a background thread, sends a request,
+/// and verifies the response.
+///
+/// Uses http_server.mc.template with {{PORT}} placeholder.
+#[test]
+fn snapshot_http_server() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let http_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("http");
+
+    let template_path = http_dir.join("http_server.mc.template");
+    if !template_path.exists() {
+        panic!("Template file not found: {:?}", template_path);
+    }
+
+    // Find an available port
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener); // Release the port so Moca can use it
+
+    // Read template and replace {{PORT}} with actual port
+    let template_content = fs::read_to_string(&template_path)
+        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", template_path, e));
+    let moca_content = template_content.replace("{{PORT}}", &port.to_string());
+
+    // Write to a temporary file
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join("http_server_test.mc");
+    fs::write(&temp_file, &moca_content).expect("Failed to write temp file");
+
+    // Channel to receive server result
+    let (tx, rx) = mpsc::channel();
+
+    // Start the Moca server in a background thread
+    let temp_file_clone = temp_file.clone();
+    let server_thread = std::thread::spawn(move || {
+        let config = RuntimeConfig::default();
+        let result = run_moca_file_inprocess(&temp_file_clone, &config);
+        let _ = tx.send(result);
+    });
+
+    // Wait for server to start
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Send an HTTP request
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .expect("Failed to connect to Moca server");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let request = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    stream
+        .write_all(request.as_bytes())
+        .expect("Failed to send request");
+
+    // Read response
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("Failed to read response");
+
+    // Verify HTTP response
+    assert!(
+        response.contains("HTTP/1.1 200 OK"),
+        "Response should contain HTTP 200 OK status: {}",
+        response
+    );
+    assert!(
+        response.contains("Hello from Moca!"),
+        "Response should contain expected body: {}",
+        response
+    );
+
+    // Wait for server thread to finish
+    server_thread.join().expect("Server thread panicked");
+
+    // Verify server output
+    let (actual_stdout, actual_stderr, actual_exitcode) =
+        rx.recv().expect("Failed to receive server result");
+
+    // Check expected stdout
+    let stdout_path = http_dir.join("http_server.stdout");
+    if stdout_path.exists() {
+        let expected_stdout = fs::read_to_string(&stdout_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
+        assert_eq!(
+            actual_stdout, expected_stdout,
+            "stdout mismatch for http_server\n--- expected ---\n{}\n--- actual ---\n{}",
+            expected_stdout, actual_stdout
+        );
+    }
+
+    // Check exit code
+    assert_eq!(
+        actual_exitcode, 0,
+        "Server should exit with code 0, stderr: {}",
+        actual_stderr
+    );
+
+    // Clean up
+    let _ = fs::remove_file(&temp_file);
+}
+
+// ============================================================================
+// HTTP Client Snapshot Tests
 // ============================================================================
 
 /// Run HTTP snapshot tests with a local hyper-based test server.
@@ -541,14 +656,18 @@ fn snapshot_http() {
         return;
     }
 
-    // Find all .mc.template files
+    // Find all .mc.template files (excluding server templates which are tested separately)
     let templates: Vec<_> = fs::read_dir(&http_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path()
+            let name = e
+                .path()
                 .file_name()
-                .map_or(false, |n| n.to_string_lossy().ends_with(".mc.template"))
+                .map(|n| n.to_string_lossy().to_string());
+            name.as_ref().map_or(false, |n| {
+                n.ends_with(".mc.template") && !n.starts_with("http_server")
+            })
         })
         .collect();
 

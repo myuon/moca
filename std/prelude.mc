@@ -10,6 +10,9 @@
 // Syscall 4: read(fd, count) -> string
 // Syscall 5: socket(domain, type) -> fd
 // Syscall 6: connect(fd, host, port) -> status
+// Syscall 7: bind(fd, host, port) -> status
+// Syscall 8: listen(fd, backlog) -> status
+// Syscall 9: accept(fd) -> client_fd
 
 // ============================================================================
 // POSIX-like Constants (as functions to avoid polluting the stack)
@@ -33,6 +36,7 @@ fun ECONNREFUSED() -> int { return -4; }    // Connection refused
 fun ETIMEDOUT() -> int { return -5; }       // Connection timed out
 fun EAFNOSUPPORT() -> int { return -6; }    // Address family not supported
 fun ESOCKTNOSUPPORT() -> int { return -7; } // Socket type not supported
+fun EADDRINUSE() -> int { return -8; }      // Address already in use
 
 // ============================================================================
 // Low-level I/O Functions (using __syscall)
@@ -76,6 +80,26 @@ fun socket(domain: int, typ: int) -> int {
 // Returns: 0 on success, negative error code on failure
 fun connect(fd: int, host: string, port: int) -> int {
     return __syscall(6, fd, host, port);
+}
+
+// Bind a socket to a local address.
+// host: "0.0.0.0" for all interfaces, "127.0.0.1" for localhost only
+// Returns: 0 on success, negative error code on failure
+fun bind(fd: int, host: string, port: int) -> int {
+    return __syscall(7, fd, host, port);
+}
+
+// Listen for incoming connections on a bound socket.
+// backlog: maximum number of pending connections (ignored in current implementation)
+// Returns: 0 on success, negative error code on failure
+fun listen(fd: int, backlog: int) -> int {
+    return __syscall(8, fd, backlog);
+}
+
+// Accept an incoming connection on a listening socket.
+// Returns: new socket fd for the client connection, or negative error code on failure
+fun accept(fd: int) -> int {
+    return __syscall(9, fd);
 }
 
 // ============================================================================
