@@ -1,0 +1,114 @@
+// HTTP POST echo test
+// This test sends a POST request to /echo and receives the same body back
+
+// Helper: Parse Content-Length value from HTTP headers
+// Searches for "content-length:" (case-insensitive) and extracts the number
+fun parse_content_length(response: string, header_end: int) -> int {
+    // ASCII codes for comparison
+    let ASCII_0 = 48;
+    let ASCII_9 = 57;
+    let ASCII_COLON = 58;
+    let ASCII_SPACE = 32;
+    let ASCII_CR = 13;
+
+    // Search for "content-length:" pattern (lowercase, as hyper returns lowercase)
+    let pattern = "content-length:";
+    let pattern_pos = str_index_of(response, pattern);
+    if pattern_pos < 0 {
+        return -1;
+    }
+
+    // Parse the number after "content-length:"
+    var value = 0;
+    var i = pattern_pos + len(pattern);
+
+    // Skip whitespace
+    while i < header_end {
+        let c = response[i];
+        if c != ASCII_SPACE {
+            i = i;  // break simulation - exit condition below
+        }
+        if c == ASCII_SPACE {
+            i = i + 1;
+        }
+        if c != ASCII_SPACE {
+            // Exit while by making condition false
+            i = i + header_end;
+        }
+    }
+    i = i - header_end;  // Restore position
+
+    // Parse digits
+    while i < header_end {
+        let c = response[i];
+        if c >= ASCII_0 {
+            if c <= ASCII_9 {
+                value = value * 10 + (c - ASCII_0);
+                i = i + 1;
+            }
+        }
+        if c < ASCII_0 {
+            // Not a digit, stop parsing
+            i = header_end;
+        }
+        if c > ASCII_9 {
+            // Not a digit, stop parsing
+            i = header_end;
+        }
+    }
+
+    return value;
+}
+
+// Create socket (AF_INET=2, SOCK_STREAM=1)
+let fd = socket(AF_INET(), SOCK_STREAM());
+if fd < 0 {
+    print("Failed to create socket");
+    print(fd);
+}
+
+if fd >= 0 {
+    // Connect to local test server
+    let result = connect(fd, "127.0.0.1", {{PORT}});
+    if result < 0 {
+        print("Failed to connect");
+        print(result);
+    }
+
+    if result >= 0 {
+        // Build HTTP POST request with JSON body
+        let body = "{\"x\":123}";
+        let headers = "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: " + to_string(len(body)) + "\r\nConnection: close\r\n\r\n";
+        let request = headers + body;
+        let written = write(fd, request, len(request));
+
+        // Read response - first read enough to get headers
+        var response = read(fd, 1024);
+
+        // Find end of headers (\r\n\r\n)
+        let header_end = str_index_of(response, "\r\n\r\n");
+        if header_end >= 0 {
+            // Parse Content-Length from headers
+            let content_length = parse_content_length(response, header_end);
+
+            // Calculate body position and how much we already have
+            let body_start = header_end + 4;
+            let body_received = len(response) - body_start;
+
+            // Read remaining body if needed
+            if content_length > body_received {
+                let remaining = content_length - body_received;
+                let more_body = read(fd, remaining);
+                response = response + more_body;
+            }
+
+            // Output the complete response (headers + body)
+            // Use write to stdout (fd=1) to avoid extra newline from print
+            write(1, response, header_end + 4 + content_length);
+            print("");  // Final newline
+        }
+    }
+
+    // Close socket
+    close(fd);
+}

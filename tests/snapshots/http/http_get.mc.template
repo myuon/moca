@@ -1,0 +1,33 @@
+// HTTP GET request test
+// This test sends an HTTP GET request to a local test server
+
+// Create socket (AF_INET=2, SOCK_STREAM=1)
+let fd = socket(AF_INET(), SOCK_STREAM());
+if fd < 0 {
+    print("Failed to create socket");
+    print(fd);
+}
+
+if fd >= 0 {
+    // Connect to local test server
+    let result = connect(fd, "127.0.0.1", {{PORT}});
+    if result < 0 {
+        print("Failed to connect");
+        print(result);
+    }
+
+    if result >= 0 {
+        // Send HTTP GET request
+        let request = "GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
+        let written = write(fd, request, len(request));
+
+        // Read response
+        let response = read(fd, 4096);
+
+        // Print response (will contain HTTP headers and body)
+        print(response);
+    }
+
+    // Close socket
+    close(fd);
+}
