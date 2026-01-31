@@ -1,0 +1,34 @@
+// HTTP POST echo test
+// This test sends a POST request to /echo and receives the same body back
+
+// Create socket (AF_INET=2, SOCK_STREAM=1)
+let fd = socket(AF_INET(), SOCK_STREAM());
+if fd < 0 {
+    print("Failed to create socket");
+    print(fd);
+}
+
+if fd >= 0 {
+    // Connect to local test server
+    let result = connect(fd, "127.0.0.1", {{PORT}});
+    if result < 0 {
+        print("Failed to connect");
+        print(result);
+    }
+
+    if result >= 0 {
+        // Build HTTP POST request with body
+        let body = "Hello, Echo!";
+        let request = "POST /echo HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nHello, Echo!";
+        let written = write(fd, request, len(request));
+
+        // Read response
+        let response = read(fd, 4096);
+
+        // Print response
+        print(response);
+    }
+
+    // Close socket
+    close(fd);
+}

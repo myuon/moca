@@ -1,5 +1,5 @@
 HTTP/1.0 200 OK
 content-type: text/plain
-content-length: 23
+content-length: 12
 
-Hello from test server!
+Hello, Echo!

@@ -484,14 +484,53 @@ fn snapshot_stdlib() {
 // HTTP Snapshot Tests
 // ============================================================================
 
-/// Run HTTP snapshot tests with a local test server.
+/// Run HTTP snapshot tests with a local hyper-based test server.
 /// These tests require a running HTTP server and use template files
 /// with {{PORT}} placeholder that gets replaced with the actual port.
+///
+/// Endpoints:
+/// - GET / : Returns "Hello from test server!"
+/// - POST /echo : Returns the request body as-is
 #[test]
 fn snapshot_http() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::{Bytes, Incoming};
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper::{Method, Request, Response, StatusCode};
+    use hyper_util::rt::TokioIo;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        match (req.method(), req.uri().path()) {
+            (&Method::GET, "/") => {
+                let body = "Hello from test server!";
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain")
+                    .header("Content-Length", body.len())
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap())
+            }
+            (&Method::POST, "/echo") => {
+                let body_bytes = req.collect().await?.to_bytes();
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain")
+                    .header("Content-Length", body_bytes.len())
+                    .body(Full::new(body_bytes))
+                    .unwrap())
+            }
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Full::new(Bytes::from("Not Found")))
+                .unwrap()),
+        }
+    }
 
     let http_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -513,6 +552,9 @@ fn snapshot_http() {
         })
         .collect();
 
+    // Create a tokio runtime for the HTTP server
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
     for entry in templates {
         let template_path = entry.path();
         let base_name = template_path
@@ -521,29 +563,43 @@ fn snapshot_http() {
             .to_string_lossy()
             .replace(".mc", "");
 
-        // Start a simple HTTP server on a random port
-        let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind");
-        let port = listener.local_addr().unwrap().port();
+        // Start hyper HTTP server on a random port
+        let (port, shutdown_tx) = rt.block_on(async {
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let listener = TcpListener::bind(addr).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
 
-        let server_handle = thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                // Read request
-                let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf);
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let shutdown_flag = Arc::new(AtomicBool::new(false));
+            let shutdown_flag_clone = shutdown_flag.clone();
 
-                // Send HTTP response with proper headers
-                let body = "Hello from test server!";
-                let response = format!(
-                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = stream.write_all(response.as_bytes());
-            }
+            tokio::spawn(async move {
+                let mut shutdown_rx = shutdown_rx;
+                loop {
+                    tokio::select! {
+                        result = listener.accept() => {
+                            if let Ok((stream, _)) = result {
+                                let io = TokioIo::new(stream);
+                                tokio::spawn(async move {
+                                    let _ = http1::Builder::new()
+                                        .serve_connection(io, service_fn(handle_request))
+                                        .await;
+                                });
+                            }
+                        }
+                        _ = &mut shutdown_rx => {
+                            shutdown_flag_clone.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                }
+            });
+
+            (port, shutdown_tx)
         });
 
         // Give server time to start
-        thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Read template and replace {{PORT}} with actual port
         let template_content = fs::read_to_string(&template_path)
@@ -564,18 +620,27 @@ fn snapshot_http() {
         // Clean up temp file
         let _ = fs::remove_file(&temp_file);
 
-        // Wait for server to finish
-        let _ = server_handle.join();
+        // Shutdown the server
+        let _ = shutdown_tx.send(());
 
         // Check expected stdout
         let stdout_path = http_dir.join(format!("{}.stdout", base_name));
         if stdout_path.exists() {
             let expected_stdout = fs::read_to_string(&stdout_path)
                 .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
+
+            // Remove dynamic 'date:' header line from actual output for comparison
+            // Split by \r\n to preserve CRLF line endings
+            let actual_stdout_normalized: String = actual_stdout
+                .split("\r\n")
+                .filter(|line| !line.to_lowercase().starts_with("date:"))
+                .collect::<Vec<_>>()
+                .join("\r\n");
+
             assert_eq!(
-                actual_stdout, expected_stdout,
+                actual_stdout_normalized, expected_stdout,
                 "stdout mismatch for {:?}\n--- expected ---\n{}\n--- actual ---\n{}",
-                template_path, expected_stdout, actual_stdout
+                template_path, expected_stdout, actual_stdout_normalized
             );
         }
 
