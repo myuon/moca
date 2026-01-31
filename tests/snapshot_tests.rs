@@ -487,6 +487,8 @@ fn snapshot_stdlib() {
 /// Test that a Moca HTTP server can accept connections and respond to requests.
 /// This test starts a Moca HTTP server in a background thread, sends a request,
 /// and verifies the response.
+///
+/// Uses http_server.mc.template with {{PORT}} placeholder.
 #[test]
 fn snapshot_http_server() {
     use std::io::{Read, Write};
@@ -494,69 +496,30 @@ fn snapshot_http_server() {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    let http_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("http");
+
+    let template_path = http_dir.join("http_server.mc.template");
+    if !template_path.exists() {
+        panic!("Template file not found: {:?}", template_path);
+    }
+
     // Find an available port
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener); // Release the port so Moca can use it
 
-    // Create a simple Moca HTTP server script that handles one request
-    let moca_script = format!(
-        r#"
-// Simple HTTP server for testing
-fun main() {{
-    let fd = socket(AF_INET(), SOCK_STREAM());
-    if fd < 0 {{
-        print("Error: Failed to create socket");
-        return 1;
-    }}
+    // Read template and replace {{PORT}} with actual port
+    let template_content = fs::read_to_string(&template_path)
+        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", template_path, e));
+    let moca_content = template_content.replace("{{PORT}}", &port.to_string());
 
-    let bind_result = bind(fd, "127.0.0.1", {port});
-    if bind_result < 0 {{
-        print("Error: Failed to bind");
-        close(fd);
-        return 1;
-    }}
-
-    let listen_result = listen(fd, 10);
-    if listen_result < 0 {{
-        print("Error: Failed to listen");
-        close(fd);
-        return 1;
-    }}
-
-    // Accept one connection
-    let client_fd = accept(fd);
-    if client_fd < 0 {{
-        print("Error: Failed to accept");
-        close(fd);
-        return 1;
-    }}
-
-    // Read the request
-    let request = read(client_fd, 4096);
-
-    // Send HTTP response
-    let body = "Hello from Moca!";
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 16\r\nConnection: close\r\n\r\n" + body;
-    write(client_fd, response, len(response));
-
-    // Close connections
-    close(client_fd);
-    close(fd);
-
-    print("Server handled one request");
-    return 0;
-}}
-
-main();
-"#,
-        port = port
-    );
-
-    // Write the script to a temp file
+    // Write to a temporary file
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("moca_http_server_test.mc");
-    fs::write(&temp_file, &moca_script).expect("Failed to write temp file");
+    let temp_file = temp_dir.join("http_server_test.mc");
+    fs::write(&temp_file, &moca_content).expect("Failed to write temp file");
 
     // Channel to receive server result
     let (tx, rx) = mpsc::channel();
@@ -590,7 +553,7 @@ main();
         .read_to_string(&mut response)
         .expect("Failed to read response");
 
-    // Verify response
+    // Verify HTTP response
     assert!(
         response.contains("HTTP/1.1 200 OK"),
         "Response should contain HTTP 200 OK status: {}",
@@ -606,16 +569,26 @@ main();
     server_thread.join().expect("Server thread panicked");
 
     // Verify server output
-    let (stdout, stderr, exit_code) = rx.recv().expect("Failed to receive server result");
+    let (actual_stdout, actual_stderr, actual_exitcode) =
+        rx.recv().expect("Failed to receive server result");
+
+    // Check expected stdout
+    let stdout_path = http_dir.join("http_server.stdout");
+    if stdout_path.exists() {
+        let expected_stdout = fs::read_to_string(&stdout_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
+        assert_eq!(
+            actual_stdout, expected_stdout,
+            "stdout mismatch for http_server\n--- expected ---\n{}\n--- actual ---\n{}",
+            expected_stdout, actual_stdout
+        );
+    }
+
+    // Check exit code
     assert_eq!(
-        exit_code, 0,
+        actual_exitcode, 0,
         "Server should exit with code 0, stderr: {}",
-        stderr
-    );
-    assert!(
-        stdout.contains("Server handled one request"),
-        "Server should print success message, got: {}",
-        stdout
+        actual_stderr
     );
 
     // Clean up
@@ -683,14 +656,18 @@ fn snapshot_http() {
         return;
     }
 
-    // Find all .mc.template files
+    // Find all .mc.template files (excluding server templates which are tested separately)
     let templates: Vec<_> = fs::read_dir(&http_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path()
+            let name = e
+                .path()
                 .file_name()
-                .map_or(false, |n| n.to_string_lossy().ends_with(".mc.template"))
+                .map(|n| n.to_string_lossy().to_string());
+            name.as_ref().map_or(false, |n| {
+                n.ends_with(".mc.template") && !n.starts_with("http_server")
+            })
         })
         .collect();
 

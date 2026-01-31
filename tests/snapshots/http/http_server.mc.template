@@ -1,0 +1,56 @@
+// HTTP server test
+// This test starts an HTTP server and handles one request
+
+fun main() {
+    let fd = socket(AF_INET(), SOCK_STREAM());
+    if fd < 0 {
+        print("Error: Failed to create socket");
+        return 1;
+    }
+
+    let bind_result = bind(fd, "127.0.0.1", {{PORT}});
+    if bind_result < 0 {
+        print("Error: Failed to bind");
+        close(fd);
+        return 1;
+    }
+
+    let listen_result = listen(fd, 10);
+    if listen_result < 0 {
+        print("Error: Failed to listen");
+        close(fd);
+        return 1;
+    }
+
+    // Accept one connection
+    let client_fd = accept(fd);
+    if client_fd < 0 {
+        print("Error: Failed to accept");
+        close(fd);
+        return 1;
+    }
+
+    // Read the request
+    let request = read(client_fd, 4096);
+
+    // Log request received (check first char is 'G' for GET)
+    if len(request) > 0 && request[0] == 71 {
+        print("Received: GET request");
+    } else {
+        print("Received: unknown request");
+    }
+
+    // Send HTTP response
+    let body = "Hello from Moca!";
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 16\r\nConnection: close\r\n\r\n" + body;
+    write(client_fd, response, len(response));
+
+    // Close connections
+    close(client_fd);
+    close(fd);
+
+    print("Server handled one request");
+    return 0;
+}
+
+main();
