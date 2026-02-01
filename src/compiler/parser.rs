@@ -101,6 +101,7 @@ impl<'a> Parser<'a> {
 
         Ok(FnDef {
             name,
+            type_params: Vec::new(), // TODO: Parse type params in Phase 2
             params,
             return_type,
             body,
@@ -128,7 +129,12 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::RBrace)?;
 
-        Ok(StructDef { name, fields, span })
+        Ok(StructDef {
+            name,
+            type_params: Vec::new(), // TODO: Parse type params in Phase 2
+            fields,
+            span,
+        })
     }
 
     /// Parse a struct field: `name: Type`
@@ -169,7 +175,12 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::RBrace)?;
 
-        Ok(Expr::StructLiteral { name, fields, span })
+        Ok(Expr::StructLiteral {
+            name,
+            type_args: Vec::new(), // TODO: Parse type args in Phase 3
+            fields,
+            span,
+        })
     }
 
     /// Parse an impl block: `impl Point { fn methods... }`
@@ -187,7 +198,9 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RBrace)?;
 
         Ok(ImplBlock {
+            type_params: Vec::new(), // TODO: Parse type params in Phase 2
             struct_name,
+            struct_type_args: Vec::new(), // TODO: Parse type args in Phase 2
             methods,
             span,
         })
@@ -743,6 +756,7 @@ impl<'a> Parser<'a> {
 
                     expr = Expr::Call {
                         callee: name.clone(),
+                        type_args: Vec::new(), // TODO: Parse type args in Phase 3
                         args,
                         span: *span,
                     };
@@ -782,6 +796,7 @@ impl<'a> Parser<'a> {
                     expr = Expr::MethodCall {
                         object: Box::new(expr),
                         method: field,
+                        type_args: Vec::new(), // TODO: Parse type args in Phase 3
                         args,
                         span,
                     };
@@ -814,7 +829,9 @@ impl<'a> Parser<'a> {
 
                     expr = Expr::AssociatedFunctionCall {
                         type_name: type_name.clone(),
+                        type_args: Vec::new(), // TODO: Parse type args in Phase 3
                         function,
+                        fn_type_args: Vec::new(), // TODO: Parse fn type args in Phase 3
                         args,
                         span: *span,
                     };

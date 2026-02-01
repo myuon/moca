@@ -101,6 +101,20 @@ impl Substitution {
                     .map(|(n, t)| (n.clone(), self.apply(t)))
                     .collect(),
             },
+            Type::GenericStruct {
+                name,
+                type_args,
+                fields,
+            } => Type::GenericStruct {
+                name: name.clone(),
+                type_args: type_args.iter().map(|t| self.apply(t)).collect(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.apply(t)))
+                    .collect(),
+            },
+            // Type parameters are unchanged (they are not inference variables)
+            Type::Param { .. } => ty.clone(),
             // Primitive types and Any are unchanged
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
                 ty.clone()
@@ -275,6 +289,14 @@ impl TypeChecker {
                 Ok(Type::function(
                     param_types?,
                     self.resolve_type_annotation(ret, span)?,
+                ))
+            }
+            TypeAnnotation::Generic { name, type_args: _ } => {
+                // TODO: Implement generic type resolution in Phase 5
+                // For now, return an error
+                Err(TypeError::new(
+                    format!("generic type '{}' not yet supported", name),
+                    span,
                 ))
             }
         }
@@ -1191,7 +1213,9 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Call { callee, args, span } => {
+            Expr::Call {
+                callee, args, span, ..
+            } => {
                 // Check for builtin functions
                 if let Some(result_type) = self.check_builtin(callee, args, env, *span) {
                     return result_type;
@@ -1240,7 +1264,9 @@ impl TypeChecker {
                 }
             }
 
-            Expr::StructLiteral { name, fields, span } => {
+            Expr::StructLiteral {
+                name, fields, span, ..
+            } => {
                 // Look up struct definition
                 let struct_info = match self.structs.get(name) {
                     Some(info) => info.clone(),
@@ -1303,6 +1329,7 @@ impl TypeChecker {
                 method,
                 args,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let resolved_obj_type = self.substitution.apply(&obj_type);
@@ -1418,6 +1445,7 @@ impl TypeChecker {
                 function,
                 args,
                 span,
+                ..
             } => {
                 // Check if this is an associated function on a struct or builtin type
                 self.infer_associated_function_call(type_name, function, args, env, *span)

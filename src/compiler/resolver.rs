@@ -718,7 +718,9 @@ impl<'a> Resolver<'a> {
                     right: Box::new(right),
                 })
             }
-            Expr::Call { callee, args, span } => {
+            Expr::Call {
+                callee, args, span, ..
+            } => {
                 // Special handling for spawn - it takes a function name, not a value
                 if callee == "spawn" {
                     if args.len() != 1 {
@@ -769,7 +771,9 @@ impl<'a> Resolver<'a> {
 
                 Err(self.error(&format!("undefined function '{}'", callee), span))
             }
-            Expr::StructLiteral { name, fields, span } => {
+            Expr::StructLiteral {
+                name, fields, span, ..
+            } => {
                 // Look up struct definition
                 let struct_info = self
                     .structs
@@ -811,6 +815,7 @@ impl<'a> Resolver<'a> {
                 method,
                 args,
                 span,
+                ..
             } => {
                 // Get struct name from the object expression before resolving
                 let struct_name = match &*object {
@@ -865,6 +870,7 @@ impl<'a> Resolver<'a> {
                 function,
                 args,
                 span,
+                ..
             } => {
                 // Resolve arguments
                 let resolved_args: Vec<_> = args
