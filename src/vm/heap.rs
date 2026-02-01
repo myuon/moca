@@ -6,20 +6,28 @@ use super::Value;
 // Header Layout (64 bits)
 // =============================================================================
 //
-// +--------+------------------+------------------------+
-// | marked | slot_count (32)  | reserved (31)          |
-// | 1 bit  | 32 bits          | 31 bits                |
-// +--------+------------------+------------------------+
+// +--------+------+------------------+-------------------+
+// | marked | free | slot_count (32)  | reserved (30)     |
+// | 1 bit  | 1 bit| 32 bits          | 30 bits           |
+// +--------+------+------------------+-------------------+
 //
 // - Bit 63: marked flag for GC
-// - Bits 31-62: slot count (max 2^32 - 1 slots)
-// - Bits 0-30: reserved for future use
+// - Bit 62: free flag (1 = free block in free list, 0 = allocated)
+// - Bits 30-61: slot count (max 2^32 - 1 slots)
+// - Bits 0-29: reserved for future use
+//
+// Free block layout:
+// +----------------+----------------+
+// | Header         | Next Free Ptr  |
+// | (free=1, size) | (offset or 0)  |
+// +----------------+----------------+
 
 const HEADER_MARKED_BIT: u64 = 1 << 63;
-const HEADER_SLOT_COUNT_SHIFT: u32 = 31;
+const HEADER_FREE_BIT: u64 = 1 << 62;
+const HEADER_SLOT_COUNT_SHIFT: u32 = 30;
 const HEADER_SLOT_COUNT_MASK: u64 = 0xFFFF_FFFF << HEADER_SLOT_COUNT_SHIFT;
 
-/// Encode a header word from marked flag and slot count.
+/// Encode a header word from marked flag, free flag, and slot count.
 fn encode_header(marked: bool, slot_count: u32) -> u64 {
     let mut header = (slot_count as u64) << HEADER_SLOT_COUNT_SHIFT;
     if marked {
@@ -28,14 +36,32 @@ fn encode_header(marked: bool, slot_count: u32) -> u64 {
     header
 }
 
+/// Encode a free block header.
+fn encode_free_header(size_words: usize) -> u64 {
+    // For free blocks, we store the size in words (not slot count)
+    // in the slot_count field for simplicity
+    let size = size_words as u64;
+    (size << HEADER_SLOT_COUNT_SHIFT) | HEADER_FREE_BIT
+}
+
 /// Decode marked flag from header word.
 fn decode_marked(header: u64) -> bool {
     (header & HEADER_MARKED_BIT) != 0
 }
 
-/// Decode slot count from header word.
+/// Decode free flag from header word.
+fn decode_free(header: u64) -> bool {
+    (header & HEADER_FREE_BIT) != 0
+}
+
+/// Decode slot count from header word (for allocated objects).
 fn decode_slot_count(header: u64) -> u32 {
     ((header & HEADER_SLOT_COUNT_MASK) >> HEADER_SLOT_COUNT_SHIFT) as u32
+}
+
+/// Decode size in words from free block header.
+fn decode_free_size(header: u64) -> usize {
+    ((header & HEADER_SLOT_COUNT_MASK) >> HEADER_SLOT_COUNT_SHIFT) as usize
 }
 
 // =============================================================================
@@ -244,19 +270,25 @@ impl Heap {
 
         self.check_heap_limit(obj_size_bytes)?;
 
-        // Ensure we have enough capacity
-        let required_len = self.next_alloc + obj_size_words;
-        if required_len > self.memory.len() {
-            self.memory
-                .resize(required_len.max(self.memory.len() * 2), 0);
-        }
+        // Try to find a suitable free block (first-fit)
+        let offset = if let Some(offset) = self.find_free_block(obj_size_words) {
+            offset
+        } else {
+            // No suitable free block, allocate from bump pointer
+            let required_len = self.next_alloc + obj_size_words;
+            if required_len > self.memory.len() {
+                self.memory
+                    .resize(required_len.max(self.memory.len() * 2), 0);
+            }
 
-        // Allocate at next_alloc
-        let offset = self.next_alloc;
-        self.next_alloc += obj_size_words;
+            let offset = self.next_alloc;
+            self.next_alloc += obj_size_words;
+            offset
+        };
+
         self.bytes_allocated += obj_size_bytes;
 
-        // Write header
+        // Write header (not marked, not free)
         self.memory[offset] = encode_header(false, slot_count);
 
         // Write slots
@@ -267,6 +299,60 @@ impl Heap {
         }
 
         Ok(GcRef::from_offset(offset))
+    }
+
+    /// Find a free block of at least the given size (first-fit).
+    /// If found, removes it from the free list and returns its offset.
+    /// May split the block if it's larger than needed.
+    fn find_free_block(&mut self, needed_words: usize) -> Option<usize> {
+        // Minimum free block size: header + next pointer = 2 words
+        const MIN_FREE_BLOCK_SIZE: usize = 2;
+
+        let mut prev_offset: Option<usize> = None;
+        let mut current = self.free_list_head;
+
+        while current != 0 {
+            let header = self.memory[current];
+            let block_size = decode_free_size(header);
+            let next = self.memory[current + 1] as usize;
+
+            if block_size >= needed_words {
+                // Found a suitable block
+                // Remove from free list
+                if let Some(prev) = prev_offset {
+                    self.memory[prev + 1] = next as u64;
+                } else {
+                    self.free_list_head = next;
+                }
+
+                // Check if we should split the block
+                let remaining = block_size - needed_words;
+                if remaining >= MIN_FREE_BLOCK_SIZE {
+                    // Split: create a new free block for the remainder
+                    let new_free_offset = current + needed_words;
+                    self.memory[new_free_offset] = encode_free_header(remaining);
+                    self.memory[new_free_offset + 1] = self.free_list_head as u64;
+                    self.free_list_head = new_free_offset;
+                }
+
+                return Some(current);
+            }
+
+            prev_offset = Some(current);
+            current = next;
+        }
+
+        None
+    }
+
+    /// Add a block to the free list.
+    fn add_to_free_list(&mut self, offset: usize, size_words: usize) {
+        // Write free block header
+        self.memory[offset] = encode_free_header(size_words);
+        // Link to current head
+        self.memory[offset + 1] = self.free_list_head as u64;
+        // Update head
+        self.free_list_head = offset;
     }
 
     /// Get an object by reference, constructing a HeapObject view.
@@ -388,9 +474,7 @@ impl Heap {
         }
     }
 
-    /// Sweep phase: free all unmarked objects.
-    /// Note: With bump allocation, we don't actually free memory yet.
-    /// Full free list support will be added in a later task.
+    /// Sweep phase: free all unmarked objects by adding them to the free list.
     pub fn sweep(&mut self) {
         // Walk through all allocated objects
         let mut offset = 1; // Start after reserved word
@@ -398,15 +482,25 @@ impl Heap {
 
         while offset < self.next_alloc {
             let header = self.memory[offset];
+
+            // Skip free blocks (already in free list)
+            if decode_free(header) {
+                let block_size = decode_free_size(header);
+                offset += block_size;
+                continue;
+            }
+
             let slot_count = decode_slot_count(header);
             let obj_size = object_size_words(slot_count);
 
             if decode_marked(header) {
-                // Reset mark for next GC cycle
+                // Live object - reset mark for next GC cycle
                 self.set_marked(offset, false);
                 live_bytes += obj_size * 8;
+            } else {
+                // Dead object - add to free list
+                self.add_to_free_list(offset, obj_size);
             }
-            // TODO: Add to free list when unmarked (future task)
 
             offset += obj_size;
         }
@@ -421,7 +515,7 @@ impl Heap {
         self.sweep();
     }
 
-    /// Get count of live (marked after GC) objects.
+    /// Get count of allocated (non-free) objects.
     /// Note: This counts all allocated objects (some may be garbage before GC).
     pub fn object_count(&self) -> usize {
         let mut count = 0;
@@ -429,6 +523,14 @@ impl Heap {
 
         while offset < self.next_alloc {
             let header = self.memory[offset];
+
+            // Skip free blocks
+            if decode_free(header) {
+                let block_size = decode_free_size(header);
+                offset += block_size;
+                continue;
+            }
+
             let slot_count = decode_slot_count(header);
             count += 1;
             offset += object_size_words(slot_count);
@@ -587,5 +689,154 @@ mod tests {
 
         assert_eq!(heap.slot_count(r1), Some(0));
         assert_eq!(heap.slot_count(r2), Some(2));
+    }
+
+    // =========================================================================
+    // Free List Tests
+    // =========================================================================
+
+    #[test]
+    fn test_free_header_encoding() {
+        // Test free block header encoding/decoding
+        let h = encode_free_header(10);
+        assert!(decode_free(h));
+        assert!(!decode_marked(h));
+        assert_eq!(decode_free_size(h), 10);
+
+        let h2 = encode_free_header(1000);
+        assert!(decode_free(h2));
+        assert_eq!(decode_free_size(h2), 1000);
+    }
+
+    #[test]
+    fn test_gc_adds_to_free_list() {
+        let mut heap = Heap::new();
+
+        // Allocate objects
+        let r1 = heap
+            .alloc_slots(vec![Value::I64(1), Value::I64(2)])
+            .unwrap();
+        let _r2 = heap
+            .alloc_slots(vec![Value::I64(3), Value::I64(4)])
+            .unwrap();
+        let r3 = heap
+            .alloc_slots(vec![Value::I64(5), Value::I64(6)])
+            .unwrap();
+
+        assert_eq!(heap.object_count(), 3);
+
+        // GC with only r1 and r3 as roots (r2 becomes garbage)
+        heap.collect(&[Value::Ref(r1), Value::Ref(r3)]);
+
+        // r2 should have been freed and added to free list
+        assert_eq!(heap.object_count(), 2);
+        assert!(heap.free_list_head != 0); // Free list should not be empty
+
+        // r1 and r3 should still be accessible
+        assert_eq!(heap.get(r1).unwrap().slots[0], Value::I64(1));
+        assert_eq!(heap.get(r3).unwrap().slots[0], Value::I64(5));
+    }
+
+    #[test]
+    fn test_free_list_reuse() {
+        let mut heap = Heap::new();
+
+        // Allocate 3 objects of the same size (2 slots each)
+        let r1 = heap
+            .alloc_slots(vec![Value::I64(1), Value::I64(2)])
+            .unwrap();
+        let r2 = heap
+            .alloc_slots(vec![Value::I64(3), Value::I64(4)])
+            .unwrap();
+        let r3 = heap
+            .alloc_slots(vec![Value::I64(5), Value::I64(6)])
+            .unwrap();
+
+        let r2_offset = r2.offset();
+
+        // GC with only r1 and r3 (r2 becomes garbage)
+        heap.collect(&[Value::Ref(r1), Value::Ref(r3)]);
+
+        // Allocate a new object of the same size
+        let r4 = heap
+            .alloc_slots(vec![Value::I64(7), Value::I64(8)])
+            .unwrap();
+
+        // r4 should reuse r2's memory
+        assert_eq!(r4.offset(), r2_offset);
+
+        // r4 should have correct values
+        assert_eq!(heap.get(r4).unwrap().slots[0], Value::I64(7));
+        assert_eq!(heap.get(r4).unwrap().slots[1], Value::I64(8));
+    }
+
+    #[test]
+    fn test_free_list_block_splitting() {
+        let mut heap = Heap::new();
+
+        // Allocate a large object (5 slots)
+        let r1 = heap
+            .alloc_slots(vec![
+                Value::I64(1),
+                Value::I64(2),
+                Value::I64(3),
+                Value::I64(4),
+                Value::I64(5),
+            ])
+            .unwrap();
+        let r1_offset = r1.offset();
+
+        // GC with no roots (r1 becomes garbage)
+        heap.collect(&[]);
+
+        // The 5-slot object takes 1 + 2*5 = 11 words
+        // Allocate a smaller object (1 slot = 3 words)
+        let r2 = heap.alloc_slots(vec![Value::I64(100)]).unwrap();
+
+        // r2 should reuse r1's memory
+        assert_eq!(r2.offset(), r1_offset);
+
+        // There should be remaining free space (11 - 3 = 8 words)
+        // which should be in the free list
+        assert!(heap.free_list_head != 0);
+    }
+
+    #[test]
+    fn test_multiple_gc_cycles() {
+        let mut heap = Heap::new();
+
+        // First cycle: allocate and collect
+        let r1 = heap.alloc_slots(vec![Value::I64(1)]).unwrap();
+        let _garbage1 = heap.alloc_slots(vec![Value::I64(2)]).unwrap();
+        heap.collect(&[Value::Ref(r1)]);
+        assert_eq!(heap.object_count(), 1);
+
+        // Second cycle: allocate more and collect
+        let r2 = heap.alloc_slots(vec![Value::I64(3)]).unwrap();
+        let _garbage2 = heap.alloc_slots(vec![Value::I64(4)]).unwrap();
+        heap.collect(&[Value::Ref(r1), Value::Ref(r2)]);
+        assert_eq!(heap.object_count(), 2);
+
+        // Both objects should still be valid
+        assert_eq!(heap.get(r1).unwrap().slots[0], Value::I64(1));
+        assert_eq!(heap.get(r2).unwrap().slots[0], Value::I64(3));
+    }
+
+    #[test]
+    fn test_gc_all_garbage() {
+        let mut heap = Heap::new();
+
+        // Allocate some objects
+        let _r1 = heap.alloc_slots(vec![Value::I64(1)]).unwrap();
+        let _r2 = heap.alloc_slots(vec![Value::I64(2)]).unwrap();
+        let _r3 = heap.alloc_slots(vec![Value::I64(3)]).unwrap();
+
+        assert_eq!(heap.object_count(), 3);
+
+        // GC with no roots - everything is garbage
+        heap.collect(&[]);
+
+        assert_eq!(heap.object_count(), 0);
+        assert!(heap.free_list_head != 0); // Free list should have all the blocks
     }
 }

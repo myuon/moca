@@ -29,16 +29,96 @@ Lower 3 bits    Type
 
 ## Heap Object Layout
 
-Heap objects are allocated on the managed heap and tracked by the garbage collector.
+Heap objects are allocated on the managed heap (linear memory) and tracked by the garbage collector.
 
-### HeapObject Structure
+### Linear Memory Architecture
+
+The heap uses a `Vec<u64>` as linear memory. Objects are stored contiguously with headers.
+
+```
+Linear Memory (Vec<u64>):
++-------+--------------------+------------+--------------------+-----+
+| Rsv 0 | Object 0           | Free Block | Object 2           | ... |
++-------+--------------------+------------+--------------------+-----+
+```
+
+- Offset 0 is reserved (invalid/null reference)
+- Objects and free blocks are interspersed
+
+### Object Layout (in u64 words)
+
+```
++----------------+------+------+------+------+-----+
+| Header (1 word)| Tag0 | Val0 | Tag1 | Val1 | ... |
++----------------+------+------+------+------+-----+
+```
+
+- Each slot is 2 words: tag + payload (see Value encoding)
+- Total object size = 1 + 2 × slot_count words
+
+### Header Layout (64 bits)
+
+```
++--------+------+------------------+-------------------+
+| marked | free | slot_count (32)  | reserved (30)     |
+| 1 bit  | 1 bit| 32 bits          | 30 bits           |
++--------+------+------------------+-------------------+
+```
+
+- Bit 63: marked flag for GC
+- Bit 62: free flag (1 = free block in free list, 0 = allocated)
+- Bits 30-61: slot count (max 2^32 - 1 slots)
+- Bits 0-29: reserved for future use
+
+### Value Encoding (for slots)
+
+Each Value is stored as 2 u64 words: [tag, payload]
+
+| Tag | Type | Payload |
+|-----|------|---------|
+| 0 | I64 | 64-bit signed integer |
+| 1 | F64 | IEEE 754 double bits |
+| 2 | Bool | 0 or 1 |
+| 3 | Null | 0 |
+| 4 | Ref | Offset into linear memory |
+
+### Free List Management
+
+Free blocks are embedded within linear memory:
+
+```
+Free Block Layout:
++----------------+----------------+
+| Header         | Next Free Ptr  |
+| (free=1, size) | (offset or 0)  |
++----------------+----------------+
+```
+
+- First-fit allocation algorithm
+- Block splitting when free block is larger than needed
+- Minimum free block size: 2 words
+
+### GcRef Structure
+
+```rust
+struct GcRef {
+    index: usize,  // Offset in words (u64 units) into linear memory
+}
+```
+
+- Offset 0 is reserved as invalid/null reference
+- GcRef points to the header word of an object
+
+### HeapObject (View Structure)
 
 ```rust
 struct HeapObject {
     marked: bool,        // GC mark flag
-    slots: Vec<Value>,   // Variable-length array of values
+    slots: Vec<Value>,   // Parsed values from memory
 }
 ```
+
+HeapObject is constructed on-demand by parsing linear memory. It is a read-only view.
 
 All heap-allocated data (arrays, strings, structs, vectors) use this unified slot-based format.
 
