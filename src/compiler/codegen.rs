@@ -758,6 +758,19 @@ impl Codegen {
                 // Call the resolved method function (self + args)
                 ops.push(Op::Call(*func_index, args.len() + 1));
             }
+            ResolvedExpr::AssociatedFunctionCall {
+                func_index,
+                args,
+                return_struct_name: _,
+            } => {
+                // Push arguments (no self for associated functions)
+                for arg in args {
+                    self.compile_expr(arg, ops)?;
+                }
+
+                // Call the resolved function
+                ops.push(Op::Call(*func_index, args.len()));
+            }
             ResolvedExpr::AsmBlock {
                 input_slots,
                 output_type: _,

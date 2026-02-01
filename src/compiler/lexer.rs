@@ -58,6 +58,7 @@ pub enum TokenKind {
     Comma,
     Semi,
     Colon,
+    ColonColon, // ::
 
     // Special
     Eof,
@@ -159,7 +160,11 @@ impl<'a> Lexer<'a> {
                 }
                 ':' => {
                     self.advance();
-                    TokenKind::Colon
+                    if self.match_char(':') {
+                        TokenKind::ColonColon
+                    } else {
+                        TokenKind::Colon
+                    }
                 }
                 '.' => {
                     self.advance();

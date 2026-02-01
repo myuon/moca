@@ -4,7 +4,7 @@ arr[1] = 25;
 print(arr[1]);
 
 // Test Vector operations (push/pop)
-var vec: vec<any> = vec_new();
+var vec: vec<any> = vec::new();
 vec.push(10);
 vec.push(20);
 vec.push(30);

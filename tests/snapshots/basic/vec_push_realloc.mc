@@ -1,6 +1,6 @@
 // Test push with reallocation
 // Initial capacity is 0, first push allocates 8, then doubles: 8 -> 16 -> 32 -> 64 -> 128
-var v: vec<any> = vec_new();
+var v: vec<any> = vec::new();
 
 // Push 100 elements (triggers multiple reallocations)
 var i = 0;

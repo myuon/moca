@@ -144,6 +144,14 @@ pub enum ResolvedExpr {
         /// If the method returns a struct, the struct name
         return_struct_name: Option<String>,
     },
+    /// Associated function call: `Type::func(args)`
+    /// Statically dispatched to the resolved function.
+    AssociatedFunctionCall {
+        func_index: usize,
+        args: Vec<ResolvedExpr>,
+        /// If the function returns a struct, the struct name
+        return_struct_name: Option<String>,
+    },
     /// Inline assembly block.
     AsmBlock {
         /// Resolved input variable slots.
@@ -291,17 +299,30 @@ impl<'a> Resolver<'a> {
 
         // Register impl block methods as functions
         for impl_block in &impl_blocks {
-            let struct_info = self.structs.get(&impl_block.struct_name).ok_or_else(|| {
-                self.error(
-                    &format!("impl for undefined struct '{}'", impl_block.struct_name),
-                    impl_block.span,
-                )
-            })?;
-            let _struct_index = struct_info.index;
+            let is_builtin_type =
+                impl_block.struct_name == "vec" || impl_block.struct_name == "map";
+
+            if !is_builtin_type {
+                // For struct impls, verify the struct exists
+                if !self.structs.contains_key(&impl_block.struct_name) {
+                    return Err(self.error(
+                        &format!("impl for undefined struct '{}'", impl_block.struct_name),
+                        impl_block.span,
+                    ));
+                }
+            }
 
             for method in &impl_block.methods {
-                // Create a unique function name for the method: StructName::method_name
-                let func_name = format!("{}::{}", impl_block.struct_name, method.name);
+                let has_self = method.params.iter().any(|p| p.name == "self");
+
+                // For associated functions on builtin types, use {type}_{func} naming
+                // For methods, use {Type}::{method} naming
+                let func_name = if is_builtin_type && !has_self {
+                    format!("{}_{}", impl_block.struct_name, method.name)
+                } else {
+                    format!("{}::{}", impl_block.struct_name, method.name)
+                };
+
                 // func_index is the next available index in resolved_functions
                 // which will contain func_defs first, then all methods
                 let func_index = self.functions.len();
@@ -331,12 +352,13 @@ impl<'a> Resolver<'a> {
                     }
                 });
 
-                // Add method to struct's method table
-                let struct_info = self.structs.get_mut(&impl_block.struct_name).unwrap();
-                struct_info.methods.insert(method.name.clone(), func_index);
-                struct_info
-                    .method_return_types
-                    .insert(method.name.clone(), return_struct_name);
+                // Add method to struct's method table (only for non-builtin types)
+                if let Some(struct_info) = self.structs.get_mut(&impl_block.struct_name) {
+                    struct_info.methods.insert(method.name.clone(), func_index);
+                    struct_info
+                        .method_return_types
+                        .insert(method.name.clone(), return_struct_name);
+                }
             }
         }
 
@@ -368,10 +390,16 @@ impl<'a> Resolver<'a> {
 
     fn resolve_method(&self, method: FnDef, struct_name: &str) -> Result<ResolvedFunction, String> {
         let mut scope = Scope::new();
+        let has_self = method.params.iter().any(|p| p.name == "self");
+        let is_builtin_type = struct_name == "vec" || struct_name == "map";
 
-        // Add 'self' as first parameter with struct type information
-        let mut param_names: Vec<String> = vec!["self".to_string()];
-        scope.declare_with_type("self".to_string(), false, Some(struct_name.to_string()));
+        let mut param_names: Vec<String> = Vec::new();
+
+        if has_self {
+            // Add 'self' as first parameter with struct type information
+            param_names.push("self".to_string());
+            scope.declare_with_type("self".to_string(), false, Some(struct_name.to_string()));
+        }
 
         // Add other parameters
         for param in &method.params {
@@ -383,8 +411,15 @@ impl<'a> Resolver<'a> {
 
         let body = self.resolve_statements(method.body.statements, &mut scope)?;
 
+        // Function name: {Type}::{method} for methods, {type}_{func} for associated functions on builtin types
+        let func_name = if is_builtin_type && !has_self {
+            format!("{}_{}", struct_name, method.name)
+        } else {
+            format!("{}::{}", struct_name, method.name)
+        };
+
         Ok(ResolvedFunction {
-            name: format!("{}::{}", struct_name, method.name),
+            name: func_name,
             params: param_names,
             locals_count: scope.locals_count,
             body,
@@ -824,6 +859,54 @@ impl<'a> Resolver<'a> {
                     args: resolved_args,
                     return_struct_name,
                 })
+            }
+            Expr::AssociatedFunctionCall {
+                type_name,
+                function,
+                args,
+                span,
+            } => {
+                // Resolve arguments
+                let resolved_args: Vec<_> = args
+                    .into_iter()
+                    .map(|a| self.resolve_expr(a, scope))
+                    .collect::<Result<_, _>>()?;
+
+                // Look up the associated function
+                // First check if it's a struct with that associated function
+                if let Some(struct_info) = self.structs.get(&type_name)
+                    && let Some(&func_index) = struct_info.methods.get(&function)
+                {
+                    let return_struct_name = struct_info
+                        .method_return_types
+                        .get(&function)
+                        .cloned()
+                        .flatten();
+                    return Ok(ResolvedExpr::AssociatedFunctionCall {
+                        func_index,
+                        args: resolved_args,
+                        return_struct_name,
+                    });
+                }
+
+                // Check for builtin types (vec, map) - they use regular functions
+                // Look for function name pattern: type_function (e.g., vec_new)
+                let builtin_func_name = format!("{}_{}", type_name, function);
+                if let Some(&func_index) = self.functions.get(&builtin_func_name) {
+                    return Ok(ResolvedExpr::AssociatedFunctionCall {
+                        func_index,
+                        args: resolved_args,
+                        return_struct_name: None,
+                    });
+                }
+
+                Err(self.error(
+                    &format!(
+                        "no associated function '{}' found for type '{}'",
+                        function, type_name
+                    ),
+                    span,
+                ))
             }
             Expr::Asm(asm_block) => {
                 // Resolve input variable names to slots

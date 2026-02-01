@@ -493,6 +493,37 @@ impl<'a> AstPrinter<'a> {
                     );
                 }
             }
+            Expr::AssociatedFunctionCall {
+                type_name,
+                function,
+                args,
+                ..
+            } => {
+                self.write(&format!(
+                    "{}AssociatedFunctionCall: {}::{}({})",
+                    prefix,
+                    type_name,
+                    function,
+                    args.len()
+                ));
+                self.write_type_suffix(expr);
+                self.newline();
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_is_last = i == args.len() - 1;
+                    let arg_prefix = if arg_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
+                    self.write_indent_with(&child_prefix);
+                    self.print_expr(
+                        arg,
+                        &format!("{}arg: ", arg_prefix),
+                        arg_is_last,
+                        &child_prefix,
+                    );
+                }
+            }
             Expr::Asm(asm_block) => {
                 let output_str = asm_block
                     .output_type
@@ -1075,6 +1106,35 @@ impl ResolvedProgramPrinter {
                 };
                 self.write_indent_with(parent_prefix);
                 self.print_expr(object, &format!("{}object: ", obj_prefix), &obj_child);
+                for (i, arg) in args.iter().enumerate() {
+                    let is_last = i == args.len() - 1;
+                    let arg_prefix = if is_last { "└── " } else { "├── " };
+                    let arg_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
+                }
+            }
+            ResolvedExpr::AssociatedFunctionCall {
+                func_index,
+                args,
+                return_struct_name,
+            } => {
+                let ret_str = return_struct_name
+                    .as_ref()
+                    .map(|s| format!(" -> {}", s))
+                    .unwrap_or_default();
+                self.write(&format!(
+                    "{}AssociatedFunctionCall(func_index={}, {} args){}",
+                    prefix,
+                    func_index,
+                    args.len(),
+                    ret_str
+                ));
+                self.newline();
                 for (i, arg) in args.iter().enumerate() {
                     let is_last = i == args.len() - 1;
                     let arg_prefix = if is_last { "└── " } else { "├── " };

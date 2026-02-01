@@ -2,7 +2,7 @@
 // Demonstrates accessing nested arrays and maps
 
 // Create a map for point
-let point: map<any, any> = map_new();
+let point: map<any, any> = map::new();
 point.put("x", 10);
 point.put("y", 20);
 

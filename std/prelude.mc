@@ -321,14 +321,17 @@ impl VectorAny {
     }
 }
 
-// Create a new empty vector.
-fun vec_new() -> VectorAny {
-    return VectorAny { ptr: 0, len: 0, cap: 0 };
-}
+// Associated functions for vec<T>
+impl vec {
+    // Create a new empty vector.
+    fun new() -> vec<any> {
+        return VectorAny { ptr: 0, len: 0, cap: 0 };
+    }
 
-// Create a vector with pre-set capacity.
-fun vec_with_capacity(cap) -> VectorAny {
-    return VectorAny { ptr: 0, len: 0, cap: cap };
+    // Create a vector with pre-set capacity.
+    fun with_capacity(cap) -> vec<any> {
+        return VectorAny { ptr: 0, len: 0, cap: cap };
+    }
 }
 
 // ============================================================================
@@ -758,17 +761,20 @@ impl HashMapAny {
     }
 }
 
-// Create a new empty map with default capacity (16 buckets)
-fun map_new() -> HashMapAny {
-    let capacity = 16;
-    let buckets = __alloc_heap(capacity);
-    // Initialize all buckets to 0 (nil)
-    var i = 0;
-    while i < capacity {
-        __heap_store(buckets, i, 0);
-        i = i + 1;
+// Associated functions for map<K, V>
+impl map {
+    // Create a new empty map with default capacity (16 buckets)
+    fun new() -> map<any, any> {
+        let capacity = 16;
+        let buckets = __alloc_heap(capacity);
+        // Initialize all buckets to 0 (nil)
+        var i = 0;
+        while i < capacity {
+            __heap_store(buckets, i, 0);
+            i = i + 1;
+        }
+        return HashMapAny { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
     }
-    return HashMapAny { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
 }
 
 // ============================================================================

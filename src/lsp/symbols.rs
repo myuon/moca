@@ -240,6 +240,19 @@ impl SymbolTable {
                     self.collect_expr(arg);
                 }
             }
+            Expr::AssociatedFunctionCall {
+                type_name,
+                function,
+                args,
+                span,
+            } => {
+                // The type and function names are references
+                self.references.push((*span, type_name.clone()));
+                self.references.push((*span, function.clone()));
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
             // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }
             | Expr::Float { .. }

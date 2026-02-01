@@ -9,6 +9,7 @@ pub struct Program {
 
 /// Top-level items in a program.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Item {
     Import(Import),
     FnDef(FnDef),
@@ -213,6 +214,13 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Associated function call: `Type::func(args)`
+    AssociatedFunctionCall {
+        type_name: String,
+        function: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Inline assembly block: `asm(inputs) -> type { ... }`
     Asm(AsmBlock),
 }
@@ -234,6 +242,7 @@ impl Expr {
             Expr::Call { span, .. } => *span,
             Expr::StructLiteral { span, .. } => *span,
             Expr::MethodCall { span, .. } => *span,
+            Expr::AssociatedFunctionCall { span, .. } => *span,
             Expr::Asm(asm_block) => asm_block.span,
         }
     }

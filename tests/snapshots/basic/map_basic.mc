@@ -1,7 +1,7 @@
 // Basic Map operations test
 
 // Test with string keys
-let m: map<any, any> = map_new();
+let m: map<any, any> = map::new();
 
 // Test put and get
 m.put("name", "Alice");

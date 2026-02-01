@@ -1,5 +1,5 @@
 // Test map mutation (migrated from object)
-var obj: map<any, any> = map_new();
+var obj: map<any, any> = map::new();
 obj.put("value", 100);
 print(obj.get("value"));
 obj.put("value", 200);

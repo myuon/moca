@@ -1,3 +1,3 @@
-var v: vec<any> = vec_new();
+var v: vec<any> = vec::new();
 v.push(10);
 print(v.len());
