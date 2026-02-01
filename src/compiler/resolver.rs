@@ -496,13 +496,11 @@ impl<'a> Resolver<'a> {
                             self.get_struct_name(&init)
                         }
                     }
-                    // vec<T> maps to VectorAny internally
-                    Some(crate::compiler::types::TypeAnnotation::Vec(_)) => {
-                        Some("VectorAny".to_string())
-                    }
-                    // map<K, V> maps to HashMapAny internally
+                    // vec<T> maps to Vec<T> generic struct
+                    Some(crate::compiler::types::TypeAnnotation::Vec(_)) => Some("Vec".to_string()),
+                    // map<K, V> maps to Map<K, V> generic struct
                     Some(crate::compiler::types::TypeAnnotation::Map(_, _)) => {
-                        Some("HashMapAny".to_string())
+                        Some("Map".to_string())
                     }
                     _ => self.get_struct_name(&init),
                 };

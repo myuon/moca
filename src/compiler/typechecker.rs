@@ -420,10 +420,42 @@ impl TypeChecker {
             // Vector types
             (Type::Vector(elem1), Type::Vector(elem2)) => self.unify(elem1, elem2, span),
 
+            // vec<T> and Vec<T> are compatible (Vec is the underlying struct for vec)
+            (
+                Type::Vector(elem1),
+                Type::GenericStruct {
+                    name, type_args, ..
+                },
+            )
+            | (
+                Type::GenericStruct {
+                    name, type_args, ..
+                },
+                Type::Vector(elem1),
+            ) if name == "Vec" && type_args.len() == 1 => self.unify(elem1, &type_args[0], span),
+
             // Map types
             (Type::Map(k1, v1), Type::Map(k2, v2)) => {
                 let s1 = self.unify(k1, k2, span)?;
                 let s2 = self.unify(v1, v2, span)?;
+                Ok(s1.compose(&s2))
+            }
+
+            // map<K, V> and Map<K, V> are compatible (Map is the underlying struct for map)
+            (
+                Type::Map(k1, v1),
+                Type::GenericStruct {
+                    name, type_args, ..
+                },
+            )
+            | (
+                Type::GenericStruct {
+                    name, type_args, ..
+                },
+                Type::Map(k1, v1),
+            ) if name == "Map" && type_args.len() == 2 => {
+                let s1 = self.unify(k1, &type_args[0], span)?;
+                let s2 = self.unify(v1, &type_args[1], span)?;
                 Ok(s1.compose(&s2))
             }
 
@@ -859,7 +891,7 @@ impl TypeChecker {
 
             // Unify return type
             // Skip type checking for builtin type associated functions
-            // (vec/map return VectorAny/HashMapAny internally but are typed as vec<T>/map<K,V>)
+            // (vec/map use Vec<T>/Map<K,V> generic structs internally)
             if (!is_builtin_type || has_self)
                 && let Err(e) = self.unify(&body_type, &expected_ret, method.span)
             {
@@ -1028,15 +1060,24 @@ impl TypeChecker {
                 self.index_object_types
                     .insert(*span, resolved_obj_type.clone());
 
-                // Object can be array<T>, Vector<T>, or VectorAny struct
+                // Object can be array<T>, Vector<T>, or Vec<T> generic struct
                 match resolved_obj_type {
                     Type::Array(elem) | Type::Vector(elem) => {
                         if let Err(e) = self.unify(&val_type, &elem, *span) {
                             self.errors.push(e);
                         }
                     }
-                    Type::Struct { ref name, .. } if name == "VectorAny" => {
-                        // VectorAny allows any element type (untyped)
+                    Type::GenericStruct {
+                        ref name,
+                        ref type_args,
+                        ..
+                    } if name == "Vec" => {
+                        // Vec<T> - check element type
+                        if let Some(elem) = type_args.first()
+                            && let Err(e) = self.unify(&val_type, elem, *span)
+                        {
+                            self.errors.push(e);
+                        }
                     }
                     _ => {
                         self.errors.push(TypeError::new(

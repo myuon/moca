@@ -251,18 +251,27 @@ fun str_index_of(haystack: string, needle: string) -> int {
 // Vector Functions (low-level implementation using heap intrinsics)
 // ============================================================================
 
-// VectorAny struct - compatible with vector internal layout.
-// This allows treating vectors as structs for more natural field access.
+// Vec<T> - Generic vector (dynamic array) implementation.
 // Layout: [ptr, len, cap]
-struct VectorAny {
+struct Vec<T> {
     ptr: int,
     len: int,
     cap: int
 }
 
-impl VectorAny {
+impl<T> Vec<T> {
+    // Create a new empty vector.
+    fun new() -> Vec<T> {
+        return Vec<T> { ptr: 0, len: 0, cap: 0 };
+    }
+
+    // Create a vector with pre-set capacity.
+    fun with_capacity(cap: int) -> Vec<T> {
+        return Vec<T> { ptr: 0, len: 0, cap: cap };
+    }
+
     // Push a value to the end of the vector
-    fun push(self, value) {
+    fun push(self, value: T) {
         if self.len >= self.cap {
             // Need to grow
             var new_cap = self.cap * 2;
@@ -294,7 +303,7 @@ impl VectorAny {
 
     // Pop a value from the end of the vector
     // Returns the popped value, throws if vector is empty.
-    fun pop(self) {
+    fun pop(self) -> T {
         if self.len == 0 {
             throw "cannot pop from empty vector";
         }
@@ -306,12 +315,12 @@ impl VectorAny {
     }
 
     // Get a value at the specified index
-    fun get(self, index) {
+    fun get(self, index: int) -> T {
         return __heap_load(self.ptr, index);
     }
 
     // Set a value at the specified index
-    fun set(self, index, value) {
+    fun set(self, index: int, value: T) {
         __heap_store(self.ptr, index, value);
     }
 
@@ -321,16 +330,16 @@ impl VectorAny {
     }
 }
 
-// Associated functions for vec<T>
+// Associated functions for vec<T> (syntax sugar for Vec<T>)
 impl vec {
     // Create a new empty vector.
     fun new() -> vec<any> {
-        return VectorAny { ptr: 0, len: 0, cap: 0 };
+        return Vec<any> { ptr: 0, len: 0, cap: 0 };
     }
 
     // Create a vector with pre-set capacity.
-    fun with_capacity(cap) -> vec<any> {
-        return VectorAny { ptr: 0, len: 0, cap: cap };
+    fun with_capacity(cap: int) -> vec<any> {
+        return Vec<any> { ptr: 0, len: 0, cap: cap };
     }
 }
 
@@ -347,12 +356,12 @@ struct HashMapEntry {
     hm_next: int
 }
 
-// HashMapAny struct - represents the hash map.
+// Map<K, V> - Generic hash map implementation.
 // Layout: [hm_buckets, hm_size, hm_capacity]
 // hm_buckets: pointer to array of bucket heads
 // hm_size: number of entries in the map
 // hm_capacity: number of buckets
-struct HashMapAny {
+struct Map<K, V> {
     hm_buckets: int,
     hm_size: int,
     hm_capacity: int
@@ -384,7 +393,7 @@ fun _map_hash_string(key: string) -> int {
 }
 
 // Internal: Find entry by key in a bucket chain (int key)
-fun _map_find_entry_int(m: HashMapAny, key: int) -> int {
+fun _map_find_entry_int(m: Map<any, any>, key: int) -> int {
     let bucket_idx = _map_hash_int(key) % m.hm_capacity;
     var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
 
@@ -399,7 +408,7 @@ fun _map_find_entry_int(m: HashMapAny, key: int) -> int {
 }
 
 // Internal: Find entry by key in a bucket chain (string key)
-fun _map_find_entry_string(m: HashMapAny, key: string) -> int {
+fun _map_find_entry_string(m: Map<any, any>, key: string) -> int {
     let bucket_idx = _map_hash_string(key) % m.hm_capacity;
     var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
 
@@ -414,7 +423,7 @@ fun _map_find_entry_string(m: HashMapAny, key: string) -> int {
 }
 
 // Internal: Rehash the map when load factor exceeds 0.75 (int keys)
-fun _map_rehash_int(m: HashMapAny) {
+fun _map_rehash_int(m: Map<any, any>) {
     let old_capacity = m.hm_capacity;
     let old_buckets = m.hm_buckets;
     let new_capacity = old_capacity * 2;
@@ -453,7 +462,7 @@ fun _map_rehash_int(m: HashMapAny) {
 }
 
 // Internal: Rehash for string keys
-fun _map_rehash_string(m: HashMapAny) {
+fun _map_rehash_string(m: Map<any, any>) {
     let old_capacity = m.hm_capacity;
     let old_buckets = m.hm_buckets;
     let new_capacity = old_capacity * 2;
@@ -492,7 +501,7 @@ fun _map_rehash_string(m: HashMapAny) {
 }
 
 // Internal helper: push to vector without using method syntax
-fun _vec_push_internal(v: VectorAny, value) {
+fun _vec_push_internal(v: Vec<any>, value) {
     if v.len >= v.cap {
         // Need to grow
         var new_cap = v.cap * 2;
@@ -522,9 +531,22 @@ fun _vec_push_internal(v: VectorAny, value) {
     v.len = v.len + 1;
 }
 
-impl HashMapAny {
+impl<K, V> Map<K, V> {
+    // Create a new empty map
+    fun new() -> Map<K, V> {
+        let capacity = 16;
+        let buckets = __alloc_heap(capacity);
+        // Initialize all buckets to 0 (empty)
+        var i = 0;
+        while i < capacity {
+            __heap_store(buckets, i, 0);
+            i = i + 1;
+        }
+        return Map<K, V> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
+    }
+
     // Put a key-value pair into the map (int key version)
-    fun put_int(self, key: int, val) {
+    fun put_int(self, key: int, val: V) {
         // Check if key already exists
         let existing = _map_find_entry_int(self, key);
         if existing != 0 {
@@ -672,8 +694,8 @@ impl HashMapAny {
     }
 
     // Get all keys from the map as a vector (works for any key type)
-    fun keys(self) -> VectorAny {
-        let result = VectorAny { ptr: 0, len: 0, cap: 0 };
+    fun keys(self) -> vec<any> {
+        var result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
         var i = 0;
         while i < self.hm_capacity {
             var entry_ptr = __heap_load(self.hm_buckets, i);
@@ -688,8 +710,8 @@ impl HashMapAny {
     }
 
     // Get all values from the map as a vector
-    fun values(self) -> VectorAny {
-        let result = VectorAny { ptr: 0, len: 0, cap: 0 };
+    fun values(self) -> vec<any> {
+        var result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
         var i = 0;
         while i < self.hm_capacity {
             var entry_ptr = __heap_load(self.hm_buckets, i);
@@ -761,7 +783,7 @@ impl HashMapAny {
     }
 }
 
-// Associated functions for map<K, V>
+// Associated functions for map<K, V> (syntax sugar for Map<K, V>)
 impl map {
     // Create a new empty map with default capacity (16 buckets)
     fun new() -> map<any, any> {
@@ -773,7 +795,7 @@ impl map {
             __heap_store(buckets, i, 0);
             i = i + 1;
         }
-        return HashMapAny { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
+        return Map<any, any> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
     }
 }
 
