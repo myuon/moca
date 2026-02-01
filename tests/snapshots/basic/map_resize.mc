@@ -1,21 +1,21 @@
 // Map resize test - add more than initial capacity (16) entries
 
-let m: HashMapAny = map_new();
+let m: map<any, any> = map_new();
 
 // Add 20 entries to trigger resize (load factor > 0.75 = 12 entries)
 var i = 0;
 while i < 20 {
-    m.put_int(i, i * 10);
+    m.put(i, i * 10);
     i = i + 1;
 }
 
-print(m.hm_size);
+print(m.len());
 
 // Verify all entries are still accessible after resize
 var all_ok = true;
 i = 0;
 while i < 20 {
-    let val = m.get_int(i);
+    let val = m.get(i);
     if val != i * 10 {
         all_ok = false;
     }
@@ -30,7 +30,7 @@ if all_ok {
 var contains_ok = true;
 i = 0;
 while i < 20 {
-    if !m.contains_int(i) {
+    if !m.contains(i) {
         contains_ok = false;
     }
     i = i + 1;
@@ -41,12 +41,12 @@ if contains_ok {
 }
 
 // Remove some entries
-m.remove_int(5);
-m.remove_int(10);
-m.remove_int(15);
-print(m.hm_size);
+m.remove(5);
+m.remove(10);
+m.remove(15);
+print(m.len());
 
 // Verify removed entries are gone
-if !m.contains_int(5) && !m.contains_int(10) && !m.contains_int(15) {
+if !m.contains(5) && !m.contains(10) && !m.contains(15) {
     print("removed entries gone");
 }

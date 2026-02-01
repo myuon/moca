@@ -1,174 +1,129 @@
-# Spec.md - 組み込み型関数のメソッド化
+# Spec.md - vec<T> / map<K, V> 組み込み型の導入
 
 ## 1. Goal
-- 組み込み型（Vector, HashMap, string, array）の関数を、メソッド呼び出し構文 `v.push(x)` で使えるようにする
+- 組み込み型として `vec<T>` と `map<K, V>` を導入し、型安全なコレクション操作を可能にする
+- 既存の `VectorAny` / `HashMapAny` を廃止し、ジェネリクス導入の布石を作る
 
 ## 2. Non-Goals
-- 言語仕様の変更（新しい構文やキーワードの追加）
-- ジェネリクスやオーバーロードの導入
-- 既存の型システムの変更
-- mutability の明示的な指定の導入
+- ユーザー定義ジェネリクス（`struct Foo<T>` など）の導入
+- `vec` / `map` のリテラル構文（`[1, 2, 3]` を `vec<int>` として解釈するなど）
+- `array<T>` の廃止や統合
+- パフォーマンス最適化（既存の実装を流用）
 
 ## 3. Target Users
-- moca言語のユーザー
-- より自然なオブジェクト指向的な記法でコードを書きたい開発者
+- Moca 言語のユーザー
+- 型安全なコレクション操作を求める開発者
 
 ## 4. Core User Flow
-1. ユーザーが `let v = vec_new();` でベクターを作成
-2. `v.push(10);` でメソッド呼び出し構文で要素を追加
-3. `v.len()` で長さを取得
-4. `let m = map_new_any();` でマップを作成
-5. `m.put_string("key", "value");` で要素を追加
-6. `m.get_string("key")` で要素を取得
+1. ユーザーが `vec<int>` や `map<string, int>` などの型注釈を書く
+2. パーサーが `vec<T>` / `map<K, V>` 構文を認識し、TypeAnnotation に変換
+3. 型チェッカーが型安全性を検証（`vec<int>` に `string` を入れるとエラー）
+4. コード生成が既存の Vector/HashMap 実装を利用して実行可能コードを出力
 
 ## 5. Inputs & Outputs
 
-### 変換前（現在）
-```moca
-let v = vec_new();
-vec_push(v, 10);
-print(vec_len(v));
+### Inputs
+- Moca ソースコード（`.mc` ファイル）
+  ```moca
+  let v: vec<int> = vec_new();
+  v.push(42);
+  v.push(100);
+  print(v.get(0));
 
-let m = map_new_any();
-map_put_string(m, "key", "value");
-print(map_get_string(m, "key"));
-```
+  let m: map<string, int> = map_new();
+  m.put("key", 100);
+  print(m.get("key"));
+  ```
 
-### 変換後（目標）
-```moca
-let v = vec_new();
-v.push(10);
-print(v.len());
-
-let m = map_new_any();
-m.put_string("key", "value");
-print(m.get_string("key"));
-```
+### Outputs
+- 型チェック済みの AST
+- 型エラー時のコンパイルエラーメッセージ
+- 実行可能なバイトコード
 
 ## 6. Tech Stack
 - 言語: Rust
-- テスト: cargo test
-- stdlib: moca言語 (`std/prelude.mc`)
+- 対象言語: Moca (.mc)
+- テスト: `cargo test` + スナップショットテスト
+- 主要ファイル:
+  - `src/compiler/parser.rs` - 型構文のパース
+  - `src/compiler/types.rs` - Type enum の拡張
+  - `src/compiler/typechecker.rs` - 型チェックロジック
+  - `src/compiler/codegen.rs` - コード生成
+  - `std/prelude.mc` - 標準ライブラリ
 
 ## 7. Rules & Constraints
 
-### 実装方式
-- **VectorAny, HashMapAny 等の既存構造体に impl ブロックでメソッドを追加**
-- コンパイラの組み込み関数（`vec_push` 等）を削除し、メソッド呼び出しに統一
-- 既存の `vec_push_any`, `map_put_string` 等の内部関数は impl 内メソッドとして再実装
+### 型システムルール
+- `vec<T>` は可変サイズの動的配列、`array<T>` は固定サイズ配列（両方残す）
+- `map<K, V>` は K をキー、V を値とするハッシュマップ
+- 型パラメータは任意の型を受け付ける（`vec<vec<int>>` なども可能）
+- 型の不一致はコンパイルエラー（警告ではない）
 
-### 命名規則
-- サフィックスは維持: `put_string`, `put_int`, `get_string`, `get_int`
-- プレフィックス（`vec_`, `map_`）は削除
+### 構文ルール
+- 小文字始まり: `vec<T>`, `map<K, V>`（`array<T>` と同じスタイル）
+- 山括弧でパラメータを指定: `vec<int>`, `map<string, int>`
 
-### 対象メソッド一覧
-
-#### Vector (`VectorAny`)
-| 現在の関数 | メソッド名 |
-|-----------|----------|
-| `vec_new()` | `vec_new()` (コンストラクタは関数のまま) |
-| `vec_with_capacity(n)` | `vec_with_capacity(n)` (コンストラクタは関数のまま) |
-| `vec_push(v, x)` | `v.push(x)` |
-| `vec_pop(v)` | `v.pop()` |
-| `vec_get(v, i)` | `v.get(i)` |
-| `vec_set(v, i, x)` | `v.set(i, x)` |
-| `vec_len(v)` | `v.len()` |
-| `vec_capacity(v)` | `v.capacity()` |
-
-#### HashMap (`HashMapAny`)
-| 現在の関数 | メソッド名 |
-|-----------|----------|
-| `map_new_any()` | `map_new_any()` (コンストラクタは関数のまま) |
-| `map_put_string(m, k, v)` | `m.put_string(k, v)` |
-| `map_get_string(m, k)` | `m.get_string(k)` |
-| `map_has_string(m, k)` | `m.has_string(k)` |
-| `map_contains_string(m, k)` | `m.contains_string(k)` |
-| `map_remove_string(m, k)` | `m.remove_string(k)` |
-| `map_put_int(m, k, v)` | `m.put_int(k, v)` |
-| `map_get_int(m, k)` | `m.get_int(k)` |
-| `map_has_int(m, k)` | `m.has_int(k)` |
-| `map_contains_int(m, k)` | `m.contains_int(k)` |
-| `map_remove_int(m, k)` | `m.remove_int(k)` |
-| `map_len(m)` | `m.len()` |
-| `map_size(m)` | `m.size()` |
-| `map_keys(m)` | `m.keys()` |
-| `map_values(m)` | `m.values()` |
-
-#### String / Array
-| 現在の関数 | メソッド名 |
-|-----------|----------|
-| `len(s)` (string) | `s.len()` |
-| `len(a)` (array) | `a.len()` |
-
-### 削除対象（コンパイラ組み込み）
-- `vec_push`, `vec_pop`, `vec_get`, `vec_set`, `vec_len`, `vec_capacity`
-- `push`, `pop` (汎用)
-- `map_*` 系の組み込み関数（もしあれば）
+### メソッド
+- VectorAny/HashMapAny のメソッドを廃止
+- 新しいジェネリック対応メソッドを導入:
+  - `vec<T>`: `push(value: T)`, `pop() -> T`, `get(index: int) -> T`, `set(index: int, value: T)`, `len() -> int`
+  - `map<K, V>`: `put(key: K, value: V)`, `get(key: K) -> V`, `contains(key: K) -> bool`, `remove(key: K) -> bool`, `keys() -> vec<K>`, `values() -> vec<V>`
 
 ### 互換性
-- 既存の関数形式は **削除**（後方互換性なし）
-- 既存テストはすべてメソッド形式に書き換え
+- `VectorAny` / `HashMapAny` は完全廃止
+- 既存テストは `vec<any>` / `map<any, any>` に移行
 
 ## 8. Open Questions
-- `len()` を string/array でメソッドとして呼び出すには、コンパイラでの特別扱いが必要（struct ではないため）。実装時に要検討。
+- なし（仕様は確定済み）
 
-## 9. Acceptance Criteria（最大10個）
+## 9. Acceptance Criteria
 
-1. `v.push(x)` でベクターに要素を追加できる
-2. `v.pop()` でベクターから要素を取り出せる
-3. `v.get(i)` でベクターの要素を取得できる
-4. `v.set(i, x)` でベクターの要素を設定できる
-5. `v.len()` でベクターの長さを取得できる
-6. `m.put_string(k, v)` でマップに要素を追加できる
-7. `m.get_string(k)` でマップから要素を取得できる
-8. `m.contains_string(k)` でマップのキー存在確認ができる
-9. 既存の `vec_push(v, x)` 形式はコンパイルエラーになる
-10. `cargo test` が全てパスする
+1. パーサーが `vec<int>`, `vec<string>`, `vec<any>` などの構文を正しくパースできる
+2. パーサーが `map<string, int>`, `map<int, any>` などの構文を正しくパースできる
+3. `Type::Map(Box<Type>, Box<Type>)` が types.rs に追加されている
+4. `vec<int>` に `string` を `push` するとコンパイルエラーになる
+5. `map<string, int>` に `int` キーで `put` するとコンパイルエラーになる
+6. `vec<T>` のメソッド（push, pop, get, set, len）が動作する
+7. `map<K, V>` のメソッド（put, get, contains, remove, keys, values）が動作する
+8. 既存の `VectorAny` / `HashMapAny` がソースから削除されている
+9. 既存テストが `vec<any>` / `map<any, any>` で動作する
+10. `cargo fmt && cargo check && cargo test && cargo clippy` が全てパスする
 
 ## 10. Verification Strategy
 
 ### 進捗検証
-- 各メソッド実装後に対応するスナップショットテストを実行
-- `cargo check` でコンパイルエラーがないことを確認
+- 各タスク完了時に `cargo check` でコンパイルエラーがないことを確認
+- パーサー変更後は単体テストでパース結果を確認
+- 型チェッカー変更後は型エラーテストで動作確認
 
 ### 達成検証
-- 全 Acceptance Criteria をチェックリストで確認
-- `cargo test` が全てパス
-- `cargo clippy` で警告がないことを確認
+- Acceptance Criteria のチェックリストを順に確認
+- `cargo test` で全テストがパス
+- 手動で `vec<int>` / `map<string, int>` を使うコードを書いて動作確認
 
 ### 漏れ検出
-- 既存のテストファイルを全てメソッド形式に変換し、テストがパスすることで網羅性を担保
-- `vec_push`, `map_put_string` 等の旧関数名で grep し、残存がないことを確認
+- `VectorAny` / `HashMapAny` を grep して残存箇所がないことを確認
+- 型エラーになるべきケースが実際にエラーになることをテスト
 
 ## 11. Test Plan
 
-### E2E シナリオ 1: Vector 基本操作
-**Given**: 空の moca プログラム
-**When**: 以下のコードを実行
-```moca
-let v = vec_new();
-v.push(10);
-v.push(20);
-print(v.len());
-print(v.get(0));
-v.set(0, 30);
-print(v.pop());
+### E2E シナリオ 1: vec<T> の基本操作
 ```
-**Then**: 出力が `2`, `10`, `20` となる
-
-### E2E シナリオ 2: HashMap 基本操作
-**Given**: 空の moca プログラム
-**When**: 以下のコードを実行
-```moca
-let m = map_new_any();
-m.put_string("name", "Alice");
-print(m.get_string("name"));
-print(m.contains_string("name"));
-print(m.len());
+Given: vec<int> を生成するコード
+When: push(42), push(100), get(0), pop() を順に実行
+Then: 正しい値が返り、型エラーなくコンパイル・実行される
 ```
-**Then**: 出力が `Alice`, `true`, `1` となる
 
-### E2E シナリオ 3: 旧構文がエラーになる
-**Given**: 空の moca プログラム
-**When**: `vec_push(v, 10);` を含むコードをコンパイル
-**Then**: コンパイルエラーが発生する
+### E2E シナリオ 2: map<K, V> の基本操作
+```
+Given: map<string, int> を生成するコード
+When: put("a", 1), put("b", 2), get("a"), contains("c") を順に実行
+Then: 正しい値が返り、型エラーなくコンパイル・実行される
+```
+
+### E2E シナリオ 3: 型エラーの検出
+```
+Given: vec<int> を生成するコード
+When: push("string") を実行しようとする
+Then: コンパイル時に型エラーが発生し、適切なエラーメッセージが表示される
+```

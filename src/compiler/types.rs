@@ -24,8 +24,10 @@ pub enum Type {
     Nil,
     /// Array type: `array<T>`
     Array(Box<Type>),
-    /// Vector type: `Vector<T>` (dynamic array)
+    /// Vector type: `vec<T>` (dynamic array)
     Vector(Box<Type>),
+    /// Map type: `map<K, V>` (hash map)
+    Map(Box<Type>, Box<Type>),
     /// Object type with named fields: `{field1: T1, field2: T2, ...}`
     /// Uses BTreeMap for deterministic ordering.
     Object(BTreeMap<std::string::String, Type>),
@@ -59,6 +61,11 @@ impl Type {
         Type::Vector(Box::new(element))
     }
 
+    /// Create a new map type.
+    pub fn map(key: Type, value: Type) -> Type {
+        Type::Map(Box::new(key), Box::new(value))
+    }
+
     /// Create a new nullable type.
     pub fn nullable(inner: Type) -> Type {
         Type::Nullable(Box::new(inner))
@@ -88,6 +95,7 @@ impl Type {
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => false,
             Type::Var(_) => true,
             Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
+            Type::Map(key, value) => key.has_type_vars() || value.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
             Type::Object(fields) => fields.values().any(|t| t.has_type_vars()),
             Type::Struct { fields, .. } => fields.iter().any(|(_, t)| t.has_type_vars()),
@@ -113,6 +121,10 @@ impl Type {
                 }
             }
             Type::Array(elem) | Type::Vector(elem) => elem.collect_type_vars(vars),
+            Type::Map(key, value) => {
+                key.collect_type_vars(vars);
+                value.collect_type_vars(vars);
+            }
             Type::Nullable(inner) => inner.collect_type_vars(vars),
             Type::Object(fields) => {
                 for t in fields.values() {
@@ -143,7 +155,8 @@ impl fmt::Display for Type {
             Type::String => write!(f, "string"),
             Type::Nil => write!(f, "nil"),
             Type::Array(elem) => write!(f, "array<{}>", elem),
-            Type::Vector(elem) => write!(f, "Vector<{}>", elem),
+            Type::Vector(elem) => write!(f, "vec<{}>", elem),
+            Type::Map(key, value) => write!(f, "map<{}, {}>", key, value),
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Object(fields) => {
                 write!(f, "{{")?;
@@ -182,6 +195,10 @@ pub enum TypeAnnotation {
     Named(std::string::String),
     /// Array type: `array<T>`
     Array(Box<TypeAnnotation>),
+    /// Vector type: `vec<T>`
+    Vec(Box<TypeAnnotation>),
+    /// Map type: `map<K, V>`
+    Map(Box<TypeAnnotation>, Box<TypeAnnotation>),
     /// Object type: `{field1: T1, field2: T2}`
     Object(Vec<(std::string::String, TypeAnnotation)>),
     /// Nullable type: `T?`
@@ -208,6 +225,8 @@ impl TypeAnnotation {
                 _ => Err(format!("unknown type: {}", name)),
             },
             TypeAnnotation::Array(elem) => Ok(Type::array(elem.to_type()?)),
+            TypeAnnotation::Vec(elem) => Ok(Type::vector(elem.to_type()?)),
+            TypeAnnotation::Map(key, value) => Ok(Type::map(key.to_type()?, value.to_type()?)),
             TypeAnnotation::Object(fields) => {
                 let mut type_fields = BTreeMap::new();
                 for (name, ann) in fields {
@@ -229,6 +248,8 @@ impl fmt::Display for TypeAnnotation {
         match self {
             TypeAnnotation::Named(name) => write!(f, "{}", name),
             TypeAnnotation::Array(elem) => write!(f, "array<{}>", elem),
+            TypeAnnotation::Vec(elem) => write!(f, "vec<{}>", elem),
+            TypeAnnotation::Map(key, value) => write!(f, "map<{}, {}>", key, value),
             TypeAnnotation::Object(fields) => {
                 write!(f, "{{")?;
                 let mut first = true;
@@ -269,6 +290,11 @@ mod tests {
         assert_eq!(Type::Nil.to_string(), "nil");
         assert_eq!(Type::Any.to_string(), "any");
         assert_eq!(Type::array(Type::Int).to_string(), "array<int>");
+        assert_eq!(Type::vector(Type::Int).to_string(), "vec<int>");
+        assert_eq!(
+            Type::map(Type::String, Type::Int).to_string(),
+            "map<string, int>"
+        );
         assert_eq!(Type::nullable(Type::String).to_string(), "string?");
         assert_eq!(Type::Var(0).to_string(), "?T0");
 
@@ -305,6 +331,21 @@ mod tests {
             Type::array(Type::Int)
         );
         assert_eq!(
+            TypeAnnotation::Vec(Box::new(TypeAnnotation::Named("int".to_string())))
+                .to_type()
+                .unwrap(),
+            Type::vector(Type::Int)
+        );
+        assert_eq!(
+            TypeAnnotation::Map(
+                Box::new(TypeAnnotation::Named("string".to_string())),
+                Box::new(TypeAnnotation::Named("int".to_string()))
+            )
+            .to_type()
+            .unwrap(),
+            Type::map(Type::String, Type::Int)
+        );
+        assert_eq!(
             TypeAnnotation::Nullable(Box::new(TypeAnnotation::Named("string".to_string())))
                 .to_type()
                 .unwrap(),
@@ -324,8 +365,13 @@ mod tests {
         assert!(!Type::Int.has_type_vars());
         assert!(!Type::Any.has_type_vars());
         assert!(!Type::array(Type::Int).has_type_vars());
+        assert!(!Type::vector(Type::Int).has_type_vars());
+        assert!(!Type::map(Type::String, Type::Int).has_type_vars());
         assert!(Type::Var(0).has_type_vars());
         assert!(Type::array(Type::Var(0)).has_type_vars());
+        assert!(Type::vector(Type::Var(0)).has_type_vars());
+        assert!(Type::map(Type::Var(0), Type::Int).has_type_vars());
+        assert!(Type::map(Type::String, Type::Var(0)).has_type_vars());
         assert!(Type::function(vec![Type::Var(0)], Type::Int).has_type_vars());
     }
 
@@ -339,5 +385,10 @@ mod tests {
         let vars = func.free_type_vars();
         assert!(vars.contains(&1));
         assert!(vars.contains(&2));
+
+        let map_type = Type::map(Type::Var(3), Type::Var(4));
+        let map_vars = map_type.free_type_vars();
+        assert!(map_vars.contains(&3));
+        assert!(map_vars.contains(&4));
     }
 }

@@ -757,6 +757,7 @@ impl VM {
                 self.stack.push(Value::I64(len));
             }
             Op::TypeOf => {
+                use crate::vm::heap::ObjectKind;
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let type_name = match &value {
                     Value::I64(_) => "int",
@@ -764,8 +765,12 @@ impl VM {
                     Value::Bool(_) => "bool",
                     Value::Null => "nil",
                     Value::Ref(r) => {
-                        if self.heap.get(*r).is_some() {
-                            "slots"
+                        if let Some(obj) = self.heap.get(*r) {
+                            match obj.kind {
+                                ObjectKind::String => "string",
+                                ObjectKind::Array => "array",
+                                ObjectKind::Slots => "slots",
+                            }
                         } else {
                             "unknown"
                         }
