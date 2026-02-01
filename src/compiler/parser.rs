@@ -485,6 +485,25 @@ impl<'a> Parser<'a> {
             return Ok(TypeAnnotation::Array(Box::new(element_type)));
         }
 
+        // Check for vec<T>
+        if name == "vec" && self.match_token(&TokenKind::Lt) {
+            let element_type = self.parse_type_annotation()?;
+            self.expect(&TokenKind::Gt)?;
+            return Ok(TypeAnnotation::Vec(Box::new(element_type)));
+        }
+
+        // Check for map<K, V>
+        if name == "map" && self.match_token(&TokenKind::Lt) {
+            let key_type = self.parse_type_annotation()?;
+            self.expect(&TokenKind::Comma)?;
+            let value_type = self.parse_type_annotation()?;
+            self.expect(&TokenKind::Gt)?;
+            return Ok(TypeAnnotation::Map(
+                Box::new(key_type),
+                Box::new(value_type),
+            ));
+        }
+
         Ok(TypeAnnotation::Named(name))
     }
 
@@ -1394,6 +1413,54 @@ mod tests {
             }) => {
                 assert!(type_annotation.is_some());
                 assert_eq!(type_annotation.as_ref().unwrap().to_string(), "array<int>");
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_let_with_vec_type() {
+        let program = parse("let v: vec<int> = vec_new();").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                type_annotation, ..
+            }) => {
+                assert!(type_annotation.is_some());
+                assert_eq!(type_annotation.as_ref().unwrap().to_string(), "vec<int>");
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_let_with_map_type() {
+        let program = parse("let m: map<string, int> = map_new();").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                type_annotation, ..
+            }) => {
+                assert!(type_annotation.is_some());
+                assert_eq!(
+                    type_annotation.as_ref().unwrap().to_string(),
+                    "map<string, int>"
+                );
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn test_nested_vec_type() {
+        let program = parse("let v: vec<vec<int>> = vec_new();").unwrap();
+        match &program.items[0] {
+            Item::Statement(Statement::Let {
+                type_annotation, ..
+            }) => {
+                assert!(type_annotation.is_some());
+                assert_eq!(
+                    type_annotation.as_ref().unwrap().to_string(),
+                    "vec<vec<int>>"
+                );
             }
             _ => panic!("expected let statement"),
         }
