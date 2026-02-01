@@ -1577,6 +1577,25 @@ impl TypeChecker {
                 }
                 Some(Type::Array(Box::new(Type::String)))
             }
+            "vec_new" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("vec_new expects 0 arguments", span));
+                }
+                // Returns vec<T> where T is fresh (will be constrained by annotation)
+                Some(Type::Vector(Box::new(self.fresh_var())))
+            }
+            "map_new" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("map_new expects 0 arguments", span));
+                }
+                // Returns map<K, V> where K, V are fresh (will be constrained by annotation)
+                Some(Type::Map(
+                    Box::new(self.fresh_var()),
+                    Box::new(self.fresh_var()),
+                ))
+            }
             _ => None,
         }
     }
