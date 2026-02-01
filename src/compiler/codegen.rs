@@ -190,19 +190,19 @@ impl Codegen {
                 value,
                 span,
             } => {
-                // Check if the object is a Vector or VectorAny struct (from type info)
+                // Check if the object is a Vector or Vec<T> generic struct (from type info)
                 let is_vector = self
                     .index_object_types
                     .get(span)
                     .map(|t| {
                         matches!(t, Type::Vector(_))
-                            || matches!(t, Type::Struct { name, .. } if name == "VectorAny")
+                            || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
                     })
                     .unwrap_or(false);
 
                 if is_vector {
                     // Vector assign: load ptr field (slot 0) then store element
-                    // VectorAny layout: [ptr, len, cap]
+                    // Vec<T> layout: [ptr, len, cap]
                     self.compile_expr(object, ops)?;
                     ops.push(Op::HeapLoad(0)); // Load ptr field
                     self.compile_expr(index, ops)?;
@@ -448,19 +448,19 @@ impl Codegen {
                 index,
                 span,
             } => {
-                // Check if the object is a Vector or VectorAny struct (from type info)
+                // Check if the object is a Vector or Vec<T> generic struct (from type info)
                 let is_vector = self
                     .index_object_types
                     .get(span)
                     .map(|t| {
                         matches!(t, Type::Vector(_))
-                            || matches!(t, Type::Struct { name, .. } if name == "VectorAny")
+                            || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
                     })
                     .unwrap_or(false);
 
                 if is_vector {
                     // Vector access: load ptr field (slot 0) then access element
-                    // VectorAny layout: [ptr, len, cap]
+                    // Vec<T> layout: [ptr, len, cap]
                     self.compile_expr(object, ops)?;
                     ops.push(Op::HeapLoad(0)); // Load ptr field
                     self.compile_expr(index, ops)?;
