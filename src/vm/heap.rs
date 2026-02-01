@@ -6,15 +6,16 @@ use super::Value;
 // Header Layout (64 bits)
 // =============================================================================
 //
-// +--------+------+------------------+-------------------+
-// | marked | free | slot_count (32)  | reserved (30)     |
-// | 1 bit  | 1 bit| 32 bits          | 30 bits           |
-// +--------+------+------------------+-------------------+
+// +--------+------+------------------+------+----------------+
+// | marked | free | slot_count (32)  | kind | reserved (28)  |
+// | 1 bit  | 1 bit| 32 bits          | 2 bit| 28 bits        |
+// +--------+------+------------------+------+----------------+
 //
 // - Bit 63: marked flag for GC
 // - Bit 62: free flag (1 = free block in free list, 0 = allocated)
 // - Bits 30-61: slot count (max 2^32 - 1 slots)
-// - Bits 0-29: reserved for future use
+// - Bits 28-29: object kind (0=slots, 1=string, 2=array, 3=reserved)
+// - Bits 0-27: reserved for future use
 //
 // Free block layout:
 // +----------------+----------------+
@@ -26,10 +27,32 @@ const HEADER_MARKED_BIT: u64 = 1 << 63;
 const HEADER_FREE_BIT: u64 = 1 << 62;
 const HEADER_SLOT_COUNT_SHIFT: u32 = 30;
 const HEADER_SLOT_COUNT_MASK: u64 = 0xFFFF_FFFF << HEADER_SLOT_COUNT_SHIFT;
+const HEADER_KIND_SHIFT: u32 = 28;
+const HEADER_KIND_MASK: u64 = 0x3 << HEADER_KIND_SHIFT;
 
-/// Encode a header word from marked flag, free flag, and slot count.
-fn encode_header(marked: bool, slot_count: u32) -> u64 {
+/// Object kinds for distinguishing heap object types at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ObjectKind {
+    Slots = 0,  // Default: structs, vectors, etc.
+    String = 1, // String objects
+    Array = 2,  // Arrays (for future use)
+}
+
+impl ObjectKind {
+    fn from_u64(value: u64) -> Self {
+        match value {
+            1 => ObjectKind::String,
+            2 => ObjectKind::Array,
+            _ => ObjectKind::Slots,
+        }
+    }
+}
+
+/// Encode a header word from marked flag, slot count, and object kind.
+fn encode_header(marked: bool, slot_count: u32, kind: ObjectKind) -> u64 {
     let mut header = (slot_count as u64) << HEADER_SLOT_COUNT_SHIFT;
+    header |= (kind as u64) << HEADER_KIND_SHIFT;
     if marked {
         header |= HEADER_MARKED_BIT;
     }
@@ -57,6 +80,11 @@ fn decode_free(header: u64) -> bool {
 /// Decode slot count from header word (for allocated objects).
 fn decode_slot_count(header: u64) -> u32 {
     ((header & HEADER_SLOT_COUNT_MASK) >> HEADER_SLOT_COUNT_SHIFT) as u32
+}
+
+/// Decode object kind from header word.
+fn decode_kind(header: u64) -> ObjectKind {
+    ObjectKind::from_u64((header & HEADER_KIND_MASK) >> HEADER_KIND_SHIFT)
 }
 
 /// Decode size in words from free block header.
@@ -92,6 +120,8 @@ const fn object_size_words(slot_count: u32) -> usize {
 pub struct HeapObject {
     /// Whether this object is marked during GC
     pub marked: bool,
+    /// The kind of object (slots, string, array)
+    pub kind: ObjectKind,
     /// The slots containing values
     pub slots: Vec<Value>,
 }
@@ -101,6 +131,16 @@ impl HeapObject {
     pub fn new(slots: Vec<Value>) -> Self {
         Self {
             marked: false,
+            kind: ObjectKind::Slots,
+            slots,
+        }
+    }
+
+    /// Create a new heap object with the given slots and kind.
+    pub fn new_with_kind(slots: Vec<Value>, kind: ObjectKind) -> Self {
+        Self {
+            marked: false,
+            kind,
             slots,
         }
     }
@@ -118,6 +158,7 @@ impl HeapObject {
         // Read header
         let header = *memory.get(offset)?;
         let marked = decode_marked(header);
+        let kind = decode_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
         // Check if we have enough memory for all slots
@@ -136,7 +177,11 @@ impl HeapObject {
             slots.push(value);
         }
 
-        Some(HeapObject { marked, slots })
+        Some(HeapObject {
+            marked,
+            kind,
+            slots,
+        })
     }
 
     /// Convert slots to a Rust String (interpreting slots as Unicode code points)
@@ -259,11 +304,20 @@ impl Heap {
     /// String is stored with each character as Value::I64 (Unicode code point).
     pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
         let slots: Vec<Value> = value.chars().map(|c| Value::I64(c as i64)).collect();
-        self.alloc_slots(slots)
+        self.alloc_slots_with_kind(slots, ObjectKind::String)
     }
 
     /// Allocate a new slot-based heap object.
     pub fn alloc_slots(&mut self, slots: Vec<Value>) -> Result<GcRef, String> {
+        self.alloc_slots_with_kind(slots, ObjectKind::Slots)
+    }
+
+    /// Allocate a new heap object with the given slots and kind.
+    pub fn alloc_slots_with_kind(
+        &mut self,
+        slots: Vec<Value>,
+        kind: ObjectKind,
+    ) -> Result<GcRef, String> {
         let slot_count = slots.len() as u32;
         let obj_size_words = object_size_words(slot_count);
         let obj_size_bytes = obj_size_words * 8;
@@ -288,8 +342,8 @@ impl Heap {
 
         self.bytes_allocated += obj_size_bytes;
 
-        // Write header (not marked, not free)
-        self.memory[offset] = encode_header(false, slot_count);
+        // Write header (not marked, not free, with kind)
+        self.memory[offset] = encode_header(false, slot_count, kind);
 
         // Write slots
         for (i, value) in slots.iter().enumerate() {
@@ -559,17 +613,20 @@ mod tests {
     #[test]
     fn test_header_encoding() {
         // Test various combinations
-        let h1 = encode_header(false, 0);
+        let h1 = encode_header(false, 0, ObjectKind::Slots);
         assert!(!decode_marked(h1));
         assert_eq!(decode_slot_count(h1), 0);
+        assert_eq!(decode_kind(h1), ObjectKind::Slots);
 
-        let h2 = encode_header(true, 42);
+        let h2 = encode_header(true, 42, ObjectKind::String);
         assert!(decode_marked(h2));
         assert_eq!(decode_slot_count(h2), 42);
+        assert_eq!(decode_kind(h2), ObjectKind::String);
 
-        let h3 = encode_header(false, u32::MAX);
+        let h3 = encode_header(false, u32::MAX, ObjectKind::Array);
         assert!(!decode_marked(h3));
         assert_eq!(decode_slot_count(h3), u32::MAX);
+        assert_eq!(decode_kind(h3), ObjectKind::Array);
     }
 
     #[test]
