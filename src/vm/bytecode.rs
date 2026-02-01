@@ -263,9 +263,7 @@ const OP_JMP_IF_FALSE: u8 = 37;
 const OP_JMP_IF_TRUE: u8 = 38;
 const OP_CALL: u8 = 39;
 const OP_RET: u8 = 40;
-const OP_NEW: u8 = 41;
-const OP_GET_F: u8 = 42;
-const OP_SET_F: u8 = 43;
+// Legacy opcodes 41, 42, 43 reserved (New, GetF, SetF - object type removed)
 // Legacy opcodes 46, 48, 49, 50, 51 removed (AllocArray, ArrayGet, ArraySet, ArrayPush, ArrayPop)
 const OP_ARRAY_LEN: u8 = 47;
 const OP_TYPE_OF: u8 = 55;
@@ -362,18 +360,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *argc as u32)?;
         }
         Op::Ret => w.write_all(&[OP_RET])?,
-        Op::New(size) => {
-            w.write_all(&[OP_NEW])?;
-            write_u32(w, *size as u32)?;
-        }
-        Op::GetF(idx) => {
-            w.write_all(&[OP_GET_F])?;
-            write_u32(w, *idx as u32)?;
-        }
-        Op::SetF(idx) => {
-            w.write_all(&[OP_SET_F])?;
-            write_u32(w, *idx as u32)?;
-        }
         Op::ArrayLen => w.write_all(&[OP_ARRAY_LEN])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::ToString => w.write_all(&[OP_TO_STRING])?,
@@ -464,9 +450,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
             Op::Call(func_idx, argc)
         }
         OP_RET => Op::Ret,
-        OP_NEW => Op::New(read_u32(r)? as usize),
-        OP_GET_F => Op::GetF(read_u32(r)? as usize),
-        OP_SET_F => Op::SetF(read_u32(r)? as usize),
         OP_ARRAY_LEN => Op::ArrayLen,
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
@@ -666,7 +649,7 @@ mod tests {
                 name: "main".to_string(),
                 arity: 0,
                 locals_count: 4,
-                code: vec![Op::New(2), Op::Ret],
+                code: vec![Op::AllocHeap(2), Op::Ret],
                 stackmap: Some(stackmap),
             },
             strings: vec![],
@@ -740,9 +723,6 @@ mod tests {
             Op::JmpIfTrue(3000),
             Op::Call(5, 3),
             Op::Ret,
-            Op::New(10),
-            Op::GetF(1),
-            Op::SetF(2),
             Op::ArrayLen,
             Op::TypeOf,
             Op::ToString,
