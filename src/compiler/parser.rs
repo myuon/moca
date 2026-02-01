@@ -74,11 +74,30 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse type parameters: `<T>`, `<T, U>`, etc.
+    /// Returns an empty Vec if no type parameters are present.
+    fn parse_type_params(&mut self) -> Result<Vec<String>, String> {
+        if !self.match_token(&TokenKind::Lt) {
+            return Ok(Vec::new());
+        }
+
+        let mut params = Vec::new();
+        params.push(self.expect_ident()?);
+
+        while self.match_token(&TokenKind::Comma) {
+            params.push(self.expect_ident()?);
+        }
+
+        self.expect(&TokenKind::Gt)?;
+        Ok(params)
+    }
+
     fn fn_def(&mut self) -> Result<FnDef, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Fun)?;
 
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.expect(&TokenKind::LParen)?;
 
         let mut params = Vec::new();
@@ -101,7 +120,7 @@ impl<'a> Parser<'a> {
 
         Ok(FnDef {
             name,
-            type_params: Vec::new(), // TODO: Parse type params in Phase 2
+            type_params,
             params,
             return_type,
             body,
@@ -109,12 +128,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse a struct definition: `struct Point { x: int, y: int }`
+    /// Parse a struct definition: `struct Point { x: int, y: int }` or `struct Container<T> { value: T }`
     fn struct_def(&mut self) -> Result<StructDef, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Struct)?;
 
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.expect(&TokenKind::LBrace)?;
 
         let mut fields = Vec::new();
@@ -131,7 +151,7 @@ impl<'a> Parser<'a> {
 
         Ok(StructDef {
             name,
-            type_params: Vec::new(), // TODO: Parse type params in Phase 2
+            type_params,
             fields,
             span,
         })
@@ -183,12 +203,19 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an impl block: `impl Point { fn methods... }`
+    /// Parse an impl block: `impl Point { ... }` or `impl<T> Container<T> { ... }`
     fn impl_block(&mut self) -> Result<ImplBlock, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Impl)?;
 
+        // Parse optional type parameters: impl<T> ...
+        let type_params = self.parse_type_params()?;
+
         let struct_name = self.expect_ident()?;
+
+        // Parse optional type arguments for the struct: Container<T>
+        let struct_type_args = self.parse_type_args()?;
+
         self.expect(&TokenKind::LBrace)?;
 
         let mut methods = Vec::new();
@@ -198,12 +225,30 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RBrace)?;
 
         Ok(ImplBlock {
-            type_params: Vec::new(), // TODO: Parse type params in Phase 2
+            type_params,
             struct_name,
-            struct_type_args: Vec::new(), // TODO: Parse type args in Phase 2
+            struct_type_args,
             methods,
             span,
         })
+    }
+
+    /// Parse type arguments: `<int, string>`, `<T>`, etc.
+    /// Returns an empty Vec if no type arguments are present.
+    fn parse_type_args(&mut self) -> Result<Vec<TypeAnnotation>, String> {
+        if !self.match_token(&TokenKind::Lt) {
+            return Ok(Vec::new());
+        }
+
+        let mut args = Vec::new();
+        args.push(self.parse_type_annotation()?);
+
+        while self.match_token(&TokenKind::Comma) {
+            args.push(self.parse_type_annotation()?);
+        }
+
+        self.expect(&TokenKind::Gt)?;
+        Ok(args)
     }
 
     fn parse_param(&mut self) -> Result<Param, String> {
