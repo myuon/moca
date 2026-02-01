@@ -4,13 +4,13 @@ arr[1] = 25;
 print(arr[1]);
 
 // Test Vector operations (push/pop)
-var vec = vec_new();
-vec_push(vec, 10);
-vec_push(vec, 20);
-vec_push(vec, 30);
-vec_push(vec, 40);
-print(vec_len(vec));
-print(vec_get(vec, 3));
-let last = vec_pop(vec);
+var vec: VectorAny = vec_new();
+vec.push(10);
+vec.push(20);
+vec.push(30);
+vec.push(40);
+print(vec.len);
+print(vec.get(3));
+let last = vec.pop();
 print(last);
-print(vec_len(vec));
+print(vec.len);

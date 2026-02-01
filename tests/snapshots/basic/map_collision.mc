@@ -2,64 +2,64 @@
 
 // ===== Int key collision test =====
 // Keys 0, 16, 32 all hash to bucket 0 (key % 16 == 0)
-let m1 = map_new_any();
+let m1: HashMapAny = map_new();
 
-map_put_int(m1, 0, "zero");
-map_put_int(m1, 16, "sixteen");
-map_put_int(m1, 32, "thirty-two");
+m1.put_int(0, "zero");
+m1.put_int(16, "sixteen");
+m1.put_int(32, "thirty-two");
 
 // All three should be retrievable despite collision
-print(map_get_int(m1, 0));
-print(map_get_int(m1, 16));
-print(map_get_int(m1, 32));
-print(map_len(m1));
+print(m1.get_int(0));
+print(m1.get_int(16));
+print(m1.get_int(32));
+print(m1.hm_size);
 
 // Verify contains works for colliding keys
-if map_contains_int(m1, 0) && map_contains_int(m1, 16) && map_contains_int(m1, 32) {
+if m1.contains_int(0) && m1.contains_int(16) && m1.contains_int(32) {
     print("all int keys found");
 }
 
 // Update a colliding key
-map_put_int(m1, 16, "SIXTEEN");
-print(map_get_int(m1, 16));
-print(map_len(m1));
+m1.put_int(16, "SIXTEEN");
+print(m1.get_int(16));
+print(m1.hm_size);
 
 // Remove middle element in chain
-map_remove_int(m1, 16);
-print(map_len(m1));
+m1.remove_int(16);
+print(m1.hm_size);
 // Other colliding keys should still work
-print(map_get_int(m1, 0));
-print(map_get_int(m1, 32));
+print(m1.get_int(0));
+print(m1.get_int(32));
 
 // ===== String key collision test =====
 // Keys "a", "q", "A" all hash to bucket 6
-let m2 = map_new_any();
+let m2: HashMapAny = map_new();
 
-map_put_string(m2, "a", 100);
-map_put_string(m2, "q", 200);
-map_put_string(m2, "A", 300);
+m2.put_string("a", 100);
+m2.put_string("q", 200);
+m2.put_string("A", 300);
 
 // All three should be retrievable despite collision
-print(map_get_string(m2, "a"));
-print(map_get_string(m2, "q"));
-print(map_get_string(m2, "A"));
-print(map_len(m2));
+print(m2.get_string("a"));
+print(m2.get_string("q"));
+print(m2.get_string("A"));
+print(m2.hm_size);
 
 // Verify contains works for colliding keys
-if map_contains_string(m2, "a") && map_contains_string(m2, "q") && map_contains_string(m2, "A") {
+if m2.contains_string("a") && m2.contains_string("q") && m2.contains_string("A") {
     print("all string keys found");
 }
 
 // Remove first element (head of chain)
-map_remove_string(m2, "a");
-print(map_len(m2));
+m2.remove_string("a");
+print(m2.hm_size);
 // Other colliding keys should still work
-print(map_get_string(m2, "q"));
-print(map_get_string(m2, "A"));
+print(m2.get_string("q"));
+print(m2.get_string("A"));
 
 // Remove last element (tail of chain)
-map_remove_string(m2, "A");
-print(map_len(m2));
-print(map_get_string(m2, "q"));
+m2.remove_string("A");
+print(m2.hm_size);
+print(m2.get_string("q"));
 
 print("collision test passed");

@@ -190,24 +190,24 @@ impl Codegen {
                 value,
                 span,
             } => {
-                // Check if the object is a Vector (from type info)
+                // Check if the object is a Vector or VectorAny struct (from type info)
                 let is_vector = self
                     .index_object_types
                     .get(span)
-                    .map(|t| matches!(t, Type::Vector(_)))
+                    .map(|t| {
+                        matches!(t, Type::Vector(_))
+                            || matches!(t, Type::Struct { name, .. } if name == "VectorAny")
+                    })
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector assign: call vec_set_any from stdlib
-                    if let Some(&func_idx) = self.function_indices.get("vec_set_any") {
-                        self.compile_expr(object, ops)?;
-                        self.compile_expr(index, ops)?;
-                        self.compile_expr(value, ops)?;
-                        ops.push(Op::Call(func_idx, 3));
-                        ops.push(Op::Pop); // Discard nil return value
-                    } else {
-                        return Err("vec_set_any not found in stdlib".to_string());
-                    }
+                    // Vector assign: load ptr field (slot 0) then store element
+                    // VectorAny layout: [ptr, len, cap]
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::HeapLoad(0)); // Load ptr field
+                    self.compile_expr(index, ops)?;
+                    self.compile_expr(value, ops)?;
+                    ops.push(Op::HeapStoreDyn);
                 } else {
                     // Array/struct assign: direct HeapStoreDyn
                     self.compile_expr(object, ops)?;
@@ -448,22 +448,23 @@ impl Codegen {
                 index,
                 span,
             } => {
-                // Check if the object is a Vector (from type info)
+                // Check if the object is a Vector or VectorAny struct (from type info)
                 let is_vector = self
                     .index_object_types
                     .get(span)
-                    .map(|t| matches!(t, Type::Vector(_)))
+                    .map(|t| {
+                        matches!(t, Type::Vector(_))
+                            || matches!(t, Type::Struct { name, .. } if name == "VectorAny")
+                    })
                     .unwrap_or(false);
 
                 if is_vector {
-                    // Vector access: call vec_get_any from stdlib
-                    if let Some(&func_idx) = self.function_indices.get("vec_get_any") {
-                        self.compile_expr(object, ops)?;
-                        self.compile_expr(index, ops)?;
-                        ops.push(Op::Call(func_idx, 2));
-                    } else {
-                        return Err("vec_get_any not found in stdlib".to_string());
-                    }
+                    // Vector access: load ptr field (slot 0) then access element
+                    // VectorAny layout: [ptr, len, cap]
+                    self.compile_expr(object, ops)?;
+                    ops.push(Op::HeapLoad(0)); // Load ptr field
+                    self.compile_expr(index, ops)?;
+                    ops.push(Op::HeapLoadDyn);
                 } else {
                     // Array/struct access: direct HeapLoadDyn
                     self.compile_expr(object, ops)?;
@@ -613,32 +614,6 @@ impl Codegen {
                         // VM will handle type dispatch
                         ops.push(Op::ArrayLen); // This also works for strings via VM dispatch
                     }
-                    "push" => {
-                        if args.len() != 2 {
-                            return Err("push takes exactly 2 arguments".to_string());
-                        }
-                        // Call vec_push_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_push_any") {
-                            self.compile_expr(&args[0], ops)?;
-                            self.compile_expr(&args[1], ops)?;
-                            ops.push(Op::Call(func_idx, 2));
-                            // vec_push_any returns nil implicitly
-                        } else {
-                            return Err("vec_push_any not found in stdlib".to_string());
-                        }
-                    }
-                    "pop" => {
-                        if args.len() != 1 {
-                            return Err("pop takes exactly 1 argument".to_string());
-                        }
-                        // Call vec_pop_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_pop_any") {
-                            self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::Call(func_idx, 1));
-                        } else {
-                            return Err("vec_pop_any not found in stdlib".to_string());
-                        }
-                    }
                     "type_of" => {
                         if args.len() != 1 {
                             return Err("type_of takes exactly 1 argument".to_string());
@@ -696,108 +671,6 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ThreadJoin);
-                    }
-                    // Vector builtins - delegate to stdlib functions
-                    "vec_new" => {
-                        if !args.is_empty() {
-                            return Err("vec_new takes no arguments".to_string());
-                        }
-                        // Call vec_new_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_new_any") {
-                            ops.push(Op::Call(func_idx, 0));
-                        } else {
-                            return Err("vec_new_any not found in stdlib".to_string());
-                        }
-                    }
-                    "vec_with_capacity" => {
-                        if args.len() != 1 {
-                            return Err(
-                                "vec_with_capacity takes exactly 1 argument (capacity)".to_string()
-                            );
-                        }
-                        // Call vec_with_capacity_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_with_capacity_any")
-                        {
-                            self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::Call(func_idx, 1));
-                        } else {
-                            return Err("vec_with_capacity_any not found in stdlib".to_string());
-                        }
-                    }
-                    "vec_push" => {
-                        if args.len() != 2 {
-                            return Err(
-                                "vec_push takes exactly 2 arguments (vector, value)".to_string()
-                            );
-                        }
-                        // Call vec_push_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_push_any") {
-                            self.compile_expr(&args[0], ops)?;
-                            self.compile_expr(&args[1], ops)?;
-                            ops.push(Op::Call(func_idx, 2));
-                            // vec_push_any returns nil implicitly, no need to push
-                        } else {
-                            return Err("vec_push_any not found in stdlib".to_string());
-                        }
-                    }
-                    "vec_pop" => {
-                        if args.len() != 1 {
-                            return Err("vec_pop takes exactly 1 argument (vector)".to_string());
-                        }
-                        // Call vec_pop_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_pop_any") {
-                            self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::Call(func_idx, 1));
-                        } else {
-                            return Err("vec_pop_any not found in stdlib".to_string());
-                        }
-                    }
-                    "vec_len" => {
-                        if args.len() != 1 {
-                            return Err("vec_len takes exactly 1 argument (vector)".to_string());
-                        }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(1)); // slot 1 is length [ptr, len, cap]
-                    }
-                    "vec_capacity" => {
-                        if args.len() != 1 {
-                            return Err(
-                                "vec_capacity takes exactly 1 argument (vector)".to_string()
-                            );
-                        }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapLoad(2)); // slot 2 is capacity [ptr, len, cap]
-                    }
-                    "vec_get" => {
-                        if args.len() != 2 {
-                            return Err(
-                                "vec_get takes exactly 2 arguments (vector, index)".to_string()
-                            );
-                        }
-                        // Call vec_get_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_get_any") {
-                            self.compile_expr(&args[0], ops)?;
-                            self.compile_expr(&args[1], ops)?;
-                            ops.push(Op::Call(func_idx, 2));
-                        } else {
-                            return Err("vec_get_any not found in stdlib".to_string());
-                        }
-                    }
-                    "vec_set" => {
-                        if args.len() != 3 {
-                            return Err("vec_set takes exactly 3 arguments (vector, index, value)"
-                                .to_string());
-                        }
-                        // Call vec_set_any from stdlib
-                        if let Some(&func_idx) = self.function_indices.get("vec_set_any") {
-                            self.compile_expr(&args[0], ops)?;
-                            self.compile_expr(&args[1], ops)?;
-                            self.compile_expr(&args[2], ops)?;
-                            ops.push(Op::Call(func_idx, 3));
-                            // vec_set_any returns nil implicitly
-                        } else {
-                            return Err("vec_set_any not found in stdlib".to_string());
-                        }
                     }
                     // Low-level heap intrinsics (for stdlib implementation)
                     "__heap_load" => {
@@ -1118,9 +991,6 @@ impl Codegen {
                 )
             })
     }
-
-    // compile_vector_push and compile_vector_pop have been removed
-    // vec_push/vec_pop now call vec_push_any/vec_pop_any from stdlib
 }
 
 #[cfg(test)]
