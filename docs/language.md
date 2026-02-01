@@ -26,7 +26,7 @@ This document defines the syntax and semantics of the Moca programming language.
 | `string` | Heap object | UTF-8, immutable |
 | `array` | Heap object | Fixed-length array of Values |
 | `Vector` | Heap object | Dynamic array with ptr/len/cap layout |
-| `object` | Heap object | Field name → Value mapping |
+| `HashMapAny` | Heap object | Key → Value mapping (stdlib) |
 
 ## Syntax
 
@@ -106,10 +106,11 @@ var arr = [1, 2, 3];
 let first = arr[0];
 arr[1] = 42;
 
-// Object literals
-let obj = { x: 10, y: 20 };
-let x = obj.x;
-obj.y = 30;
+// Map (use stdlib HashMap functions)
+let m = map_new_any();
+map_put_string(m, "x", 10);
+map_put_string(m, "y", 20);
+let x = map_get_string(m, "x");
 
 // nil
 let nothing = nil;
@@ -243,9 +244,7 @@ call_expr   = primary { "(" [ args ] ")" | "[" expr "]" | "." IDENT } ;
 args        = expr { "," expr } ;
 primary     = INT | FLOAT | STRING | "true" | "false" | "nil" | IDENT
             | "(" expr ")"
-            | "[" [ args ] "]"
-            | "{" [ obj_fields ] "}" ;
-obj_fields  = IDENT ":" expr { "," IDENT ":" expr } ;
+            | "[" [ args ] "]" ;
 ```
 
 ## Semantics
@@ -284,6 +283,28 @@ obj_fields  = IDENT ":" expr { "," IDENT ":" expr } ;
 | `vec_capacity(vec)` | Get current capacity |
 | `vec_get(vec, i)` | Get element at index (alternative to `vec[i]`) |
 | `vec_set(vec, i, v)` | Set element at index (alternative to `vec[i] = v`) |
+
+### HashMap Functions
+
+Functions for key-value storage using the stdlib HashMap implementation.
+
+| Function | Description |
+|----------|-------------|
+| `map_new_any()` | Create an empty HashMap |
+| `map_put_string(m, key, val)` | Insert with string key |
+| `map_get_string(m, key)` | Get value by string key |
+| `map_has_string(m, key)` | Check if string key exists |
+| `map_remove_string(m, key)` | Remove entry by string key |
+| `map_put_int(m, key, val)` | Insert with int key |
+| `map_get_int(m, key)` | Get value by int key |
+| `map_has_int(m, key)` | Check if int key exists |
+| `map_remove_int(m, key)` | Remove entry by int key |
+| `map_size(m)` | Get number of entries |
+| `map_keys(m)` | Get array of all keys |
+| `map_values(m)` | Get array of all values |
+| `map_clear(m)` | Remove all entries |
+
+**Note:** HashMap value types are inferred from the first `map_put_*` call. Use separate maps for different value types.
 
 ### Network Functions
 
