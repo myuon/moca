@@ -944,17 +944,9 @@ impl VM {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-                if offset >= obj.slots.len() {
-                    return Err(format!(
-                        "runtime error: slot index {} out of bounds",
-                        offset
-                    ));
-                }
-                obj.slots[offset] = value;
+                self.heap.write_slot(r, offset, value).map_err(|e| {
+                    format!("runtime error: slot index {} out of bounds ({})", offset, e)
+                })?;
             }
             Op::HeapLoadDyn => {
                 let index = self.pop_int()?;
@@ -972,14 +964,12 @@ impl VM {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-                if index < 0 || index as usize >= obj.slots.len() {
+                if index < 0 {
                     return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
-                obj.slots[index as usize] = value;
+                self.heap
+                    .write_slot(r, index as usize, value)
+                    .map_err(|e| format!("runtime error: {}", e))?;
             }
             Op::Swap => {
                 let len = self.stack.len();
