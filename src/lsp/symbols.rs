@@ -222,7 +222,9 @@ impl SymbolTable {
                 self.collect_expr(left);
                 self.collect_expr(right);
             }
-            Expr::Call { callee, args, span } => {
+            Expr::Call {
+                callee, args, span, ..
+            } => {
                 // The callee is a function reference
                 self.references.push((*span, callee.clone()));
                 for arg in args {
@@ -245,6 +247,7 @@ impl SymbolTable {
                 function,
                 args,
                 span,
+                ..
             } => {
                 // The type and function names are references
                 self.references.push((*span, type_name.clone()));

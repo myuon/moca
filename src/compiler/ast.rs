@@ -40,6 +40,8 @@ pub struct StructField {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
+    /// Type parameters for generic structs: `struct Container<T> { ... }`
+    pub type_params: Vec<String>,
     pub fields: Vec<StructField>,
     pub span: Span,
 }
@@ -47,7 +49,11 @@ pub struct StructDef {
 /// An impl block containing methods for a struct.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
+    /// Type parameters for the impl block: `impl<T> Container<T> { ... }`
+    pub type_params: Vec<String>,
     pub struct_name: String,
+    /// Type arguments for the struct: `impl<T> Container<T> { ... }` has `[T]`
+    pub struct_type_args: Vec<TypeAnnotation>,
     pub methods: Vec<FnDef>,
     pub span: Span,
 }
@@ -64,6 +70,8 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
+    /// Type parameters for generic functions: `fun identity<T>(x: T) -> T { ... }`
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeAnnotation>,
     pub body: Block,
@@ -198,26 +206,36 @@ pub enum Expr {
     },
     Call {
         callee: String,
+        /// Type arguments for generic function calls: `identity<int>(42)`
+        type_args: Vec<TypeAnnotation>,
         args: Vec<Expr>,
         span: Span,
     },
-    /// Struct literal: `Point { x: 1, y: 2 }`
+    /// Struct literal: `Point { x: 1, y: 2 }` or `Container<int> { value: 42 }`
     StructLiteral {
         name: String,
+        /// Type arguments for generic struct literals: `Container<int> { value: 42 }`
+        type_args: Vec<TypeAnnotation>,
         fields: Vec<(String, Expr)>,
         span: Span,
     },
-    /// Method call: `obj.method(args)`
+    /// Method call: `obj.method(args)` or `obj.method<U>(args)`
     MethodCall {
         object: Box<Expr>,
         method: String,
+        /// Type arguments for generic method calls: `container.map<string>(f)`
+        type_args: Vec<TypeAnnotation>,
         args: Vec<Expr>,
         span: Span,
     },
-    /// Associated function call: `Type::func(args)`
+    /// Associated function call: `Type::func(args)` or `Type<T>::func(args)`
     AssociatedFunctionCall {
         type_name: String,
+        /// Type arguments for the type: `Container<int>::new(42)`
+        type_args: Vec<TypeAnnotation>,
         function: String,
+        /// Type arguments for the function: `Container<int>::create<U>()`
+        fn_type_args: Vec<TypeAnnotation>,
         args: Vec<Expr>,
         span: Span,
     },

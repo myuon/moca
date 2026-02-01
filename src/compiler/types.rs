@@ -48,6 +48,17 @@ pub enum Type {
     /// Any type: bypasses type checking, unifies with any other type.
     /// When unified with another type T, the result is T.
     Any,
+    /// Type parameter (generic type variable): `T`, `U`, etc.
+    /// Used in generic function/struct definitions.
+    Param { name: std::string::String },
+    /// Generic struct instantiation: `Container<int>`, `Pair<T, U>`
+    GenericStruct {
+        name: std::string::String,
+        /// Type arguments (concrete types or type parameters)
+        type_args: Vec<Type>,
+        /// Fields in declaration order (name, type) with type params substituted
+        fields: Vec<(std::string::String, Type)>,
+    },
 }
 
 impl Type {
@@ -94,11 +105,18 @@ impl Type {
         match self {
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => false,
             Type::Var(_) => true,
+            Type::Param { .. } => false, // Type params are not inference variables
             Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
             Type::Map(key, value) => key.has_type_vars() || value.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
             Type::Object(fields) => fields.values().any(|t| t.has_type_vars()),
             Type::Struct { fields, .. } => fields.iter().any(|(_, t)| t.has_type_vars()),
+            Type::GenericStruct {
+                type_args, fields, ..
+            } => {
+                type_args.iter().any(|t| t.has_type_vars())
+                    || fields.iter().any(|(_, t)| t.has_type_vars())
+            }
             Type::Function { params, ret } => {
                 params.iter().any(|t| t.has_type_vars()) || ret.has_type_vars()
             }
@@ -115,6 +133,7 @@ impl Type {
     fn collect_type_vars(&self, vars: &mut Vec<TypeVarId>) {
         match self {
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {}
+            Type::Param { .. } => {} // Type params are not inference variables
             Type::Var(id) => {
                 if !vars.contains(id) {
                     vars.push(*id);
@@ -136,12 +155,89 @@ impl Type {
                     t.collect_type_vars(vars);
                 }
             }
+            Type::GenericStruct {
+                type_args, fields, ..
+            } => {
+                for t in type_args {
+                    t.collect_type_vars(vars);
+                }
+                for (_, t) in fields {
+                    t.collect_type_vars(vars);
+                }
+            }
             Type::Function { params, ret } => {
                 for t in params {
                     t.collect_type_vars(vars);
                 }
                 ret.collect_type_vars(vars);
             }
+        }
+    }
+
+    /// Substitute a type parameter with a concrete type.
+    /// Returns a new type with all occurrences of `Type::Param { name }` replaced with `replacement`.
+    pub fn substitute_param(&self, param_name: &str, replacement: &Type) -> Type {
+        match self {
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
+                self.clone()
+            }
+            Type::Var(_) => self.clone(),
+            Type::Param { name } => {
+                if name == param_name {
+                    replacement.clone()
+                } else {
+                    self.clone()
+                }
+            }
+            Type::Array(elem) => {
+                Type::Array(Box::new(elem.substitute_param(param_name, replacement)))
+            }
+            Type::Vector(elem) => {
+                Type::Vector(Box::new(elem.substitute_param(param_name, replacement)))
+            }
+            Type::Map(key, value) => Type::Map(
+                Box::new(key.substitute_param(param_name, replacement)),
+                Box::new(value.substitute_param(param_name, replacement)),
+            ),
+            Type::Nullable(inner) => {
+                Type::Nullable(Box::new(inner.substitute_param(param_name, replacement)))
+            }
+            Type::Object(fields) => {
+                let new_fields: BTreeMap<std::string::String, Type> = fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.substitute_param(param_name, replacement)))
+                    .collect();
+                Type::Object(new_fields)
+            }
+            Type::Struct { name, fields } => Type::Struct {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), t.substitute_param(param_name, replacement)))
+                    .collect(),
+            },
+            Type::GenericStruct {
+                name,
+                type_args,
+                fields,
+            } => Type::GenericStruct {
+                name: name.clone(),
+                type_args: type_args
+                    .iter()
+                    .map(|t| t.substitute_param(param_name, replacement))
+                    .collect(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), t.substitute_param(param_name, replacement)))
+                    .collect(),
+            },
+            Type::Function { params, ret } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|t| t.substitute_param(param_name, replacement))
+                    .collect(),
+                ret: Box::new(ret.substitute_param(param_name, replacement)),
+            },
         }
     }
 }
@@ -183,6 +279,19 @@ impl fmt::Display for Type {
             Type::Struct { name, .. } => write!(f, "{}", name),
             Type::Var(id) => write!(f, "?T{}", id),
             Type::Any => write!(f, "any"),
+            Type::Param { name } => write!(f, "{}", name),
+            Type::GenericStruct {
+                name, type_args, ..
+            } => {
+                write!(f, "{}<", name)?;
+                for (i, arg) in type_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ">")
+            }
         }
     }
 }
@@ -208,11 +317,18 @@ pub enum TypeAnnotation {
         params: Vec<TypeAnnotation>,
         ret: Box<TypeAnnotation>,
     },
+    /// Generic type with type arguments: `Container<int>`, `Pair<T, U>`
+    Generic {
+        name: std::string::String,
+        type_args: Vec<TypeAnnotation>,
+    },
 }
 
 impl TypeAnnotation {
     /// Convert a type annotation to a concrete Type.
     /// Returns an error if the type name is unknown.
+    /// Note: This basic conversion doesn't handle struct types or generic instantiation.
+    /// Those require context from the typechecker.
     pub fn to_type(&self) -> Result<Type, String> {
         match self {
             TypeAnnotation::Named(name) => match name.as_str() {
@@ -238,6 +354,13 @@ impl TypeAnnotation {
             TypeAnnotation::Function { params, ret } => {
                 let param_types: Result<Vec<_>, _> = params.iter().map(|p| p.to_type()).collect();
                 Ok(Type::function(param_types?, ret.to_type()?))
+            }
+            TypeAnnotation::Generic { name, .. } => {
+                // Generic types need context from typechecker to resolve
+                Err(format!(
+                    "generic type '{}' requires typechecker context",
+                    name
+                ))
             }
         }
     }
@@ -272,6 +395,16 @@ impl fmt::Display for TypeAnnotation {
                     write!(f, "{}", param)?;
                 }
                 write!(f, ") -> {}", ret)
+            }
+            TypeAnnotation::Generic { name, type_args } => {
+                write!(f, "{}<", name)?;
+                for (i, arg) in type_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ">")
             }
         }
     }

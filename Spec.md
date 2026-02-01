@@ -1,118 +1,202 @@
-# Spec.md - Associated Function の導入
+# Spec.md - Generics Support
 
 ## 1. Goal
-- `vec::new()`や`map::new()`のようにassociated function（型に紐づく静的関数）を定義・呼び出しできるようにする
+- moca 言語に Generics（ジェネリクス）を導入し、関数・メソッド・構造体で型パラメータ `<T, U>` を使えるようにする
+- コンパイラに Monomorphisation フェーズを追加し、呼び出し時の具体型に応じた特殊化コードを生成する
 
 ## 2. Non-Goals
-- インスタンスメソッド（`self`を取るメソッド）の変更
-- 新しい型の追加
-- JITコンパイラの対応（VMのみ対応）
-- `vec_new()`等の既存関数の互換性維持（削除する）
+- Trait bound（型制約）: `<T: Comparable>` のような制約は実装しない
+- 高階型（Higher-Kinded Types）: `<F<_>>` のような型コンストラクタは対象外
+- 既存の `vec<T>`, `map<K,V>` の汎用ジェネリクスへの置き換え: 後日対応
 
 ## 3. Target Users
-- mocaプログラマー
-- より直感的なAPI（`vec::new()`）を使いたい開発者
+- moca 言語のユーザー（言語利用者）
+- moca コンパイラの開発者（将来の拡張のため）
 
 ## 4. Core User Flow
-1. ユーザーが`impl vec { fun new() -> vec<any> { ... } }`のようにassociated functionを定義
-2. ユーザーが`vec::new()`の形式で呼び出し
-3. 型推論により戻り値の型が決定される（`let v: vec<int> = vec::new()`なら`vec<int>`に推論）
+1. ユーザーが型パラメータ付きの関数/構造体を定義する
+2. 呼び出し時に型引数を明示 (`f<int>()`) または省略（型推論）
+3. コンパイラが型チェック時に型パラメータを解決
+4. Monomorphisation フェーズで具体型ごとの関数/構造体を生成
+5. 実行時は通常の（非ジェネリック）コードとして動作
 
 ## 5. Inputs & Outputs
 
-### Input（ソースコード）
-```moca
-impl vec {
-    fun new() -> vec<any> {
-        // 実装
+### Inputs（ソースコード例）
+```
+// ジェネリック関数
+fun identity<T>(x: T) -> T {
+    return x;
+}
+
+// 複数型パラメータ
+fun pair<T, U>(a: T, b: U) -> {first: T, second: U} {
+    return {first: a, second: b};
+}
+
+// ジェネリック構造体
+struct Container<T> {
+    value: T,
+}
+
+// ジェネリック impl ブロック
+impl<T> Container<T> {
+    fun new(v: T) -> Container<T> {
+        return Container { value: v };
+    }
+
+    fun get(self) -> T {
+        return self.value;
+    }
+
+    // メソッド独自の型パラメータ
+    fun map<U>(self, f: (T) -> U) -> Container<U> {
+        return Container { value: f(self.value) };
     }
 }
 
-let v = vec::new();
+// 呼び出し
+let a = identity<int>(42);
+let b = identity("hello");  // 型推論で T = string
+
+let c = Container<int>::new(100);
+let d = Container::new("world");  // 型推論で T = string
+print(c.get());
+print(d.get());
 ```
 
-### Output
-- 正常にパース・型チェック・コンパイル・実行される
-- `vec::new()`が対応する関数を呼び出す
+### Outputs
+- 型チェック成功/エラーメッセージ
+- Monomorphisation 後の具体化された関数群
+- 実行可能なバイトコード
 
 ## 6. Tech Stack
-- 言語: Rust
-- テスト: cargo test + スナップショットテスト
-- フォーマット: cargo fmt
-- Lint: cargo clippy
+- 言語: Rust（既存プロジェクト継続）
+- テストフレームワーク: insta（スナップショットテスト、既存）
+- その他: 既存の moca コンパイラ/VM インフラ
 
 ## 7. Rules & Constraints
 
 ### 構文ルール
-- associated functionは`impl TypeName { fun name(...) -> ReturnType { ... } }`で定義
-- 呼び出しは`TypeName::function_name(args)`形式
-- `self`パラメータを持たない関数のみがassociated function
-
-### 対象の型
-- `vec`（ビルトイン）
-- `map`（ビルトイン）
-- ユーザー定義struct
+- 型パラメータリスト: `<T>`, `<T, U>`, `<T, U, V>` （カンマ区切り）
+- 型パラメータ名: 大文字開始の識別子（慣習として `T`, `U`, `V` など）
+- 関数定義: `fun name<T>(params) -> RetType { ... }`
+- 構造体定義: `struct Name<T> { field: T, ... }`
+- impl ブロック: `impl<T> StructName<T> { ... }`
+- メソッド追加パラメータ: `fun method<U>(self, ...) -> ... { ... }`
+- 呼び出し時の型指定: `func<Type>(args)`, `Type<T>::method(args)`
 
 ### 型推論ルール
-- 戻り値型に`any`を含む場合、使用箇所から型推論される
-- 明示的に型注釈がある場合はそれに従う
-- 例: `let v: vec<int> = vec::new()` → `vec<int>`として推論
+- 既存の Hindley-Milner 型推論を拡張
+- 引数から型パラメータを推論可能な場合は型引数を省略可
+- 推論不可能な場合はコンパイルエラー
 
-### 削除対象
-- `vec_new()`関数（prelude.mcから削除）
-- `map_new()`関数（prelude.mcから削除）
-- typechecker.rsの`vec_new`/`map_new`ビルトイン処理
+### Monomorphisation ルール
+- 呼び出しサイトで使用される具体型の組み合わせごとに特殊化
+- 同じ具体型の組み合わせは1つの実装を共有
+- 未使用のジェネリック定義はコード生成しない（デッドコード除去）
+
+### 制約
+- 型パラメータに制約（trait bound）は付けられない
+- 再帰的な型パラメータ適用は許可（例: `Container<Container<int>>`）
+- 型パラメータのデフォルト値は未サポート
 
 ## 8. Open Questions
-なし
+- `vec<T>`, `map<K,V>` の汎用化タイミング（今回は対象外だが将来的に統合予定）
 
-## 9. Acceptance Criteria
+## 9. Acceptance Criteria（最大10個）
 
-1. `impl vec { fun new() -> vec<any> { ... } }`の形式でassociated functionを定義できる
-2. `impl map { fun new() -> map<any, any> { ... } }`の形式でassociated functionを定義できる
-3. ユーザー定義structに対して`impl Point { fun origin() -> Point { ... } }`の形式でassociated functionを定義できる
-4. `vec::new()`の形式でassociated functionを呼び出せる
-5. `map::new()`の形式でassociated functionを呼び出せる
-6. `Point::origin()`の形式でユーザー定義structのassociated functionを呼び出せる
-7. 引数付きassociated function（例: `vec::with_capacity(10)`）が定義・呼び出しできる
-8. 戻り値の型推論が機能する（`let v: vec<int> = vec::new()`で`v`が`vec<int>`になる）
-9. `vec_new()`および`map_new()`が削除されている
-10. 全ての既存テストがパスする
+1. [ ] `fun identity<T>(x: T) -> T` のようなジェネリック関数を定義できる
+2. [ ] `identity<int>(42)` のように型引数を明示して呼び出せる
+3. [ ] `identity(42)` のように型引数を省略し、型推論で解決できる
+4. [ ] `<T, U>` のような複数型パラメータを使用できる
+5. [ ] `struct Container<T> { value: T }` のようなジェネリック構造体を定義できる
+6. [ ] `impl<T> Container<T> { ... }` でジェネリック構造体にメソッドを定義できる
+7. [ ] `Container<int>::new(42)` のように型引数付きで associated function を呼び出せる
+8. [ ] メソッドに追加の型パラメータ `fun map<U>(self, f: (T) -> U)` を定義できる
+9. [ ] Monomorphisation により、使用された具体型の組み合わせごとにコードが生成される
+10. [ ] 既存のテスト（非ジェネリックコード）が引き続きパスする
 
 ## 10. Verification Strategy
 
 ### 進捗検証
-- 各フェーズ完了時に`cargo check`と`cargo test`を実行
-- パース→型チェック→コード生成→実行の順に段階的に動作確認
+- 各フェーズ（Parser → TypeChecker → Monomorphisation → Codegen）ごとにスナップショットテストを追加
+- 段階的に機能を追加し、各段階でテストがパスすることを確認
+- `cargo check && cargo test` を各コミット前に実行
 
 ### 達成検証
-- 上記Acceptance Criteriaを全てチェックリストで確認
-- 新規スナップショットテストで`vec::new()`と`map::new()`の動作を確認
+- 上記 Acceptance Criteria の全項目をテストケースとして実装
+- `examples/` に generics を使ったサンプルプログラムを追加し、実行確認
+- スナップショットテストで AST・型情報・生成コードを検証
 
 ### 漏れ検出
-- `cargo clippy`でwarningがないことを確認
-- 既存の全テストがパスすることを確認
-- `vec_new`/`map_new`がコードベースに残っていないことをgrepで確認
+- エッジケースのテスト: ネストした型パラメータ、再帰的構造体、複数パラメータ
+- 既存テストのリグレッション確認
+- `cargo clippy` でコード品質チェック
 
 ## 11. Test Plan
 
-### E2E シナリオ 1: ビルトイン型のassociated function
+### E2E シナリオ 1: ジェネリック関数の基本
 ```
-Given: prelude.mcに`impl vec { fun new() -> vec<any> { ... } }`が定義されている
-When: `let v = vec::new(); v.push(1); print(v.len());`を実行する
-Then: `1`が出力される
+Given: 以下のソースコード
+  fun identity<T>(x: T) -> T {
+      return x;
+  }
+  let a = identity<int>(42);
+  let b = identity("hello");
+  print(a);
+  print(b);
+
+When: コンパイル・実行する
+
+Then:
+  - コンパイル成功
+  - 出力: "42" と "hello"
 ```
 
-### E2E シナリオ 2: ユーザー定義structのassociated function
+### E2E シナリオ 2: ジェネリック構造体とメソッド
 ```
-Given: `struct Point { x: int, y: int }` と `impl Point { fun origin() -> Point { return Point { x: 0, y: 0 }; } }`が定義されている
-When: `let p = Point::origin(); print(p.x);`を実行する
-Then: `0`が出力される
+Given: 以下のソースコード
+  struct Box<T> {
+      value: T,
+  }
+
+  impl<T> Box<T> {
+      fun new(v: T) -> Box<T> {
+          return Box { value: v };
+      }
+      fun get(self) -> T {
+          return self.value;
+      }
+  }
+
+  let int_box = Box<int>::new(123);
+  let str_box = Box::new("test");
+  print(int_box.get());
+  print(str_box.get());
+
+When: コンパイル・実行する
+
+Then:
+  - コンパイル成功
+  - 出力: "123" と "test"
 ```
 
-### E2E シナリオ 3: 型推論の確認
+### E2E シナリオ 3: 複数型パラメータと型推論
 ```
-Given: `impl vec { fun new() -> vec<any> { ... } }`が定義されている
-When: `let v: vec<int> = vec::new(); v.push(1); let x: int = v.get(0); print(x);`を実行する
-Then: コンパイルエラーなく`1`が出力される
+Given: 以下のソースコード
+  fun make_pair<T, U>(a: T, b: U) -> {first: T, second: U} {
+      return {first: a, second: b};
+  }
+
+  let p1 = make_pair<int, string>(1, "one");
+  let p2 = make_pair(2, "two");  // 型推論
+  print(p1.first);
+  print(p2.second);
+
+When: コンパイル・実行する
+
+Then:
+  - コンパイル成功
+  - 出力: "1" と "two"
 ```

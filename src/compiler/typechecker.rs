@@ -20,7 +20,10 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, Clone)]
 pub struct StructInfo {
     pub name: String,
+    /// Type parameters for generic structs: `struct Container<T> { ... }`
+    pub type_params: Vec<String>,
     /// Fields in declaration order: (name, type)
+    /// For generic structs, field types may contain Type::Param
     pub fields: Vec<(String, Type)>,
     /// Methods from impl blocks: method_name -> function type
     pub methods: HashMap<String, Type>,
@@ -101,6 +104,20 @@ impl Substitution {
                     .map(|(n, t)| (n.clone(), self.apply(t)))
                     .collect(),
             },
+            Type::GenericStruct {
+                name,
+                type_args,
+                fields,
+            } => Type::GenericStruct {
+                name: name.clone(),
+                type_args: type_args.iter().map(|t| self.apply(t)).collect(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.apply(t)))
+                    .collect(),
+            },
+            // Type parameters are unchanged (they are not inference variables)
+            Type::Param { .. } => ty.clone(),
             // Primitive types and Any are unchanged
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
                 ty.clone()
@@ -177,6 +194,15 @@ impl TypeEnv {
     }
 }
 
+/// Information about a generic function
+#[derive(Debug, Clone)]
+pub struct GenericFunctionInfo {
+    /// Type parameters: T, U, etc.
+    pub type_params: Vec<String>,
+    /// Function type (with Type::Param for generic parameters)
+    pub fn_type: Type,
+}
+
 /// The type checker with inference support.
 pub struct TypeChecker {
     filename: String,
@@ -184,6 +210,8 @@ pub struct TypeChecker {
     errors: Vec<TypeError>,
     /// Function signatures (name -> type)
     functions: HashMap<String, Type>,
+    /// Generic function signatures (name -> generic info)
+    generic_functions: HashMap<String, GenericFunctionInfo>,
     /// Struct definitions (name -> struct info)
     structs: HashMap<String, StructInfo>,
     /// Substitution accumulated during inference
@@ -191,6 +219,8 @@ pub struct TypeChecker {
     /// Type of objects in index expressions (Span -> Type)
     /// Used by codegen to differentiate between array and vector access
     index_object_types: HashMap<Span, Type>,
+    /// Current type parameters in scope (during function signature inference)
+    current_type_params: Vec<String>,
 }
 
 impl TypeChecker {
@@ -200,9 +230,11 @@ impl TypeChecker {
             next_var_id: 0,
             errors: Vec::new(),
             functions: HashMap::new(),
+            generic_functions: HashMap::new(),
             structs: HashMap::new(),
             substitution: Substitution::new(),
             index_object_types: HashMap::new(),
+            current_type_params: Vec::new(),
         }
     }
 
@@ -231,6 +263,10 @@ impl TypeChecker {
                     "nil" => Ok(Type::Nil),
                     "any" => Ok(Type::Any),
                     _ => {
+                        // Check if it's a type parameter in scope
+                        if self.current_type_params.contains(name) {
+                            return Ok(Type::Param { name: name.clone() });
+                        }
                         // Try to find a struct with this name
                         if let Some(info) = self.structs.get(name) {
                             Ok(Type::Struct {
@@ -277,6 +313,57 @@ impl TypeChecker {
                     self.resolve_type_annotation(ret, span)?,
                 ))
             }
+            TypeAnnotation::Generic { name, type_args } => {
+                // Look up struct definition
+                if let Some(struct_info) = self.structs.get(name).cloned() {
+                    // Check type argument count
+                    if type_args.len() != struct_info.type_params.len() {
+                        return Err(TypeError::new(
+                            format!(
+                                "struct `{}` expects {} type arguments, got {}",
+                                name,
+                                struct_info.type_params.len(),
+                                type_args.len()
+                            ),
+                            span,
+                        ));
+                    }
+
+                    // Resolve type arguments
+                    let resolved_type_args: Vec<Type> = type_args
+                        .iter()
+                        .map(|ta| self.resolve_type_annotation(ta, span))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    // Substitute type params in field types
+                    let instantiated_fields: Vec<(String, Type)> = struct_info
+                        .fields
+                        .iter()
+                        .map(|(fname, ftype)| {
+                            let mut substituted = ftype.clone();
+                            for (param_name, type_arg) in struct_info
+                                .type_params
+                                .iter()
+                                .zip(resolved_type_args.iter())
+                            {
+                                substituted = substituted.substitute_param(param_name, type_arg);
+                            }
+                            (fname.clone(), substituted)
+                        })
+                        .collect();
+
+                    Ok(Type::GenericStruct {
+                        name: name.clone(),
+                        type_args: resolved_type_args,
+                        fields: instantiated_fields,
+                    })
+                } else {
+                    Err(TypeError::new(
+                        format!("unknown generic type: {}", name),
+                        span,
+                    ))
+                }
+            }
         }
     }
 
@@ -316,6 +403,15 @@ impl TypeChecker {
                 subst.extend(*id, other.clone());
                 self.substitution = self.substitution.compose(&subst);
                 Ok(subst)
+            }
+
+            // Type parameter unification: same name = same type
+            (Type::Param { name: n1 }, Type::Param { name: n2 }) => {
+                if n1 == n2 {
+                    Ok(Substitution::new())
+                } else {
+                    Err(TypeError::mismatch(t1, t2, span))
+                }
             }
 
             // Array types
@@ -413,6 +509,33 @@ impl TypeChecker {
                 Ok(result)
             }
 
+            // Generic struct types - nominal typing with type argument unification
+            (
+                Type::GenericStruct {
+                    name: n1,
+                    type_args: a1,
+                    ..
+                },
+                Type::GenericStruct {
+                    name: n2,
+                    type_args: a2,
+                    ..
+                },
+            ) => {
+                if n1 != n2 {
+                    return Err(TypeError::mismatch(t1.clone(), t2.clone(), span));
+                }
+                if a1.len() != a2.len() {
+                    return Err(TypeError::mismatch(t1.clone(), t2.clone(), span));
+                }
+                let mut result = Substitution::new();
+                for (arg1, arg2) in a1.iter().zip(a2.iter()) {
+                    let s = self.unify(arg1, arg2, span)?;
+                    result = result.compose(&s);
+                }
+                Ok(result)
+            }
+
             // Mismatch
             _ => Err(TypeError::mismatch(t1, t2, span)),
         }
@@ -431,7 +554,16 @@ impl TypeChecker {
         for item in &program.items {
             match item {
                 Item::FnDef(fn_def) => {
-                    let fn_type = self.infer_function_signature(fn_def);
+                    let (fn_type, is_generic) = self.infer_function_signature(fn_def);
+                    if is_generic {
+                        self.generic_functions.insert(
+                            fn_def.name.clone(),
+                            GenericFunctionInfo {
+                                type_params: fn_def.type_params.clone(),
+                                fn_type: fn_type.clone(),
+                            },
+                        );
+                    }
                     self.functions.insert(fn_def.name.clone(), fn_type);
                 }
                 Item::ImplBlock(impl_block) => {
@@ -475,7 +607,12 @@ impl TypeChecker {
     }
 
     /// Infer the type signature of a function.
-    fn infer_function_signature(&mut self, fn_def: &FnDef) -> Type {
+    /// Returns the function type and whether it's a generic function.
+    fn infer_function_signature(&mut self, fn_def: &FnDef) -> (Type, bool) {
+        // Set current type params for resolving type annotations
+        let is_generic = !fn_def.type_params.is_empty();
+        self.current_type_params = fn_def.type_params.clone();
+
         let param_types: Vec<Type> = fn_def
             .params
             .iter()
@@ -502,18 +639,28 @@ impl TypeChecker {
             self.fresh_var()
         };
 
-        Type::function(param_types, ret_type)
+        // Clear current type params
+        self.current_type_params.clear();
+
+        let fn_type = Type::function(param_types, ret_type);
+        (fn_type, is_generic)
     }
 
     /// Type check a function definition.
     fn check_function(&mut self, fn_def: &FnDef) {
         let mut env = TypeEnv::new();
 
+        // Set current type params for generic functions
+        self.current_type_params = fn_def.type_params.clone();
+
         // Get function type
         let fn_type = self.functions.get(&fn_def.name).cloned();
         let (param_types, expected_ret) = match fn_type {
             Some(Type::Function { params, ret }) => (params, *ret),
-            _ => return,
+            _ => {
+                self.current_type_params.clear();
+                return;
+            }
         };
 
         // Bind parameters
@@ -528,23 +675,33 @@ impl TypeChecker {
         if let Err(e) = self.unify(&body_type, &expected_ret, fn_def.span) {
             self.errors.push(e);
         }
+
+        // Clear current type params
+        self.current_type_params.clear();
     }
 
     /// Register a struct definition.
     fn register_struct(&mut self, struct_def: &StructDef) {
+        // Set current type params for resolving field types
+        self.current_type_params = struct_def.type_params.clone();
+
         let mut fields = Vec::new();
         for field in &struct_def.fields {
-            match field.type_annotation.to_type() {
+            match self.resolve_type_annotation(&field.type_annotation, field.span) {
                 Ok(ty) => fields.push((field.name.clone(), ty)),
-                Err(msg) => {
-                    self.errors.push(TypeError::new(msg, field.span));
+                Err(e) => {
+                    self.errors.push(e);
                     fields.push((field.name.clone(), self.fresh_var()));
                 }
             }
         }
 
+        // Clear current type params
+        self.current_type_params.clear();
+
         let info = StructInfo {
             name: struct_def.name.clone(),
+            type_params: struct_def.type_params.clone(),
             fields,
             methods: HashMap::new(),
         };
@@ -566,6 +723,10 @@ impl TypeChecker {
         }
 
         for method in &impl_block.methods {
+            // Set current type params: impl block's params + method's params
+            self.current_type_params = impl_block.type_params.clone();
+            self.current_type_params.extend(method.type_params.clone());
+
             // Infer method signature (skip 'self' parameter in type)
             let param_types: Vec<Type> = method
                 .params
@@ -593,6 +754,9 @@ impl TypeChecker {
             } else {
                 self.fresh_var()
             };
+
+            // Clear current type params
+            self.current_type_params.clear();
 
             let fn_type = Type::function(param_types.clone(), ret_type);
 
@@ -624,11 +788,25 @@ impl TypeChecker {
         let is_builtin_type = struct_name == "vec" || struct_name == "map";
 
         // Get struct type for 'self'
-        let self_type = if let Some(info) = self.structs.get(struct_name) {
-            Some(Type::Struct {
-                name: info.name.clone(),
-                fields: info.fields.clone(),
-            })
+        let self_type = if let Some(info) = self.structs.get(struct_name).cloned() {
+            // For generic structs, create GenericStruct with type params
+            if !impl_block.type_params.is_empty() {
+                let type_args: Vec<Type> = impl_block
+                    .type_params
+                    .iter()
+                    .map(|name| Type::Param { name: name.clone() })
+                    .collect();
+                Some(Type::GenericStruct {
+                    name: info.name.clone(),
+                    type_args,
+                    fields: info.fields.clone(),
+                })
+            } else {
+                Some(Type::Struct {
+                    name: info.name.clone(),
+                    fields: info.fields.clone(),
+                })
+            }
         } else if is_builtin_type {
             None // Builtin types don't have a struct definition
         } else {
@@ -638,6 +816,10 @@ impl TypeChecker {
         for method in &impl_block.methods {
             let mut env = TypeEnv::new();
             let has_self = method.params.iter().any(|p| p.name == "self");
+
+            // Set current type params: impl block's params + method's params
+            self.current_type_params = impl_block.type_params.clone();
+            self.current_type_params.extend(method.type_params.clone());
 
             // Get method signature
             let method_type = if is_builtin_type && !has_self {
@@ -654,7 +836,10 @@ impl TypeChecker {
 
             let (param_types, expected_ret) = match method_type {
                 Some(Type::Function { params, ret }) => (params, *ret),
-                _ => continue,
+                _ => {
+                    self.current_type_params.clear();
+                    continue;
+                }
             };
 
             // Bind 'self' parameter if present
@@ -680,6 +865,9 @@ impl TypeChecker {
             {
                 self.errors.push(e);
             }
+
+            // Clear current type params
+            self.current_type_params.clear();
         }
     }
 
@@ -902,6 +1090,25 @@ impl TypeChecker {
                             ));
                         }
                     }
+                    Type::GenericStruct { name, fields, .. } => {
+                        // Look up field in generic struct (fields have type params substituted)
+                        let mut found = false;
+                        for (field_name, field_type) in &fields {
+                            if field_name == field {
+                                if let Err(e) = self.unify(&val_type, field_type, *span) {
+                                    self.errors.push(e);
+                                }
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            self.errors.push(TypeError::new(
+                                format!("struct `{}` has no field `{}`", name, field),
+                                *span,
+                            ));
+                        }
+                    }
                     Type::Var(_) => {
                         // Can't infer field assignment on unknown object type
                     }
@@ -1058,6 +1265,19 @@ impl TypeChecker {
                         ));
                         self.fresh_var()
                     }
+                    Type::GenericStruct { name, fields, .. } => {
+                        // Look up field in generic struct (fields already have type params substituted)
+                        for (field_name, field_type) in &fields {
+                            if field_name == field {
+                                return field_type.clone();
+                            }
+                        }
+                        self.errors.push(TypeError::new(
+                            format!("struct `{}` has no field `{}`", name, field),
+                            *span,
+                        ));
+                        self.fresh_var()
+                    }
                     Type::Var(_) => {
                         // Can't infer field access on unknown object type
                         self.fresh_var()
@@ -1191,14 +1411,97 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Call { callee, args, span } => {
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+                span,
+            } => {
                 // Check for builtin functions
                 if let Some(result_type) = self.check_builtin(callee, args, env, *span) {
                     return result_type;
                 }
 
-                // User-defined function
-                if let Some(fn_type) = self.functions.get(callee).cloned() {
+                // Check if it's a generic function with explicit type arguments
+                if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
+                    // Instantiate the generic function with the provided type arguments
+                    let fn_type = if !type_args.is_empty() {
+                        // Check that the number of type arguments matches
+                        if type_args.len() != generic_info.type_params.len() {
+                            self.errors.push(TypeError::new(
+                                format!(
+                                    "function `{}` expects {} type arguments, got {}",
+                                    callee,
+                                    generic_info.type_params.len(),
+                                    type_args.len()
+                                ),
+                                *span,
+                            ));
+                            generic_info.fn_type.clone()
+                        } else {
+                            // Substitute type parameters with type arguments
+                            let mut instantiated = generic_info.fn_type.clone();
+                            for (param_name, type_arg) in
+                                generic_info.type_params.iter().zip(type_args.iter())
+                            {
+                                let resolved_arg =
+                                    match self.resolve_type_annotation(type_arg, *span) {
+                                        Ok(t) => t,
+                                        Err(e) => {
+                                            self.errors.push(e);
+                                            self.fresh_var()
+                                        }
+                                    };
+                                instantiated =
+                                    instantiated.substitute_param(param_name, &resolved_arg);
+                            }
+                            instantiated
+                        }
+                    } else {
+                        // No explicit type args - substitute type params with fresh type variables
+                        // This allows Hindley-Milner inference to work out the types
+                        let mut instantiated = generic_info.fn_type.clone();
+                        for param_name in &generic_info.type_params {
+                            let fresh = self.fresh_var();
+                            instantiated = instantiated.substitute_param(param_name, &fresh);
+                        }
+                        instantiated
+                    };
+
+                    match fn_type {
+                        Type::Function { params, ret } => {
+                            if args.len() != params.len() {
+                                self.errors.push(TypeError::new(
+                                    format!(
+                                        "function `{}` expects {} arguments, got {}",
+                                        callee,
+                                        params.len(),
+                                        args.len()
+                                    ),
+                                    *span,
+                                ));
+                                return self.substitution.apply(&ret);
+                            }
+
+                            for (arg, param_type) in args.iter().zip(params.iter()) {
+                                let arg_type = self.infer_expr(arg, env);
+                                if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                                    self.errors.push(e);
+                                }
+                            }
+
+                            self.substitution.apply(&ret)
+                        }
+                        _ => {
+                            self.errors.push(TypeError::new(
+                                format!("`{}` is not a function", callee),
+                                *span,
+                            ));
+                            self.fresh_var()
+                        }
+                    }
+                } else if let Some(fn_type) = self.functions.get(callee).cloned() {
+                    // Non-generic user-defined function
                     match fn_type {
                         Type::Function { params, ret } => {
                             if args.len() != params.len() {
@@ -1240,7 +1543,12 @@ impl TypeChecker {
                 }
             }
 
-            Expr::StructLiteral { name, fields, span } => {
+            Expr::StructLiteral {
+                name,
+                type_args,
+                fields,
+                span,
+            } => {
                 // Look up struct definition
                 let struct_info = match self.structs.get(name) {
                     Some(info) => info.clone(),
@@ -1257,11 +1565,83 @@ impl TypeChecker {
                     }
                 };
 
+                // Handle generic structs
+                let is_generic = !struct_info.type_params.is_empty();
+                let instantiated_fields = if is_generic {
+                    // Check that type args are provided for generic structs
+                    if type_args.is_empty() {
+                        // Type inference will happen during unification
+                        // For now, create fresh type variables for each type param
+                        let type_vars: Vec<Type> = struct_info
+                            .type_params
+                            .iter()
+                            .map(|_| self.fresh_var())
+                            .collect();
+
+                        // Substitute type params with fresh type vars in field types
+                        struct_info
+                            .fields
+                            .iter()
+                            .map(|(fname, ftype)| {
+                                let mut substituted = ftype.clone();
+                                for (param_name, type_var) in
+                                    struct_info.type_params.iter().zip(type_vars.iter())
+                                {
+                                    substituted =
+                                        substituted.substitute_param(param_name, type_var);
+                                }
+                                (fname.clone(), substituted)
+                            })
+                            .collect::<Vec<_>>()
+                    } else if type_args.len() != struct_info.type_params.len() {
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "struct `{}` expects {} type arguments, got {}",
+                                name,
+                                struct_info.type_params.len(),
+                                type_args.len()
+                            ),
+                            *span,
+                        ));
+                        struct_info.fields.clone()
+                    } else {
+                        // Resolve type arguments and substitute in field types
+                        let resolved_type_args: Vec<Type> = type_args
+                            .iter()
+                            .map(|ta| {
+                                self.resolve_type_annotation(ta, *span).unwrap_or_else(|e| {
+                                    self.errors.push(e);
+                                    self.fresh_var()
+                                })
+                            })
+                            .collect();
+
+                        struct_info
+                            .fields
+                            .iter()
+                            .map(|(fname, ftype)| {
+                                let mut substituted = ftype.clone();
+                                for (param_name, type_arg) in struct_info
+                                    .type_params
+                                    .iter()
+                                    .zip(resolved_type_args.iter())
+                                {
+                                    substituted =
+                                        substituted.substitute_param(param_name, type_arg);
+                                }
+                                (fname.clone(), substituted)
+                            })
+                            .collect::<Vec<_>>()
+                    }
+                } else {
+                    struct_info.fields.clone()
+                };
+
                 // Check that all required fields are provided
                 let provided_fields: HashMap<&str, &Expr> =
                     fields.iter().map(|(n, e)| (n.as_str(), e)).collect();
 
-                for (field_name, expected_type) in &struct_info.fields {
+                for (field_name, expected_type) in &instantiated_fields {
                     match provided_fields.get(field_name.as_str()) {
                         Some(expr) => {
                             let actual_type = self.infer_expr(expr, env);
@@ -1279,8 +1659,10 @@ impl TypeChecker {
                 }
 
                 // Check for extra fields not in the struct definition
-                let struct_field_names: std::collections::HashSet<&str> =
-                    struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
+                let struct_field_names: std::collections::HashSet<&str> = instantiated_fields
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect();
 
                 for (field_name, expr) in fields {
                     if !struct_field_names.contains(field_name.as_str()) {
@@ -1292,9 +1674,27 @@ impl TypeChecker {
                     }
                 }
 
-                Type::Struct {
-                    name: name.clone(),
-                    fields: struct_info.fields.clone(),
+                if is_generic && !type_args.is_empty() {
+                    // Return GenericStruct with explicit type args
+                    let resolved_type_args: Vec<Type> = type_args
+                        .iter()
+                        .map(|ta| {
+                            self.resolve_type_annotation(ta, *span).unwrap_or_else(|e| {
+                                self.errors.push(e);
+                                self.fresh_var()
+                            })
+                        })
+                        .collect();
+                    Type::GenericStruct {
+                        name: name.clone(),
+                        type_args: resolved_type_args,
+                        fields: instantiated_fields,
+                    }
+                } else {
+                    Type::Struct {
+                        name: name.clone(),
+                        fields: instantiated_fields,
+                    }
                 }
             }
 
@@ -1303,6 +1703,7 @@ impl TypeChecker {
                 method,
                 args,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let resolved_obj_type = self.substitution.apply(&obj_type);
@@ -1317,9 +1718,12 @@ impl TypeChecker {
                     return self.check_map_method(method, args, key_type, value_type, env, *span);
                 }
 
-                // Get struct name from object type
-                let struct_name = match &resolved_obj_type {
-                    Type::Struct { name, .. } => name.clone(),
+                // Get struct name and type args from object type
+                let (struct_name, type_args) = match &resolved_obj_type {
+                    Type::Struct { name, .. } => (name.clone(), Vec::new()),
+                    Type::GenericStruct {
+                        name, type_args, ..
+                    } => (name.clone(), type_args.clone()),
                     Type::Var(_) => {
                         // Can't determine struct type yet
                         for arg in args {
@@ -1343,14 +1747,37 @@ impl TypeChecker {
                 };
 
                 // Look up method in struct's method table
-                let method_type = self
-                    .structs
-                    .get(&struct_name)
+                let struct_info = self.structs.get(&struct_name).cloned();
+                let method_type = struct_info
+                    .as_ref()
                     .and_then(|info| info.methods.get(method))
                     .cloned();
 
                 match method_type {
                     Some(Type::Function { params, ret }) => {
+                        // For generic structs, substitute type params with actual type args
+                        let (params, ret) = if !type_args.is_empty() {
+                            if let Some(ref info) = struct_info {
+                                let mut substituted_params = params;
+                                let mut substituted_ret = *ret.clone();
+                                for (param_name, type_arg) in
+                                    info.type_params.iter().zip(type_args.iter())
+                                {
+                                    substituted_params = substituted_params
+                                        .iter()
+                                        .map(|p| p.substitute_param(param_name, type_arg))
+                                        .collect();
+                                    substituted_ret =
+                                        substituted_ret.substitute_param(param_name, type_arg);
+                                }
+                                (substituted_params, Box::new(substituted_ret))
+                            } else {
+                                (params, ret)
+                            }
+                        } else {
+                            (params, ret)
+                        };
+
                         // Check argument count
                         if args.len() != params.len() {
                             self.errors.push(TypeError::new(
@@ -1415,12 +1842,16 @@ impl TypeChecker {
 
             Expr::AssociatedFunctionCall {
                 type_name,
+                type_args,
                 function,
                 args,
                 span,
+                ..
             } => {
                 // Check if this is an associated function on a struct or builtin type
-                self.infer_associated_function_call(type_name, function, args, env, *span)
+                self.infer_associated_function_call(
+                    type_name, type_args, function, args, env, *span,
+                )
             }
         }
     }
@@ -1429,6 +1860,7 @@ impl TypeChecker {
     fn infer_associated_function_call(
         &mut self,
         type_name: &str,
+        struct_type_args: &[crate::compiler::types::TypeAnnotation],
         function: &str,
         args: &[Expr],
         env: &mut TypeEnv,
@@ -1438,45 +1870,79 @@ impl TypeChecker {
         let arg_types: Vec<Type> = args.iter().map(|arg| self.infer_expr(arg, env)).collect();
 
         // Check if it's an associated function on a struct
-        // Clone the function type to avoid borrow issues
-        let fn_type_opt = self
-            .structs
-            .get(type_name)
-            .and_then(|s| s.methods.get(function))
-            .cloned();
+        // Clone the struct info to avoid borrow issues
+        let struct_info_opt = self.structs.get(type_name).cloned();
 
-        if let Some(Type::Function { params, ret }) = fn_type_opt {
-            // Found the associated function - check argument types
-            // Check argument count
-            if params.len() != arg_types.len() {
-                self.errors.push(TypeError::new(
-                    format!(
-                        "{}::{} expects {} arguments, got {}",
-                        type_name,
-                        function,
-                        params.len(),
-                        arg_types.len()
-                    ),
-                    span,
-                ));
-            } else {
-                // Check each argument type
-                for (i, (param, arg_type)) in params.iter().zip(arg_types.iter()).enumerate() {
-                    if let Err(e) = self.unify(param, arg_type, span) {
-                        self.errors.push(TypeError::new(
-                            format!(
-                                "{}::{} argument {} type mismatch: {}",
-                                type_name,
-                                function,
-                                i + 1,
-                                e.message
-                            ),
-                            span,
-                        ));
+        if let Some(struct_info) = struct_info_opt {
+            let fn_type_opt = struct_info.methods.get(function).cloned();
+
+            if let Some(Type::Function { params, ret }) = fn_type_opt {
+                // For generic structs, substitute type params with provided type args
+                let (params, ret) = if !struct_type_args.is_empty()
+                    && !struct_info.type_params.is_empty()
+                {
+                    // Resolve type arguments to Types
+                    let resolved_type_args: Vec<Type> = struct_type_args
+                        .iter()
+                        .map(|ann| {
+                            self.resolve_type_annotation(ann, span).unwrap_or_else(|e| {
+                                self.errors.push(e);
+                                self.fresh_var()
+                            })
+                        })
+                        .collect();
+
+                    // Substitute type parameters with concrete types
+                    let mut substituted_params = params;
+                    let mut substituted_ret = *ret.clone();
+                    for (param_name, type_arg) in struct_info
+                        .type_params
+                        .iter()
+                        .zip(resolved_type_args.iter())
+                    {
+                        substituted_params = substituted_params
+                            .iter()
+                            .map(|p| p.substitute_param(param_name, type_arg))
+                            .collect();
+                        substituted_ret = substituted_ret.substitute_param(param_name, type_arg);
+                    }
+                    (substituted_params, Box::new(substituted_ret))
+                } else {
+                    (params, ret)
+                };
+
+                // Found the associated function - check argument types
+                // Check argument count
+                if params.len() != arg_types.len() {
+                    self.errors.push(TypeError::new(
+                        format!(
+                            "{}::{} expects {} arguments, got {}",
+                            type_name,
+                            function,
+                            params.len(),
+                            arg_types.len()
+                        ),
+                        span,
+                    ));
+                } else {
+                    // Check each argument type
+                    for (i, (param, arg_type)) in params.iter().zip(arg_types.iter()).enumerate() {
+                        if let Err(e) = self.unify(param, arg_type, span) {
+                            self.errors.push(TypeError::new(
+                                format!(
+                                    "{}::{} argument {} type mismatch: {}",
+                                    type_name,
+                                    function,
+                                    i + 1,
+                                    e.message
+                                ),
+                                span,
+                            ));
+                        }
                     }
                 }
+                return self.substitution.apply(ret.as_ref());
             }
-            return self.substitution.apply(ret.as_ref());
         }
 
         // Check builtin types: vec and map

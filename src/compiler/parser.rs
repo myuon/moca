@@ -74,11 +74,30 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse type parameters: `<T>`, `<T, U>`, etc.
+    /// Returns an empty Vec if no type parameters are present.
+    fn parse_type_params(&mut self) -> Result<Vec<String>, String> {
+        if !self.match_token(&TokenKind::Lt) {
+            return Ok(Vec::new());
+        }
+
+        let mut params = Vec::new();
+        params.push(self.expect_ident()?);
+
+        while self.match_token(&TokenKind::Comma) {
+            params.push(self.expect_ident()?);
+        }
+
+        self.expect(&TokenKind::Gt)?;
+        Ok(params)
+    }
+
     fn fn_def(&mut self) -> Result<FnDef, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Fun)?;
 
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.expect(&TokenKind::LParen)?;
 
         let mut params = Vec::new();
@@ -101,6 +120,7 @@ impl<'a> Parser<'a> {
 
         Ok(FnDef {
             name,
+            type_params,
             params,
             return_type,
             body,
@@ -108,12 +128,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse a struct definition: `struct Point { x: int, y: int }`
+    /// Parse a struct definition: `struct Point { x: int, y: int }` or `struct Container<T> { value: T }`
     fn struct_def(&mut self) -> Result<StructDef, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Struct)?;
 
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.expect(&TokenKind::LBrace)?;
 
         let mut fields = Vec::new();
@@ -128,7 +149,12 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::RBrace)?;
 
-        Ok(StructDef { name, fields, span })
+        Ok(StructDef {
+            name,
+            type_params,
+            fields,
+            span,
+        })
     }
 
     /// Parse a struct field: `name: Type`
@@ -169,15 +195,27 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::RBrace)?;
 
-        Ok(Expr::StructLiteral { name, fields, span })
+        Ok(Expr::StructLiteral {
+            name,
+            type_args: Vec::new(), // TODO: Parse type args in Phase 3
+            fields,
+            span,
+        })
     }
 
-    /// Parse an impl block: `impl Point { fn methods... }`
+    /// Parse an impl block: `impl Point { ... }` or `impl<T> Container<T> { ... }`
     fn impl_block(&mut self) -> Result<ImplBlock, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Impl)?;
 
+        // Parse optional type parameters: impl<T> ...
+        let type_params = self.parse_type_params()?;
+
         let struct_name = self.expect_ident()?;
+
+        // Parse optional type arguments for the struct: Container<T>
+        let struct_type_args = self.parse_type_args()?;
+
         self.expect(&TokenKind::LBrace)?;
 
         let mut methods = Vec::new();
@@ -187,10 +225,30 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RBrace)?;
 
         Ok(ImplBlock {
+            type_params,
             struct_name,
+            struct_type_args,
             methods,
             span,
         })
+    }
+
+    /// Parse type arguments: `<int, string>`, `<T>`, etc.
+    /// Returns an empty Vec if no type arguments are present.
+    fn parse_type_args(&mut self) -> Result<Vec<TypeAnnotation>, String> {
+        if !self.match_token(&TokenKind::Lt) {
+            return Ok(Vec::new());
+        }
+
+        let mut args = Vec::new();
+        args.push(self.parse_type_annotation()?);
+
+        while self.match_token(&TokenKind::Comma) {
+            args.push(self.parse_type_annotation()?);
+        }
+
+        self.expect(&TokenKind::Gt)?;
+        Ok(args)
     }
 
     fn parse_param(&mut self) -> Result<Param, String> {
@@ -504,6 +562,17 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // Check for generic type: Name<T, U, ...>
+        if self.match_token(&TokenKind::Lt) {
+            let mut type_args = Vec::new();
+            type_args.push(self.parse_type_annotation()?);
+            while self.match_token(&TokenKind::Comma) {
+                type_args.push(self.parse_type_annotation()?);
+            }
+            self.expect(&TokenKind::Gt)?;
+            return Ok(TypeAnnotation::Generic { name, type_args });
+        }
+
         Ok(TypeAnnotation::Named(name))
     }
 
@@ -727,8 +796,99 @@ impl<'a> Parser<'a> {
         let mut expr = self.primary()?;
 
         loop {
+            // Check for type arguments: identity<int>(...) or Type<T>::func(...)
+            if self.check(&TokenKind::Lt)
+                && self.looks_like_type_args()
+                && let Expr::Ident { name, span } = &expr
+            {
+                let name = name.clone();
+                let span = *span;
+                let type_args = self.parse_type_args()?;
+
+                // Check if this is Type<T>::func() or func<T>()
+                if self.match_token(&TokenKind::ColonColon) {
+                    // Associated function call: Type<T>::func()
+                    let function = self.expect_ident()?;
+
+                    // Check for function type args: Type<T>::func<U>(...)
+                    let fn_type_args = if self.check(&TokenKind::Lt) && self.looks_like_type_args()
+                    {
+                        self.parse_type_args()?
+                    } else {
+                        Vec::new()
+                    };
+
+                    self.expect(&TokenKind::LParen)?;
+
+                    let mut args = Vec::new();
+                    if !self.check(&TokenKind::RParen) {
+                        args.push(self.expression()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.expression()?);
+                        }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+
+                    expr = Expr::AssociatedFunctionCall {
+                        type_name: name,
+                        type_args,
+                        function,
+                        fn_type_args,
+                        args,
+                        span,
+                    };
+                } else if self.match_token(&TokenKind::LBrace) {
+                    // Struct literal with type args: Container<int> { value: 42 }
+                    let mut fields = Vec::new();
+                    if !self.check(&TokenKind::RBrace) {
+                        let field_name = self.expect_ident()?;
+                        self.expect(&TokenKind::Colon)?;
+                        let value = self.expression()?;
+                        fields.push((field_name, value));
+
+                        while self.match_token(&TokenKind::Comma) {
+                            if self.check(&TokenKind::RBrace) {
+                                break;
+                            }
+                            let field_name = self.expect_ident()?;
+                            self.expect(&TokenKind::Colon)?;
+                            let value = self.expression()?;
+                            fields.push((field_name, value));
+                        }
+                    }
+                    self.expect(&TokenKind::RBrace)?;
+
+                    expr = Expr::StructLiteral {
+                        name,
+                        type_args,
+                        fields,
+                        span,
+                    };
+                } else {
+                    // Function call with type args: func<T>(...)
+                    self.expect(&TokenKind::LParen)?;
+
+                    let mut args = Vec::new();
+                    if !self.check(&TokenKind::RParen) {
+                        args.push(self.expression()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.expression()?);
+                        }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+
+                    expr = Expr::Call {
+                        callee: name,
+                        type_args,
+                        args,
+                        span,
+                    };
+                }
+                continue;
+            }
+
             if self.match_token(&TokenKind::LParen) {
-                // Function call
+                // Function call (without type args)
                 if let Expr::Ident { name, span } = &expr {
                     let mut args = Vec::new();
 
@@ -743,6 +903,7 @@ impl<'a> Parser<'a> {
 
                     expr = Expr::Call {
                         callee: name.clone(),
+                        type_args: Vec::new(),
                         args,
                         span: *span,
                     };
@@ -766,8 +927,29 @@ impl<'a> Parser<'a> {
                 let span = expr.span();
                 let field = self.expect_ident()?;
 
-                // Check if this is a method call
-                if self.match_token(&TokenKind::LParen) {
+                // Check for method call with type args: obj.method<T>(...)
+                if self.check(&TokenKind::Lt) && self.looks_like_type_args() {
+                    let type_args = self.parse_type_args()?;
+                    self.expect(&TokenKind::LParen)?;
+
+                    let mut args = Vec::new();
+                    if !self.check(&TokenKind::RParen) {
+                        args.push(self.expression()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.expression()?);
+                        }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+
+                    expr = Expr::MethodCall {
+                        object: Box::new(expr),
+                        method: field,
+                        type_args,
+                        args,
+                        span,
+                    };
+                } else if self.match_token(&TokenKind::LParen) {
+                    // Method call without type args
                     let mut args = Vec::new();
 
                     if !self.check(&TokenKind::RParen) {
@@ -782,6 +964,7 @@ impl<'a> Parser<'a> {
                     expr = Expr::MethodCall {
                         object: Box::new(expr),
                         method: field,
+                        type_args: Vec::new(),
                         args,
                         span,
                     };
@@ -793,13 +976,26 @@ impl<'a> Parser<'a> {
                     };
                 }
             } else if self.match_token(&TokenKind::ColonColon) {
-                // Associated function call: Type::func()
+                // Associated function call: Type::func() or Type<T>::func()
+                // Note: Type<T> case is handled above via looks_like_type_args
                 if let Expr::Ident {
                     name: type_name,
                     span,
                 } = &expr
                 {
+                    let type_name = type_name.clone();
+                    let span = *span;
+
                     let function = self.expect_ident()?;
+
+                    // Check for function type args: Type::func<U>(...)
+                    let fn_type_args = if self.check(&TokenKind::Lt) && self.looks_like_type_args()
+                    {
+                        self.parse_type_args()?
+                    } else {
+                        Vec::new()
+                    };
+
                     self.expect(&TokenKind::LParen)?;
 
                     let mut args = Vec::new();
@@ -813,10 +1009,12 @@ impl<'a> Parser<'a> {
                     self.expect(&TokenKind::RParen)?;
 
                     expr = Expr::AssociatedFunctionCall {
-                        type_name: type_name.clone(),
+                        type_name,
+                        type_args: Vec::new(), // Type without type args
                         function,
+                        fn_type_args,
                         args,
-                        span: *span,
+                        span,
                     };
                 } else {
                     return Err(self.error("expected type name before '::'"));
@@ -1084,6 +1282,69 @@ impl<'a> Parser<'a> {
             && matches!(&token.kind, TokenKind::Ident(_))
         {
             return self.check_ahead(&TokenKind::Colon, 2);
+        }
+
+        false
+    }
+
+    /// Check if the current position looks like the start of type arguments.
+    /// This helps distinguish `f<T>(...)` from `a < b`.
+    /// Returns true if we see `< ident (> | ,)` pattern which suggests type args.
+    fn looks_like_type_args(&self) -> bool {
+        // Current token should be `<`
+        if !self.check(&TokenKind::Lt) {
+            return false;
+        }
+
+        // Look ahead to see if it matches type argument pattern
+        // Pattern: `< ident >` or `< ident ,` or `< ident < ...` (nested generics)
+        let mut offset = 1;
+        let mut depth = 1;
+
+        while depth > 0 {
+            let token = match self.tokens.get(self.current + offset) {
+                Some(t) => &t.kind,
+                None => return false,
+            };
+
+            match token {
+                TokenKind::Ident(_) => {
+                    // Valid type name
+                    offset += 1;
+                }
+                TokenKind::Lt => {
+                    // Nested generic
+                    depth += 1;
+                    offset += 1;
+                }
+                TokenKind::Gt => {
+                    depth -= 1;
+                    offset += 1;
+                    if depth == 0 {
+                        // Check if followed by `(` or `::`
+                        if let Some(next) = self.tokens.get(self.current + offset) {
+                            return matches!(
+                                next.kind,
+                                TokenKind::LParen | TokenKind::ColonColon | TokenKind::LBrace
+                            );
+                        }
+                    }
+                }
+                TokenKind::Comma => {
+                    // Multiple type args
+                    offset += 1;
+                }
+                TokenKind::Question => {
+                    // Nullable type: T?
+                    offset += 1;
+                }
+                _ => return false,
+            }
+
+            // Prevent infinite loop
+            if offset > 100 {
+                return false;
+            }
         }
 
         false
