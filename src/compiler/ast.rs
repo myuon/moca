@@ -9,6 +9,7 @@ pub struct Program {
 
 /// Top-level items in a program.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Item {
     Import(Import),
     FnDef(FnDef),
