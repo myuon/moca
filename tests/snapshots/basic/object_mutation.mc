@@ -1,8 +1,8 @@
 // Test map mutation (migrated from object)
-var obj = map_new_any();
-map_put_string(obj, "value", 100);
-print(map_get_string(obj, "value"));
-map_put_string(obj, "value", 200);
-print(map_get_string(obj, "value"));
-map_put_string(obj, "newField", 300);
-print(map_get_string(obj, "newField"));
+var obj: HashMapAny = map_new();
+obj.put_string("value", 100);
+print(obj.get_string("value"));
+obj.put_string("value", 200);
+print(obj.get_string("value"));
+obj.put_string("newField", 300);
+print(obj.get_string("newField"));

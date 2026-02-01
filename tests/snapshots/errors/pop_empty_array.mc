@@ -1,3 +1,3 @@
-var arr: array<int> = [];
-let x = pop(arr);
+var v: VectorAny = vec_new();
+let x = v.pop();
 print(x);

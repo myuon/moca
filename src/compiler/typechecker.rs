@@ -786,12 +786,15 @@ impl TypeChecker {
                 self.index_object_types
                     .insert(*span, resolved_obj_type.clone());
 
-                // Object can be array<T> or Vector<T>, extract element type and unify with value
+                // Object can be array<T>, Vector<T>, or VectorAny struct
                 match resolved_obj_type {
                     Type::Array(elem) | Type::Vector(elem) => {
                         if let Err(e) = self.unify(&val_type, &elem, *span) {
                             self.errors.push(e);
                         }
+                    }
+                    Type::Struct { ref name, .. } if name == "VectorAny" => {
+                        // VectorAny allows any element type (untyped)
                     }
                     _ => {
                         self.errors.push(TypeError::new(
@@ -1477,89 +1480,6 @@ impl TypeChecker {
                     self.infer_expr(arg, env);
                 }
                 Some(self.fresh_var())
-            }
-            // Vector operations
-            "vec_new" => {
-                if !args.is_empty() {
-                    self.errors
-                        .push(TypeError::new("vec_new expects 0 arguments", span));
-                }
-                // Returns Vector<T> where T is a fresh type variable
-                Some(Type::Vector(Box::new(self.fresh_var())))
-            }
-            "vec_with_capacity" => {
-                if args.len() != 1 {
-                    self.errors
-                        .push(TypeError::new("vec_with_capacity expects 1 argument", span));
-                    return Some(Type::Vector(Box::new(self.fresh_var())));
-                }
-                let arg_type = self.infer_expr(&args[0], env);
-                if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
-                    self.errors.push(e);
-                }
-                Some(Type::Vector(Box::new(self.fresh_var())))
-            }
-            "vec_push" => {
-                if args.len() != 2 {
-                    self.errors
-                        .push(TypeError::new("vec_push expects 2 arguments", span));
-                    return Some(Type::Nil);
-                }
-                self.infer_expr(&args[0], env);
-                self.infer_expr(&args[1], env);
-                Some(Type::Nil)
-            }
-            "vec_pop" => {
-                if args.len() != 1 {
-                    self.errors
-                        .push(TypeError::new("vec_pop expects 1 argument", span));
-                    return Some(self.fresh_var());
-                }
-                self.infer_expr(&args[0], env);
-                Some(self.fresh_var())
-            }
-            "vec_len" => {
-                if args.len() != 1 {
-                    self.errors
-                        .push(TypeError::new("vec_len expects 1 argument", span));
-                    return Some(Type::Int);
-                }
-                self.infer_expr(&args[0], env);
-                Some(Type::Int)
-            }
-            "vec_capacity" => {
-                if args.len() != 1 {
-                    self.errors
-                        .push(TypeError::new("vec_capacity expects 1 argument", span));
-                    return Some(Type::Int);
-                }
-                self.infer_expr(&args[0], env);
-                Some(Type::Int)
-            }
-            "vec_get" => {
-                if args.len() != 2 {
-                    self.errors.push(TypeError::new(
-                        "vec_get expects 2 arguments (vector, index)",
-                        span,
-                    ));
-                    return Some(self.fresh_var());
-                }
-                self.infer_expr(&args[0], env);
-                self.infer_expr(&args[1], env);
-                Some(self.fresh_var())
-            }
-            "vec_set" => {
-                if args.len() != 3 {
-                    self.errors.push(TypeError::new(
-                        "vec_set expects 3 arguments (vector, index, value)",
-                        span,
-                    ));
-                    return Some(Type::Nil);
-                }
-                self.infer_expr(&args[0], env);
-                self.infer_expr(&args[1], env);
-                self.infer_expr(&args[2], env);
-                Some(Type::Nil)
             }
             // Low-level heap intrinsics (for stdlib implementation)
             "__heap_load" => {

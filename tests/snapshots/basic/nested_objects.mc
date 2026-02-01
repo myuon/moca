@@ -3,9 +3,9 @@
 // using maps with consistent types per map
 
 // Test 1: String access - prints "outer"
-let str_map = map_new_any();
-map_put_string(str_map, "name", "outer");
-print(map_get_string(str_map, "name"));
+let str_map: HashMapAny = map_new();
+str_map.put_string("name", "outer");
+print(str_map.get_string("name"));
 
 // Test 2: Int access - prints "42"
 print(42);

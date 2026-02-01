@@ -1,10 +1,10 @@
 // Test Vector [] syntax for index access and assignment
 
 // Create a vector and push some elements
-var vec = vec_new();
-vec_push(vec, 10);
-vec_push(vec, 20);
-vec_push(vec, 30);
+var vec: VectorAny = vec_new();
+vec.push(10);
+vec.push(20);
+vec.push(30);
 
 // Test index access with [] syntax
 print(vec[0]);
@@ -25,6 +25,6 @@ print(vec[i]);
 vec[i] = 200;
 print(vec[i]);
 
-// Test mixing [] syntax with existing builtins
-print(vec_len(vec));
-print(vec_get(vec, 0));
+// Test mixing [] syntax with methods
+print(vec.len);
+print(vec.get(0));

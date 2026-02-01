@@ -2,13 +2,13 @@
 // Demonstrates accessing nested arrays and maps
 
 // Create a map for point
-let point = map_new_any();
-map_put_string(point, "x", 10);
-map_put_string(point, "y", 20);
+let point: HashMapAny = map_new();
+point.put_string("x", 10);
+point.put_string("y", 20);
 
 // Create an array of numbers
 let numbers = [1, 2, 3];
 print(numbers[1]);
 
 // Access the nested map
-print(map_get_string(point, "x"));
+print(point.get_string("x"));

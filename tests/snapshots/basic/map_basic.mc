@@ -1,35 +1,35 @@
 // Basic Map operations test
 
 // Test with string keys
-let m = map_new_any();
+let m: HashMapAny = map_new();
 
-// Test map_put_string and map_get_string
-map_put_string(m, "name", "Alice");
-map_put_string(m, "city", "Tokyo");
+// Test put_string and get_string
+m.put_string("name", "Alice");
+m.put_string("city", "Tokyo");
 
-print(map_get_string(m, "name"));
-print(map_get_string(m, "city"));
-print(map_len(m));
+print(m.get_string("name"));
+print(m.get_string("city"));
+print(m.hm_size);
 
-// Test map_contains_string
-if map_contains_string(m, "name") {
+// Test contains_string
+if m.contains_string("name") {
     print("has name");
 }
-if !map_contains_string(m, "unknown") {
+if !m.contains_string("unknown") {
     print("no unknown");
 }
 
 // Test overwrite
-map_put_string(m, "name", "Bob");
-print(map_get_string(m, "name"));
-print(map_len(m));
+m.put_string("name", "Bob");
+print(m.get_string("name"));
+print(m.hm_size);
 
-// Test map_remove_string
-let removed = map_remove_string(m, "city");
+// Test remove_string
+let removed = m.remove_string("city");
 if removed {
     print("removed city");
 }
-print(map_len(m));
+print(m.hm_size);
 
 // Test get non-existent key returns 0
-print(map_get_string(m, "city"));
+print(m.get_string("city"));

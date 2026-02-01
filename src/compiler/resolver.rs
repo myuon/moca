@@ -187,8 +187,6 @@ impl<'a> Resolver<'a> {
                 "print".to_string(),
                 "print_debug".to_string(),
                 "len".to_string(),
-                "push".to_string(),
-                "pop".to_string(),
                 "type_of".to_string(),
                 "to_string".to_string(),
                 "parse_int".to_string(),
@@ -198,15 +196,6 @@ impl<'a> Resolver<'a> {
                 "send".to_string(),
                 "recv".to_string(),
                 "join".to_string(),
-                // Vector operations
-                "vec_new".to_string(),
-                "vec_with_capacity".to_string(),
-                "vec_push".to_string(),
-                "vec_pop".to_string(),
-                "vec_len".to_string(),
-                "vec_capacity".to_string(),
-                "vec_get".to_string(),
-                "vec_set".to_string(),
                 // Syscall operations (generic syscall builtin)
                 "__syscall".to_string(),
                 // Low-level heap intrinsics (for stdlib implementation)
@@ -458,12 +447,24 @@ impl<'a> Resolver<'a> {
             Statement::Let {
                 name,
                 mutable,
-                type_annotation: _,
+                type_annotation,
                 init,
                 span: _,
             } => {
                 let init = self.resolve_expr(init, scope)?;
-                let struct_name = self.get_struct_name(&init);
+                // First try to get struct name from type annotation
+                let struct_name =
+                    if let Some(crate::compiler::types::TypeAnnotation::Named(type_name)) =
+                        type_annotation
+                    {
+                        if self.structs.contains_key(&type_name) {
+                            Some(type_name)
+                        } else {
+                            self.get_struct_name(&init)
+                        }
+                    } else {
+                        self.get_struct_name(&init)
+                    };
                 let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
                 Ok(ResolvedStatement::Let { slot, init })
             }

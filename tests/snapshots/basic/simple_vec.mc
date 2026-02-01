@@ -1,3 +1,3 @@
-var v = vec_new();
-vec_push(v, 10);
-print(vec_len(v));
+var v: VectorAny = vec_new();
+v.push(10);
+print(v.len);
