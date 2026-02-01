@@ -227,6 +227,11 @@ fn snapshot_ffi() {
 }
 
 #[test]
+fn snapshot_generics() {
+    run_snapshot_dir("generics");
+}
+
+#[test]
 fn snapshot_gc() {
     run_gc_snapshot_dir("gc");
 }

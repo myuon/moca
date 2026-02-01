@@ -562,6 +562,17 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // Check for generic type: Name<T, U, ...>
+        if self.match_token(&TokenKind::Lt) {
+            let mut type_args = Vec::new();
+            type_args.push(self.parse_type_annotation()?);
+            while self.match_token(&TokenKind::Comma) {
+                type_args.push(self.parse_type_annotation()?);
+            }
+            self.expect(&TokenKind::Gt)?;
+            return Ok(TypeAnnotation::Generic { name, type_args });
+        }
+
         Ok(TypeAnnotation::Named(name))
     }
 

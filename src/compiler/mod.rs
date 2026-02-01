@@ -6,6 +6,7 @@ mod codegen;
 pub mod dump;
 pub mod lexer;
 mod module;
+pub mod monomorphise;
 mod parser;
 pub mod resolver;
 pub mod typechecker;
@@ -114,6 +115,9 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
         .map_err(|errors| format_type_errors(filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
 
+    // Monomorphisation (specialize generic functions/structs)
+    let program = monomorphise::monomorphise_program(program);
+
     // Name resolution
     let mut resolver = Resolver::new(filename);
     let resolved = resolver.resolve(program)?;
@@ -176,6 +180,9 @@ pub fn run_file_capturing_output(
             .check_program(&program)
             .map_err(|errors| format_type_errors(&filename, &errors))?;
         let index_object_types = typechecker.index_object_types().clone();
+
+        // Monomorphisation (specialize generic functions/structs)
+        let program = monomorphise::monomorphise_program(program);
 
         // Name resolution
         let mut resolver = Resolver::new(&filename);
@@ -246,6 +253,9 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
 
+    // Monomorphisation (specialize generic functions/structs)
+    let program = monomorphise::monomorphise_program(program);
+
     // Name resolution
     let mut resolver = Resolver::new(&filename);
     let resolved = resolver.resolve(program)?;
@@ -311,6 +321,9 @@ pub fn run_file_with_dump(
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+
+    // Monomorphisation (specialize generic functions/structs)
+    let program = monomorphise::monomorphise_program(program);
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
@@ -426,6 +439,9 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+
+    // Monomorphisation (specialize generic functions/structs)
+    let program = monomorphise::monomorphise_program(program);
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);

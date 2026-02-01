@@ -173,6 +173,73 @@ impl Type {
             }
         }
     }
+
+    /// Substitute a type parameter with a concrete type.
+    /// Returns a new type with all occurrences of `Type::Param { name }` replaced with `replacement`.
+    pub fn substitute_param(&self, param_name: &str, replacement: &Type) -> Type {
+        match self {
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
+                self.clone()
+            }
+            Type::Var(_) => self.clone(),
+            Type::Param { name } => {
+                if name == param_name {
+                    replacement.clone()
+                } else {
+                    self.clone()
+                }
+            }
+            Type::Array(elem) => {
+                Type::Array(Box::new(elem.substitute_param(param_name, replacement)))
+            }
+            Type::Vector(elem) => {
+                Type::Vector(Box::new(elem.substitute_param(param_name, replacement)))
+            }
+            Type::Map(key, value) => Type::Map(
+                Box::new(key.substitute_param(param_name, replacement)),
+                Box::new(value.substitute_param(param_name, replacement)),
+            ),
+            Type::Nullable(inner) => {
+                Type::Nullable(Box::new(inner.substitute_param(param_name, replacement)))
+            }
+            Type::Object(fields) => {
+                let new_fields: BTreeMap<std::string::String, Type> = fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.substitute_param(param_name, replacement)))
+                    .collect();
+                Type::Object(new_fields)
+            }
+            Type::Struct { name, fields } => Type::Struct {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), t.substitute_param(param_name, replacement)))
+                    .collect(),
+            },
+            Type::GenericStruct {
+                name,
+                type_args,
+                fields,
+            } => Type::GenericStruct {
+                name: name.clone(),
+                type_args: type_args
+                    .iter()
+                    .map(|t| t.substitute_param(param_name, replacement))
+                    .collect(),
+                fields: fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), t.substitute_param(param_name, replacement)))
+                    .collect(),
+            },
+            Type::Function { params, ret } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|t| t.substitute_param(param_name, replacement))
+                    .collect(),
+                ret: Box::new(ret.substitute_param(param_name, replacement)),
+            },
+        }
+    }
 }
 
 impl fmt::Display for Type {
