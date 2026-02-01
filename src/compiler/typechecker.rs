@@ -321,6 +321,16 @@ impl TypeChecker {
             // Array types
             (Type::Array(elem1), Type::Array(elem2)) => self.unify(elem1, elem2, span),
 
+            // Vector types
+            (Type::Vector(elem1), Type::Vector(elem2)) => self.unify(elem1, elem2, span),
+
+            // Map types
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => {
+                let s1 = self.unify(k1, k2, span)?;
+                let s2 = self.unify(v1, v2, span)?;
+                Ok(s1.compose(&s2))
+            }
+
             // Nullable types
             (Type::Nullable(inner1), Type::Nullable(inner2)) => self.unify(inner1, inner2, span),
 
@@ -1265,6 +1275,16 @@ impl TypeChecker {
                 let obj_type = self.infer_expr(object, env);
                 let resolved_obj_type = self.substitution.apply(&obj_type);
 
+                // Handle vec<T> methods
+                if let Type::Vector(elem_type) = &resolved_obj_type {
+                    return self.check_vec_method(method, args, elem_type, env, *span);
+                }
+
+                // Handle map<K, V> methods
+                if let Type::Map(key_type, value_type) = &resolved_obj_type {
+                    return self.check_map_method(method, args, key_type, value_type, env, *span);
+                }
+
                 // Get struct name from object type
                 let struct_name = match &resolved_obj_type {
                     Type::Struct { name, .. } => name.clone(),
@@ -1558,6 +1578,219 @@ impl TypeChecker {
                 Some(Type::Array(Box::new(Type::String)))
             }
             _ => None,
+        }
+    }
+
+    /// Type check method calls on vec<T>.
+    fn check_vec_method(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        elem_type: &Type,
+        env: &mut TypeEnv,
+        span: Span,
+    ) -> Type {
+        match method {
+            "push" => {
+                // push(value: T) -> nil
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("vec.push expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Nil;
+                }
+                let arg_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&arg_type, elem_type, args[0].span()) {
+                    self.errors.push(e);
+                }
+                Type::Nil
+            }
+            "pop" => {
+                // pop() -> T
+                if !args.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("vec.pop expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                self.substitution.apply(elem_type)
+            }
+            "get" => {
+                // get(index: int) -> T
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("vec.get expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return self.substitution.apply(elem_type);
+                }
+                let index_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&index_type, &Type::Int, args[0].span()) {
+                    self.errors.push(e);
+                }
+                self.substitution.apply(elem_type)
+            }
+            "set" => {
+                // set(index: int, value: T) -> nil
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        format!("vec.set expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Nil;
+                }
+                let index_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&index_type, &Type::Int, args[0].span()) {
+                    self.errors.push(e);
+                }
+                let value_type = self.infer_expr(&args[1], env);
+                if let Err(e) = self.unify(&value_type, elem_type, args[1].span()) {
+                    self.errors.push(e);
+                }
+                Type::Nil
+            }
+            "len" => {
+                // len() -> int
+                if !args.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("vec.len expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Type::Int
+            }
+            _ => {
+                self.errors.push(TypeError::new(
+                    format!("undefined method `{}` on vec<{}>", method, elem_type),
+                    span,
+                ));
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                self.fresh_var()
+            }
+        }
+    }
+
+    /// Type check method calls on map<K, V>.
+    fn check_map_method(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        key_type: &Type,
+        value_type: &Type,
+        env: &mut TypeEnv,
+        span: Span,
+    ) -> Type {
+        match method {
+            "put" => {
+                // put(key: K, value: V) -> nil
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        format!("map.put expects 2 arguments, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Nil;
+                }
+                let k_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
+                    self.errors.push(e);
+                }
+                let v_type = self.infer_expr(&args[1], env);
+                if let Err(e) = self.unify(&v_type, value_type, args[1].span()) {
+                    self.errors.push(e);
+                }
+                Type::Nil
+            }
+            "get" => {
+                // get(key: K) -> V
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("map.get expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return self.substitution.apply(value_type);
+                }
+                let k_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
+                    self.errors.push(e);
+                }
+                self.substitution.apply(value_type)
+            }
+            "contains" => {
+                // contains(key: K) -> bool
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("map.contains expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Bool;
+                }
+                let k_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
+                    self.errors.push(e);
+                }
+                Type::Bool
+            }
+            "remove" => {
+                // remove(key: K) -> bool
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("map.remove expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Bool;
+                }
+                let k_type = self.infer_expr(&args[0], env);
+                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
+                    self.errors.push(e);
+                }
+                Type::Bool
+            }
+            "keys" => {
+                // keys() -> vec<K>
+                if !args.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("map.keys expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Type::Vector(Box::new(self.substitution.apply(key_type)))
+            }
+            "values" => {
+                // values() -> vec<V>
+                if !args.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("map.values expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Type::Vector(Box::new(self.substitution.apply(value_type)))
+            }
+            "len" => {
+                // len() -> int
+                if !args.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("map.len expects 0 arguments, got {}", args.len()),
+                        span,
+                    ));
+                }
+                Type::Int
+            }
+            _ => {
+                self.errors.push(TypeError::new(
+                    format!(
+                        "undefined method `{}` on map<{}, {}>",
+                        method, key_type, value_type
+                    ),
+                    span,
+                ));
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                self.fresh_var()
+            }
         }
     }
 
