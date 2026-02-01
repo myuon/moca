@@ -369,9 +369,9 @@ impl<'a> Resolver<'a> {
     fn resolve_method(&self, method: FnDef, struct_name: &str) -> Result<ResolvedFunction, String> {
         let mut scope = Scope::new();
 
-        // Add 'self' as first parameter
+        // Add 'self' as first parameter with struct type information
         let mut param_names: Vec<String> = vec!["self".to_string()];
-        scope.declare("self".to_string(), false);
+        scope.declare_with_type("self".to_string(), false, Some(struct_name.to_string()));
 
         // Add other parameters
         for param in &method.params {
@@ -453,18 +453,24 @@ impl<'a> Resolver<'a> {
             } => {
                 let init = self.resolve_expr(init, scope)?;
                 // First try to get struct name from type annotation
-                let struct_name =
-                    if let Some(crate::compiler::types::TypeAnnotation::Named(type_name)) =
-                        type_annotation
-                    {
+                let struct_name = match type_annotation {
+                    Some(crate::compiler::types::TypeAnnotation::Named(type_name)) => {
                         if self.structs.contains_key(&type_name) {
                             Some(type_name)
                         } else {
                             self.get_struct_name(&init)
                         }
-                    } else {
-                        self.get_struct_name(&init)
-                    };
+                    }
+                    // vec<T> maps to VectorAny internally
+                    Some(crate::compiler::types::TypeAnnotation::Vec(_)) => {
+                        Some("VectorAny".to_string())
+                    }
+                    // map<K, V> maps to HashMapAny internally
+                    Some(crate::compiler::types::TypeAnnotation::Map(_, _)) => {
+                        Some("HashMapAny".to_string())
+                    }
+                    _ => self.get_struct_name(&init),
+                };
                 let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
                 Ok(ResolvedStatement::Let { slot, init })
             }
