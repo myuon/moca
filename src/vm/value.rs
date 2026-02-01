@@ -138,6 +138,45 @@ impl Value {
     pub fn as_ptr(&self) -> Option<GcRef> {
         self.as_ref()
     }
+
+    // =========================================================================
+    // Linear Memory Encoding (for heap storage)
+    // =========================================================================
+
+    /// Tag values for linear memory encoding.
+    /// Each Value is stored as 2 u64 words: [tag, payload]
+    const TAG_I64: u64 = 0;
+    const TAG_F64: u64 = 1;
+    const TAG_BOOL: u64 = 2;
+    const TAG_NULL: u64 = 3;
+    const TAG_REF: u64 = 4;
+
+    /// Encode this Value into two u64 words for linear memory storage.
+    /// Returns (tag, payload).
+    pub fn encode(&self) -> (u64, u64) {
+        match self {
+            Value::I64(n) => (Self::TAG_I64, *n as u64),
+            Value::F64(f) => (Self::TAG_F64, f.to_bits()),
+            Value::Bool(b) => (Self::TAG_BOOL, if *b { 1 } else { 0 }),
+            Value::Null => (Self::TAG_NULL, 0),
+            Value::Ref(r) => (Self::TAG_REF, r.index as u64),
+        }
+    }
+
+    /// Decode a Value from two u64 words read from linear memory.
+    /// Returns None if the tag is invalid.
+    pub fn decode(tag: u64, payload: u64) -> Option<Self> {
+        match tag {
+            Self::TAG_I64 => Some(Value::I64(payload as i64)),
+            Self::TAG_F64 => Some(Value::F64(f64::from_bits(payload))),
+            Self::TAG_BOOL => Some(Value::Bool(payload != 0)),
+            Self::TAG_NULL => Some(Value::Null),
+            Self::TAG_REF => Some(Value::Ref(GcRef {
+                index: payload as usize,
+            })),
+            _ => None,
+        }
+    }
 }
 
 impl PartialEq for Value {
@@ -300,5 +339,105 @@ mod tests {
         // Bool can be coerced to I64
         assert_eq!(Value::Bool(true).as_i64(), Some(1));
         assert_eq!(Value::Bool(false).as_i64(), Some(0));
+    }
+
+    // =========================================================================
+    // Linear Memory Encoding Tests
+    // =========================================================================
+
+    /// Test: encode/decode roundtrip for I64
+    #[test]
+    fn test_encode_decode_i64() {
+        let values = [
+            Value::I64(0),
+            Value::I64(42),
+            Value::I64(-42),
+            Value::I64(i64::MIN),
+            Value::I64(i64::MAX),
+        ];
+        for v in values {
+            let (tag, payload) = v.encode();
+            let decoded = Value::decode(tag, payload).unwrap();
+            assert_eq!(v, decoded, "Roundtrip failed for {:?}", v);
+        }
+    }
+
+    /// Test: encode/decode roundtrip for F64
+    #[test]
+    fn test_encode_decode_f64() {
+        let values = [
+            Value::F64(0.0),
+            Value::F64(-0.0),
+            Value::F64(3.14159),
+            Value::F64(-273.15),
+            Value::F64(f64::INFINITY),
+            Value::F64(f64::NEG_INFINITY),
+            Value::F64(f64::MIN),
+            Value::F64(f64::MAX),
+        ];
+        for v in values {
+            let (tag, payload) = v.encode();
+            let decoded = Value::decode(tag, payload).unwrap();
+            // Use to_bits comparison for F64 to handle -0.0 correctly
+            match (&v, &decoded) {
+                (Value::F64(a), Value::F64(b)) => {
+                    assert_eq!(a.to_bits(), b.to_bits(), "Roundtrip failed for {:?}", v)
+                }
+                _ => panic!("Expected F64"),
+            }
+        }
+    }
+
+    /// Test: encode/decode roundtrip for F64 NaN
+    #[test]
+    fn test_encode_decode_f64_nan() {
+        let v = Value::F64(f64::NAN);
+        let (tag, payload) = v.encode();
+        let decoded = Value::decode(tag, payload).unwrap();
+        match decoded {
+            Value::F64(f) => assert!(f.is_nan(), "Decoded NaN should be NaN"),
+            _ => panic!("Expected F64"),
+        }
+    }
+
+    /// Test: encode/decode roundtrip for Bool
+    #[test]
+    fn test_encode_decode_bool() {
+        for v in [Value::Bool(true), Value::Bool(false)] {
+            let (tag, payload) = v.encode();
+            let decoded = Value::decode(tag, payload).unwrap();
+            assert_eq!(v, decoded, "Roundtrip failed for {:?}", v);
+        }
+    }
+
+    /// Test: encode/decode roundtrip for Null
+    #[test]
+    fn test_encode_decode_null() {
+        let v = Value::Null;
+        let (tag, payload) = v.encode();
+        let decoded = Value::decode(tag, payload).unwrap();
+        assert_eq!(v, decoded);
+    }
+
+    /// Test: encode/decode roundtrip for Ref
+    #[test]
+    fn test_encode_decode_ref() {
+        let values = [
+            Value::Ref(GcRef { index: 0 }),
+            Value::Ref(GcRef { index: 42 }),
+            Value::Ref(GcRef { index: usize::MAX }),
+        ];
+        for v in values {
+            let (tag, payload) = v.encode();
+            let decoded = Value::decode(tag, payload).unwrap();
+            assert_eq!(v, decoded, "Roundtrip failed for {:?}", v);
+        }
+    }
+
+    /// Test: decode with invalid tag returns None
+    #[test]
+    fn test_decode_invalid_tag() {
+        assert!(Value::decode(99, 0).is_none());
+        assert!(Value::decode(u64::MAX, 0).is_none());
     }
 }

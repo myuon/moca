@@ -753,12 +753,7 @@ impl VM {
                     .ok_or("runtime error: expected array or string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                let len = if let Some(slots) = obj.as_slots() {
-                    // All slots-based objects use slots.len() for length
-                    slots.slots.len() as i64
-                } else {
-                    return Err("runtime error: len expects slots".to_string());
-                };
+                let len = obj.slots.len() as i64;
                 self.stack.push(Value::I64(len));
             }
             Op::TypeOf => {
@@ -769,10 +764,8 @@ impl VM {
                     Value::Bool(_) => "bool",
                     Value::Null => "nil",
                     Value::Ref(r) => {
-                        if let Some(obj) = self.heap.get(*r) {
-                            match obj.obj_type() {
-                                super::ObjectType::Slots => "slots",
-                            }
+                        if self.heap.get(*r).is_some() {
+                            "slots"
                         } else {
                             "unknown"
                         }
@@ -793,9 +786,7 @@ impl VM {
                     .as_ref()
                     .ok_or("runtime error: parse_int expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let s = obj
-                    .slots_to_string()
-                    .ok_or("runtime error: parse_int expects string")?;
+                let s = obj.slots_to_string();
                 let n: i64 = s
                     .trim()
                     .parse()
@@ -808,11 +799,8 @@ impl VM {
                     .as_ref()
                     .ok_or("runtime error: str_len expects string")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let s = obj
-                    .as_slots()
-                    .ok_or("runtime error: str_len expects slots")?;
                 // Length is the number of slots
-                let len = s.slots.len() as i64;
+                let len = obj.slots.len() as i64;
                 self.stack.push(Value::I64(len));
             }
             Op::Throw => {
@@ -944,35 +932,21 @@ impl VM {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let slots = obj
-                    .as_slots()
-                    .ok_or("runtime error: expected slots object")?;
-                if offset >= slots.slots.len() {
+                if offset >= obj.slots.len() {
                     return Err(format!(
                         "runtime error: slot index {} out of bounds",
                         offset
                     ));
                 }
-                self.stack.push(slots.slots[offset]);
+                self.stack.push(obj.slots[offset]);
             }
             Op::HeapStore(offset) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-                let slots = obj
-                    .as_slots_mut()
-                    .ok_or("runtime error: expected slots object")?;
-                if offset >= slots.slots.len() {
-                    return Err(format!(
-                        "runtime error: slot index {} out of bounds",
-                        offset
-                    ));
-                }
-                slots.slots[offset] = value;
+                self.heap.write_slot(r, offset, value).map_err(|e| {
+                    format!("runtime error: slot index {} out of bounds ({})", offset, e)
+                })?;
             }
             Op::HeapLoadDyn => {
                 let index = self.pop_int()?;
@@ -980,32 +954,22 @@ impl VM {
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
                 let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                // Support Slots types (arrays, strings, etc.)
-                if let Some(slots) = obj.as_slots() {
-                    if index < 0 || index as usize >= slots.slots.len() {
-                        return Err(format!("runtime error: slot index {} out of bounds", index));
-                    }
-                    self.stack.push(slots.slots[index as usize]);
-                } else {
-                    return Err("runtime error: expected slots".to_string());
+                if index < 0 || index as usize >= obj.slots.len() {
+                    return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
+                self.stack.push(obj.slots[index as usize]);
             }
             Op::HeapStoreDyn => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-                let slots = obj
-                    .as_slots_mut()
-                    .ok_or("runtime error: expected slots object")?;
-                if index < 0 || index as usize >= slots.slots.len() {
+                if index < 0 {
                     return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
-                slots.slots[index as usize] = value;
+                self.heap
+                    .write_slot(r, index as usize, value)
+                    .map_err(|e| format!("runtime error: {}", e))?;
             }
             Op::Swap => {
                 let len = self.stack.len();
@@ -1112,15 +1076,11 @@ impl VM {
                 let a_obj = self.heap.get(a).ok_or("runtime error: invalid reference")?;
                 let b_obj = self.heap.get(b).ok_or("runtime error: invalid reference")?;
 
-                if let (Some(a_str), Some(b_str)) =
-                    (a_obj.slots_to_string(), b_obj.slots_to_string())
-                {
-                    let result = format!("{}{}", a_str, b_str);
-                    let r = self.heap.alloc_string(result)?;
-                    return Ok(Value::Ref(r));
-                }
-
-                Err("runtime error: cannot add these types".to_string())
+                let a_str = a_obj.slots_to_string();
+                let b_str = b_obj.slots_to_string();
+                let result = format!("{}{}", a_str, b_str);
+                let r = self.heap.alloc_string(result)?;
+                Ok(Value::Ref(r))
             }
             _ => Err("runtime error: cannot add these types".to_string()),
         }
@@ -1207,13 +1167,8 @@ impl VM {
 
                 match (a_obj, b_obj) {
                     (Some(a), Some(b)) => {
-                        if let (Some(a_str), Some(b_str)) =
-                            (a.slots_to_string(), b.slots_to_string())
-                        {
-                            return a_str == b_str;
-                        }
-                        // For arrays and objects, compare by reference
-                        a_ref.index == b_ref.index
+                        // Compare strings by content
+                        a.slots_to_string() == b.slots_to_string()
                     }
                     _ => false,
                 }
@@ -1239,42 +1194,38 @@ impl VM {
                     .heap
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
-                match obj {
-                    super::HeapObject::Slots(s) => {
-                        // Try to interpret as string first
-                        // Only treat as string if all slots are printable Unicode characters
-                        // (not control characters 0-31, except tab/newline/carriage return)
-                        let is_printable_string = !s.slots.is_empty()
-                            && s.slots.iter().all(|v| {
-                                if let Some(c) = v.as_i64() {
-                                    if let Some(ch) = char::from_u32(c as u32) {
-                                        // Allow printable chars, tab, newline, carriage return
-                                        ch >= ' ' || ch == '\t' || ch == '\n' || ch == '\r'
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            });
-                        if is_printable_string {
-                            // Interpret as string
-                            let chars: String = s
-                                .slots
-                                .iter()
-                                .filter_map(|v| v.as_i64())
-                                .filter_map(|c| char::from_u32(c as u32))
-                                .collect();
-                            Ok(chars)
-                        } else {
-                            // Interpret as array/struct - show all elements
-                            let mut parts = Vec::new();
-                            for elem in s.slots.iter() {
-                                parts.push(self.value_to_string(elem)?);
+                // Try to interpret as string first
+                // Only treat as string if all slots are printable Unicode characters
+                // (not control characters 0-31, except tab/newline/carriage return)
+                let is_printable_string = !obj.slots.is_empty()
+                    && obj.slots.iter().all(|v| {
+                        if let Some(c) = v.as_i64() {
+                            if let Some(ch) = char::from_u32(c as u32) {
+                                // Allow printable chars, tab, newline, carriage return
+                                ch >= ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+                            } else {
+                                false
                             }
-                            Ok(format!("[{}]", parts.join(", ")))
+                        } else {
+                            false
                         }
+                    });
+                if is_printable_string {
+                    // Interpret as string
+                    let chars: String = obj
+                        .slots
+                        .iter()
+                        .filter_map(|v| v.as_i64())
+                        .filter_map(|c| char::from_u32(c as u32))
+                        .collect();
+                    Ok(chars)
+                } else {
+                    // Interpret as array/struct - show all elements
+                    let mut parts = Vec::new();
+                    for elem in obj.slots.iter() {
+                        parts.push(self.value_to_string(elem)?);
                     }
+                    Ok(format!("[{}]", parts.join(", ")))
                 }
             }
         }
@@ -1391,9 +1342,7 @@ impl VM {
                     .heap
                     .get(path_ref)
                     .ok_or_else(|| "open: invalid reference".to_string())?;
-                let path = heap_obj
-                    .slots_to_string()
-                    .ok_or_else(|| "open: path must be a string".to_string())?;
+                let path = heap_obj.slots_to_string();
 
                 // Get flags
                 let flags = args[1]
@@ -1490,9 +1439,7 @@ impl VM {
                     .heap
                     .get(buf_ref)
                     .ok_or_else(|| "write: invalid reference".to_string())?;
-                let buf_str = heap_obj
-                    .slots_to_string()
-                    .ok_or_else(|| "write: buf must be a string".to_string())?;
+                let buf_str = heap_obj.slots_to_string();
 
                 // Calculate actual bytes to write
                 let buf_bytes = buf_str.as_bytes();
@@ -1635,9 +1582,7 @@ impl VM {
                     .heap
                     .get(host_ref)
                     .ok_or_else(|| "connect: invalid reference".to_string())?;
-                let host = heap_obj
-                    .slots_to_string()
-                    .ok_or_else(|| "connect: host must be a string".to_string())?;
+                let host = heap_obj.slots_to_string();
 
                 let port = args[2]
                     .as_i64()
@@ -1689,9 +1634,7 @@ impl VM {
                     .heap
                     .get(host_ref)
                     .ok_or_else(|| "bind: invalid reference".to_string())?;
-                let host = heap_obj
-                    .slots_to_string()
-                    .ok_or_else(|| "bind: host must be a string".to_string())?;
+                let host = heap_obj.slots_to_string();
 
                 let port = args[2]
                     .as_i64()
@@ -2280,7 +2223,7 @@ mod tests {
                 }
             })
             .expect("Expected to find a Ref value in stack");
-        let content = vm.heap.get(content_ref).unwrap().slots_to_string().unwrap();
+        let content = vm.heap.get(content_ref).unwrap().slots_to_string();
         assert_eq!(content, "hello world");
 
         // Clean up
@@ -2356,7 +2299,7 @@ mod tests {
                 }
             })
             .expect("Expected to find a Ref value in stack");
-        let content = vm.heap.get(content_ref).unwrap().slots_to_string().unwrap();
+        let content = vm.heap.get(content_ref).unwrap().slots_to_string();
         assert_eq!(content, "hello");
 
         // Clean up
@@ -2523,12 +2466,7 @@ mod tests {
             })
             .expect("Expected to find a Ref value in stack");
 
-        let response = vm
-            .heap
-            .get(response_ref)
-            .unwrap()
-            .slots_to_string()
-            .unwrap();
+        let response = vm.heap.get(response_ref).unwrap().slots_to_string();
 
         // Response should contain HTTP status and our test message
         assert!(
