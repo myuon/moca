@@ -79,6 +79,9 @@ impl Substitution {
             }
             Type::Array(elem) => Type::Array(Box::new(self.apply(elem))),
             Type::Vector(elem) => Type::Vector(Box::new(self.apply(elem))),
+            Type::Map(key, value) => {
+                Type::Map(Box::new(self.apply(key)), Box::new(self.apply(value)))
+            }
             Type::Nullable(inner) => Type::Nullable(Box::new(self.apply(inner))),
             Type::Object(fields) => {
                 let new_fields: BTreeMap<String, Type> = fields
@@ -243,6 +246,15 @@ impl TypeChecker {
             TypeAnnotation::Array(elem) => {
                 let elem_type = self.resolve_type_annotation(elem, span)?;
                 Ok(Type::array(elem_type))
+            }
+            TypeAnnotation::Vec(elem) => {
+                let elem_type = self.resolve_type_annotation(elem, span)?;
+                Ok(Type::vector(elem_type))
+            }
+            TypeAnnotation::Map(key, value) => {
+                let key_type = self.resolve_type_annotation(key, span)?;
+                let value_type = self.resolve_type_annotation(value, span)?;
+                Ok(Type::map(key_type, value_type))
             }
             TypeAnnotation::Object(fields) => {
                 let mut type_fields = BTreeMap::new();
