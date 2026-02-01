@@ -1449,7 +1449,7 @@ mod tests {
 
     #[test]
     fn test_let_with_vec_type() {
-        let program = parse("let v: vec<int> = vec_new();").unwrap();
+        let program = parse("let v: vec<int> = vec::new();").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let {
                 type_annotation, ..
@@ -1463,7 +1463,7 @@ mod tests {
 
     #[test]
     fn test_let_with_map_type() {
-        let program = parse("let m: map<string, int> = map_new();").unwrap();
+        let program = parse("let m: map<string, int> = map::new();").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let {
                 type_annotation, ..
@@ -1480,7 +1480,7 @@ mod tests {
 
     #[test]
     fn test_nested_vec_type() {
-        let program = parse("let v: vec<vec<int>> = vec_new();").unwrap();
+        let program = parse("let v: vec<vec<int>> = vec::new();").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let {
                 type_annotation, ..

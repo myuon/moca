@@ -3,7 +3,7 @@ var arr: array<int> = [1, 2, 3];
 print(len(arr));
 
 // Test Vector push/pop operations
-var vec: vec<any> = vec_new();
+var vec: vec<any> = vec::new();
 vec.push(1);
 vec.push(2);
 vec.push(3);
