@@ -761,70 +761,6 @@ impl VM {
                 };
                 self.stack.push(Value::I64(len));
             }
-            Op::New(n) => {
-                let mut fields = HashMap::new();
-                for _ in 0..n {
-                    let value = self.stack.pop().ok_or("stack underflow")?;
-                    let key = self.stack.pop().ok_or("stack underflow")?;
-
-                    // Key should be a string
-                    let key_ref = key
-                        .as_ref()
-                        .ok_or("runtime error: object key must be a string")?;
-                    let key_obj = self
-                        .heap
-                        .get(key_ref)
-                        .ok_or("runtime error: invalid reference")?;
-                    let key_str = key_obj
-                        .slots_to_string()
-                        .ok_or("runtime error: object key must be a string")?;
-                    fields.insert(key_str, value);
-                }
-                let r = self.heap.alloc_object_map(fields)?;
-                self.stack.push(Value::Ref(r));
-            }
-            Op::GetF(str_idx) => {
-                let obj = self.stack.pop().ok_or("stack underflow")?;
-                let r = obj.as_ref().ok_or("runtime error: expected object")?;
-
-                let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
-
-                let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let obj = heap_obj
-                    .as_object()
-                    .ok_or("runtime error: expected object")?;
-
-                let value = obj.fields.get(&field_name).copied().unwrap_or(Value::Null);
-                self.stack.push(value);
-            }
-            Op::SetF(str_idx) => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let obj = self.stack.pop().ok_or("stack underflow")?;
-                let r = obj.as_ref().ok_or("runtime error: expected object")?;
-
-                let field_name = chunk.strings.get(str_idx).cloned().unwrap_or_default();
-
-                // Write barrier: get old value first (immutable borrow)
-                let old_value = {
-                    let heap_obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                    let obj = heap_obj
-                        .as_object()
-                        .ok_or("runtime error: expected object")?;
-                    obj.fields.get(&field_name).copied().unwrap_or(Value::Null)
-                };
-                self.write_barrier(old_value);
-
-                // Now do the mutable update
-                let heap_obj = self
-                    .heap
-                    .get_mut(r)
-                    .ok_or("runtime error: invalid reference")?;
-                let obj = heap_obj
-                    .as_object_mut()
-                    .ok_or("runtime error: expected object")?;
-
-                obj.fields.insert(field_name, value);
-            }
             Op::TypeOf => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let type_name = match &value {
@@ -835,7 +771,6 @@ impl VM {
                     Value::Ref(r) => {
                         if let Some(obj) = self.heap.get(*r) {
                             match obj.obj_type() {
-                                super::ObjectType::Object => "object",
                                 super::ObjectType::Slots => "slots",
                             }
                         } else {
@@ -1305,13 +1240,6 @@ impl VM {
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
                 match obj {
-                    super::HeapObject::Object(o) => {
-                        let mut parts = Vec::new();
-                        for (k, v) in &o.fields {
-                            parts.push(format!("{}: {}", k, self.value_to_string(v)?));
-                        }
-                        Ok(format!("{{{}}}", parts.join(", ")))
-                    }
                     super::HeapObject::Slots(s) => {
                         // Try to interpret as string first
                         // Only treat as string if all slots are printable Unicode characters
@@ -2166,55 +2094,6 @@ mod tests {
         // The last value should be the array length (1 element)
         let stack = result.unwrap();
         assert!(stack.iter().any(|v| *v == Value::I64(1)));
-    }
-
-    #[test]
-    fn test_write_barrier_setf() {
-        // Test that SetF correctly calls write barrier when overwriting object fields.
-        // In stop-the-world GC the barrier is a no-op, but this verifies the code path.
-        //
-        // SetF stack order: [object, value] with value on top
-        // Pop order: value first, then object
-        let chunk = Chunk {
-            functions: vec![],
-            main: Function {
-                name: "__main__".to_string(),
-                arity: 0,
-                locals_count: 1,
-                code: vec![
-                    // Create object { x: 1 }
-                    Op::PushString(0), // "x"
-                    Op::PushInt(1),
-                    Op::New(1),
-                    Op::SetL(0),
-                    // Update object.x = 2 (triggers write barrier)
-                    // SetF expects stack: [object, value] (value on top)
-                    Op::GetL(0),    // push object
-                    Op::PushInt(2), // push value
-                    Op::SetF(0),    // str_idx 0 = "x", stores 2 in object.x
-                    // Get the updated field to verify
-                    Op::GetL(0),
-                    Op::GetF(0),
-                ],
-                stackmap: None,
-            },
-            strings: vec!["x".to_string()],
-            debug: None,
-        };
-
-        let mut vm = VM::new();
-        let result = vm.run(&chunk);
-        assert!(
-            result.is_ok(),
-            "SetF write barrier test failed: {:?}",
-            result
-        );
-
-        // The last pushed value should be the updated field value (2)
-        assert!(
-            vm.stack.iter().any(|v| *v == Value::I64(2)),
-            "Expected to find updated value 2 in stack"
-        );
     }
 
     #[test]

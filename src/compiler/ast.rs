@@ -172,10 +172,6 @@ pub enum Expr {
         elements: Vec<Expr>,
         span: Span,
     },
-    Object {
-        fields: Vec<(String, Expr)>,
-        span: Span,
-    },
     Index {
         object: Box<Expr>,
         index: Box<Expr>,
@@ -231,7 +227,6 @@ impl Expr {
             Expr::Nil { span, .. } => *span,
             Expr::Ident { span, .. } => *span,
             Expr::Array { span, .. } => *span,
-            Expr::Object { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::Field { span, .. } => *span,
             Expr::Unary { span, .. } => *span,

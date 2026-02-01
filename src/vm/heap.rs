@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt;
 
 use super::Value;
@@ -6,7 +5,6 @@ use super::Value;
 /// Type ID for heap objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectType {
-    Object,
     /// Generic slot-based heap object (for arrays, vectors, and strings)
     Slots,
 }
@@ -16,15 +14,6 @@ pub enum ObjectType {
 pub struct ObjectHeader {
     pub obj_type: ObjectType,
     pub marked: bool,
-}
-
-/// A heap-allocated object (key-value map).
-#[derive(Debug)]
-pub struct MocaObject {
-    pub header: ObjectHeader,
-    pub fields: HashMap<String, Value>,
-    /// Shape ID for inline caching (objects with same fields have same shape)
-    pub shape_id: u32,
 }
 
 /// A generic slot-based heap object.
@@ -39,7 +28,6 @@ pub struct MocaSlots {
 
 /// A heap object can be any of the heap-allocated types.
 pub enum HeapObject {
-    Object(MocaObject),
     /// Generic slot-based heap object (for arrays, vectors, and strings)
     Slots(MocaSlots),
 }
@@ -47,21 +35,18 @@ pub enum HeapObject {
 impl HeapObject {
     pub fn obj_type(&self) -> ObjectType {
         match self {
-            HeapObject::Object(_) => ObjectType::Object,
             HeapObject::Slots(_) => ObjectType::Slots,
         }
     }
 
     pub fn header(&self) -> &ObjectHeader {
         match self {
-            HeapObject::Object(o) => &o.header,
             HeapObject::Slots(s) => &s.header,
         }
     }
 
     pub fn header_mut(&mut self) -> &mut ObjectHeader {
         match self {
-            HeapObject::Object(o) => &mut o.header,
             HeapObject::Slots(s) => &mut s.header,
         }
     }
@@ -78,42 +63,24 @@ impl HeapObject {
                     .collect();
                 Some(chars)
             }
-            _ => None,
-        }
-    }
-
-    pub fn as_object(&self) -> Option<&MocaObject> {
-        match self {
-            HeapObject::Object(o) => Some(o),
-            _ => None,
-        }
-    }
-
-    pub fn as_object_mut(&mut self) -> Option<&mut MocaObject> {
-        match self {
-            HeapObject::Object(o) => Some(o),
-            _ => None,
         }
     }
 
     pub fn as_slots(&self) -> Option<&MocaSlots> {
         match self {
             HeapObject::Slots(s) => Some(s),
-            _ => None,
         }
     }
 
     pub fn as_slots_mut(&mut self) -> Option<&mut MocaSlots> {
         match self {
             HeapObject::Slots(s) => Some(s),
-            _ => None,
         }
     }
 
     /// Get all Value references in this object for GC tracing.
     pub fn trace(&self) -> Vec<GcRef> {
         match self {
-            HeapObject::Object(obj) => obj.fields.values().filter_map(|v| v.as_ref()).collect(),
             HeapObject::Slots(slots) => slots.slots.iter().filter_map(|v| v.as_ref()).collect(),
         }
     }
@@ -122,7 +89,6 @@ impl HeapObject {
 impl fmt::Debug for HeapObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HeapObject::Object(o) => write!(f, "Object({:?})", o.fields),
             HeapObject::Slots(s) => write!(f, "Slots({:?})", s.slots),
         }
     }
@@ -140,10 +106,6 @@ pub struct Heap {
     free_list: Vec<usize>,
     bytes_allocated: usize,
     gc_threshold: usize,
-    /// Counter for generating unique shape IDs
-    next_shape_id: u32,
-    /// Cache of shape signatures to shape IDs
-    shape_cache: HashMap<Vec<String>, u32>,
     /// Hard limit on heap size (None = unlimited)
     heap_limit: Option<usize>,
     /// Whether GC is enabled
@@ -166,25 +128,8 @@ impl Heap {
             free_list: Vec::new(),
             bytes_allocated: 0,
             gc_threshold: 1024 * 1024, // 1MB initial threshold
-            next_shape_id: 1,
-            shape_cache: HashMap::new(),
             heap_limit,
             gc_enabled,
-        }
-    }
-
-    /// Compute or retrieve a shape ID for a given set of field names.
-    fn get_shape_id(&mut self, field_names: &[String]) -> u32 {
-        let mut sorted_names: Vec<String> = field_names.to_vec();
-        sorted_names.sort();
-
-        if let Some(&id) = self.shape_cache.get(&sorted_names) {
-            id
-        } else {
-            let id = self.next_shape_id;
-            self.next_shape_id += 1;
-            self.shape_cache.insert(sorted_names, id);
-            id
         }
     }
 
@@ -208,28 +153,6 @@ impl Heap {
         // Convert string to slots of Unicode code points (not bytes)
         let slots: Vec<Value> = value.chars().map(|c| Value::I64(c as i64)).collect();
         self.alloc_slots(slots)
-    }
-
-    /// Allocate a new object on the heap.
-    pub fn alloc_object_map(&mut self, fields: HashMap<String, Value>) -> Result<GcRef, String> {
-        let size = std::mem::size_of::<MocaObject>()
-            + fields.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
-        self.check_heap_limit(size)?;
-        self.bytes_allocated += size;
-
-        // Compute shape ID based on field names
-        let field_names: Vec<String> = fields.keys().cloned().collect();
-        let shape_id = self.get_shape_id(&field_names);
-
-        let obj = HeapObject::Object(MocaObject {
-            header: ObjectHeader {
-                obj_type: ObjectType::Object,
-                marked: false,
-            },
-            fields,
-            shape_id,
-        });
-        Ok(self.alloc_object(obj))
     }
 
     /// Allocate a new slot-based heap object.
@@ -316,11 +239,6 @@ impl Heap {
         self.bytes_allocated = 0;
         for o in self.objects.iter().flatten() {
             self.bytes_allocated += match o {
-                HeapObject::Object(o) => {
-                    std::mem::size_of::<MocaObject>()
-                        + o.fields.len()
-                            * (std::mem::size_of::<String>() + std::mem::size_of::<Value>())
-                }
                 HeapObject::Slots(s) => {
                     std::mem::size_of::<MocaSlots>() + s.slots.len() * std::mem::size_of::<Value>()
                 }

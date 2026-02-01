@@ -1,15 +1,17 @@
-// Test object literal and field access
-let person = { name: "Alice", age: 30, active: true };
-print(person.name);
-print(person.age);
-print(person.active);
+// Test map operations (migrated from object literal test)
 
-// Nested object
-let nested = { outer: { inner: 42 } };
-print(nested.outer.inner);
+// String key map with string values
+let person = map_new_any();
+map_put_string(person, "name", "Alice");
+map_put_string(person, "city", "Tokyo");
+print(map_get_string(person, "name"));
+print(map_get_string(person, "city"));
 
-// Object with computed values
+// Int key map demonstrating computed keys
 let x = 10;
 let y = 20;
-let point = { x: x, y: y, sum: x + y };
-print(point.sum);
+let point = map_new_any();
+map_put_int(point, x, "ten");
+map_put_int(point, y, "twenty");
+map_put_int(point, x + y, "thirty");
+print(map_get_int(point, 30));

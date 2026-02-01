@@ -208,11 +208,6 @@ impl SymbolTable {
                     self.collect_expr(elem);
                 }
             }
-            Expr::Object { fields, .. } => {
-                for (_, expr) in fields {
-                    self.collect_expr(expr);
-                }
-            }
             Expr::Index { object, index, .. } => {
                 self.collect_expr(object);
                 self.collect_expr(index);

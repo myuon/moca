@@ -198,7 +198,7 @@ struct_init_field ::= IDENT ':' expr
 
 ### Type Checking
 4. `let p: Point = Point { x: 1, y: 2 };` type checks
-5. `let p: Point = { x: 1, y: 2 };` is a type error (plain object vs struct)
+5. `let p: Point = { x: 1, y: 2 };` is a parse error (object literal syntax removed)
 6. `Point { x: 1 }` is a type error (missing field `y`)
 7. `Point { x: 1, y: 2, z: 3 }` is a type error (extra field `z`)
 8. `Point { x: "a", y: 2 }` is a type error (wrong field type)
@@ -242,5 +242,5 @@ struct_init_field ::= IDENT ':' expr
 
 ### VM Changes
 
-1. Add `Value::Struct` variant (or reuse object with type tag)
-2. Optimize field access to use indices instead of string lookup
+1. Structs use `MocaSlots` for field storage (same as arrays)
+2. Field access uses indices (resolved at compile time)

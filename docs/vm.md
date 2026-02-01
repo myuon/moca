@@ -35,10 +35,11 @@ Heap objects are allocated on the managed heap and tracked by the garbage collec
 
 ```rust
 enum HeapObject {
-    Object(MocaObject),  // Key-value map (JavaScript-like objects)
     Slots(MocaSlots),    // Indexed slots (arrays, strings, structs, vectors)
 }
 ```
+
+**Note:** Key-value maps use the stdlib HashMap implementation (see `map_new_any()` and related functions).
 
 ### MocaSlots Layout
 
@@ -87,18 +88,6 @@ Vector<T> → slots: [ptr, len, cap]
 - slots[1]: Current length
 - slots[2]: Capacity
 ```
-
-### MocaObject Layout (Key-Value Maps)
-
-```
-+----------------+
-| header (64bit) |
-+----------------+
-| fields: HashMap<String, Value> |
-+----------------+
-```
-
-Used for JavaScript-like objects with string keys: `{ name: "Alice", age: 30 }`
 
 ## Call Frame
 
@@ -174,14 +163,6 @@ JMP <offset>           // Unconditional jump
 JMP_IF_FALSE <offset>  // Jump if false
 JMP_IF_TRUE <offset>   // Jump if true (for short-circuit)
 RET                    // Return from function
-```
-
-### Object Operations
-
-```
-ALLOC_OBJ <type_id> <n_fields>  // Allocate object
-READ_FIELD <field_idx>          // Read object field
-WRITE_FIELD <field_idx>         // Write object field
 ```
 
 ### Array Operations

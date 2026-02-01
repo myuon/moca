@@ -396,11 +396,6 @@ impl Verifier {
             Op::Call(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::Ret => (1, 0),               // pops return value
 
-            // Heap & Objects
-            Op::New(n) => (*n * 2, 1), // pops n key-value pairs, pushes object
-            Op::GetF(_) => (1, 1),     // pops object, pushes field value
-            Op::SetF(_) => (2, 0),     // pops object and value
-
             // Array operations (legacy, kept for compatibility)
             Op::ArrayLen => (1, 1),
 
@@ -753,23 +748,23 @@ mod tests {
 
     /// Test: Spec 7.3 - NEW is a safepoint requiring StackMap
     #[test]
-    fn test_spec_new_safepoint() {
+    fn test_spec_alloc_heap_safepoint() {
         use crate::vm::stackmap::{FunctionStackMap, StackMapEntry};
 
         let mut stackmap = FunctionStackMap::new();
-        // Add entry for the NEW instruction at pc=2
+        // Add entry for the AllocHeap instruction at pc=2
         stackmap.add_entry(StackMapEntry::new(2, 2));
 
         let verifier = Verifier::new();
         let func = Function {
-            name: "with_new".to_string(),
+            name: "with_alloc".to_string(),
             arity: 0,
             locals_count: 0,
             code: vec![
-                Op::PushString(0), // 0: field name
-                Op::PushInt(42),   // 1: field value
-                Op::New(1),        // 2: NEW is safepoint (allocates object)
-                Op::Ret,           // 3: return
+                Op::PushInt(10),  // 0: slot value
+                Op::PushInt(20),  // 1: slot value
+                Op::AllocHeap(2), // 2: AllocHeap is safepoint (allocates heap object)
+                Op::Ret,          // 3: return
             ],
             stackmap: Some(stackmap),
         };

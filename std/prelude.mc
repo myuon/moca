@@ -342,6 +342,368 @@ fun vec_set_any(v, index, value) {
 }
 
 // ============================================================================
+// Map Functions (HashMap implementation using chaining)
+// ============================================================================
+
+// HashMapEntry struct - represents a key-value pair in the map.
+// Layout: [hm_key, hm_value, hm_next]
+// hm_next: pointer to next entry in the chain (0 if end of chain)
+struct HashMapEntry {
+    hm_key: any,
+    hm_value: any,
+    hm_next: int
+}
+
+// HashMapAny struct - represents the hash map.
+// Layout: [hm_buckets, hm_size, hm_capacity]
+// hm_buckets: pointer to array of bucket heads
+// hm_size: number of entries in the map
+// hm_capacity: number of buckets
+struct HashMapAny {
+    hm_buckets: int,
+    hm_size: int,
+    hm_capacity: int
+}
+
+// Hash function for integers - uses the value directly
+fun _map_hash_int(key: int) -> int {
+    if key < 0 {
+        return -key;
+    }
+    return key;
+}
+
+// Hash function for strings - DJB2 algorithm
+fun _map_hash_string(key: string) -> int {
+    var hash = 5381;
+    let n = len(key);
+    var i = 0;
+    while i < n {
+        let c = key[i];
+        // hash = hash * 33 + c
+        hash = hash * 33 + c;
+        i = i + 1;
+    }
+    if hash < 0 {
+        return -hash;
+    }
+    return hash;
+}
+
+// Create a new empty map with default capacity (16 buckets)
+fun map_new_any() {
+    let capacity = 16;
+    let buckets = __alloc_heap(capacity);
+    // Initialize all buckets to 0 (nil)
+    var i = 0;
+    while i < capacity {
+        __heap_store(buckets, i, 0);
+        i = i + 1;
+    }
+    return HashMapAny { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
+}
+
+// Internal: Find entry by key in a bucket chain (int key)
+// Returns the entry pointer if found, 0 if not found
+fun _map_find_entry_int(m, key: int) -> int {
+    let capacity = m.hm_capacity;
+    let bucket_idx = _map_hash_int(key) % capacity;
+    var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+
+    while entry_ptr != 0 {
+        let entry_key = __heap_load(entry_ptr, 0);
+        if entry_key == key {
+            return entry_ptr;
+        }
+        entry_ptr = __heap_load(entry_ptr, 2);
+    }
+    return 0;
+}
+
+// Internal: Find entry by key in a bucket chain (string key)
+fun _map_find_entry_string(m, key: string) -> int {
+    let capacity = m.hm_capacity;
+    let bucket_idx = _map_hash_string(key) % capacity;
+    var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+
+    while entry_ptr != 0 {
+        let entry_key = __heap_load(entry_ptr, 0);
+        if entry_key == key {
+            return entry_ptr;
+        }
+        entry_ptr = __heap_load(entry_ptr, 2);
+    }
+    return 0;
+}
+
+// Internal: Rehash the map when load factor exceeds 0.75
+fun _map_rehash_int(m) {
+    let old_capacity = m.hm_capacity;
+    let old_buckets = m.hm_buckets;
+    let new_capacity = old_capacity * 2;
+    let new_buckets = __alloc_heap(new_capacity);
+
+    // Initialize new buckets to 0
+    var i = 0;
+    while i < new_capacity {
+        __heap_store(new_buckets, i, 0);
+        i = i + 1;
+    }
+
+    // Rehash all entries
+    i = 0;
+    while i < old_capacity {
+        var entry_ptr = __heap_load(old_buckets, i);
+        while entry_ptr != 0 {
+            let key = __heap_load(entry_ptr, 0);
+            let next_ptr = __heap_load(entry_ptr, 2);
+
+            // Compute new bucket index
+            let new_bucket_idx = _map_hash_int(key) % new_capacity;
+
+            // Insert at head of new bucket
+            let old_head = __heap_load(new_buckets, new_bucket_idx);
+            __heap_store(entry_ptr, 2, old_head);
+            __heap_store(new_buckets, new_bucket_idx, entry_ptr);
+
+            entry_ptr = next_ptr;
+        }
+        i = i + 1;
+    }
+
+    m.hm_buckets = new_buckets;
+    m.hm_capacity = new_capacity;
+}
+
+// Internal: Rehash for string keys
+fun _map_rehash_string(m) {
+    let old_capacity = m.hm_capacity;
+    let old_buckets = m.hm_buckets;
+    let new_capacity = old_capacity * 2;
+    let new_buckets = __alloc_heap(new_capacity);
+
+    // Initialize new buckets to 0
+    var i = 0;
+    while i < new_capacity {
+        __heap_store(new_buckets, i, 0);
+        i = i + 1;
+    }
+
+    // Rehash all entries
+    i = 0;
+    while i < old_capacity {
+        var entry_ptr = __heap_load(old_buckets, i);
+        while entry_ptr != 0 {
+            let key = __heap_load(entry_ptr, 0);
+            let next_ptr = __heap_load(entry_ptr, 2);
+
+            // Compute new bucket index
+            let new_bucket_idx = _map_hash_string(key) % new_capacity;
+
+            // Insert at head of new bucket
+            let old_head = __heap_load(new_buckets, new_bucket_idx);
+            __heap_store(entry_ptr, 2, old_head);
+            __heap_store(new_buckets, new_bucket_idx, entry_ptr);
+
+            entry_ptr = next_ptr;
+        }
+        i = i + 1;
+    }
+
+    m.hm_buckets = new_buckets;
+    m.hm_capacity = new_capacity;
+}
+
+// Put a key-value pair into the map (int key version)
+fun map_put_int(m, key: int, val) {
+    // Check if key already exists
+    let existing = _map_find_entry_int(m, key);
+    if existing != 0 {
+        // Update existing entry
+        __heap_store(existing, 1, val);
+        return;
+    }
+
+    // Check if we need to rehash (load factor > 0.75)
+    let load = m.hm_size * 4;
+    let threshold = m.hm_capacity * 3;
+    if load >= threshold {
+        _map_rehash_int(m);
+    }
+
+    // Create new entry
+    let entry = __alloc_heap(3);
+    __heap_store(entry, 0, key);
+    __heap_store(entry, 1, val);
+
+    // Insert at head of bucket
+    let bucket_idx = _map_hash_int(key) % m.hm_capacity;
+    let old_head = __heap_load(m.hm_buckets, bucket_idx);
+    __heap_store(entry, 2, old_head);
+    __heap_store(m.hm_buckets, bucket_idx, entry);
+
+    m.hm_size = m.hm_size + 1;
+}
+
+// Put a key-value pair into the map (string key version)
+fun map_put_string(m, key: string, val) {
+    // Check if key already exists
+    let existing = _map_find_entry_string(m, key);
+    if existing != 0 {
+        // Update existing entry
+        __heap_store(existing, 1, val);
+        return;
+    }
+
+    // Check if we need to rehash (load factor > 0.75)
+    let load = m.hm_size * 4;
+    let threshold = m.hm_capacity * 3;
+    if load >= threshold {
+        _map_rehash_string(m);
+    }
+
+    // Create new entry
+    let entry = __alloc_heap(3);
+    __heap_store(entry, 0, key);
+    __heap_store(entry, 1, val);
+
+    // Insert at head of bucket
+    let bucket_idx = _map_hash_string(key) % m.hm_capacity;
+    let old_head = __heap_load(m.hm_buckets, bucket_idx);
+    __heap_store(entry, 2, old_head);
+    __heap_store(m.hm_buckets, bucket_idx, entry);
+
+    m.hm_size = m.hm_size + 1;
+}
+
+// Get a value from the map by int key
+// Returns 0 if key not found
+fun map_get_int(m, key: int) {
+    let entry_ptr = _map_find_entry_int(m, key);
+    if entry_ptr == 0 {
+        return 0;
+    }
+    return __heap_load(entry_ptr, 1);
+}
+
+// Get a value from the map by string key
+// Returns 0 if key not found
+fun map_get_string(m, key: string) {
+    let entry_ptr = _map_find_entry_string(m, key);
+    if entry_ptr == 0 {
+        return 0;
+    }
+    return __heap_load(entry_ptr, 1);
+}
+
+// Check if the map contains a key (int version)
+fun map_contains_int(m, key: int) -> bool {
+    return _map_find_entry_int(m, key) != 0;
+}
+
+// Check if the map contains a key (string version)
+fun map_contains_string(m, key: string) -> bool {
+    return _map_find_entry_string(m, key) != 0;
+}
+
+// Remove an entry from the map by int key
+// Returns true if the key was found and removed, false otherwise
+fun map_remove_int(m, key: int) -> bool {
+    let capacity = m.hm_capacity;
+    let bucket_idx = _map_hash_int(key) % capacity;
+    var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+    var prev_ptr = 0;
+
+    while entry_ptr != 0 {
+        let entry_key = __heap_load(entry_ptr, 0);
+        if entry_key == key {
+            // Found the entry, remove it
+            let next_ptr = __heap_load(entry_ptr, 2);
+            if prev_ptr == 0 {
+                // Entry is head of bucket
+                __heap_store(m.hm_buckets, bucket_idx, next_ptr);
+            } else {
+                // Entry is in middle/end of chain
+                __heap_store(prev_ptr, 2, next_ptr);
+            }
+            m.hm_size = m.hm_size - 1;
+            return true;
+        }
+        prev_ptr = entry_ptr;
+        entry_ptr = __heap_load(entry_ptr, 2);
+    }
+    return false;
+}
+
+// Remove an entry from the map by string key
+// Returns true if the key was found and removed, false otherwise
+fun map_remove_string(m, key: string) -> bool {
+    let capacity = m.hm_capacity;
+    let bucket_idx = _map_hash_string(key) % capacity;
+    var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+    var prev_ptr = 0;
+
+    while entry_ptr != 0 {
+        let entry_key = __heap_load(entry_ptr, 0);
+        if entry_key == key {
+            // Found the entry, remove it
+            let next_ptr = __heap_load(entry_ptr, 2);
+            if prev_ptr == 0 {
+                // Entry is head of bucket
+                __heap_store(m.hm_buckets, bucket_idx, next_ptr);
+            } else {
+                // Entry is in middle/end of chain
+                __heap_store(prev_ptr, 2, next_ptr);
+            }
+            m.hm_size = m.hm_size - 1;
+            return true;
+        }
+        prev_ptr = entry_ptr;
+        entry_ptr = __heap_load(entry_ptr, 2);
+    }
+    return false;
+}
+
+// Get the number of entries in the map
+fun map_len(m) -> int {
+    return m.hm_size;
+}
+
+// Get all keys from the map as a vector (works for any key type)
+fun map_keys(m) {
+    let result = vec_new_any();
+    let capacity = m.hm_capacity;
+    var i = 0;
+    while i < capacity {
+        var entry_ptr = __heap_load(m.hm_buckets, i);
+        while entry_ptr != 0 {
+            let key = __heap_load(entry_ptr, 0);
+            vec_push_any(result, key);
+            entry_ptr = __heap_load(entry_ptr, 2);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// Get all values from the map as a vector
+fun map_values(m) {
+    let result = vec_new_any();
+    let capacity = m.hm_capacity;
+    var i = 0;
+    while i < capacity {
+        var entry_ptr = __heap_load(m.hm_buckets, i);
+        while entry_ptr != 0 {
+            let val = __heap_load(entry_ptr, 1);
+            vec_push_any(result, val);
+            entry_ptr = __heap_load(entry_ptr, 2);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================================
 // Parsing Functions
 // ============================================================================
 

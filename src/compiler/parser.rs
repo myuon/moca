@@ -851,31 +851,6 @@ impl<'a> Parser<'a> {
             return Ok(Expr::Array { elements, span });
         }
 
-        if self.match_token(&TokenKind::LBrace) {
-            // Object literal
-            let mut fields = Vec::new();
-
-            if !self.check(&TokenKind::RBrace) {
-                let name = self.expect_ident()?;
-                self.expect(&TokenKind::Colon)?;
-                let value = self.expression()?;
-                fields.push((name, value));
-
-                while self.match_token(&TokenKind::Comma) {
-                    if self.check(&TokenKind::RBrace) {
-                        break; // Allow trailing comma
-                    }
-                    let name = self.expect_ident()?;
-                    self.expect(&TokenKind::Colon)?;
-                    let value = self.expression()?;
-                    fields.push((name, value));
-                }
-            }
-
-            self.expect(&TokenKind::RBrace)?;
-            return Ok(Expr::Object { fields, span });
-        }
-
         // Inline assembly block: asm { ... } or asm(inputs) { ... } or asm(inputs) -> type { ... }
         if self.match_token(&TokenKind::Asm) {
             return self.asm_block(span);
@@ -1284,22 +1259,6 @@ mod tests {
     }
 
     #[test]
-    fn test_object_literal() {
-        let program = parse("let obj = { x: 10, y: 20 };").unwrap();
-        match &program.items[0] {
-            Item::Statement(Statement::Let { init, .. }) => match init {
-                Expr::Object { fields, .. } => {
-                    assert_eq!(fields.len(), 2);
-                    assert_eq!(fields[0].0, "x");
-                    assert_eq!(fields[1].0, "y");
-                }
-                _ => panic!("expected object"),
-            },
-            _ => panic!("expected let statement"),
-        }
-    }
-
-    #[test]
     fn test_index_access() {
         let program = parse("let x = arr[0];").unwrap();
         match &program.items[0] {
@@ -1483,23 +1442,6 @@ mod tests {
                 assert!(return_type.is_none());
             }
             _ => panic!("expected function definition"),
-        }
-    }
-
-    #[test]
-    fn test_object_type_annotation() {
-        let program = parse("let obj: {x: int, y: string} = {x: 1, y: \"a\"};").unwrap();
-        match &program.items[0] {
-            Item::Statement(Statement::Let {
-                type_annotation, ..
-            }) => {
-                assert!(type_annotation.is_some());
-                assert_eq!(
-                    type_annotation.as_ref().unwrap().to_string(),
-                    "{x: int, y: string}"
-                );
-            }
-            _ => panic!("expected let statement"),
         }
     }
 
