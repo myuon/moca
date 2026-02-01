@@ -2,95 +2,43 @@ use std::fmt;
 
 use super::Value;
 
-/// Type ID for heap objects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObjectType {
-    /// Generic slot-based heap object (for arrays, vectors, and strings)
-    Slots,
-}
-
-/// Header for all heap objects.
+/// A heap object containing a vector of slots.
+/// Used for arrays, vectors, and strings.
 #[derive(Debug)]
-pub struct ObjectHeader {
-    pub obj_type: ObjectType,
+pub struct HeapObject {
+    /// Whether this object is marked during GC
     pub marked: bool,
-}
-
-/// A generic slot-based heap object.
-/// Used for the new array implementation where:
-/// - slot 0: length (as Value::I64)
-/// - slot 1..n: elements
-#[derive(Debug)]
-pub struct MocaSlots {
-    pub header: ObjectHeader,
+    /// The slots containing values
     pub slots: Vec<Value>,
 }
 
-/// A heap object can be any of the heap-allocated types.
-pub enum HeapObject {
-    /// Generic slot-based heap object (for arrays, vectors, and strings)
-    Slots(MocaSlots),
-}
-
 impl HeapObject {
-    pub fn obj_type(&self) -> ObjectType {
-        match self {
-            HeapObject::Slots(_) => ObjectType::Slots,
-        }
-    }
-
-    pub fn header(&self) -> &ObjectHeader {
-        match self {
-            HeapObject::Slots(s) => &s.header,
-        }
-    }
-
-    pub fn header_mut(&mut self) -> &mut ObjectHeader {
-        match self {
-            HeapObject::Slots(s) => &mut s.header,
+    /// Create a new heap object with the given slots.
+    pub fn new(slots: Vec<Value>) -> Self {
+        Self {
+            marked: false,
+            slots,
         }
     }
 
     /// Convert slots to a Rust String (interpreting slots as Unicode code points)
-    pub fn slots_to_string(&self) -> Option<String> {
-        match self {
-            HeapObject::Slots(s) => {
-                let chars: String = s
-                    .slots
-                    .iter()
-                    .filter_map(|v| v.as_i64())
-                    .filter_map(|c| char::from_u32(c as u32))
-                    .collect();
-                Some(chars)
-            }
-        }
-    }
-
-    pub fn as_slots(&self) -> Option<&MocaSlots> {
-        match self {
-            HeapObject::Slots(s) => Some(s),
-        }
-    }
-
-    pub fn as_slots_mut(&mut self) -> Option<&mut MocaSlots> {
-        match self {
-            HeapObject::Slots(s) => Some(s),
-        }
+    pub fn slots_to_string(&self) -> String {
+        self.slots
+            .iter()
+            .filter_map(|v| v.as_i64())
+            .filter_map(|c| char::from_u32(c as u32))
+            .collect()
     }
 
     /// Get all Value references in this object for GC tracing.
     pub fn trace(&self) -> Vec<GcRef> {
-        match self {
-            HeapObject::Slots(slots) => slots.slots.iter().filter_map(|v| v.as_ref()).collect(),
-        }
+        self.slots.iter().filter_map(|v| v.as_ref()).collect()
     }
 }
 
-impl fmt::Debug for HeapObject {
+impl fmt::Display for HeapObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HeapObject::Slots(s) => write!(f, "Slots({:?})", s.slots),
-        }
+        write!(f, "HeapObject({:?})", self.slots)
     }
 }
 
@@ -158,17 +106,11 @@ impl Heap {
     /// Allocate a new slot-based heap object.
     /// This is used for the new array implementation where slots[0] is length.
     pub fn alloc_slots(&mut self, slots: Vec<Value>) -> Result<GcRef, String> {
-        let size = std::mem::size_of::<MocaSlots>() + slots.len() * std::mem::size_of::<Value>();
+        let size = std::mem::size_of::<HeapObject>() + slots.len() * std::mem::size_of::<Value>();
         self.check_heap_limit(size)?;
         self.bytes_allocated += size;
 
-        let obj = HeapObject::Slots(MocaSlots {
-            header: ObjectHeader {
-                obj_type: ObjectType::Slots,
-                marked: false,
-            },
-            slots,
-        });
+        let obj = HeapObject::new(slots);
         Ok(self.alloc_object(obj))
     }
 
@@ -211,9 +153,9 @@ impl Heap {
         // Mark and trace
         while let Some(r) = worklist.pop() {
             if let Some(obj) = self.objects.get_mut(r.index).and_then(|o| o.as_mut())
-                && !obj.header().marked
+                && !obj.marked
             {
-                obj.header_mut().marked = true;
+                obj.marked = true;
                 // Trace children
                 worklist.extend(obj.trace());
             }
@@ -224,9 +166,9 @@ impl Heap {
     pub fn sweep(&mut self) {
         for i in 0..self.objects.len() {
             if let Some(obj) = &mut self.objects[i] {
-                if obj.header().marked {
+                if obj.marked {
                     // Reset mark for next GC cycle
-                    obj.header_mut().marked = false;
+                    obj.marked = false;
                 } else {
                     // Free unmarked object
                     self.objects[i] = None;
@@ -238,11 +180,8 @@ impl Heap {
         // Recalculate bytes allocated
         self.bytes_allocated = 0;
         for o in self.objects.iter().flatten() {
-            self.bytes_allocated += match o {
-                HeapObject::Slots(s) => {
-                    std::mem::size_of::<MocaSlots>() + s.slots.len() * std::mem::size_of::<Value>()
-                }
-            };
+            self.bytes_allocated +=
+                std::mem::size_of::<HeapObject>() + o.slots.len() * std::mem::size_of::<Value>();
         }
 
         // Adjust threshold
@@ -277,7 +216,7 @@ mod tests {
         let r = heap.alloc_string("hello".to_string()).unwrap();
         let obj = heap.get(r).unwrap();
         // String is now stored as slots of Unicode code points
-        let str_value = obj.slots_to_string().unwrap();
+        let str_value = obj.slots_to_string();
         assert_eq!(str_value, "hello");
     }
 

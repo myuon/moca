@@ -31,27 +31,18 @@ Lower 3 bits    Type
 
 Heap objects are allocated on the managed heap and tracked by the garbage collector.
 
-### HeapObject Types
+### HeapObject Structure
 
 ```rust
-enum HeapObject {
-    Slots(MocaSlots),    // Indexed slots (arrays, strings, structs, vectors)
+struct HeapObject {
+    marked: bool,        // GC mark flag
+    slots: Vec<Value>,   // Variable-length array of values
 }
 ```
 
+All heap-allocated data (arrays, strings, structs, vectors) use this unified slot-based format.
+
 **Note:** Key-value maps use the stdlib HashMap implementation (see `map_new_any()` and related functions).
-
-### MocaSlots Layout
-
-All slot-based types (arrays, strings, structs, vectors) use the unified `MocaSlots` format:
-
-```
-+----------------+
-| header (64bit) |  - obj_type + gc_mark + flags
-+----------------+
-| slots: Vec<Value> |  - Variable-length array of values
-+----------------+
-```
 
 **Key Design**: Length is derived from `slots.len()`, not stored redundantly.
 
