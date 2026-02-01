@@ -1,97 +1,174 @@
-# Spec.md - Object型からMap型への移行
+# Spec.md - 組み込み型関数のメソッド化
 
 ## 1. Goal
-- moca言語から組み込みオブジェクト型を削除し、動的なキー・バリュー構造はstdライブラリのHashMap（map）に統一する
+- 組み込み型（Vector, HashMap, string, array）の関数を、メソッド呼び出し構文 `v.push(x)` で使えるようにする
 
 ## 2. Non-Goals
-- struct型の変更（固定フィールドのstructはそのまま維持）
-- HashMap実装のパフォーマンス最適化
-- 新しい構文の追加
+- 言語仕様の変更（新しい構文やキーワードの追加）
+- ジェネリクスやオーバーロードの導入
+- 既存の型システムの変更
+- mutability の明示的な指定の導入
 
 ## 3. Target Users
-- moca言語の利用者
-- 動的オブジェクトを使っていたコードをmapベースに移行する開発者
+- moca言語のユーザー
+- より自然なオブジェクト指向的な記法でコードを書きたい開発者
 
 ## 4. Core User Flow
-1. 既存の `{ key: value }` リテラルを `map_new_any()` + `map_put_string()` に書き換え
-2. 既存の `obj.field` アクセスを `map_get_string(obj, "field")` に書き換え
-3. 既存の `obj.field = value` 代入を `map_put_string(obj, "field", value)` に書き換え
-4. コンパイル・実行して動作確認
+1. ユーザーが `let v = vec_new();` でベクターを作成
+2. `v.push(10);` でメソッド呼び出し構文で要素を追加
+3. `v.len()` で長さを取得
+4. `let m = map_new_any();` でマップを作成
+5. `m.put_string("key", "value");` で要素を追加
+6. `m.get_string("key")` で要素を取得
 
 ## 5. Inputs & Outputs
-### 入力
-- 既存のobject関連コード（テストファイル）
-- コンパイラソースコード（parser, resolver, codegen, typechecker）
-- VMソースコード（ops, vm, heap）
 
-### 出力
-- object構文・opcodeを削除したコンパイラ
-- MocaObject型を削除したVM
-- mapベースに書き換えたテストファイル
+### 変換前（現在）
+```moca
+let v = vec_new();
+vec_push(v, 10);
+print(vec_len(v));
+
+let m = map_new_any();
+map_put_string(m, "key", "value");
+print(map_get_string(m, "key"));
+```
+
+### 変換後（目標）
+```moca
+let v = vec_new();
+v.push(10);
+print(v.len());
+
+let m = map_new_any();
+m.put_string("key", "value");
+print(m.get_string("key"));
+```
 
 ## 6. Tech Stack
 - 言語: Rust
-- テスト: cargo test（スナップショットテスト）
-- 対象モジュール:
-  - `src/compiler/parser.rs`
-  - `src/compiler/resolver.rs`
-  - `src/compiler/codegen.rs`
-  - `src/compiler/typechecker.rs`
-  - `src/compiler/types.rs`
-  - `src/vm/ops.rs`
-  - `src/vm/vm.rs`
-  - `src/vm/heap.rs`
-  - `tests/snapshots/basic/object_*.mc`
+- テスト: cargo test
+- stdlib: moca言語 (`std/prelude.mc`)
 
 ## 7. Rules & Constraints
-- struct型（`struct Foo { x: int }`）は変更しない
-- `obj.field` 構文はstruct専用として残す（objectには使えなくなる）
-- 既存のmapテスト（map_*.mc）は変更しない
-- 全ての既存テストがパスすること
+
+### 実装方式
+- **VectorAny, HashMapAny 等の既存構造体に impl ブロックでメソッドを追加**
+- コンパイラの組み込み関数（`vec_push` 等）を削除し、メソッド呼び出しに統一
+- 既存の `vec_push_any`, `map_put_string` 等の内部関数は impl 内メソッドとして再実装
+
+### 命名規則
+- サフィックスは維持: `put_string`, `put_int`, `get_string`, `get_int`
+- プレフィックス（`vec_`, `map_`）は削除
+
+### 対象メソッド一覧
+
+#### Vector (`VectorAny`)
+| 現在の関数 | メソッド名 |
+|-----------|----------|
+| `vec_new()` | `vec_new()` (コンストラクタは関数のまま) |
+| `vec_with_capacity(n)` | `vec_with_capacity(n)` (コンストラクタは関数のまま) |
+| `vec_push(v, x)` | `v.push(x)` |
+| `vec_pop(v)` | `v.pop()` |
+| `vec_get(v, i)` | `v.get(i)` |
+| `vec_set(v, i, x)` | `v.set(i, x)` |
+| `vec_len(v)` | `v.len()` |
+| `vec_capacity(v)` | `v.capacity()` |
+
+#### HashMap (`HashMapAny`)
+| 現在の関数 | メソッド名 |
+|-----------|----------|
+| `map_new_any()` | `map_new_any()` (コンストラクタは関数のまま) |
+| `map_put_string(m, k, v)` | `m.put_string(k, v)` |
+| `map_get_string(m, k)` | `m.get_string(k)` |
+| `map_has_string(m, k)` | `m.has_string(k)` |
+| `map_contains_string(m, k)` | `m.contains_string(k)` |
+| `map_remove_string(m, k)` | `m.remove_string(k)` |
+| `map_put_int(m, k, v)` | `m.put_int(k, v)` |
+| `map_get_int(m, k)` | `m.get_int(k)` |
+| `map_has_int(m, k)` | `m.has_int(k)` |
+| `map_contains_int(m, k)` | `m.contains_int(k)` |
+| `map_remove_int(m, k)` | `m.remove_int(k)` |
+| `map_len(m)` | `m.len()` |
+| `map_size(m)` | `m.size()` |
+| `map_keys(m)` | `m.keys()` |
+| `map_values(m)` | `m.values()` |
+
+#### String / Array
+| 現在の関数 | メソッド名 |
+|-----------|----------|
+| `len(s)` (string) | `s.len()` |
+| `len(a)` (array) | `a.len()` |
+
+### 削除対象（コンパイラ組み込み）
+- `vec_push`, `vec_pop`, `vec_get`, `vec_set`, `vec_len`, `vec_capacity`
+- `push`, `pop` (汎用)
+- `map_*` 系の組み込み関数（もしあれば）
+
+### 互換性
+- 既存の関数形式は **削除**（後方互換性なし）
+- 既存テストはすべてメソッド形式に書き換え
 
 ## 8. Open Questions
-なし
+- `len()` を string/array でメソッドとして呼び出すには、コンパイラでの特別扱いが必要（struct ではないため）。実装時に要検討。
 
-## 9. Acceptance Criteria
-1. [ ] オブジェクトリテラル `{ key: value }` 構文がコンパイルエラーになる
-2. [ ] `New` opcodeが削除されている
-3. [ ] `GetF` opcodeが削除されている（struct用の仕組みは別途維持）
-4. [ ] `SetF` opcodeが削除されている
-5. [ ] `MocaObject` 型がheap.rsから削除されている
-6. [ ] 既存のobjectテストがmapベースに書き換えられている
-7. [ ] 書き換えたテストが全てパスする
-8. [ ] structのフィールドアクセス（`point.x`）は引き続き動作する
-9. [ ] `cargo check` がエラーなく通る
-10. [ ] `cargo test` が全てパスする
+## 9. Acceptance Criteria（最大10個）
+
+1. `v.push(x)` でベクターに要素を追加できる
+2. `v.pop()` でベクターから要素を取り出せる
+3. `v.get(i)` でベクターの要素を取得できる
+4. `v.set(i, x)` でベクターの要素を設定できる
+5. `v.len()` でベクターの長さを取得できる
+6. `m.put_string(k, v)` でマップに要素を追加できる
+7. `m.get_string(k)` でマップから要素を取得できる
+8. `m.contains_string(k)` でマップのキー存在確認ができる
+9. 既存の `vec_push(v, x)` 形式はコンパイルエラーになる
+10. `cargo test` が全てパスする
 
 ## 10. Verification Strategy
-- **進捗検証**: 各タスク完了時に `cargo check` と `cargo test` を実行
-- **達成検証**: 全Acceptance Criteriaをチェックリストで確認
-- **漏れ検出**: grep で `Object` `GetF` `SetF` `New` の残存確認
+
+### 進捗検証
+- 各メソッド実装後に対応するスナップショットテストを実行
+- `cargo check` でコンパイルエラーがないことを確認
+
+### 達成検証
+- 全 Acceptance Criteria をチェックリストで確認
+- `cargo test` が全てパス
+- `cargo clippy` で警告がないことを確認
+
+### 漏れ検出
+- 既存のテストファイルを全てメソッド形式に変換し、テストがパスすることで網羅性を担保
+- `vec_push`, `map_put_string` 等の旧関数名で grep し、残存がないことを確認
 
 ## 11. Test Plan
 
-### Scenario 1: オブジェクトリテラルがエラーになること
-- **Given**: `let obj = { name: "test" };` というコード
-- **When**: コンパイルを実行
-- **Then**: コンパイルエラーが発生する
+### E2E シナリオ 1: Vector 基本操作
+**Given**: 空の moca プログラム
+**When**: 以下のコードを実行
+```moca
+let v = vec_new();
+v.push(10);
+v.push(20);
+print(v.len());
+print(v.get(0));
+v.set(0, 30);
+print(v.pop());
+```
+**Then**: 出力が `2`, `10`, `20` となる
 
-### Scenario 2: mapベースのコードが動作すること
-- **Given**: 以下のコード
-  ```moca
-  let obj = map_new_any();
-  map_put_string(obj, "name", "Alice");
-  print(map_get_string(obj, "name"));
-  ```
-- **When**: 実行する
-- **Then**: "Alice" が出力される
+### E2E シナリオ 2: HashMap 基本操作
+**Given**: 空の moca プログラム
+**When**: 以下のコードを実行
+```moca
+let m = map_new_any();
+m.put_string("name", "Alice");
+print(m.get_string("name"));
+print(m.contains_string("name"));
+print(m.len());
+```
+**Then**: 出力が `Alice`, `true`, `1` となる
 
-### Scenario 3: structは引き続き動作すること
-- **Given**: 以下のコード
-  ```moca
-  struct Point { x: int, y: int }
-  let p = Point { x: 10, y: 20 };
-  print(p.x);
-  ```
-- **When**: 実行する
-- **Then**: "10" が出力される
+### E2E シナリオ 3: 旧構文がエラーになる
+**Given**: 空の moca プログラム
+**When**: `vec_push(v, 10);` を含むコードをコンパイル
+**Then**: コンパイルエラーが発生する
