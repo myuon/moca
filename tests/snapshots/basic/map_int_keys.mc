@@ -1,37 +1,37 @@
 // Map with integer keys test
 
-let m: HashMapAny = map_new();
+let m: map<any, any> = map_new();
 
-// Test put_int and get_int
-m.put_int(1, "one");
-m.put_int(2, "two");
-m.put_int(100, "hundred");
+// Test put and get
+m.put(1, "one");
+m.put(2, "two");
+m.put(100, "hundred");
 
-print(m.get_int(1));
-print(m.get_int(2));
-print(m.get_int(100));
-print(m.hm_size);
+print(m.get(1));
+print(m.get(2));
+print(m.get(100));
+print(m.len());
 
-// Test contains_int
-if m.contains_int(1) {
+// Test contains
+if m.contains(1) {
     print("has 1");
 }
-if !m.contains_int(999) {
+if !m.contains(999) {
     print("no 999");
 }
 
 // Test overwrite
-m.put_int(1, "ONE");
-print(m.get_int(1));
-print(m.hm_size);
+m.put(1, "ONE");
+print(m.get(1));
+print(m.len());
 
-// Test remove_int
-let removed = m.remove_int(2);
+// Test remove
+let removed = m.remove(2);
 if removed {
     print("removed 2");
 }
-print(m.hm_size);
+print(m.len());
 
 // Test negative key
-m.put_int(-5, "negative");
-print(m.get_int(-5));
+m.put(-5, "negative");
+print(m.get(-5));

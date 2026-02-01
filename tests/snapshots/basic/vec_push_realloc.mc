@@ -1,6 +1,6 @@
 // Test push with reallocation
 // Initial capacity is 0, first push allocates 8, then doubles: 8 -> 16 -> 32 -> 64 -> 128
-var v: VectorAny = vec_new();
+var v: vec<any> = vec_new();
 
 // Push 100 elements (triggers multiple reallocations)
 var i = 0;
@@ -9,7 +9,7 @@ while (i < 100) {
     i = i + 1;
 }
 
-print(v.len);
+print(v.len());
 
 // Verify first and last elements
 print(v.get(0));
