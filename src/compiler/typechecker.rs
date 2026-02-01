@@ -555,8 +555,9 @@ impl TypeChecker {
     fn register_impl_methods(&mut self, impl_block: &ImplBlock) {
         let struct_name = &impl_block.struct_name;
 
-        // Check if struct exists
-        if !self.structs.contains_key(struct_name) {
+        // Allow impl blocks for builtin types (vec, map) or defined structs
+        let is_builtin_type = struct_name == "vec" || struct_name == "map";
+        if !is_builtin_type && !self.structs.contains_key(struct_name) {
             self.errors.push(TypeError::new(
                 format!("impl for undefined struct `{}`", struct_name),
                 impl_block.span,
@@ -593,11 +594,26 @@ impl TypeChecker {
                 self.fresh_var()
             };
 
-            let fn_type = Type::function(param_types, ret_type);
+            let fn_type = Type::function(param_types.clone(), ret_type);
 
-            // Add method to struct's method table
-            if let Some(struct_info) = self.structs.get_mut(struct_name) {
-                struct_info.methods.insert(method.name.clone(), fn_type);
+            // Check if this is an associated function (no 'self' parameter)
+            let has_self = method.params.iter().any(|p| p.name == "self");
+
+            if has_self {
+                // Add method to struct's method table
+                if let Some(struct_info) = self.structs.get_mut(struct_name) {
+                    struct_info.methods.insert(method.name.clone(), fn_type);
+                }
+            } else {
+                // Associated function - add to struct's method table if struct exists,
+                // or register as a standalone function for builtin types
+                if let Some(struct_info) = self.structs.get_mut(struct_name) {
+                    struct_info.methods.insert(method.name.clone(), fn_type);
+                } else {
+                    // For builtin types (vec, map), register as {type}_{func} function
+                    let func_name = format!("{}_{}", struct_name, method.name);
+                    self.functions.insert(func_name, fn_type);
+                }
             }
         }
     }
@@ -605,37 +621,49 @@ impl TypeChecker {
     /// Type check an impl block.
     fn check_impl_block(&mut self, impl_block: &ImplBlock) {
         let struct_name = &impl_block.struct_name;
+        let is_builtin_type = struct_name == "vec" || struct_name == "map";
 
         // Get struct type for 'self'
         let self_type = if let Some(info) = self.structs.get(struct_name) {
-            Type::Struct {
+            Some(Type::Struct {
                 name: info.name.clone(),
                 fields: info.fields.clone(),
-            }
+            })
+        } else if is_builtin_type {
+            None // Builtin types don't have a struct definition
         } else {
             return; // Error already reported in register_impl_methods
         };
 
         for method in &impl_block.methods {
             let mut env = TypeEnv::new();
+            let has_self = method.params.iter().any(|p| p.name == "self");
 
-            // Get method signature from struct info
-            let method_type = self
-                .structs
-                .get(struct_name)
-                .and_then(|info| info.methods.get(&method.name))
-                .cloned();
+            // Get method signature
+            let method_type = if is_builtin_type && !has_self {
+                // For builtin types, look up the function by {type}_{func} name
+                let func_name = format!("{}_{}", struct_name, method.name);
+                self.functions.get(&func_name).cloned()
+            } else {
+                // For struct methods, look up in the struct's method table
+                self.structs
+                    .get(struct_name)
+                    .and_then(|info| info.methods.get(&method.name))
+                    .cloned()
+            };
 
             let (param_types, expected_ret) = match method_type {
                 Some(Type::Function { params, ret }) => (params, *ret),
                 _ => continue,
             };
 
-            // Bind 'self' parameter
+            // Bind 'self' parameter if present
             let mut param_iter = param_types.iter();
             for param in &method.params {
                 if param.name == "self" {
-                    env.bind("self".to_string(), self_type.clone());
+                    if let Some(ref self_ty) = self_type {
+                        env.bind("self".to_string(), self_ty.clone());
+                    }
                 } else if let Some(param_type) = param_iter.next() {
                     env.bind(param.name.clone(), param_type.clone());
                 }
@@ -645,7 +673,11 @@ impl TypeChecker {
             let body_type = self.infer_block(&method.body, &mut env);
 
             // Unify return type
-            if let Err(e) = self.unify(&body_type, &expected_ret, method.span) {
+            // Skip type checking for builtin type associated functions
+            // (vec/map return VectorAny/HashMapAny internally but are typed as vec<T>/map<K,V>)
+            if (!is_builtin_type || has_self)
+                && let Err(e) = self.unify(&body_type, &expected_ret, method.span)
+            {
                 self.errors.push(e);
             }
         }
@@ -1380,6 +1412,143 @@ impl TypeChecker {
                     _ => self.fresh_var(), // Any/unknown type
                 }
             }
+
+            Expr::AssociatedFunctionCall {
+                type_name,
+                function,
+                args,
+                span,
+            } => {
+                // Check if this is an associated function on a struct or builtin type
+                self.infer_associated_function_call(type_name, function, args, env, *span)
+            }
+        }
+    }
+
+    /// Infer the type of an associated function call (Type::func()).
+    fn infer_associated_function_call(
+        &mut self,
+        type_name: &str,
+        function: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+        span: Span,
+    ) -> Type {
+        // Infer types of all arguments
+        let arg_types: Vec<Type> = args.iter().map(|arg| self.infer_expr(arg, env)).collect();
+
+        // Check if it's an associated function on a struct
+        // Clone the function type to avoid borrow issues
+        let fn_type_opt = self
+            .structs
+            .get(type_name)
+            .and_then(|s| s.methods.get(function))
+            .cloned();
+
+        if let Some(Type::Function { params, ret }) = fn_type_opt {
+            // Found the associated function - check argument types
+            // Check argument count
+            if params.len() != arg_types.len() {
+                self.errors.push(TypeError::new(
+                    format!(
+                        "{}::{} expects {} arguments, got {}",
+                        type_name,
+                        function,
+                        params.len(),
+                        arg_types.len()
+                    ),
+                    span,
+                ));
+            } else {
+                // Check each argument type
+                for (i, (param, arg_type)) in params.iter().zip(arg_types.iter()).enumerate() {
+                    if let Err(e) = self.unify(param, arg_type, span) {
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "{}::{} argument {} type mismatch: {}",
+                                type_name,
+                                function,
+                                i + 1,
+                                e.message
+                            ),
+                            span,
+                        ));
+                    }
+                }
+            }
+            return self.substitution.apply(ret.as_ref());
+        }
+
+        // Check builtin types: vec and map
+        match type_name {
+            "vec" => {
+                if let Some(ty) = self.check_vec_associated_function(function, &arg_types, span) {
+                    return ty;
+                }
+            }
+            "map" => {
+                if let Some(ty) = self.check_map_associated_function(function, &arg_types, span) {
+                    return ty;
+                }
+            }
+            _ => {}
+        }
+
+        // Not found
+        self.errors.push(TypeError::new(
+            format!(
+                "no associated function `{}` found for type `{}`",
+                function, type_name
+            ),
+            span,
+        ));
+        self.fresh_var()
+    }
+
+    /// Check associated functions on vec type.
+    fn check_vec_associated_function(
+        &mut self,
+        function: &str,
+        arg_types: &[Type],
+        span: Span,
+    ) -> Option<Type> {
+        match function {
+            "new" => {
+                if !arg_types.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("vec::new expects 0 arguments, got {}", arg_types.len()),
+                        span,
+                    ));
+                }
+                // Return vec<T> where T is a fresh type variable (will be inferred from usage)
+                Some(Type::Vector(Box::new(self.fresh_var())))
+            }
+            _ => None,
+        }
+    }
+
+    /// Check associated functions on map type.
+    fn check_map_associated_function(
+        &mut self,
+        function: &str,
+        arg_types: &[Type],
+        span: Span,
+    ) -> Option<Type> {
+        match function {
+            "new" => {
+                if !arg_types.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("map::new expects 0 arguments, got {}", arg_types.len()),
+                        span,
+                    ));
+                }
+                // Return map<K, V> where K and V are fresh type variables
+                Some(Type::Map(
+                    Box::new(self.fresh_var()),
+                    Box::new(self.fresh_var()),
+                ))
+            }
+            _ => None,
         }
     }
 
@@ -1577,25 +1746,8 @@ impl TypeChecker {
                 }
                 Some(Type::Array(Box::new(Type::String)))
             }
-            "vec_new" => {
-                if !args.is_empty() {
-                    self.errors
-                        .push(TypeError::new("vec_new expects 0 arguments", span));
-                }
-                // Returns vec<T> where T is fresh (will be constrained by annotation)
-                Some(Type::Vector(Box::new(self.fresh_var())))
-            }
-            "map_new" => {
-                if !args.is_empty() {
-                    self.errors
-                        .push(TypeError::new("map_new expects 0 arguments", span));
-                }
-                // Returns map<K, V> where K, V are fresh (will be constrained by annotation)
-                Some(Type::Map(
-                    Box::new(self.fresh_var()),
-                    Box::new(self.fresh_var()),
-                ))
-            }
+            // vec_new and map_new are now associated functions (vec::new(), map::new())
+            // They are defined in prelude.mc using impl vec/map blocks
             _ => None,
         }
     }

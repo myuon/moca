@@ -792,6 +792,35 @@ impl<'a> Parser<'a> {
                         span,
                     };
                 }
+            } else if self.match_token(&TokenKind::ColonColon) {
+                // Associated function call: Type::func()
+                if let Expr::Ident {
+                    name: type_name,
+                    span,
+                } = &expr
+                {
+                    let function = self.expect_ident()?;
+                    self.expect(&TokenKind::LParen)?;
+
+                    let mut args = Vec::new();
+                    if !self.check(&TokenKind::RParen) {
+                        args.push(self.expression()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.expression()?);
+                        }
+                    }
+
+                    self.expect(&TokenKind::RParen)?;
+
+                    expr = Expr::AssociatedFunctionCall {
+                        type_name: type_name.clone(),
+                        function,
+                        args,
+                        span: *span,
+                    };
+                } else {
+                    return Err(self.error("expected type name before '::'"));
+                }
             } else {
                 break;
             }
