@@ -21,6 +21,7 @@ pub enum TokenKind {
     Struct,
     Impl,
     Asm,
+    Type, // type literal keyword
 
     // Literals
     Int(i64),
@@ -449,6 +450,7 @@ impl<'a> Lexer<'a> {
             "struct" => TokenKind::Struct,
             "impl" => TokenKind::Impl,
             "asm" => TokenKind::Asm,
+            "type" => TokenKind::Type,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }
