@@ -946,6 +946,11 @@ impl<'a> Resolver<'a> {
                     body,
                 })
             }
+            Expr::TypeLiteral { span, .. } => {
+                // TODO: Implement desugar in Task 4
+                // TypeLiteral should be desugared before resolver runs
+                Err(self.error("TypeLiteral should be desugared before resolution", span))
+            }
         }
     }
 

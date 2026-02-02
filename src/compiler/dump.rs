@@ -540,6 +540,34 @@ impl<'a> AstPrinter<'a> {
                 self.write_type_suffix(expr);
                 self.newline();
             }
+            Expr::TypeLiteral {
+                type_name,
+                type_args,
+                elements,
+                ..
+            } => {
+                let type_args_str = if type_args.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "<{}>",
+                        type_args
+                            .iter()
+                            .map(|t| format!("{:?}", t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                self.write(&format!(
+                    "{}TypeLiteral: {}{} [{} elements]",
+                    prefix,
+                    type_name,
+                    type_args_str,
+                    elements.len()
+                ));
+                self.write_type_suffix(expr);
+                self.newline();
+            }
         }
     }
 

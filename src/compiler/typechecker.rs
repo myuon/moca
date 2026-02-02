@@ -1894,6 +1894,12 @@ impl TypeChecker {
                     type_name, type_args, function, args, env, *span,
                 )
             }
+
+            Expr::TypeLiteral { .. } => {
+                // TypeLiteral should be desugared before type checking
+                // If we reach here, return a fresh type var (will cause unification errors)
+                self.fresh_var()
+            }
         }
     }
 
