@@ -1102,9 +1102,9 @@ impl<'a> Parser<'a> {
             return self.asm_block(span);
         }
 
-        // Type literal: type TypeName { expr, ... } or type TypeName { key: value, ... }
-        if self.match_token(&TokenKind::Type) {
-            return self.type_literal(span);
+        // New literal: new TypeName { expr, ... } or new TypeName { key: value, ... }
+        if self.match_token(&TokenKind::New) {
+            return self.new_literal(span);
         }
 
         Err(self.error("expected expression"))
@@ -1245,8 +1245,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a type literal: type TypeName { expr, ... } or type TypeName { key: value, ... }
-    fn type_literal(&mut self, span: Span) -> Result<Expr, String> {
+    /// Parse a new literal: new TypeName { expr, ... } or new TypeName { key: value, ... }
+    fn new_literal(&mut self, span: Span) -> Result<Expr, String> {
         // Parse type name
         let type_name = self.expect_ident()?;
 
@@ -1274,13 +1274,13 @@ impl<'a> Parser<'a> {
                     // This is key: value format
                     if is_key_value == Some(false) {
                         return Err(
-                            self.error("cannot mix value and key:value elements in type literal")
+                            self.error("cannot mix value and key:value elements in new literal")
                         );
                     }
                     is_key_value = Some(true);
 
                     let value = self.expression()?;
-                    elements.push(TypeLiteralElement::KeyValue {
+                    elements.push(NewLiteralElement::KeyValue {
                         key: first_expr,
                         value,
                     });
@@ -1288,12 +1288,12 @@ impl<'a> Parser<'a> {
                     // This is a value
                     if is_key_value == Some(true) {
                         return Err(
-                            self.error("cannot mix value and key:value elements in type literal")
+                            self.error("cannot mix value and key:value elements in new literal")
                         );
                     }
                     is_key_value = Some(false);
 
-                    elements.push(TypeLiteralElement::Value(first_expr));
+                    elements.push(NewLiteralElement::Value(first_expr));
                 }
 
                 // Check for comma or end
@@ -1310,7 +1310,7 @@ impl<'a> Parser<'a> {
 
         self.expect(&TokenKind::RBrace)?;
 
-        Ok(Expr::TypeLiteral {
+        Ok(Expr::NewLiteral {
             type_name,
             type_args,
             elements,
@@ -1788,7 +1788,7 @@ mod tests {
 
     #[test]
     fn test_let_with_vec_type() {
-        let program = parse("let v: vec<int> = vec::new();").unwrap();
+        let program = parse("let v: vec<int> = vec::`new`();").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let {
                 type_annotation, ..
@@ -1802,7 +1802,7 @@ mod tests {
 
     #[test]
     fn test_let_with_map_type() {
-        let program = parse("let m: map<string, int> = map::new();").unwrap();
+        let program = parse("let m: map<string, int> = map::`new`();").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let {
                 type_annotation, ..
@@ -1819,7 +1819,7 @@ mod tests {
 
     #[test]
     fn test_nested_vec_type() {
-        let program = parse("let v: vec<vec<int>> = vec::new();").unwrap();
+        let program = parse("let v: vec<vec<int>> = vec::`new`();").unwrap();
         match &program.items[0] {
             Item::Statement(Statement::Let {
                 type_annotation, ..

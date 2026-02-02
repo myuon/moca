@@ -256,13 +256,13 @@ impl SymbolTable {
                     self.collect_expr(arg);
                 }
             }
-            Expr::TypeLiteral { elements, .. } => {
+            Expr::NewLiteral { elements, .. } => {
                 for elem in elements {
                     match elem {
-                        crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                        crate::compiler::ast::NewLiteralElement::Value(e) => {
                             self.collect_expr(e);
                         }
-                        crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                        crate::compiler::ast::NewLiteralElement::KeyValue { key, value } => {
                             self.collect_expr(key);
                             self.collect_expr(value);
                         }

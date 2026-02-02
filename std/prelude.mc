@@ -261,7 +261,7 @@ struct Vec<T> {
 
 impl<T> Vec<T> {
     // Create a new empty vector.
-    fun new() -> Vec<T> {
+    fun `new`() -> Vec<T> {
         return Vec<T> { ptr: 0, len: 0, cap: 0 };
     }
 
@@ -333,7 +333,7 @@ impl<T> Vec<T> {
 // Associated functions for vec<T> (syntax sugar for Vec<T>)
 impl vec {
     // Create a new empty vector.
-    fun new() -> vec<any> {
+    fun `new`() -> vec<any> {
         return Vec<any> { ptr: 0, len: 0, cap: 0 };
     }
 
@@ -533,7 +533,7 @@ fun _vec_push_internal(v: Vec<any>, value) {
 
 impl<K, V> Map<K, V> {
     // Create a new empty map
-    fun new() -> Map<K, V> {
+    fun `new`() -> Map<K, V> {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
         // Initialize all buckets to 0 (empty)
@@ -786,7 +786,7 @@ impl<K, V> Map<K, V> {
 // Associated functions for map<K, V> (syntax sugar for Map<K, V>)
 impl map {
     // Create a new empty map with default capacity (16 buckets)
-    fun new() -> map<any, any> {
+    fun `new`() -> map<any, any> {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
         // Initialize all buckets to 0 (nil)

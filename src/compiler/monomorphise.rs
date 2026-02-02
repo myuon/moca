@@ -356,7 +356,7 @@ impl InstantiationCollector {
                 self.collect_expr(left);
                 self.collect_expr(right);
             }
-            Expr::TypeLiteral {
+            Expr::NewLiteral {
                 type_name,
                 type_args,
                 elements,
@@ -379,10 +379,10 @@ impl InstantiationCollector {
 
                 for elem in elements {
                     match elem {
-                        crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                        crate::compiler::ast::NewLiteralElement::Value(e) => {
                             self.collect_expr(e);
                         }
-                        crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                        crate::compiler::ast::NewLiteralElement::KeyValue { key, value } => {
                             self.collect_expr(key);
                             self.collect_expr(value);
                         }
@@ -961,12 +961,12 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             span: *span,
         },
         Expr::Asm(asm_block) => Expr::Asm(asm_block.clone()),
-        Expr::TypeLiteral {
+        Expr::NewLiteral {
             type_name,
             type_args,
             elements,
             span,
-        } => Expr::TypeLiteral {
+        } => Expr::NewLiteral {
             type_name: type_name.clone(),
             type_args: type_args
                 .iter()
@@ -975,13 +975,11 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             elements: elements
                 .iter()
                 .map(|elem| match elem {
-                    crate::compiler::ast::TypeLiteralElement::Value(e) => {
-                        crate::compiler::ast::TypeLiteralElement::Value(substitute_expr(
-                            e, type_map,
-                        ))
+                    crate::compiler::ast::NewLiteralElement::Value(e) => {
+                        crate::compiler::ast::NewLiteralElement::Value(substitute_expr(e, type_map))
                     }
-                    crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
-                        crate::compiler::ast::TypeLiteralElement::KeyValue {
+                    crate::compiler::ast::NewLiteralElement::KeyValue { key, value } => {
+                        crate::compiler::ast::NewLiteralElement::KeyValue {
                             key: substitute_expr(key, type_map),
                             value: substitute_expr(value, type_map),
                         }

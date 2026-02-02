@@ -21,7 +21,8 @@ pub enum TokenKind {
     Struct,
     Impl,
     Asm,
-    Type, // type literal keyword
+    Type,
+    New, // new literal keyword
 
     // Literals
     Int(i64),
@@ -250,6 +251,7 @@ impl<'a> Lexer<'a> {
                 '"' => self.scan_string()?,
                 '0'..='9' => self.scan_number()?,
                 'a'..='z' | 'A'..='Z' | '_' => self.scan_identifier(),
+                '`' => self.scan_escaped_identifier()?,
                 _ => return Err(self.error(&format!("unexpected character '{}'", ch))),
             };
 
@@ -416,6 +418,43 @@ impl<'a> Lexer<'a> {
         Ok(TokenKind::Str(value))
     }
 
+    fn scan_escaped_identifier(&mut self) -> Result<TokenKind, String> {
+        self.advance(); // consume opening backtick
+
+        let start = self.peek().map(|(i, _)| i).unwrap_or(self.source.len());
+
+        while let Some((_, ch)) = self.peek() {
+            if ch == '`' {
+                break;
+            }
+            if ch == '\n' {
+                return Err(self.error("unterminated escaped identifier (newline in identifier)"));
+            }
+            if !ch.is_ascii_alphanumeric() && ch != '_' {
+                return Err(
+                    self.error(&format!("invalid character '{}' in escaped identifier", ch))
+                );
+            }
+            self.advance();
+        }
+
+        let end = self.peek().map(|(i, _)| i).unwrap_or(self.source.len());
+        let ident = &self.source[start..end];
+
+        if ident.is_empty() {
+            return Err(self.error("empty escaped identifier"));
+        }
+
+        match self.peek() {
+            Some((_, '`')) => {
+                self.advance(); // consume closing backtick
+            }
+            _ => return Err(self.error("unterminated escaped identifier")),
+        }
+
+        Ok(TokenKind::Ident(ident.to_string()))
+    }
+
     fn scan_identifier(&mut self) -> TokenKind {
         let start = self.peek().map(|(i, _)| i).unwrap_or(0);
 
@@ -451,6 +490,7 @@ impl<'a> Lexer<'a> {
             "impl" => TokenKind::Impl,
             "asm" => TokenKind::Asm,
             "type" => TokenKind::Type,
+            "new" => TokenKind::New,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }

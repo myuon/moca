@@ -10,8 +10,8 @@
 #![allow(clippy::result_large_err)]
 
 use crate::compiler::ast::{
-    BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef,
-    TypeLiteralElement, UnaryOp,
+    BinaryOp, Block, Expr, FnDef, ImplBlock, Item, NewLiteralElement, Program, Statement,
+    StructDef, UnaryOp,
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
@@ -1896,7 +1896,7 @@ impl TypeChecker {
                 )
             }
 
-            Expr::TypeLiteral {
+            Expr::NewLiteral {
                 type_name,
                 type_args,
                 elements,
@@ -1905,10 +1905,10 @@ impl TypeChecker {
                 // Type check the elements
                 for elem in elements {
                     match elem {
-                        TypeLiteralElement::Value(e) => {
+                        NewLiteralElement::Value(e) => {
                             self.infer_expr(e, env);
                         }
-                        TypeLiteralElement::KeyValue { key, value } => {
+                        NewLiteralElement::KeyValue { key, value } => {
                             self.infer_expr(key, env);
                             self.infer_expr(value, env);
                         }

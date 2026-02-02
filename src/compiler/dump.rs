@@ -540,7 +540,7 @@ impl<'a> AstPrinter<'a> {
                 self.write_type_suffix(expr);
                 self.newline();
             }
-            Expr::TypeLiteral {
+            Expr::NewLiteral {
                 type_name,
                 type_args,
                 elements,
@@ -559,7 +559,7 @@ impl<'a> AstPrinter<'a> {
                     )
                 };
                 self.write(&format!(
-                    "{}TypeLiteral: {}{} [{} elements]",
+                    "{}NewLiteral: {}{} [{} elements]",
                     prefix,
                     type_name,
                     type_args_str,
@@ -1193,7 +1193,7 @@ impl ResolvedProgramPrinter {
                 ));
                 self.newline();
             }
-            ResolvedExpr::TypeLiteral {
+            ResolvedExpr::NewLiteral {
                 type_name,
                 type_args,
                 elements,
@@ -1211,7 +1211,7 @@ impl ResolvedProgramPrinter {
                     )
                 };
                 self.write(&format!(
-                    "{}TypeLiteral(type {}{}, {} elements)",
+                    "{}NewLiteral(new {}{}, {} elements)",
                     prefix,
                     type_name,
                     type_args_str,
