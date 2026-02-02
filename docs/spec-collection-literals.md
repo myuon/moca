@@ -1,27 +1,26 @@
-# Spec: Collection Literals
+# Spec: Collection Literals (type構文)
 
 ## 1. Goal
-- `Vec<T>[e1, e2, ...]` や `Map<K,V>{k1: v1, k2: v2}` の構文糖衣を提供し、コレクションの初期化を簡潔に書けるようにする
+- `type 型名 {式, ...}` 構文でarray/Vec/Mapの初期化を統一的に記述できるようにする
 
 ## 2. Non-Goals
-- ネストしたリテラル（例: `Vec[Vec[1, 2], Vec[3, 4]]`）の特別なサポート（通常の構文として動作すればOK）
-- イテレータからの生成（`Vec.from_iter(...)`）
-- 配列リテラル `[1, 2, 3]` から Vec への暗黙変換
-- `insert` メソッドの新設（既存の `put` を使用）
+- 型引数の推論（型引数は必須）
+- ネストしたリテラルの特別な最適化
+- 既存の配列リテラル `[1, 2, 3]` の即時廃止（当面は両方サポート）
 
 ## 3. Target Users
 - Moca言語の利用者（言語開発者自身を含む）
 
 ## 4. Core User Flow
-1. ユーザーがVecリテラル `Vec<int>[1, 2, 3]` を記述
-2. パーサーがこれを認識し、AST上で `CollectionLiteral` として表現
-3. Desugarフェーズ（またはパーサー内）で以下に展開:
+1. ユーザーが `type Vec<int> {1, 2, 3}` を記述
+2. パーサーが `type` キーワードを認識し、TypeLiteralとしてAST生成
+3. Desugarフェーズで以下に展開:
    ```
    {
-     var __tmp = Vec<int>.new();
-     __tmp.push(1);
-     __tmp.push(2);
-     __tmp.push(3);
+     var __tmp = Vec<int>.uninit(3);
+     __tmp.set(0, 1);
+     __tmp.set(1, 2);
+     __tmp.set(2, 3);
      __tmp
    }
    ```
@@ -30,27 +29,46 @@
 ## 5. Inputs & Outputs
 
 ### 入力（構文）
-| 構文 | 説明 |
-|------|------|
-| `Type[e1, e2, ...]` | Vecライクなリテラル。`Type.new()` + `.push(ei)` にdesugar |
-| `Type{k1: v1, k2: v2}` | Mapライクなリテラル。`Type.new()` + `.put(ki, vi)` にdesugar |
+```
+type 型名 { 初期化式, 初期化式, ... }
+```
+
+初期化式は2種類:
+| 形式 | 用途 | 例 |
+|------|------|-----|
+| `expr` | array/Vec用 | `type Vec<int> {1, 2, 3}` |
+| `key: value` | Map用 | `type Map<string, int> {"a": 1, "b": 2}` |
 
 ### 出力（desugar後）
+
+**array/Vec用** (`expr` 形式):
 ```
-// Vec<int>[1, 2, 3]
+// type array<int> {1, 2, 3}
 {
-  var __tmp = Vec<int>.new();
-  __tmp.push(1);
-  __tmp.push(2);
-  __tmp.push(3);
+  var __tmp = array<int>.uninit(3);
+  __tmp.set(0, 1);
+  __tmp.set(1, 2);
+  __tmp.set(2, 3);
   __tmp
 }
 
-// Map<string, int>{"a": 1, "b": 2}
+// type Vec<int> {1, 2, 3}
 {
-  var __tmp = Map<string, int>.new();
-  __tmp.put("a", 1);
-  __tmp.put("b", 2);
+  var __tmp = Vec<int>.uninit(3);
+  __tmp.set(0, 1);
+  __tmp.set(1, 2);
+  __tmp.set(2, 3);
+  __tmp
+}
+```
+
+**Map用** (`key: value` 形式):
+```
+// type Map<string, int> {"a": 1, "b": 2}
+{
+  var __tmp = Map<string, int>.uninit(2);
+  __tmp.insert("a", 1);
+  __tmp.insert("b", 2);
   __tmp
 }
 ```
@@ -58,47 +76,53 @@
 ## 6. Tech Stack
 - 言語: Rust（既存のMocaコンパイラ）
 - 変更対象:
-  - `src/compiler/lexer.rs` - 必要に応じてトークン追加
-  - `src/compiler/parser.rs` - 新構文のパース
-  - `src/compiler/ast.rs` - 新しいExpr variant追加
-  - `src/compiler/resolver.rs` または新規desugarフェーズ - 構文糖衣の展開
-  - `src/compiler/typechecker.rs` - 型チェック対応（desugar後なら変更不要の可能性）
+  - `src/compiler/lexer.rs` - `type` キーワードのトークン追加
+  - `src/compiler/parser.rs` - type構文のパース
+  - `src/compiler/ast.rs` - `TypeLiteral` Expr variant追加
+  - `src/compiler/resolver.rs` - 構文糖衣の展開（desugar）
+  - `std/prelude.mc` - `uninit`, `insert` メソッド追加
 - テスト: 既存の `cargo test` + 新規 `.mc` テストファイル
 
 ## 7. Rules & Constraints
 
 ### 構文ルール
-1. **Vecリテラル**: `TypeName[e1, e2, ...]` または `TypeName<T>[e1, e2, ...]`
-   - `[` の直前に型名がある場合にのみリテラルとして認識
-   - 単独の `[1, 2, 3]` は既存の配列リテラルのまま
-2. **Mapリテラル**: `TypeName{k1: v1, ...}` または `TypeName<K,V>{k1: v1, ...}`
-   - `{` の直前に型名がある場合にリテラルとして認識
-   - 既存の構造体リテラル `Point { x: 1, y: 2 }` との区別: キーが識別子でなく式の場合はMapリテラル
-3. **空リテラル**: `Vec<int>[]` や `Map<string, int>{}` は許可（単に `.new()` と同等）
-4. **対象型**: `push` / `put` メソッドを持つ任意の型で使用可能（Vec/Map専用ではない）
+1. `type` キーワードの後に型名（型引数含む）、その後に `{...}`
+2. 型引数は必須（推論しない）
+3. 空リテラル `type Vec<int> {}` は許可（`uninit(0)` と同等）
+4. 初期化式が全て `expr` 形式なら `.set(index, value)` にdesugar
+5. 初期化式が全て `key: value` 形式なら `.insert(key, value)` にdesugar
+6. 混在は禁止（コンパイルエラー）
+
+### 対象型の要件
+`type` 構文を使うには、型が以下のメソッドを持つ必要がある:
+- **expr形式の場合**: `uninit(capacity: int)` と `set(index: int, value: T)`
+- **key:value形式の場合**: `uninit(capacity: int)` と `insert(key: K, value: V)`
+
+### stdlib追加メソッド
+| 型 | 追加メソッド | 説明 |
+|----|-------------|------|
+| `array<T>` | `uninit(cap: int)` | 指定サイズの未初期化配列を作成 |
+| `array<T>` | `set(idx: int, val: T)` | 要素を設定（既存の `[]` 代入と同等） |
+| `Vec<T>` | `uninit(cap: int)` | 指定サイズ・長さのVecを作成 |
+| `Map<K,V>` | `uninit(cap: int)` | 指定キャパシティのMapを作成 |
+| `Map<K,V>` | `insert(key: K, val: V)` | キー・値ペアを挿入（`put`のエイリアス） |
 
 ### 技術的制約
-1. Desugarは型チェック前に行う（resolver段階が望ましい）
-2. 一時変数名は既存の変数と衝突しない名前を使用（例: `__collection_tmp_0`）
-3. 型引数が省略された場合、要素から推論する（仮）
-
-### 構文の曖昧性回避
-- `Type { field: value }` （構造体リテラル）vs `Type { key: value }` （Mapリテラル）
-  - **判別方法**: キーが既知のフィールド名なら構造体リテラル、そうでなければMapリテラル（仮）
-  - または: Mapリテラルは `Map` または `map` 型名の場合のみ有効とする（仮）
+1. Desugarは型チェック前に行う（resolver段階）
+2. 一時変数名は既存の変数と衝突しない名前を使用（例: `__type_lit_0`）
+3. 既存の配列リテラル `[1, 2, 3]` は当面サポート継続
 
 ## 8. Open Questions
-1. **構造体リテラルとの曖昧性**: `MyType{a: 1}` が構造体かMapか。現時点では「Map/map型のみMapリテラル」で仮決め
-2. **型推論**: `Vec[1, 2, 3]` で `Vec<int>` と推論するか、型引数必須か。現時点では「推論する」で仮決め
+なし
 
 ## 9. Acceptance Criteria
-1. `Vec<int>[1, 2, 3]` をパースしてコンパイル・実行できる
-2. `Map<string, int>{"a": 1, "b": 2}` をパースしてコンパイル・実行できる
-3. 空リテラル `Vec<int>[]` と `Map<string, int>{}` が動作する
-4. Vecリテラルで生成したVecに対して `.len()` で正しい長さが返る
-5. Mapリテラルで生成したMapに対して `.get()` で正しい値が返る
-6. 型引数を省略した `Vec[1, 2, 3]` が `Vec<int>` として推論される（仮）
-7. ユーザー定義型で `new()` と `push()` を持つ型でもVecリテラル構文が使える
+1. `type array<int> {1, 2, 3}` をパースしてコンパイル・実行できる
+2. `type Vec<int> {1, 2, 3}` をパースしてコンパイル・実行できる
+3. `type Map<string, int> {"a": 1, "b": 2}` をパースしてコンパイル・実行できる
+4. 空リテラル `type Vec<int> {}` が動作する
+5. 生成したVecに対して `.len()` で正しい長さが返る
+6. 生成したMapに対して `.get()` で正しい値が返る
+7. ユーザー定義型で `uninit` と `set` を持つ型でも動作する
 8. 既存の配列リテラル `[1, 2, 3]` が引き続き動作する
 9. 既存の構造体リテラル `Point { x: 1, y: 2 }` が引き続き動作する
 10. `cargo test` が全てパスする
@@ -107,27 +131,30 @@
 
 ### 進捗検証
 - 各フェーズ完了時に該当する `.mc` テストファイルを実行
-- パーサー変更後: ASTダンプで新しいノードが生成されることを確認
-- Desugar後: 展開されたコードが期待通りか確認（デバッグ出力）
+- パーサー変更後: ASTダンプで `TypeLiteral` ノードが生成されることを確認
+- Desugar後: 展開されたコードが期待通りか確認
 
 ### 達成検証
 - 全Acceptance Criteriaをテストコードで網羅
 - `cargo test` が全てパス
-- 手動で `examples/collection_literals.mc` を実行して動作確認
+- 手動で `examples/type_literals.mc` を実行して動作確認
 
 ### 漏れ検出
 - 既存テストが全てパスすることで後方互換性を確認
-- エッジケース（空リテラル、ネスト、型推論）のテストを追加
+- エッジケース（空リテラル、ネスト）のテストを追加
 
 ## 11. Test Plan
 
-### E2E シナリオ 1: Vec リテラルの基本動作
+### E2E シナリオ 1: array/Vec リテラルの基本動作
 **Given**: 以下のコードを含む `.mc` ファイル
 ```
-let v = Vec<int>[1, 2, 3];
-assert_eq(v.len(), 3, "length should be 3");
-assert_eq(v.get(0), 1, "first element should be 1");
-assert_eq(v.get(2), 3, "last element should be 3");
+let arr = type array<int> {1, 2, 3};
+assert_eq(arr[0], 1, "array[0] should be 1");
+assert_eq(arr[2], 3, "array[2] should be 3");
+
+let v = type Vec<int> {10, 20, 30};
+assert_eq(v.len(), 3, "vec length should be 3");
+assert_eq(v.get(1), 20, "vec[1] should be 20");
 ```
 **When**: `moca run` で実行
 **Then**: アサーションが全て成功し、正常終了
@@ -135,7 +162,7 @@ assert_eq(v.get(2), 3, "last element should be 3");
 ### E2E シナリオ 2: Map リテラルの基本動作
 **Given**: 以下のコードを含む `.mc` ファイル
 ```
-let m = Map<string, int>{"foo": 10, "bar": 20};
+let m = type Map<string, int> {"foo": 10, "bar": 20};
 assert_eq(m.len(), 2, "length should be 2");
 assert_eq(m.get("foo"), 10, "foo should be 10");
 assert_eq(m.get("bar"), 20, "bar should be 20");
@@ -146,18 +173,18 @@ assert_eq(m.get("bar"), 20, "bar should be 20");
 ### E2E シナリオ 3: 既存構文との共存
 **Given**: 以下のコードを含む `.mc` ファイル
 ```
-// 既存の配列リテラル
+// 既存の配列リテラル（当面サポート）
 let arr = [1, 2, 3];
-assert_eq(arr[0], 1, "array literal works");
+assert_eq(arr[0], 1, "legacy array literal works");
 
 // 既存の構造体リテラル
 struct Point { x: int, y: int }
 let p = Point { x: 10, y: 20 };
 assert_eq(p.x, 10, "struct literal works");
 
-// 新しいVecリテラル
-let v = Vec<int>[100, 200];
-assert_eq(v.get(0), 100, "vec literal works");
+// 新しいtype構文
+let v = type Vec<int> {100, 200};
+assert_eq(v.get(0), 100, "type literal works");
 ```
 **When**: `moca run` で実行
 **Then**: アサーションが全て成功し、正常終了
