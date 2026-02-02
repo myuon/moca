@@ -10,7 +10,8 @@
 #![allow(clippy::result_large_err)]
 
 use crate::compiler::ast::{
-    BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef, UnaryOp,
+    BinaryOp, Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef,
+    TypeLiteralElement, UnaryOp,
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
@@ -1895,10 +1896,77 @@ impl TypeChecker {
                 )
             }
 
-            Expr::TypeLiteral { .. } => {
-                // TypeLiteral should be desugared before type checking
-                // If we reach here, return a fresh type var (will cause unification errors)
-                self.fresh_var()
+            Expr::TypeLiteral {
+                type_name,
+                type_args,
+                elements,
+                span,
+            } => {
+                // Type check the elements
+                for elem in elements {
+                    match elem {
+                        TypeLiteralElement::Value(e) => {
+                            self.infer_expr(e, env);
+                        }
+                        TypeLiteralElement::KeyValue { key, value } => {
+                            self.infer_expr(key, env);
+                            self.infer_expr(value, env);
+                        }
+                    }
+                }
+
+                // Resolve type arguments to Types
+                let resolved_type_args: Vec<Type> = type_args
+                    .iter()
+                    .filter_map(|ann| self.resolve_type_annotation(ann, *span).ok())
+                    .collect();
+
+                // Look up the struct definition
+                if let Some(struct_info) = self.structs.get(type_name).cloned() {
+                    // Build the result type as GenericStruct
+                    if struct_info.type_params.is_empty() {
+                        // Non-generic struct
+                        let fields = struct_info
+                            .fields
+                            .iter()
+                            .map(|(name, ty)| (name.clone(), ty.clone()))
+                            .collect();
+                        Type::Struct {
+                            name: type_name.clone(),
+                            fields,
+                        }
+                    } else {
+                        // Generic struct - substitute type params
+                        let fields: Vec<(String, Type)> = struct_info
+                            .fields
+                            .iter()
+                            .map(|(name, ty)| {
+                                let mut substituted = ty.clone();
+                                for (param_name, type_arg) in struct_info
+                                    .type_params
+                                    .iter()
+                                    .zip(resolved_type_args.iter())
+                                {
+                                    substituted =
+                                        substituted.substitute_param(param_name, type_arg);
+                                }
+                                (name.clone(), substituted)
+                            })
+                            .collect();
+                        Type::GenericStruct {
+                            name: type_name.clone(),
+                            type_args: resolved_type_args,
+                            fields,
+                        }
+                    }
+                } else {
+                    // Unknown type - report error
+                    self.errors.push(TypeError::new(
+                        format!("unknown type '{}' in type literal", type_name),
+                        *span,
+                    ));
+                    self.fresh_var()
+                }
             }
         }
     }

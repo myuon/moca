@@ -161,6 +161,24 @@ pub enum ResolvedExpr {
         /// Resolved asm instructions.
         body: Vec<ResolvedAsmInstruction>,
     },
+    /// Type literal: `type Vec<int> {1, 2, 3}` or `type Map<string, int> {"a": 1}`
+    TypeLiteral {
+        type_name: String,
+        type_args: Vec<crate::compiler::types::TypeAnnotation>,
+        elements: Vec<ResolvedTypeLiteralElement>,
+    },
+}
+
+/// An element in a resolved type literal.
+#[derive(Debug, Clone)]
+pub enum ResolvedTypeLiteralElement {
+    /// Simple value: `1`, `"foo"` etc.
+    Value(ResolvedExpr),
+    /// Key-value pair: `"a": 1`, `key: value`
+    KeyValue {
+        key: ResolvedExpr,
+        value: ResolvedExpr,
+    },
 }
 
 /// Information about a struct during resolution.
@@ -502,6 +520,14 @@ impl<'a> Resolver<'a> {
                     Some(crate::compiler::types::TypeAnnotation::Map(_, _)) => {
                         Some("Map".to_string())
                     }
+                    // Generic type annotation: Vec<int>, Map<string, int>, etc.
+                    Some(crate::compiler::types::TypeAnnotation::Generic { name, .. }) => {
+                        if self.structs.contains_key(&name) {
+                            Some(name)
+                        } else {
+                            self.get_struct_name(&init)
+                        }
+                    }
                     _ => self.get_struct_name(&init),
                 };
                 let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
@@ -821,6 +847,7 @@ impl<'a> Resolver<'a> {
                         scope.lookup_with_type(name).and_then(|(_, _, sn)| sn)
                     }
                     Expr::StructLiteral { name, .. } => Some(name.clone()),
+                    Expr::TypeLiteral { type_name, .. } => Some(type_name.clone()),
                     _ => None,
                 };
 
@@ -946,10 +973,36 @@ impl<'a> Resolver<'a> {
                     body,
                 })
             }
-            Expr::TypeLiteral { span, .. } => {
-                // TODO: Implement desugar in Task 4
-                // TypeLiteral should be desugared before resolver runs
-                Err(self.error("TypeLiteral should be desugared before resolution", span))
+            Expr::TypeLiteral {
+                type_name,
+                type_args,
+                elements,
+                ..
+            } => {
+                // Resolve each element
+                let resolved_elements: Vec<ResolvedTypeLiteralElement> = elements
+                    .into_iter()
+                    .map(|elem| match elem {
+                        crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                            let resolved = self.resolve_expr(e, scope)?;
+                            Ok(ResolvedTypeLiteralElement::Value(resolved))
+                        }
+                        crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                            let resolved_key = self.resolve_expr(key, scope)?;
+                            let resolved_value = self.resolve_expr(value, scope)?;
+                            Ok(ResolvedTypeLiteralElement::KeyValue {
+                                key: resolved_key,
+                                value: resolved_value,
+                            })
+                        }
+                    })
+                    .collect::<Result<_, String>>()?;
+
+                Ok(ResolvedExpr::TypeLiteral {
+                    type_name,
+                    type_args,
+                    elements: resolved_elements,
+                })
             }
         }
     }

@@ -295,6 +295,8 @@ const OP_ALLOC_HEAP_DYN_SIMPLE: u8 = 83;
 const OP_ARGC: u8 = 84;
 const OP_ARGV: u8 = 85;
 const OP_ARGS: u8 = 86;
+const OP_VEC_LITERAL: u8 = 87;
+const OP_MAP_LITERAL: u8 = 88;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -408,6 +410,14 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::Argc => w.write_all(&[OP_ARGC])?,
         Op::Argv => w.write_all(&[OP_ARGV])?,
         Op::Args => w.write_all(&[OP_ARGS])?,
+        Op::VecLiteral(n) => {
+            w.write_all(&[OP_VEC_LITERAL])?;
+            write_u32(w, *n as u32)?;
+        }
+        Op::MapLiteral(n) => {
+            w.write_all(&[OP_MAP_LITERAL])?;
+            write_u32(w, *n as u32)?;
+        }
     }
     Ok(())
 }
@@ -476,6 +486,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_ARGC => Op::Argc,
         OP_ARGV => Op::Argv,
         OP_ARGS => Op::Args,
+        OP_VEC_LITERAL => Op::VecLiteral(read_u32(r)? as usize),
+        OP_MAP_LITERAL => Op::MapLiteral(read_u32(r)? as usize),
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
