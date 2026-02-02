@@ -1102,6 +1102,11 @@ impl<'a> Parser<'a> {
             return self.asm_block(span);
         }
 
+        // Type literal: type TypeName { expr, ... } or type TypeName { key: value, ... }
+        if self.match_token(&TokenKind::Type) {
+            return self.type_literal(span);
+        }
+
         Err(self.error("expected expression"))
     }
 
@@ -1238,6 +1243,79 @@ impl<'a> Parser<'a> {
             }
             _ => Err(self.error("expected int, float, or string as asm argument")),
         }
+    }
+
+    /// Parse a type literal: type TypeName { expr, ... } or type TypeName { key: value, ... }
+    fn type_literal(&mut self, span: Span) -> Result<Expr, String> {
+        // Parse type name
+        let type_name = self.expect_ident()?;
+
+        // Parse optional type arguments: <int>, <string, int>, etc.
+        let type_args = if self.check(&TokenKind::Lt) && self.looks_like_type_args() {
+            self.parse_type_args()?
+        } else {
+            Vec::new()
+        };
+
+        // Expect opening brace
+        self.expect(&TokenKind::LBrace)?;
+
+        // Parse elements
+        let mut elements = Vec::new();
+        let mut is_key_value: Option<bool> = None; // None means not yet determined
+
+        if !self.check(&TokenKind::RBrace) {
+            loop {
+                // Parse the first expression (could be value or key)
+                let first_expr = self.expression()?;
+
+                // Check if this is key: value format
+                if self.match_token(&TokenKind::Colon) {
+                    // This is key: value format
+                    if is_key_value == Some(false) {
+                        return Err(
+                            self.error("cannot mix value and key:value elements in type literal")
+                        );
+                    }
+                    is_key_value = Some(true);
+
+                    let value = self.expression()?;
+                    elements.push(TypeLiteralElement::KeyValue {
+                        key: first_expr,
+                        value,
+                    });
+                } else {
+                    // This is a value
+                    if is_key_value == Some(true) {
+                        return Err(
+                            self.error("cannot mix value and key:value elements in type literal")
+                        );
+                    }
+                    is_key_value = Some(false);
+
+                    elements.push(TypeLiteralElement::Value(first_expr));
+                }
+
+                // Check for comma or end
+                if !self.match_token(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(Expr::TypeLiteral {
+            type_name,
+            type_args,
+            elements,
+            span,
+        })
     }
 
     // Helper methods
