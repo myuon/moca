@@ -2,7 +2,7 @@ use crate::compiler::ast::{AsmArg, BinaryOp, UnaryOp};
 use crate::compiler::lexer::Span;
 use crate::compiler::resolver::{
     ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement,
-    ResolvedStruct,
+    ResolvedStruct, ResolvedTypeLiteralElement,
 };
 use crate::compiler::types::Type;
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
@@ -788,6 +788,40 @@ impl Codegen {
 
                 // If no output type, the result is whatever is on the stack
                 // The caller is responsible for handling the stack state
+            }
+            ResolvedExpr::TypeLiteral {
+                type_name: _,
+                type_args: _,
+                elements,
+            } => {
+                // Compile type literal to VM opcodes
+                // For Vec/array types: push all values, then VecLiteral(n)
+                // For Map types: push all key-value pairs, then MapLiteral(n)
+
+                let is_map = elements
+                    .first()
+                    .is_some_and(|e| matches!(e, ResolvedTypeLiteralElement::KeyValue { .. }));
+
+                if is_map {
+                    // Push key-value pairs: key1, value1, key2, value2, ...
+                    for elem in elements {
+                        if let ResolvedTypeLiteralElement::KeyValue { key, value } = elem {
+                            self.compile_expr(key, ops)?;
+                            self.compile_expr(value, ops)?;
+                        }
+                    }
+                    // Create map from n key-value pairs on the stack
+                    ops.push(Op::MapLiteral(elements.len()));
+                } else {
+                    // Push all values
+                    for elem in elements {
+                        if let ResolvedTypeLiteralElement::Value(e) = elem {
+                            self.compile_expr(e, ops)?;
+                        }
+                    }
+                    // Create vec from n elements on the stack
+                    ops.push(Op::VecLiteral(elements.len()));
+                }
             }
         }
 

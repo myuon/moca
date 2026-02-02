@@ -1065,6 +1065,99 @@ impl VM {
                 let arr_ref = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(arr_ref));
             }
+            Op::VecLiteral(n) => {
+                // Pop n elements from stack
+                let mut elements = Vec::with_capacity(n);
+                for _ in 0..n {
+                    elements.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                elements.reverse(); // Elements were popped in reverse order
+
+                // Allocate heap array for elements
+                let data_ref = if n > 0 {
+                    let r = self.heap.alloc_slots(elements)?;
+                    Value::Ref(r)
+                } else {
+                    Value::I64(0) // null ptr for empty vec
+                };
+
+                // Create Vec struct: [ptr, len, cap]
+                let vec_slots = vec![data_ref, Value::I64(n as i64), Value::I64(n as i64)];
+                let vec_ref = self.heap.alloc_slots(vec_slots)?;
+                self.stack.push(Value::Ref(vec_ref));
+            }
+            Op::MapLiteral(n) => {
+                // Pop n key-value pairs from stack
+                let mut pairs = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let value = self.stack.pop().ok_or("stack underflow")?;
+                    let key = self.stack.pop().ok_or("stack underflow")?;
+                    pairs.push((key, value));
+                }
+                pairs.reverse(); // Pairs were popped in reverse order
+
+                // Create a Map with appropriate capacity
+                // Map struct: [hm_buckets, hm_size, hm_capacity]
+                let capacity = std::cmp::max(16, n * 2); // At least 16 buckets, or 2x elements
+
+                // Allocate and initialize buckets to 0 (null)
+                let bucket_slots = vec![Value::I64(0); capacity];
+                let buckets_ref = self.heap.alloc_slots(bucket_slots)?;
+
+                // Insert each key-value pair
+                for (key, value) in &pairs {
+                    // Compute hash based on key type
+                    let hash = match key {
+                        Value::I64(i) => {
+                            let h = if *i < 0 { -*i } else { *i };
+                            h as usize
+                        }
+                        Value::Ref(r) => {
+                            // Assume it's a string - compute DJB2 hash
+                            if let Some(obj) = self.heap.get(*r) {
+                                let s = obj.slots_to_string();
+                                let mut hash: i64 = 5381;
+                                for c in s.bytes() {
+                                    hash = hash.wrapping_mul(33).wrapping_add(c as i64);
+                                }
+                                if hash < 0 {
+                                    (-hash) as usize
+                                } else {
+                                    hash as usize
+                                }
+                            } else {
+                                0
+                            }
+                        }
+                        _ => 0,
+                    };
+                    let bucket_idx = hash % capacity;
+
+                    // Create entry: [key, value, next]
+                    let old_head = self
+                        .heap
+                        .get(buckets_ref)
+                        .ok_or("runtime error: invalid bucket reference")?
+                        .slots[bucket_idx];
+                    // next stores the old bucket head (either I64(0) for null or Ref(r) for chain)
+                    let entry_slots = vec![*key, *value, old_head];
+                    let entry_ref = self.heap.alloc_slots(entry_slots)?;
+
+                    // Update bucket head
+                    self.heap
+                        .write_slot(buckets_ref, bucket_idx, Value::Ref(entry_ref))
+                        .map_err(|e| format!("runtime error: {}", e))?;
+                }
+
+                // Create Map struct: [hm_buckets, hm_size, hm_capacity]
+                let map_slots = vec![
+                    Value::Ref(buckets_ref),
+                    Value::I64(n as i64),
+                    Value::I64(capacity as i64),
+                ];
+                let map_ref = self.heap.alloc_slots(map_slots)?;
+                self.stack.push(Value::Ref(map_ref));
+            }
         }
 
         Ok(ControlFlow::Continue)

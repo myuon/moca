@@ -540,6 +540,34 @@ impl<'a> AstPrinter<'a> {
                 self.write_type_suffix(expr);
                 self.newline();
             }
+            Expr::TypeLiteral {
+                type_name,
+                type_args,
+                elements,
+                ..
+            } => {
+                let type_args_str = if type_args.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "<{}>",
+                        type_args
+                            .iter()
+                            .map(|t| format!("{:?}", t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                self.write(&format!(
+                    "{}TypeLiteral: {}{} [{} elements]",
+                    prefix,
+                    type_name,
+                    type_args_str,
+                    elements.len()
+                ));
+                self.write_type_suffix(expr);
+                self.newline();
+            }
         }
     }
 
@@ -1165,6 +1193,32 @@ impl ResolvedProgramPrinter {
                 ));
                 self.newline();
             }
+            ResolvedExpr::TypeLiteral {
+                type_name,
+                type_args,
+                elements,
+            } => {
+                let type_args_str = if type_args.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "<{}>",
+                        type_args
+                            .iter()
+                            .map(|t| format!("{:?}", t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                self.write(&format!(
+                    "{}TypeLiteral(type {}{}, {} elements)",
+                    prefix,
+                    type_name,
+                    type_args_str,
+                    elements.len()
+                ));
+                self.newline();
+            }
         }
     }
 
@@ -1389,6 +1443,10 @@ impl<'a> Disassembler<'a> {
             Op::Argc => self.output.push_str("Argc"),
             Op::Argv => self.output.push_str("Argv"),
             Op::Args => self.output.push_str("Args"),
+
+            // Type literal operations
+            Op::VecLiteral(n) => self.output.push_str(&format!("VecLiteral {}", n)),
+            Op::MapLiteral(n) => self.output.push_str(&format!("MapLiteral {}", n)),
         }
     }
 }

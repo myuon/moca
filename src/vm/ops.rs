@@ -141,4 +141,12 @@ pub enum Op {
     ChannelSend,        // stack: [channel_id, value] -> []
     ChannelRecv,        // stack: [channel_id] -> [value]
     ThreadJoin,         // stack: [handle] -> [result]
+
+    // ========================================
+    // Type literals (collection initialization)
+    // ========================================
+    /// Create a Vec from n elements on stack: [e1, ..., en] -> [Vec{ptr, len, cap}]
+    VecLiteral(usize),
+    /// Create a Map from n key-value pairs: [k1, v1, ..., kn, vn] -> [Map{buckets, size, cap}]
+    MapLiteral(usize),
 }

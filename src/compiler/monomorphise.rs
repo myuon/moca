@@ -356,6 +356,39 @@ impl InstantiationCollector {
                 self.collect_expr(left);
                 self.collect_expr(right);
             }
+            Expr::TypeLiteral {
+                type_name,
+                type_args,
+                elements,
+                ..
+            } => {
+                // Check if this is a generic type instantiation
+                if self.generic_structs.contains_key(type_name) && !type_args.is_empty() {
+                    let concrete_types: Vec<Type> = type_args
+                        .iter()
+                        .filter_map(|ta| ta.to_type().ok())
+                        .collect();
+
+                    if concrete_types.len() == type_args.len() {
+                        self.instantiations.insert(Instantiation {
+                            name: type_name.clone(),
+                            type_args: concrete_types,
+                        });
+                    }
+                }
+
+                for elem in elements {
+                    match elem {
+                        crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                            self.collect_expr(e);
+                        }
+                        crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                            self.collect_expr(key);
+                            self.collect_expr(value);
+                        }
+                    }
+                }
+            }
             // Literals and asm blocks don't contain generic calls
             Expr::Int { .. }
             | Expr::Float { .. }
@@ -928,6 +961,35 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             span: *span,
         },
         Expr::Asm(asm_block) => Expr::Asm(asm_block.clone()),
+        Expr::TypeLiteral {
+            type_name,
+            type_args,
+            elements,
+            span,
+        } => Expr::TypeLiteral {
+            type_name: type_name.clone(),
+            type_args: type_args
+                .iter()
+                .map(|ta| substitute_type_annotation(ta, type_map))
+                .collect(),
+            elements: elements
+                .iter()
+                .map(|elem| match elem {
+                    crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                        crate::compiler::ast::TypeLiteralElement::Value(substitute_expr(
+                            e, type_map,
+                        ))
+                    }
+                    crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                        crate::compiler::ast::TypeLiteralElement::KeyValue {
+                            key: substitute_expr(key, type_map),
+                            value: substitute_expr(value, type_map),
+                        }
+                    }
+                })
+                .collect(),
+            span: *span,
+        },
     }
 }
 

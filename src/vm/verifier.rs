@@ -439,6 +439,10 @@ impl Verifier {
             Op::Argc => (0, 1), // pushes argc
             Op::Argv => (1, 1), // pops index, pushes arg string
             Op::Args => (0, 1), // pushes args array
+
+            // Type literals
+            Op::VecLiteral(n) => (*n, 1), // pops n elements, pushes Vec
+            Op::MapLiteral(n) => (n * 2, 1), // pops n key-value pairs (2n values), pushes Map
         }
     }
 }

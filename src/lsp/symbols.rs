@@ -256,6 +256,19 @@ impl SymbolTable {
                     self.collect_expr(arg);
                 }
             }
+            Expr::TypeLiteral { elements, .. } => {
+                for elem in elements {
+                    match elem {
+                        crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                            self.collect_expr(e);
+                        }
+                        crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                            self.collect_expr(key);
+                            self.collect_expr(value);
+                        }
+                    }
+                }
+            }
             // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }
             | Expr::Float { .. }

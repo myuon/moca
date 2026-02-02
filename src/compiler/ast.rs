@@ -241,6 +241,15 @@ pub enum Expr {
     },
     /// Inline assembly block: `asm(inputs) -> type { ... }`
     Asm(AsmBlock),
+    /// Type literal: `type Vec<int> {1, 2, 3}` or `type Map<string, int> {"a": 1, "b": 2}`
+    TypeLiteral {
+        type_name: String,
+        /// Type arguments: `Vec<int>` has `[int]`
+        type_args: Vec<TypeAnnotation>,
+        /// Elements: either all Value or all KeyValue
+        elements: Vec<TypeLiteralElement>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -262,6 +271,7 @@ impl Expr {
             Expr::MethodCall { span, .. } => *span,
             Expr::AssociatedFunctionCall { span, .. } => *span,
             Expr::Asm(asm_block) => asm_block.span,
+            Expr::TypeLiteral { span, .. } => *span,
         }
     }
 }
@@ -289,6 +299,15 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+}
+
+/// An element in a type literal.
+#[derive(Debug, Clone)]
+pub enum TypeLiteralElement {
+    /// Simple expression: `1`, `"foo"` etc.
+    Value(Expr),
+    /// Key-value pair: `"a": 1`, `key: value`
+    KeyValue { key: Expr, value: Expr },
 }
 
 /// An inline assembly block.
