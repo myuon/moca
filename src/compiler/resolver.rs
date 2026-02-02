@@ -161,17 +161,17 @@ pub enum ResolvedExpr {
         /// Resolved asm instructions.
         body: Vec<ResolvedAsmInstruction>,
     },
-    /// Type literal: `type Vec<int> {1, 2, 3}` or `type Map<string, int> {"a": 1}`
-    TypeLiteral {
+    /// New literal: `new Vec<int> {1, 2, 3}` or `new Map<string, int> {"a": 1}`
+    NewLiteral {
         type_name: String,
         type_args: Vec<crate::compiler::types::TypeAnnotation>,
-        elements: Vec<ResolvedTypeLiteralElement>,
+        elements: Vec<ResolvedNewLiteralElement>,
     },
 }
 
-/// An element in a resolved type literal.
+/// An element in a resolved new literal.
 #[derive(Debug, Clone)]
-pub enum ResolvedTypeLiteralElement {
+pub enum ResolvedNewLiteralElement {
     /// Simple value: `1`, `"foo"` etc.
     Value(ResolvedExpr),
     /// Key-value pair: `"a": 1`, `key: value`
@@ -847,7 +847,7 @@ impl<'a> Resolver<'a> {
                         scope.lookup_with_type(name).and_then(|(_, _, sn)| sn)
                     }
                     Expr::StructLiteral { name, .. } => Some(name.clone()),
-                    Expr::TypeLiteral { type_name, .. } => Some(type_name.clone()),
+                    Expr::NewLiteral { type_name, .. } => Some(type_name.clone()),
                     _ => None,
                 };
 
@@ -973,24 +973,24 @@ impl<'a> Resolver<'a> {
                     body,
                 })
             }
-            Expr::TypeLiteral {
+            Expr::NewLiteral {
                 type_name,
                 type_args,
                 elements,
                 ..
             } => {
                 // Resolve each element
-                let resolved_elements: Vec<ResolvedTypeLiteralElement> = elements
+                let resolved_elements: Vec<ResolvedNewLiteralElement> = elements
                     .into_iter()
                     .map(|elem| match elem {
-                        crate::compiler::ast::TypeLiteralElement::Value(e) => {
+                        crate::compiler::ast::NewLiteralElement::Value(e) => {
                             let resolved = self.resolve_expr(e, scope)?;
-                            Ok(ResolvedTypeLiteralElement::Value(resolved))
+                            Ok(ResolvedNewLiteralElement::Value(resolved))
                         }
-                        crate::compiler::ast::TypeLiteralElement::KeyValue { key, value } => {
+                        crate::compiler::ast::NewLiteralElement::KeyValue { key, value } => {
                             let resolved_key = self.resolve_expr(key, scope)?;
                             let resolved_value = self.resolve_expr(value, scope)?;
-                            Ok(ResolvedTypeLiteralElement::KeyValue {
+                            Ok(ResolvedNewLiteralElement::KeyValue {
                                 key: resolved_key,
                                 value: resolved_value,
                             })
@@ -998,7 +998,7 @@ impl<'a> Resolver<'a> {
                     })
                     .collect::<Result<_, String>>()?;
 
-                Ok(ResolvedExpr::TypeLiteral {
+                Ok(ResolvedExpr::NewLiteral {
                     type_name,
                     type_args,
                     elements: resolved_elements,

@@ -1,4 +1,4 @@
-// Test: Map<int, string> type literal syntax with int keys
+// Test: Map<int, string> new literal syntax with int keys
 // Expected output:
 // 3
 // one
@@ -7,8 +7,8 @@
 // true
 // false
 
-// Create a Map<int, string> using type literal syntax
-let m: Map<int, string> = type Map<int, string> {1: "one", 2: "two", 3: "three"};
+// Create a Map<int, string> using new literal syntax
+let m: Map<int, string> = new Map<int, string> {1: "one", 2: "two", 3: "three"};
 
 // Check size
 print(m.len());

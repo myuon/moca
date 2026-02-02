@@ -1,6 +1,6 @@
 // Map iteration test - keys and values methods
 
-let m: map<any, any> = map::new();
+let m: map<any, any> = map::`new`();
 
 // Add some entries
 m.put(1, 100);

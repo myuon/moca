@@ -1,8 +1,8 @@
 use crate::compiler::ast::{AsmArg, BinaryOp, UnaryOp};
 use crate::compiler::lexer::Span;
 use crate::compiler::resolver::{
-    ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement,
-    ResolvedStruct, ResolvedTypeLiteralElement,
+    ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedNewLiteralElement,
+    ResolvedProgram, ResolvedStatement, ResolvedStruct,
 };
 use crate::compiler::types::Type;
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
@@ -789,23 +789,23 @@ impl Codegen {
                 // If no output type, the result is whatever is on the stack
                 // The caller is responsible for handling the stack state
             }
-            ResolvedExpr::TypeLiteral {
+            ResolvedExpr::NewLiteral {
                 type_name: _,
                 type_args: _,
                 elements,
             } => {
-                // Compile type literal to VM opcodes
+                // Compile new literal to VM opcodes
                 // For Vec/array types: push all values, then VecLiteral(n)
                 // For Map types: push all key-value pairs, then MapLiteral(n)
 
                 let is_map = elements
                     .first()
-                    .is_some_and(|e| matches!(e, ResolvedTypeLiteralElement::KeyValue { .. }));
+                    .is_some_and(|e| matches!(e, ResolvedNewLiteralElement::KeyValue { .. }));
 
                 if is_map {
                     // Push key-value pairs: key1, value1, key2, value2, ...
                     for elem in elements {
-                        if let ResolvedTypeLiteralElement::KeyValue { key, value } = elem {
+                        if let ResolvedNewLiteralElement::KeyValue { key, value } = elem {
                             self.compile_expr(key, ops)?;
                             self.compile_expr(value, ops)?;
                         }
@@ -815,7 +815,7 @@ impl Codegen {
                 } else {
                     // Push all values
                     for elem in elements {
-                        if let ResolvedTypeLiteralElement::Value(e) = elem {
+                        if let ResolvedNewLiteralElement::Value(e) = elem {
                             self.compile_expr(e, ops)?;
                         }
                     }

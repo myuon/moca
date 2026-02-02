@@ -1,4 +1,4 @@
-// Test: Map<K, V> type literal syntax
+// Test: Map<K, V> new literal syntax
 // Expected output:
 // 2
 // 10
@@ -6,8 +6,8 @@
 // true
 // true
 
-// Create a Map<string, int> using type literal syntax
-let m: Map<string, int> = type Map<string, int> {"a": 10, "b": 20};
+// Create a Map<string, int> using new literal syntax
+let m: Map<string, int> = new Map<string, int> {"a": 10, "b": 20};
 
 // Check size
 print(m.len());
