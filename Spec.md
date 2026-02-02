@@ -1,147 +1,122 @@
-# Spec.md - vec<T>/map<K,V> ジェネリクス化
+# Spec.md - 構造体初期化構文の統一
 
 ## 1. Goal
-- `vec<T>` と `map<K,V>` を完全なジェネリクス構造体として実装し、`VectorAny`/`HashMapAny`（any型ベース）を廃止する
-- 型安全なコレクション操作を実現し、コンパイル時に型エラーを検出できるようにする
+
+構造体リテラルの初期化構文を `type` キーワードを使った形式に統一し、コレクションリテラルと一貫した構文にする。
+
+- Before: `Point { x: 1, y: 2 }`
+- After: `type Point { x: 1, y: 2 }`
 
 ## 2. Non-Goals
-- イテレータ / for-in ループのジェネリクス対応
-- 追加のコレクション型（Set, Deque等）
-- Hash trait / Eq trait などの trait システム
-- mapのキー型拡張（int/string以外）
+
+- 非推奨期間を設けた段階的な移行（即時廃止とする）
+- `type` キーワード以外の新しい構文の追加
+- コレクションリテラル（`type Vec<int> {1, 2, 3}` など）の変更
+- 構造体定義（`struct Point { x: int, y: int }`）の変更
 
 ## 3. Target Users
-- mocaプログラマー：型安全なコレクションを使用したい開発者
-- moca言語開発者：型システムの一貫性を保ちたいメンテナー
+
+- Moca言語のユーザー（言語利用者）
+- Moca言語の開発者（コンパイラ開発者）
 
 ## 4. Core User Flow
 
-### vec<T> の使用
-```mc
-// 1. 型引数付きでベクトルを作成
-var v: vec<int> = vec::new();  // または型推論
-
-// 2. 要素を追加
-v.push(10);
-v.push(20);
-
-// 3. 要素にアクセス
-print(v[0]);      // インデックスアクセス
-print(v.get(0));  // メソッドアクセス
-v.set(0, 100);
-
-// 4. 長さ取得・pop
-print(v.len());
-let x = v.pop();
-```
-
-### map<K,V> の使用
-```mc
-// 1. 型引数付きでマップを作成
-let m: map<string, int> = map::new();
-
-// 2. キー・値を追加
-m.put("score", 100);
-m.put("level", 5);
-
-// 3. 値にアクセス
-print(m.get("score"));
-
-// 4. 操作
-print(m.contains("score"));
-m.remove("level");
-print(m.len());
-```
+1. ユーザーが構造体を定義する: `struct Point { x: int, y: int }`
+2. ユーザーが構造体インスタンスを作成する: `type Point { x: 1, y: 2 }`
+3. コンパイラが正しくパースし、バイトコードを生成する
+4. 旧構文 `Point { x: 1, y: 2 }` を使うとパースエラーになる
 
 ## 5. Inputs & Outputs
 
 ### Inputs
-- ジェネリック型パラメータ付きの `vec<T>`, `map<K,V>` 宣言
-- 各メソッド呼び出し時の引数
+- Mocaソースコード（`.mc` ファイル）
 
 ### Outputs
-- 型チェック：不正な型の要素挿入・取得をコンパイル時にエラー
-- monomorphisation：使用される具体型ごとに特殊化されたコード生成
-- 実行時：既存と同等の動作（ヒープ操作ベース）
+- 新構文: 正常にコンパイル・実行
+- 旧構文: パースエラー（明確なエラーメッセージ）
 
 ## 6. Tech Stack
-- 言語：Rust（既存のmocaコンパイラ）
-- 主要変更ファイル：
-  - `src/compiler/types.rs` - 型定義
-  - `src/compiler/typechecker.rs` - 型チェック
-  - `src/compiler/monomorphise.rs` - 特殊化
-  - `src/compiler/resolver.rs` - 名前解決
-  - `src/compiler/codegen.rs` - コード生成
-  - `std/prelude.mc` - 標準ライブラリ実装
-- テストフレームワーク：既存のスナップショットテスト
+
+- 言語: Rust
+- テストフレームワーク: `cargo test`
+- Lint: `cargo clippy`
+- Formatter: `cargo fmt`
 
 ## 7. Rules & Constraints
 
-### 型システムルール
-- `vec<T>` の `T` は任意の型（プリミティブ、構造体、ネストしたジェネリクス）
-- `map<K,V>` の `K` は `int` または `string`（ハッシュ関数が実装済みの型）
-- `map<K,V>` の `V` は任意の型
-- 型推論：`vec::new()` の戻り値型は使用箇所から推論可能
+### 構文ルール
 
-### 実装ルール
-- Monomorphisation方式：`vec<int>` と `vec<string>` は別々の特殊化コードを生成
-- 内部レイアウト：既存の ptr/len/cap（vec）、buckets/size/capacity（map）を維持
-- ヒープ操作：`__alloc_heap`, `__heap_load`, `__heap_store` を継続使用
+1. 構造体リテラルは必ず `type` キーワードで始まる
+2. 形式: `type <StructName> { field1: value1, field2: value2, ... }`
+3. ジェネリック構造体: `type <StructName><TypeArgs> { field1: value1, ... }`
+4. 空の構造体: `type <StructName> {}`
+5. トレーリングカンマは許可する
+
+### 技術的制約
+
+1. 既存の `TypeLiteral` パース処理を拡張して構造体リテラルも処理する
+2. `StructLiteral` AST ノードは維持する（内部表現は変えない）
+3. 旧構文 `Name { field: value }` はパースエラーとする
+4. エラーメッセージは新構文への移行を促す内容にする
 
 ### 互換性
-- 構文は維持：`vec::new()`, `map::new()`, `.push()`, `.get()` 等
-- `vec<any>`, `map<any,any>` は引き続きサポート（後方互換）
+
+1. 既存のテストファイル（`.mc`）は全て新構文に書き換える
+2. ドキュメントは新構文に更新する
 
 ## 8. Open Questions
-- なし（仕様確定済み）
+
+なし
 
 ## 9. Acceptance Criteria
 
-1. `vec<int>` を宣言し、`int` 型の値を push/get できる
-2. `vec<string>` を宣言し、`string` 型の値を push/get できる
-3. `vec<int>` に `string` を push しようとするとコンパイルエラーになる
-4. `map<string, int>` を宣言し、string キーで int 値を put/get できる
-5. `map<int, string>` を宣言し、int キーで string 値を put/get できる
-6. `map<string, int>` に int 値以外を put しようとするとコンパイルエラーになる
-7. ネストした型 `vec<vec<int>>` が動作する
-8. 構造体を要素に持つ `vec<Point>` が動作する（Point は任意のユーザー定義構造体）
-9. `VectorAny`, `HashMapAny` が prelude.mc から削除されている
-10. 既存の17個のvec/map関連テストが全て通過する
+1. [ ] `type Point { x: 1, y: 2 }` がパースできる
+2. [ ] `type Container<int> { value: 42 }` がパースできる
+3. [ ] `type Empty {}` がパースできる
+4. [ ] `type Point { x: 1, }` （トレーリングカンマ）がパースできる
+5. [ ] 旧構文 `Point { x: 1, y: 2 }` がパースエラーになる
+6. [ ] 構造体リテラルの型チェックが正しく動作する
+7. [ ] 構造体リテラルのコード生成が正しく動作する
+8. [ ] 全ての既存テスト（`cargo test`）がパスする
+9. [ ] `cargo clippy` が警告なしでパスする
+10. [ ] ドキュメント（`docs/structs.md`, `docs/language.md`）が更新されている
 
 ## 10. Verification Strategy
 
 ### 進捗検証
-- 各フェーズ完了時に `cargo check` と `cargo test` を実行
-- 型エラーテストを先に書き、コンパイルエラーが正しく出ることを確認
+- 各タスク完了時に `cargo test` を実行し、既存機能が壊れていないことを確認
+- パーサー変更後、簡単なテストコードで新構文がパースできることを確認
 
 ### 達成検証
 - 全 Acceptance Criteria をチェックリストで確認
-- `cargo test` で全テスト通過
-- `cargo clippy` で警告なし
+- `cargo fmt && cargo check && cargo test && cargo clippy` が全てパス
 
 ### 漏れ検出
-- 既存の17個のvec/map関連テストを具体型に書き換え
-- 新規テストケース追加：型エラー検出、ネスト型、構造体要素
+- `grep -r "{ .* : " tests/` で旧構文の残りがないか確認
+- 構造体リテラルを使う全てのテストファイルをリストアップし、漏れなく更新
 
 ## 11. Test Plan
 
-### E2E シナリオ 1: vec<T> 基本操作
+### E2E シナリオ 1: 基本的な構造体リテラル
+
 ```
-Given: 空の vec<int> を作成
-When: push(10), push(20), get(0), pop() を実行
-Then: get(0) は 10 を返し、pop() は 20 を返し、len() は 1
+Given: struct Point { x: int, y: int } が定義されている
+When: let p = type Point { x: 10, y: 20 }; を実行する
+Then: p.x == 10 かつ p.y == 20 である
 ```
 
-### E2E シナリオ 2: map<K,V> 基本操作
+### E2E シナリオ 2: ジェネリック構造体リテラル
+
 ```
-Given: 空の map<string, int> を作成
-When: put("a", 1), put("b", 2), get("a"), remove("b") を実行
-Then: get("a") は 1 を返し、contains("b") は false、len() は 1
+Given: struct Container<T> { value: T } が定義されている
+When: let c = type Container<int> { value: 42 }; を実行する
+Then: c.value == 42 である
 ```
 
-### E2E シナリオ 3: 型エラー検出
+### E2E シナリオ 3: 旧構文のエラー
+
 ```
-Given: vec<int> を宣言
-When: v.push("hello") をコンパイル
-Then: 型エラー「expected int, got string」が発生
+Given: struct Point { x: int, y: int } が定義されている
+When: let p = Point { x: 1, y: 2 }; をパースする
+Then: パースエラーが発生する
 ```
