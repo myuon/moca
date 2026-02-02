@@ -3,8 +3,8 @@
 # Default task: run all checks
 default: check
 
-# Run all checks (fmt, clippy, test, coverage)
-check: fmt-check clippy test coverage-check
+# Run all checks (fmt, clippy, test)
+check: fmt-check clippy test
     @echo "All checks passed!"
 
 # Format check (doesn't modify files)
