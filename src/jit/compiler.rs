@@ -963,7 +963,89 @@ impl JitCompiler {
 
     /// Emit PushString operation.
     /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    /// Emit PushString operation with string constant caching.
+    ///
+    /// JitCallContext layout:
+    /// - offset 56: string_cache (*const Option<GcRef>)
+    ///
+    /// Option<GcRef> layout (16 bytes):
+    /// - offset 0: discriminant (0=None, non-0=Some)
+    /// - offset 8: value (GcRef.index if Some)
     fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
+        // Calculate cache entry address: string_cache + string_index * 16
+        // Load string_cache pointer from JitCallContext (offset 56)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::VM_CTX, 56); // TMP0 = string_cache
+        }
+
+        // Calculate offset: string_index * 16
+        self.emit_load_imm64_to_reg((string_index * 16) as i64, regs::TMP1);
+
+        // TMP0 = string_cache + offset
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP1);
+        }
+
+        // Load discriminant (tag) from cache entry
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP1, regs::TMP0, 0); // TMP1 = discriminant
+        }
+
+        // Check if discriminant is 0 (None) - need to call helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cmp_imm(regs::TMP1, 0);
+        }
+
+        // Branch to helper call if None (discriminant == 0)
+        let branch_to_helper_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b_cond(Cond::Eq, 0); // B.EQ placeholder - will patch later
+        }
+
+        // === FAST PATH: Cache hit ===
+        // Load cached ref value from cache entry (offset 8)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP1, regs::TMP0, 8); // TMP1 = cached GcRef.index
+        }
+
+        // Push Ref onto JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Store tag (4 = PTR)
+            asm.mov_imm(regs::TMP0, value_tags::TAG_PTR as u16);
+            asm.str(regs::TMP0, regs::VSTACK, 0);
+            // Store payload (ref index)
+            asm.str(regs::TMP1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Branch to end (skip slow path)
+        let branch_to_end_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // B placeholder - will patch later
+        }
+
+        // === SLOW PATH: Cache miss - call helper ===
+        let helper_start_pos = self.buf.len();
+
+        // Patch the conditional branch to jump here
+        {
+            let offset = (helper_start_pos as i32) - (branch_to_helper_pos as i32);
+            let code = self.buf.code_mut();
+            // B.cond encoding: 0101 0100 iiii iiii iiii iiii iii0 cccc
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = 0x54000000 | (imm19 << 5); // cond=0 (EQ)
+            code[branch_to_helper_pos..branch_to_helper_pos + 4]
+                .copy_from_slice(&inst.to_le_bytes());
+        }
+
         // Save callee-saved registers
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
@@ -1007,6 +1089,19 @@ impl JitCompiler {
             asm.str(Reg::X0, regs::VSTACK, 0);
             asm.str(Reg::X1, regs::VSTACK, 8);
             asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // === END ===
+        let end_pos = self.buf.len();
+
+        // Patch the unconditional branch to jump here
+        {
+            let offset = (end_pos as i32) - (branch_to_end_pos as i32);
+            let code = self.buf.code_mut();
+            // B encoding: 0001 01ii iiii iiii iiii iiii iiii iiii
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = 0x14000000 | imm26;
+            code[branch_to_end_pos..branch_to_end_pos + 4].copy_from_slice(&inst.to_le_bytes());
         }
 
         self.stack_depth += 1;

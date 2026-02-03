@@ -445,6 +445,20 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(offset as u8);
     }
 
+    /// JE rel32 (jump if equal/zero)
+    pub fn je_rel32(&mut self, offset: i32) {
+        self.buf.emit_u8(0x0F); // Two-byte opcode prefix
+        self.buf.emit_u8(0x84); // JE rel32
+        self.buf.emit_u32(offset as u32);
+    }
+
+    /// JNE rel32 (jump if not equal/not zero)
+    pub fn jne_rel32(&mut self, offset: i32) {
+        self.buf.emit_u8(0x0F); // Two-byte opcode prefix
+        self.buf.emit_u8(0x85); // JNE rel32
+        self.buf.emit_u32(offset as u32);
+    }
+
     /// Jcc rel32 (conditional jump, near)
     pub fn jcc_rel32(&mut self, cond: Cond, offset: i32) {
         self.buf.emit_u8(0x0F);

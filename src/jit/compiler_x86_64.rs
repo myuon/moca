@@ -1292,7 +1292,61 @@ impl JitCompiler {
 
     /// Emit PushString operation.
     /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    /// Emit PushString operation with string constant caching.
+    ///
+    /// JitCallContext layout:
+    /// - offset 56: string_cache (*const Option<GcRef>)
+    ///
+    /// Option<GcRef> layout (16 bytes):
+    /// - offset 0: discriminant (0=None, non-0=Some)
+    /// - offset 8: value (GcRef.index if Some)
     fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Calculate cache entry address: string_cache + string_index * 16
+        // Load string_cache pointer from JitCallContext (offset 56)
+        asm.mov_rm(regs::TMP0, regs::VM_CTX, 56); // TMP0 = string_cache
+
+        // Calculate offset and add: TMP0 = string_cache + string_index * 16
+        asm.add_ri32(regs::TMP0, (string_index * 16) as i32);
+
+        // Load discriminant (tag) from cache entry
+        asm.mov_rm(regs::TMP1, regs::TMP0, 0); // TMP1 = discriminant
+
+        // Check if discriminant is 0 (None) - need to call helper
+        asm.test_rr(regs::TMP1, regs::TMP1);
+
+        // JE (jump if equal/zero) to helper - placeholder
+        let je_to_helper_pos = self.buf.len();
+        asm.je_rel32(0); // Will patch later
+
+        // === FAST PATH: Cache hit ===
+        // Load cached ref value from cache entry (offset 8)
+        asm.mov_rm(regs::TMP1, regs::TMP0, 8); // TMP1 = cached GcRef.index
+
+        // Push Ref onto JIT stack
+        // Store tag (4 = PTR)
+        asm.mov_ri64(regs::TMP0, value_tags::TAG_PTR as i64);
+        asm.mov_mr(regs::VSTACK, 0, regs::TMP0);
+        // Store payload (ref index)
+        asm.mov_mr(regs::VSTACK, 8, regs::TMP1);
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        // JMP to end (skip slow path) - placeholder
+        let jmp_to_end_pos = self.buf.len();
+        asm.jmp_rel32(0); // Will patch later
+
+        // === SLOW PATH: Cache miss - call helper ===
+        let helper_start_pos = self.buf.len();
+
+        // Patch JE to jump here
+        {
+            let offset = (helper_start_pos as i32) - (je_to_helper_pos as i32) - 6; // 6 = size of JE rel32
+            let code = self.buf.code_mut();
+            code[je_to_helper_pos + 2..je_to_helper_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        // Re-create assembler after patching
         let mut asm = X86_64Assembler::new(&mut self.buf);
 
         // Save callee-saved registers
@@ -1322,6 +1376,16 @@ impl JitCompiler {
         asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
         asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
         asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        // === END ===
+        let end_pos = self.buf.len();
+
+        // Patch JMP to jump here
+        {
+            let offset = (end_pos as i32) - (jmp_to_end_pos as i32) - 5; // 5 = size of JMP rel32
+            let code = self.buf.code_mut();
+            code[jmp_to_end_pos + 1..jmp_to_end_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
 
         self.stack_depth += 1;
 
