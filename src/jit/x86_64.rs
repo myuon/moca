@@ -501,6 +501,86 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(0xB6); // MOVZX r64, r/m8
         self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
     }
+
+    // ==================== SSE2 Floating Point ====================
+
+    /// MOVQ xmm, r64 (move quadword from GP register to XMM)
+    pub fn movq_xmm_r64(&mut self, xmm: u8, src: Reg) {
+        // 66 REX.W 0F 6E /r - MOVQ xmm, r/m64
+        self.buf.emit_u8(0x66);
+        let rex = 0x48 | src.rex_b();
+        self.buf.emit_u8(rex);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x6E);
+        self.buf.emit_u8(Self::modrm(0b11, xmm, src.code()));
+    }
+
+    /// MOVQ r64, xmm (move quadword from XMM to GP register)
+    pub fn movq_r64_xmm(&mut self, dst: Reg, xmm: u8) {
+        // 66 REX.W 0F 7E /r - MOVQ r/m64, xmm
+        self.buf.emit_u8(0x66);
+        let rex = 0x48 | dst.rex_b();
+        self.buf.emit_u8(rex);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x7E);
+        self.buf.emit_u8(Self::modrm(0b11, xmm, dst.code()));
+    }
+
+    /// ADDSD xmm1, xmm2 (add scalar double-precision)
+    pub fn addsd(&mut self, dst: u8, src: u8) {
+        // F2 0F 58 /r - ADDSD xmm1, xmm2/m64
+        self.buf.emit_u8(0xF2);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x58);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+    }
+
+    /// SUBSD xmm1, xmm2 (subtract scalar double-precision)
+    pub fn subsd(&mut self, dst: u8, src: u8) {
+        // F2 0F 5C /r - SUBSD xmm1, xmm2/m64
+        self.buf.emit_u8(0xF2);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x5C);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+    }
+
+    /// MULSD xmm1, xmm2 (multiply scalar double-precision)
+    pub fn mulsd(&mut self, dst: u8, src: u8) {
+        // F2 0F 59 /r - MULSD xmm1, xmm2/m64
+        self.buf.emit_u8(0xF2);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x59);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+    }
+
+    /// DIVSD xmm1, xmm2 (divide scalar double-precision)
+    pub fn divsd(&mut self, dst: u8, src: u8) {
+        // F2 0F 5E /r - DIVSD xmm1, xmm2/m64
+        self.buf.emit_u8(0xF2);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x5E);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+    }
+
+    /// UCOMISD xmm1, xmm2 (compare scalar double-precision and set EFLAGS)
+    pub fn ucomisd(&mut self, xmm1: u8, xmm2: u8) {
+        // 66 0F 2E /r - UCOMISD xmm1, xmm2/m64
+        self.buf.emit_u8(0x66);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x2E);
+        self.buf.emit_u8(Self::modrm(0b11, xmm1, xmm2));
+    }
+
+    /// CVTSI2SD xmm, r64 (convert signed 64-bit integer to scalar double)
+    pub fn cvtsi2sd_xmm_r64(&mut self, xmm: u8, src: Reg) {
+        // F2 REX.W 0F 2A /r - CVTSI2SD xmm, r/m64
+        self.buf.emit_u8(0xF2);
+        let rex = 0x48 | src.rex_b();
+        self.buf.emit_u8(rex);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x2A);
+        self.buf.emit_u8(Self::modrm(0b11, xmm, src.code()));
+    }
 }
 
 #[cfg(test)]

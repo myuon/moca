@@ -213,10 +213,10 @@ impl JitCompiler {
             Op::GetL(idx) => self.emit_load_local(*idx),
             Op::SetL(idx) => self.emit_store_local(*idx),
 
-            Op::Add => self.emit_add_int(),
-            Op::Sub => self.emit_sub_int(),
-            Op::Mul => self.emit_mul_int(),
-            Op::Div => self.emit_div_int(),
+            Op::Add => self.emit_add(),
+            Op::Sub => self.emit_sub(),
+            Op::Mul => self.emit_mul(),
+            Op::Div => self.emit_div(),
 
             Op::Lt => self.emit_cmp_int(Cond::L),
             Op::Le => self.emit_cmp_int(Cond::Le),
@@ -372,99 +372,602 @@ impl JitCompiler {
     }
 
     /// Integer addition: pop two values, push their sum.
-    fn emit_add_int(&mut self) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
+    /// Addition (handles both int and float).
+    fn emit_add(&mut self) -> Result<(), String> {
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -VALUE_SIZE); // b_tag
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b_payload
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -2 * VALUE_SIZE); // a_tag
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a_payload
+            asm.or_rr(regs::TMP2, regs::TMP3);
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
+        let jne_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        // INT path
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.add_rr(regs::TMP0, regs::TMP1);
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
+        let jmp_end_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let float_path = self.buf.len();
+        {
+            let offset = (float_path as i32) - (jne_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[jne_pos + 2..jne_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        // FLOAT path
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8);
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8);
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -2 * VALUE_SIZE);
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -VALUE_SIZE);
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
+        let a_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let a_is_float_pos = self.buf.len();
+        {
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[a_is_int_pos + 2..a_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_float_done = self.buf.len();
+        {
+            let offset = (a_float_done as i32) - (a_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[a_conv_done + 1..a_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cmp_ri32(regs::TMP3, 0);
+        }
+        let b_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(1, regs::TMP1);
+        }
+        let b_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let b_is_float_pos = self.buf.len();
+        {
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[b_is_int_pos + 2..b_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(1, regs::TMP1);
+        }
+        let b_float_done = self.buf.len();
+        {
+            let offset = (b_float_done as i32) - (b_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[b_conv_done + 1..b_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.addsd(0, 1);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
+        let end_pos = self.buf.len();
+        {
+            let offset = (end_pos as i32) - (jmp_end_pos as i32) - 5;
+            let code = self.buf.code_mut();
+            code[jmp_end_pos + 1..jmp_end_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
 
-        // Pop second operand (b)
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP1, regs::VSTACK, 8); // b value
+    /// Subtraction (handles both int and float).
+    fn emit_sub(&mut self) -> Result<(), String> {
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -VALUE_SIZE);
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8);
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -2 * VALUE_SIZE);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8);
+            asm.or_rr(regs::TMP2, regs::TMP3);
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
+        let jne_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        // INT path
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.sub_rr(regs::TMP0, regs::TMP1);
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
+        let jmp_end_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let float_path = self.buf.len();
+        {
+            let offset = (float_path as i32) - (jne_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[jne_pos + 2..jne_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        // FLOAT path
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8);
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8);
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -2 * VALUE_SIZE);
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -VALUE_SIZE);
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
+        let a_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let a_is_float_pos = self.buf.len();
+        {
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[a_is_int_pos + 2..a_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_float_done = self.buf.len();
+        {
+            let offset = (a_float_done as i32) - (a_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[a_conv_done + 1..a_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cmp_ri32(regs::TMP3, 0);
+        }
+        let b_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(1, regs::TMP1);
+        }
+        let b_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let b_is_float_pos = self.buf.len();
+        {
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[b_is_int_pos + 2..b_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(1, regs::TMP1);
+        }
+        let b_float_done = self.buf.len();
+        {
+            let offset = (b_float_done as i32) - (b_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[b_conv_done + 1..b_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.subsd(0, 1);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
+        let end_pos = self.buf.len();
+        {
+            let offset = (end_pos as i32) - (jmp_end_pos as i32) - 5;
+            let code = self.buf.code_mut();
+            code[jmp_end_pos + 1..jmp_end_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
 
-        // Pop first operand (a)
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // a value
+    /// Multiplication (handles both int and float).
+    fn emit_mul(&mut self) -> Result<(), String> {
+        // Load both operands with their tags
+        // Stack layout: [..., a_tag, a_payload, b_tag, b_payload] <- VSTACK
+        // a is at VSTACK - 2*VALUE_SIZE, b is at VSTACK - VALUE_SIZE
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Load b (top of stack)
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -VALUE_SIZE); // b_tag
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b_payload
+            // Load a
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -2 * VALUE_SIZE); // a_tag
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a_payload
 
-        // Add
-        asm.add_rr(regs::TMP0, regs::TMP1);
+            // Check if both are INT (tag == 0)
+            asm.or_rr(regs::TMP2, regs::TMP3); // TMP2 = a_tag | b_tag
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
 
-        // Push result with int tag
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::VSTACK, 0, regs::TMP1);
-        asm.mov_mr(regs::VSTACK, 8, regs::TMP0);
-        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+        // Jump to float path if not both int
+        let jne_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0); // placeholder
+        }
+
+        // INT path: multiply using imul
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.imul_rr(regs::TMP0, regs::TMP1);
+            // Pop one value (result stays at top-1 position)
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            // Store result (tag stays INT=0)
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
+
+        // Jump to end
+        let jmp_end_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // placeholder
+        }
+
+        // Patch jne to float path
+        let float_path = self.buf.len();
+        {
+            let offset = (float_path as i32) - (jne_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[jne_pos + 2..jne_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        // FLOAT path: multiply using SSE
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Reload a and b (tags already checked, we know at least one is FLOAT)
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a_payload
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b_payload
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -2 * VALUE_SIZE); // a_tag
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -VALUE_SIZE); // b_tag
+
+            // Convert a to float if needed (if a_tag == 0, convert)
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
+        let a_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0); // jump if a is already float
+        }
+        // a is int, convert to float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // jump over the "a is float" case
+        }
+        // Patch jump for "a is already float"
+        let a_is_float_pos = self.buf.len();
+        {
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[a_is_int_pos + 2..a_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        // a is already float, just move to xmm0
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0); // no-op but keeps consistent
+        }
+        let a_float_done = self.buf.len();
+        {
+            let offset = (a_float_done as i32) - (a_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[a_conv_done + 1..a_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        // Now convert b to float if needed
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cmp_ri32(regs::TMP3, 0);
+        }
+        let b_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0); // jump if b is already float
+        }
+        // b is int, convert to float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(1, regs::TMP1);
+        }
+        let b_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        // Patch jump for "b is already float"
+        let b_is_float_pos = self.buf.len();
+        {
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[b_is_int_pos + 2..b_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        // b is already float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(1, regs::TMP1);
+        }
+        let b_float_done = self.buf.len();
+        {
+            let offset = (b_float_done as i32) - (b_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[b_conv_done + 1..b_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        // Now a is in xmm0 (bits in TMP0), b is in xmm1
+        // Move a to xmm0 and multiply
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.mulsd(0, 1);
+            // Move result back to GP register
+            asm.movq_r64_xmm(regs::TMP0, 0);
+            // Pop one value
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            // Store float result
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
+
+        // Patch jump to end from int path
+        let end_pos = self.buf.len();
+        {
+            let offset = (end_pos as i32) - (jmp_end_pos as i32) - 5;
+            let code = self.buf.code_mut();
+            code[jmp_end_pos + 1..jmp_end_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
     }
 
-    /// Integer subtraction: pop two values, push their difference.
-    fn emit_sub_int(&mut self) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
+    /// Division (handles both int and float).
+    fn emit_div(&mut self) -> Result<(), String> {
+        // Load both operands with their tags
+        // Stack layout: [..., a_tag, a_payload, b_tag, b_payload] <- VSTACK
+        // a is at VSTACK - 2*VALUE_SIZE, b is at VSTACK - VALUE_SIZE
+        // Result = a / b
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Load b (top of stack) - divisor
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -VALUE_SIZE); // b_tag
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b_payload
+            // Load a - dividend
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -2 * VALUE_SIZE); // a_tag
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a_payload
 
-        // Pop second operand (b)
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP1, regs::VSTACK, 8);
+            // Check if both are INT (tag == 0)
+            asm.or_rr(regs::TMP2, regs::TMP3); // TMP2 = a_tag | b_tag
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
 
-        // Pop first operand (a)
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP0, regs::VSTACK, 8);
+        // Jump to float path if not both int
+        let jne_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0); // placeholder
+        }
 
-        // Subtract
-        asm.sub_rr(regs::TMP0, regs::TMP1);
+        // INT path: divide using idiv
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // TMP0 = a (dividend), TMP1 = b (divisor)
+            // For idiv, dividend must be in RDX:RAX
+            asm.mov_rr(Reg::Rax, regs::TMP0);
+            asm.cqo(); // Sign-extend RAX into RDX:RAX
+            asm.idiv(regs::TMP1); // quotient in RAX
 
-        // Push result
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::VSTACK, 0, regs::TMP1);
-        asm.mov_mr(regs::VSTACK, 8, regs::TMP0);
-        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+            // Pop one value
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            // Store result
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, Reg::Rax);
+        }
 
-        self.stack_depth = self.stack_depth.saturating_sub(1);
-        Ok(())
-    }
+        // Jump to end
+        let jmp_end_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // placeholder
+        }
 
-    /// Integer multiplication.
-    fn emit_mul_int(&mut self) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Patch jne to float path
+        let float_path = self.buf.len();
+        {
+            let offset = (float_path as i32) - (jne_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[jne_pos + 2..jne_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
 
-        // Pop two operands
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP1, regs::VSTACK, 8);
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP0, regs::VSTACK, 8);
+        // FLOAT path: divide using SSE
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Reload a and b
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a_payload
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b_payload
+            asm.mov_rm(regs::TMP2, regs::VSTACK, -2 * VALUE_SIZE); // a_tag
+            asm.mov_rm(regs::TMP3, regs::VSTACK, -VALUE_SIZE); // b_tag
 
-        // Multiply
-        asm.imul_rr(regs::TMP0, regs::TMP1);
+            // Convert a to float if needed
+            asm.cmp_ri32(regs::TMP2, 0);
+        }
+        let a_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        // a is int, convert to float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let a_is_float_pos = self.buf.len();
+        {
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[a_is_int_pos + 2..a_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        // a is already float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.movq_r64_xmm(regs::TMP0, 0);
+        }
+        let a_float_done = self.buf.len();
+        {
+            let offset = (a_float_done as i32) - (a_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[a_conv_done + 1..a_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
 
-        // Push result
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::VSTACK, 0, regs::TMP1);
-        asm.mov_mr(regs::VSTACK, 8, regs::TMP0);
-        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+        // Convert b to float if needed
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cmp_ri32(regs::TMP3, 0);
+        }
+        let b_is_int_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0);
+        }
+        // b is int, convert to float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.cvtsi2sd_xmm_r64(1, regs::TMP1);
+        }
+        let b_conv_done = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+        let b_is_float_pos = self.buf.len();
+        {
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[b_is_int_pos + 2..b_is_int_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+        // b is already float
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(1, regs::TMP1);
+        }
+        let b_float_done = self.buf.len();
+        {
+            let offset = (b_float_done as i32) - (b_conv_done as i32) - 5;
+            let code = self.buf.code_mut();
+            code[b_conv_done + 1..b_conv_done + 5].copy_from_slice(&offset.to_le_bytes());
+        }
 
-        self.stack_depth = self.stack_depth.saturating_sub(1);
-        Ok(())
-    }
+        // Divide: xmm0 = xmm0 / xmm1
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.movq_xmm_r64(0, regs::TMP0);
+            asm.divsd(0, 1);
+            // Move result back to GP register
+            asm.movq_r64_xmm(regs::TMP0, 0);
+            // Pop one value
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            // Store float result
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE, regs::TMP1);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+        }
 
-    /// Integer division.
-    fn emit_div_int(&mut self) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
-
-        // Pop two operands (divisor first, then dividend)
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(regs::TMP1, regs::VSTACK, 8); // divisor
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        asm.mov_rm(Reg::Rax, regs::VSTACK, 8); // dividend into RAX
-
-        // Sign-extend RAX into RDX:RAX
-        asm.cqo();
-
-        // Divide RDX:RAX by TMP1, quotient in RAX
-        asm.idiv(regs::TMP1);
-
-        // Push result (quotient is in RAX)
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::VSTACK, 0, regs::TMP1);
-        asm.mov_mr(regs::VSTACK, 8, Reg::Rax);
-        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+        // Patch jump to end from int path
+        let end_pos = self.buf.len();
+        {
+            let offset = (end_pos as i32) - (jmp_end_pos as i32) - 5;
+            let code = self.buf.code_mut();
+            code[jmp_end_pos + 1..jmp_end_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
