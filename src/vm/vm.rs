@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
-use crate::vm::{Chunk, Function, Heap, Op, Value};
+use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler::{CompiledCode, JitCompiler};
@@ -326,6 +326,9 @@ impl VM {
             vm: self as *mut VM as *mut u8,
             chunk: chunk as *const Chunk as *const u8,
             call_helper: jit_call_helper,
+            push_string_helper: jit_push_string_helper,
+            array_len_helper: jit_array_len_helper,
+            syscall_helper: jit_syscall_helper,
         };
 
         // Execute the JIT code
@@ -389,6 +392,9 @@ impl VM {
             vm: self as *mut VM as *mut u8,
             chunk: chunk as *const Chunk as *const u8,
             call_helper: jit_call_helper,
+            push_string_helper: jit_push_string_helper,
+            array_len_helper: jit_array_len_helper,
+            syscall_helper: jit_syscall_helper,
         };
 
         // Execute the JIT code
@@ -1861,6 +1867,92 @@ unsafe extern "C" fn jit_call_helper(
             tag: jit_result.tag,
             payload: jit_result.payload,
         }
+    }
+}
+
+/// JIT push string helper function.
+/// Allocates a string constant on the heap and returns a Ref.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_push_string_helper(
+    ctx: *mut JitCallContext,
+    string_index: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+    let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
+
+    let idx = string_index as usize;
+    let s = chunk.strings.get(idx).cloned().unwrap_or_default();
+
+    match vm.heap.alloc_string(s) {
+        Ok(r) => JitReturn {
+            tag: 4, // TAG_PTR
+            payload: r.index as u64,
+        },
+        Err(_) => JitReturn {
+            tag: 3, // TAG_NIL
+            payload: 0,
+        },
+    }
+}
+
+/// JIT array/string length helper function.
+/// Returns the length of an array or string.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_array_len_helper(ctx: *mut JitCallContext, ref_index: u64) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    let gc_ref = GcRef {
+        index: ref_index as usize,
+    };
+
+    match vm.heap.get(gc_ref) {
+        Some(obj) => JitReturn {
+            tag: 0, // TAG_INT
+            payload: obj.slots.len() as u64,
+        },
+        None => JitReturn {
+            tag: 0, // TAG_INT
+            payload: 0,
+        },
+    }
+}
+
+/// JIT syscall helper function.
+/// Executes a syscall via the VM and returns the result.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_syscall_helper(
+    ctx: *mut JitCallContext,
+    syscall_num: u64,
+    argc: u64,
+    args: *const JitValue,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    let argc = argc as usize;
+
+    // Convert JitValue args to VM Values
+    let mut vm_args = Vec::with_capacity(argc);
+    for i in 0..argc {
+        let jit_val = unsafe { *args.add(i) };
+        vm_args.push(jit_val.to_value());
+    }
+
+    // Call the syscall handler
+    match vm.handle_syscall(syscall_num as usize, &vm_args) {
+        Ok(result) => {
+            let jit_result = JitValue::from_value(&result);
+            JitReturn {
+                tag: jit_result.tag,
+                payload: jit_result.payload,
+            }
+        }
+        Err(_) => JitReturn {
+            tag: 3, // TAG_NIL
+            payload: 0,
+        },
     }
 }
 

@@ -56,9 +56,10 @@ impl JitValue {
             tags::TAG_BOOL => Value::Bool(self.payload != 0),
             tags::TAG_NIL => Value::Null,
             tags::TAG_PTR => {
-                // Note: This is a simplified conversion. In a full implementation,
-                // we'd need to properly reconstruct the GcRef.
-                Value::Null // Placeholder - pointer handling needs more work
+                // Reconstruct GcRef from the payload (which contains the index)
+                Value::Ref(crate::vm::GcRef {
+                    index: self.payload as usize,
+                })
             }
             _ => Value::Null, // Unknown tag
         }
@@ -174,6 +175,13 @@ pub struct JitCallContext {
     pub chunk: *const u8,
     /// Function call helper: (ctx, func_index, argc, args_ptr) -> JitReturn
     pub call_helper:
+        unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
+    /// Push string helper: (ctx, string_index) -> JitReturn (returns Ref)
+    pub push_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
+    /// Array/string length helper: (ctx, ref_index) -> JitReturn (returns i64)
+    pub array_len_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
+    /// Syscall helper: (ctx, syscall_num, argc, args_ptr) -> JitReturn
+    pub syscall_helper:
         unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
 }
 

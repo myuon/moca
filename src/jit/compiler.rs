@@ -260,6 +260,10 @@ impl JitCompiler {
                 }
             }
 
+            Op::PushString(idx) => self.emit_push_string(*idx),
+            Op::ArrayLen => self.emit_array_len(),
+            Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
+
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
         }
@@ -796,6 +800,191 @@ impl JitCompiler {
         asm.ldp_post(Reg::X19, Reg::X20, 16);
         asm.ldp_post(Reg::Fp, Reg::Lr, 16);
         asm.ret();
+
+        Ok(())
+    }
+
+    /// Emit PushString operation.
+    /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Set up arguments for push_string_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = string_index
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        self.emit_load_imm64_to_reg(string_index as i64, Reg::X1);
+
+        // Load push_string_helper from JitCallContext (offset 24)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 24);
+        }
+
+        // Call the helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Push the return value onto the JIT stack
+        // Return value is in x0 (tag) and x1 (payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        self.stack_depth += 1;
+
+        Ok(())
+    }
+
+    /// Emit ArrayLen operation.
+    /// Pops a Ref from stack, calls array_len_helper to get length, pushes i64.
+    fn emit_array_len(&mut self) -> Result<(), String> {
+        // Pop the Ref from JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            // Load payload (ref index) - tag at offset 0, payload at offset 8
+            asm.ldr(regs::TMP1, regs::VSTACK, 8); // x1 = ref_index
+        }
+
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Set up arguments for array_len_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = ref_index (already in x1)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        // Load array_len_helper from JitCallContext (offset 32)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 32);
+        }
+
+        // Call the helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Push the return value onto the JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Stack depth unchanged: -1 (pop ref) + 1 (push len) = 0
+
+        Ok(())
+    }
+
+    /// Emit Syscall operation.
+    /// Pops argc arguments, calls syscall_helper, pushes result.
+    fn emit_syscall(&mut self, syscall_num: usize, argc: usize) -> Result<(), String> {
+        let args_offset = (argc as u16) * VALUE_SIZE;
+
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Calculate args pointer: x3 = VSTACK - argc * VALUE_SIZE
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            if args_offset > 0 {
+                asm.sub_imm(Reg::X3, regs::VSTACK, args_offset);
+            } else {
+                asm.mov(Reg::X3, regs::VSTACK);
+            }
+        }
+
+        // Set up arguments for syscall_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = syscall_num
+        // x2 = argc
+        // x3 = args pointer (already set above)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        self.emit_load_imm64_to_reg(syscall_num as i64, Reg::X1);
+        self.emit_load_imm64_to_reg(argc as i64, Reg::X2);
+
+        // Load syscall_helper from JitCallContext (offset 40)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 40);
+        }
+
+        // Call the helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Pop the arguments from JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, args_offset);
+        }
+
+        // Push the return value onto the JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Update stack depth: -argc + 1 (pop args, push result)
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
 
         Ok(())
     }

@@ -233,6 +233,10 @@ impl JitCompiler {
 
             Op::Call(func_index, argc) => self.emit_call(*func_index, *argc),
 
+            Op::PushString(idx) => self.emit_push_string(*idx),
+            Op::ArrayLen => self.emit_array_len(),
+            Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
+
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
         }
@@ -776,6 +780,137 @@ impl JitCompiler {
         // Return value is in RAX (tag) and RDX (payload)
         asm.mov_mr(regs::VSTACK, 0, Reg::Rax); // store tag
         asm.mov_mr(regs::VSTACK, 8, Reg::Rdx); // store payload
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        // Update stack depth: -argc + 1 (pop args, push result)
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
+
+        Ok(())
+    }
+
+    /// Emit PushString operation.
+    /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Save callee-saved registers
+        asm.push(regs::VM_CTX);
+        asm.push(regs::VSTACK);
+        asm.push(regs::LOCALS);
+
+        // Set up arguments for push_string_helper:
+        // RDI = ctx (VM_CTX register)
+        // RSI = string_index
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_ri64(Reg::Rsi, string_index as i64);
+
+        // Load push_string_helper from JitCallContext (offset 24)
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 24);
+
+        // Call the helper
+        asm.call_r(regs::TMP4);
+
+        // Restore saved registers
+        asm.pop(regs::LOCALS);
+        asm.pop(regs::VSTACK);
+        asm.pop(regs::VM_CTX);
+
+        // Push the return value onto the JIT stack
+        // Return value is in RAX (tag) and RDX (payload)
+        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
+        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        self.stack_depth += 1;
+
+        Ok(())
+    }
+
+    /// Emit ArrayLen operation.
+    /// Pops a Ref from stack, calls array_len_helper to get length, pushes i64.
+    fn emit_array_len(&mut self) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Pop the Ref from JIT stack
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        // Load payload (ref index) - tag at offset 0, payload at offset 8
+        asm.mov_rm(regs::TMP1, regs::VSTACK, 8); // TMP1 = ref_index
+
+        // Save callee-saved registers
+        asm.push(regs::VM_CTX);
+        asm.push(regs::VSTACK);
+        asm.push(regs::LOCALS);
+
+        // Set up arguments for array_len_helper:
+        // RDI = ctx (VM_CTX register)
+        // RSI = ref_index
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rr(Reg::Rsi, regs::TMP1);
+
+        // Load array_len_helper from JitCallContext (offset 32)
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 32);
+
+        // Call the helper
+        asm.call_r(regs::TMP4);
+
+        // Restore saved registers
+        asm.pop(regs::LOCALS);
+        asm.pop(regs::VSTACK);
+        asm.pop(regs::VM_CTX);
+
+        // Push the return value onto the JIT stack
+        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
+        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        // Stack depth unchanged: -1 (pop ref) + 1 (push len) = 0
+
+        Ok(())
+    }
+
+    /// Emit Syscall operation.
+    /// Pops argc arguments, calls syscall_helper, pushes result.
+    fn emit_syscall(&mut self, syscall_num: usize, argc: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        let args_offset = (argc as i32) * VALUE_SIZE;
+
+        // Save callee-saved registers
+        asm.push(regs::VM_CTX);
+        asm.push(regs::VSTACK);
+        asm.push(regs::LOCALS);
+
+        // Calculate args pointer: R8 = VSTACK - argc * VALUE_SIZE
+        asm.mov_rr(Reg::R8, regs::VSTACK);
+        asm.sub_ri32(Reg::R8, args_offset);
+
+        // Set up arguments for syscall_helper:
+        // RDI = ctx (VM_CTX register)
+        // RSI = syscall_num
+        // RDX = argc
+        // RCX = args pointer
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_ri64(Reg::Rsi, syscall_num as i64);
+        asm.mov_ri64(Reg::Rdx, argc as i64);
+        asm.mov_rr(Reg::Rcx, Reg::R8);
+
+        // Load syscall_helper from JitCallContext (offset 40)
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 40);
+
+        // Call the helper
+        asm.call_r(regs::TMP4);
+
+        // Restore saved registers
+        asm.pop(regs::LOCALS);
+        asm.pop(regs::VSTACK);
+        asm.pop(regs::VM_CTX);
+
+        // Pop the arguments from JIT stack
+        asm.sub_ri32(regs::VSTACK, args_offset);
+
+        // Push the return value onto the JIT stack
+        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
+        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
         asm.add_ri32(regs::VSTACK, VALUE_SIZE);
 
         // Update stack depth: -argc + 1 (pop args, push result)
