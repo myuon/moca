@@ -491,50 +491,34 @@ impl Desugar {
                     },
                     value,
                     span,
-                    object_type: None, // Will be set by type checker on re-check, but we're after type check
+                    object_type: None,
                 });
             }
         }
 
-        // __new_literal_N (the final expression)
-        statements.push(Statement::Expr {
-            expr: Expr::Ident {
+        // Return BlockExpr with the final expression being the variable reference
+        Expr::BlockExpr {
+            statements,
+            expr: Box::new(Expr::Ident {
                 name: var_name,
                 span,
-            },
-            span,
-        });
-
-        // Wrap in a block expression
-        // Note: moca doesn't have block expressions, so we need another approach.
-        // We'll use a Call to an immediately-invoked function, or we need to handle this differently.
-        // Actually, looking at the AST, there's no block expression. Let's check how to handle this...
-        //
-        // For now, let's keep it as NewLiteral and handle it in codegen differently.
-        // Wait, the goal is to desugar it away. Let me think...
-        //
-        // The issue is that `new Vec<int> {1, 2, 3}` is an expression, and we need to transform it
-        // into something that returns the Vec. Without block expressions, we can't do this in-place.
-        //
-        // Options:
-        // 1. Add a BlockExpr variant to Expr
-        // 2. Use an IIFE (immediately invoked function expression) - but moca doesn't have lambdas
-        // 3. Transform at the statement level instead of expression level
-        //
-        // Let's add a BlockExpr variant to handle this case.
-        // Actually, let me check if there's already a way to handle this...
-
-        // For now, let's keep NewLiteral and handle it specially. We may need to add BlockExpr.
-        // TODO: Add BlockExpr support
-        Expr::NewLiteral {
-            type_name,
-            type_args,
-            elements: vec![], // Placeholder - we'll handle this differently
+            }),
             span,
         }
     }
 
     /// Desugar a Map literal.
+    ///
+    /// Transforms `new Map<K,V> {k1: v1, k2: v2, ...}` into:
+    /// ```text
+    /// {
+    ///     let __new_literal_N: Map<K,V> = Map<K,V>::uninit();
+    ///     __new_literal_N.put(k1, v1);
+    ///     __new_literal_N.put(k2, v2);
+    ///     ...
+    ///     __new_literal_N
+    /// }
+    /// ```
     fn desugar_map_literal(
         &mut self,
         type_name: String,
@@ -542,16 +526,70 @@ impl Desugar {
         elements: Vec<NewLiteralElement>,
         span: Span,
     ) -> Expr {
-        // Similar to vec_literal, but using put() instead of index assign
-        // TODO: Implement once we figure out the block expression issue
-        Expr::NewLiteral {
-            type_name,
-            type_args,
-            elements,
+        let var_name = self.fresh_var();
+
+        // Build the type annotation: Map<K,V>
+        let type_annotation = if type_args.is_empty() {
+            TypeAnnotation::Named(type_name.clone())
+        } else {
+            TypeAnnotation::Generic {
+                name: type_name.clone(),
+                type_args: type_args.clone(),
+            }
+        };
+
+        // Create statements
+        let mut statements = Vec::new();
+
+        // let __new_literal_N: Map<K,V> = Map<K,V>::uninit();
+        let init_expr = Expr::AssociatedFunctionCall {
+            type_name: type_name.clone(),
+            type_args: type_args.clone(),
+            function: "uninit".to_string(),
+            fn_type_args: vec![],
+            args: vec![],
+            span,
+        };
+
+        statements.push(Statement::Let {
+            name: var_name.clone(),
+            mutable: false,
+            type_annotation: Some(type_annotation),
+            init: init_expr,
+            span,
+        });
+
+        // __new_literal_N.put(k, v);
+        for elem in elements.into_iter() {
+            if let NewLiteralElement::KeyValue { key, value } = elem {
+                statements.push(Statement::Expr {
+                    expr: Expr::MethodCall {
+                        object: Box::new(Expr::Ident {
+                            name: var_name.clone(),
+                            span,
+                        }),
+                        method: "put".to_string(),
+                        type_args: vec![],
+                        args: vec![key, value],
+                        span,
+                    },
+                    span,
+                });
+            }
+        }
+
+        // Return BlockExpr with the final expression being the variable reference
+        Expr::BlockExpr {
+            statements,
+            expr: Box::new(Expr::Ident {
+                name: var_name,
+                span,
+            }),
             span,
         }
     }
 }
+
 
 /// Desugar a program, expanding syntax sugar into core constructs.
 pub fn desugar_program(program: Program) -> Program {
