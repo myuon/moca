@@ -357,6 +357,64 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    // ==================== Floating-Point Operations ====================
+
+    /// FMOV Dd, Xn (move from GP register to FP register, 64-bit)
+    pub fn fmov_d_x(&mut self, fd: u8, xn: Reg) {
+        // 1001 1110 0110 0111 0000 00nn nnnd dddd
+        let inst = 0x9E670000 | ((xn.code() as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
+    /// FMOV Xd, Dn (move from FP register to GP register, 64-bit)
+    pub fn fmov_x_d(&mut self, xd: Reg, fn_: u8) {
+        // 1001 1110 0110 0110 0000 00nn nnnd dddd
+        let inst = 0x9E660000 | ((fn_ as u32) << 5) | (xd.code() as u32);
+        self.emit_raw(inst);
+    }
+
+    /// FADD Dd, Dn, Dm (double-precision floating-point add)
+    pub fn fadd_d(&mut self, fd: u8, fn_: u8, fm: u8) {
+        // 0001 1110 011m mmmm 0010 10nn nnnd dddd
+        let inst = 0x1E602800 | ((fm as u32) << 16) | ((fn_ as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
+    /// FSUB Dd, Dn, Dm (double-precision floating-point subtract)
+    pub fn fsub_d(&mut self, fd: u8, fn_: u8, fm: u8) {
+        // 0001 1110 011m mmmm 0011 10nn nnnd dddd
+        let inst = 0x1E603800 | ((fm as u32) << 16) | ((fn_ as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
+    /// FMUL Dd, Dn, Dm (double-precision floating-point multiply)
+    pub fn fmul_d(&mut self, fd: u8, fn_: u8, fm: u8) {
+        // 0001 1110 011m mmmm 0000 10nn nnnd dddd
+        let inst = 0x1E600800 | ((fm as u32) << 16) | ((fn_ as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
+    /// FDIV Dd, Dn, Dm (double-precision floating-point divide)
+    pub fn fdiv_d(&mut self, fd: u8, fn_: u8, fm: u8) {
+        // 0001 1110 011m mmmm 0001 10nn nnnd dddd
+        let inst = 0x1E601800 | ((fm as u32) << 16) | ((fn_ as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
+    /// SCVTF Dd, Xn (convert signed 64-bit integer to double-precision)
+    pub fn scvtf_d_x(&mut self, fd: u8, xn: Reg) {
+        // 1001 1110 0110 0010 0000 00nn nnnd dddd
+        let inst = 0x9E620000 | ((xn.code() as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
+    /// FNEG Dd, Dn (double-precision floating-point negate)
+    pub fn fneg_d(&mut self, fd: u8, fn_: u8) {
+        // 0001 1110 0110 0001 0100 00nn nnnd dddd
+        let inst = 0x1E614000 | ((fn_ as u32) << 5) | (fd as u32);
+        self.emit_raw(inst);
+    }
+
     // ==================== NOP ====================
 
     /// NOP (no operation)
