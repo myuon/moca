@@ -7,7 +7,9 @@
 ## 2. Non-Goals
 - 型引数の推論（型引数は必須）
 - ネストしたリテラルの特別な最適化
-- VM最適化（`VecLiteral`/`MapLiteral` オプコードの `uninit` + `set` への置き換え）は今後の課題
+
+> **Note**: VecLiteral/MapLiteralオペコードは削除され、desugarフェーズで`uninit` + `set`呼び出しに展開されるようになりました。
+> 詳細は [Index Desugar仕様](spec-index-desugar.md) を参照。
 
 ## 3. Target Users
 - Moca言語の利用者（言語開発者自身を含む）

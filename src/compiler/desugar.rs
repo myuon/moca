@@ -3,22 +3,30 @@
 //! This phase runs after type checking and before monomorphisation.
 //! Currently handles:
 //! - NewLiteral (`new Vec<T> {...}`) → uninit + index assignments
+//! - Index (`vec[i]`) → `vec.get(i)` for Vec/Map types
+//! - IndexAssign (`vec[i] = v`) → `vec.set(i, v)` for Vec/Map types
 
 use crate::compiler::ast::{
     AsmBlock, Block, Expr, FnDef, ImplBlock, Item, NewLiteralElement, Param, Program, Statement,
     StructDef, StructField,
 };
 use crate::compiler::lexer::Span;
-use crate::compiler::types::TypeAnnotation;
+use crate::compiler::types::{Type, TypeAnnotation};
+use std::collections::HashMap;
 
 /// Counter for generating unique variable names.
 struct Desugar {
     counter: usize,
+    /// Type information for index expressions, keyed by span.
+    index_object_types: HashMap<Span, Type>,
 }
 
 impl Desugar {
-    fn new() -> Self {
-        Self { counter: 0 }
+    fn new(index_object_types: HashMap<Span, Type>) -> Self {
+        Self {
+            counter: 0,
+            index_object_types,
+        }
     }
 
     /// Generate a unique variable name for desugared temporaries.
@@ -26,6 +34,23 @@ impl Desugar {
         let name = format!("__new_literal_{}", self.counter);
         self.counter += 1;
         name
+    }
+
+    /// Check if the type should have its index operations desugared to method calls.
+    /// Returns true for Vec<T> and Map<K,V>, false for Array<T> and other types.
+    fn should_desugar_index(&self, obj_type: &Type) -> bool {
+        match obj_type {
+            // Vec<T> generic struct should be desugared
+            Type::GenericStruct { name, .. } if name == "Vec" || name == "Map" => true,
+            // Legacy Vector type - also desugar for consistency
+            Type::Vector(_) => true,
+            // Array, String, and other types should NOT be desugared
+            Type::Array(_) | Type::String => false,
+            // Struct types should NOT be desugared
+            Type::Struct { .. } => false,
+            // Default: don't desugar
+            _ => false,
+        }
     }
 
     /// Desugar a program.
@@ -148,14 +173,38 @@ impl Desugar {
                 index,
                 value,
                 span,
-                object_type,
-            } => Statement::IndexAssign {
-                object: self.desugar_expr(object),
-                index: self.desugar_expr(index),
-                value: self.desugar_expr(value),
-                span,
-                object_type,
-            },
+                ..
+            } => {
+                let desugared_object = self.desugar_expr(object);
+                let desugared_index = self.desugar_expr(index);
+                let desugared_value = self.desugar_expr(value);
+
+                // Check if this is a Vec or Map type that should be desugared
+                if let Some(obj_type) = self.index_object_types.get(&span)
+                    && self.should_desugar_index(obj_type)
+                {
+                    // Transform to method call: object.set(index, value)
+                    return Statement::Expr {
+                        expr: Expr::MethodCall {
+                            object: Box::new(desugared_object),
+                            method: "set".to_string(),
+                            type_args: vec![],
+                            args: vec![desugared_index, desugared_value],
+                            span,
+                        },
+                        span,
+                    };
+                }
+
+                // Keep as IndexAssign for Array and other types
+                Statement::IndexAssign {
+                    object: desugared_object,
+                    index: desugared_index,
+                    value: desugared_value,
+                    span,
+                    object_type: None,
+                }
+            }
             Statement::FieldAssign {
                 object,
                 field,
@@ -241,18 +290,38 @@ impl Desugar {
                 span,
             },
 
-            // Index - desugar object and index
+            // Index - desugar to method call for Vec/Map types
             Expr::Index {
                 object,
                 index,
                 span,
-                object_type,
-            } => Expr::Index {
-                object: Box::new(self.desugar_expr(*object)),
-                index: Box::new(self.desugar_expr(*index)),
-                span,
-                object_type,
-            },
+                ..
+            } => {
+                let desugared_object = self.desugar_expr(*object);
+                let desugared_index = self.desugar_expr(*index);
+
+                // Check if this is a Vec or Map type that should be desugared
+                if let Some(obj_type) = self.index_object_types.get(&span)
+                    && self.should_desugar_index(obj_type)
+                {
+                    // Transform to method call: object.get(index)
+                    return Expr::MethodCall {
+                        object: Box::new(desugared_object),
+                        method: "get".to_string(),
+                        type_args: vec![],
+                        args: vec![desugared_index],
+                        span,
+                    };
+                }
+
+                // Keep as Index for Array and other types
+                Expr::Index {
+                    object: Box::new(desugared_object),
+                    index: Box::new(desugared_index),
+                    span,
+                    object_type: None,
+                }
+            }
 
             // Field access - desugar object
             Expr::Field {
@@ -597,7 +666,7 @@ impl Desugar {
 }
 
 /// Desugar a program, expanding syntax sugar into core constructs.
-pub fn desugar_program(program: Program) -> Program {
-    let mut desugar = Desugar::new();
+pub fn desugar_program(program: Program, index_object_types: HashMap<Span, Type>) -> Program {
+    let mut desugar = Desugar::new(index_object_types);
     desugar.desugar_program(program)
 }
