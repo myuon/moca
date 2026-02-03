@@ -56,9 +56,10 @@ impl JitValue {
             tags::TAG_BOOL => Value::Bool(self.payload != 0),
             tags::TAG_NIL => Value::Null,
             tags::TAG_PTR => {
-                // Note: This is a simplified conversion. In a full implementation,
-                // we'd need to properly reconstruct the GcRef.
-                Value::Null // Placeholder - pointer handling needs more work
+                // Reconstruct GcRef from the payload (which contains the index)
+                Value::Ref(crate::vm::GcRef {
+                    index: self.payload as usize,
+                })
             }
             _ => Value::Null, // Unknown tag
         }
@@ -175,15 +176,24 @@ pub struct JitCallContext {
     /// Function call helper: (ctx, func_index, argc, args_ptr) -> JitReturn
     pub call_helper:
         unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
+    /// Push string helper: (ctx, string_index) -> JitReturn (returns Ref)
+    pub push_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
+    /// Array/string length helper: (ctx, ref_index) -> JitReturn (returns i64)
+    pub array_len_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
+    /// Syscall helper: (ctx, syscall_num, argc, args_ptr) -> JitReturn
+    pub syscall_helper:
+        unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
 }
 
 /// Type signature for call helper function.
 /// Called from JIT code to execute a function call via VM.
+///
 /// Arguments:
 ///   - ctx: *mut JitCallContext - context with VM and chunk pointers
 ///   - func_index: u64 - index of function to call
 ///   - argc: u64 - number of arguments
 ///   - args: *const JitValue - pointer to arguments array (argc values)
+///
 /// Returns: JitReturn with the function's return value
 pub type CallHelperFn =
     unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn;

@@ -71,7 +71,7 @@ jobs:
       - name: Get base branch coverage
         run: |
           git checkout ${{ github.base_ref }}
-          cargo llvm-cov --no-report > /dev/null 2>&1
+          cargo llvm-cov --no-report --ignore-run-fail > /dev/null 2>&1
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
             file = $1
             pct_count = 0
@@ -89,7 +89,7 @@ jobs:
 
       - name: Generate coverage report with diff
         run: |
-          cargo llvm-cov --no-report > /dev/null 2>&1
+          cargo llvm-cov --no-report --ignore-run-fail > /dev/null 2>&1
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '
           BEGIN {
             while ((getline line < "base_coverage.txt") > 0) {

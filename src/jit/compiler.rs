@@ -232,10 +232,10 @@ impl JitCompiler {
             Op::GetL(idx) => self.emit_load_local(*idx),
             Op::SetL(idx) => self.emit_store_local(*idx),
 
-            Op::Add => self.emit_add_int(),
-            Op::Sub => self.emit_sub_int(),
-            Op::Mul => self.emit_mul_int(),
-            Op::Div => self.emit_div_int(),
+            Op::Add => self.emit_add(),
+            Op::Sub => self.emit_sub(),
+            Op::Mul => self.emit_mul(),
+            Op::Div => self.emit_div(),
 
             Op::Lt => self.emit_cmp_int(Cond::Lt),
             Op::Le => self.emit_cmp_int(Cond::Le),
@@ -259,6 +259,11 @@ impl JitCompiler {
                     self.emit_call(*func_index, *argc)
                 }
             }
+
+            Op::PushString(idx) => self.emit_push_string(*idx),
+            Op::ArrayLen => self.emit_array_len(),
+            Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
+            Op::Neg => self.emit_neg(),
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -432,100 +437,256 @@ impl JitCompiler {
         Ok(())
     }
 
-    /// Integer addition: pop two values, push their sum.
-    fn emit_add_int(&mut self) -> Result<(), String> {
-        let mut asm = AArch64Assembler::new(&mut self.buf);
+    /// Helper to emit a binary arithmetic operation that handles both int and float.
+    /// `int_op` emits the integer operation using TMP0, TMP1 -> TMP0.
+    /// `float_op` emits the float operation using D0, D1 -> D0.
+    fn emit_arith_op<F, G>(&mut self, int_op: F, float_op: G) -> Result<(), String>
+    where
+        F: FnOnce(&mut AArch64Assembler),
+        G: FnOnce(&mut AArch64Assembler),
+    {
+        // Load both operands with tags
+        // Stack: [..., a, b] where each is (tag, payload)
+        // TMP0 = a_payload, TMP1 = b_payload
+        // TMP2 = a_tag, TMP3 = b_tag
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Load b (top of stack)
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            asm.ldr(regs::TMP3, regs::VSTACK, 0); // b_tag
+            asm.ldr(regs::TMP1, regs::VSTACK, 8); // b_payload
 
-        // Pop second operand (b)
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP1, regs::VSTACK, 8); // b value
+            // Load a
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            asm.ldr(regs::TMP2, regs::VSTACK, 0); // a_tag
+            asm.ldr(regs::TMP0, regs::VSTACK, 8); // a_payload
 
-        // Pop first operand (a)
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP0, regs::VSTACK, 8); // a value
+            // Check if both are INT: (a_tag | b_tag) == 0
+            asm.orr(regs::TMP4, regs::TMP2, regs::TMP3);
+        }
 
-        // Add
-        asm.add(regs::TMP0, regs::TMP0, regs::TMP1);
+        // Branch to float path if not both INT
+        let cbnz_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP4, 0); // placeholder offset
+        }
 
-        // Push result with int tag
-        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
-        asm.str(regs::TMP1, regs::VSTACK, 0);
-        asm.str(regs::TMP0, regs::VSTACK, 8);
-        asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        // INT path: TMP0 = a, TMP1 = b, result in TMP0
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            int_op(&mut asm);
+            // Push result with int tag
+            asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+            asm.str(regs::TMP1, regs::VSTACK, 0);
+            asm.str(regs::TMP0, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Jump to end
+        let b_end_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder offset
+        }
+
+        // FLOAT path
+        let float_path_start = self.buf.len();
+
+        // Patch CBNZ to jump here
+        {
+            let offset = (float_path_start as i32) - (cbnz_pos as i32);
+            let code = self.buf.code_mut();
+            // CBNZ encoding: bits 23:5 contain imm19 (offset/4)
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[cbnz_pos],
+                code[cbnz_pos + 1],
+                code[cbnz_pos + 2],
+                code[cbnz_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[cbnz_pos..cbnz_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Convert a to float if needed (TMP2 = a_tag, TMP0 = a_payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP2, 0); // if a_tag != 0, already float
+        }
+        let a_is_int_pos = self.buf.len() - 4;
+
+        // a is INT, convert to float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.scvtf_d_x(0, regs::TMP0); // D0 = (double)TMP0
+        }
+        let a_conv_done_b = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // jump past the float case
+        }
+
+        // a is FLOAT
+        let a_is_float_pos = self.buf.len();
+        {
+            // Patch the CBNZ for a_tag
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[a_is_int_pos],
+                code[a_is_int_pos + 1],
+                code[a_is_int_pos + 2],
+                code[a_is_int_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[a_is_int_pos..a_is_int_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_d_x(0, regs::TMP0); // D0 = TMP0 (as bits)
+        }
+
+        // Patch the branch after a conversion
+        let a_conv_merge = self.buf.len();
+        {
+            let offset = (a_conv_merge as i32) - (a_conv_done_b as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[a_conv_done_b],
+                code[a_conv_done_b + 1],
+                code[a_conv_done_b + 2],
+                code[a_conv_done_b + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[a_conv_done_b..a_conv_done_b + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Convert b to float if needed (TMP3 = b_tag, TMP1 = b_payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP3, 0); // if b_tag != 0, already float
+        }
+        let b_is_int_pos = self.buf.len() - 4;
+
+        // b is INT, convert to float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.scvtf_d_x(1, regs::TMP1); // D1 = (double)TMP1
+        }
+        let b_conv_done_b = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // jump past the float case
+        }
+
+        // b is FLOAT
+        let b_is_float_pos = self.buf.len();
+        {
+            // Patch the CBNZ for b_tag
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[b_is_int_pos],
+                code[b_is_int_pos + 1],
+                code[b_is_int_pos + 2],
+                code[b_is_int_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[b_is_int_pos..b_is_int_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_d_x(1, regs::TMP1); // D1 = TMP1 (as bits)
+        }
+
+        // Patch the branch after b conversion
+        let b_conv_merge = self.buf.len();
+        {
+            let offset = (b_conv_merge as i32) - (b_conv_done_b as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[b_conv_done_b],
+                code[b_conv_done_b + 1],
+                code[b_conv_done_b + 2],
+                code[b_conv_done_b + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[b_conv_done_b..b_conv_done_b + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Perform float operation: D0 = D0 op D1
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            float_op(&mut asm);
+        }
+
+        // Store result as float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_x_d(regs::TMP0, 0); // TMP0 = D0 bits
+            asm.mov_imm(regs::TMP1, value_tags::TAG_FLOAT as u16);
+            asm.str(regs::TMP1, regs::VSTACK, 0);
+            asm.str(regs::TMP0, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // End
+        let end_pos = self.buf.len();
+
+        // Patch the B (jump to end) from INT path
+        {
+            let offset = (end_pos as i32) - (b_end_pos as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[b_end_pos],
+                code[b_end_pos + 1],
+                code[b_end_pos + 2],
+                code[b_end_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[b_end_pos..b_end_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
     }
 
-    /// Integer subtraction: pop two values, push their difference.
-    fn emit_sub_int(&mut self) -> Result<(), String> {
-        let mut asm = AArch64Assembler::new(&mut self.buf);
-
-        // Pop second operand (b)
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP1, regs::VSTACK, 8);
-
-        // Pop first operand (a)
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP0, regs::VSTACK, 8);
-
-        // Subtract
-        asm.sub(regs::TMP0, regs::TMP0, regs::TMP1);
-
-        // Push result
-        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
-        asm.str(regs::TMP1, regs::VSTACK, 0);
-        asm.str(regs::TMP0, regs::VSTACK, 8);
-        asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-
-        self.stack_depth = self.stack_depth.saturating_sub(1);
-        Ok(())
+    /// Addition: pop two values, push their sum (handles both int and float).
+    fn emit_add(&mut self) -> Result<(), String> {
+        self.emit_arith_op(
+            |asm| asm.add(regs::TMP0, regs::TMP0, regs::TMP1),
+            |asm| asm.fadd_d(0, 0, 1),
+        )
     }
 
-    /// Integer multiplication.
-    fn emit_mul_int(&mut self) -> Result<(), String> {
-        let mut asm = AArch64Assembler::new(&mut self.buf);
-
-        // Pop two operands
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP1, regs::VSTACK, 8);
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP0, regs::VSTACK, 8);
-
-        // Multiply
-        asm.mul(regs::TMP0, regs::TMP0, regs::TMP1);
-
-        // Push result
-        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
-        asm.str(regs::TMP1, regs::VSTACK, 0);
-        asm.str(regs::TMP0, regs::VSTACK, 8);
-        asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-
-        self.stack_depth = self.stack_depth.saturating_sub(1);
-        Ok(())
+    /// Subtraction: pop two values, push their difference (handles both int and float).
+    fn emit_sub(&mut self) -> Result<(), String> {
+        self.emit_arith_op(
+            |asm| asm.sub(regs::TMP0, regs::TMP0, regs::TMP1),
+            |asm| asm.fsub_d(0, 0, 1),
+        )
     }
 
-    /// Integer division.
-    fn emit_div_int(&mut self) -> Result<(), String> {
-        let mut asm = AArch64Assembler::new(&mut self.buf);
+    /// Multiplication: pop two values, push their product (handles both int and float).
+    fn emit_mul(&mut self) -> Result<(), String> {
+        self.emit_arith_op(
+            |asm| asm.mul(regs::TMP0, regs::TMP0, regs::TMP1),
+            |asm| asm.fmul_d(0, 0, 1),
+        )
+    }
 
-        // Pop two operands
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP1, regs::VSTACK, 8);
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP0, regs::VSTACK, 8);
-
-        // Divide
-        asm.sdiv(regs::TMP0, regs::TMP0, regs::TMP1);
-
-        // Push result
-        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
-        asm.str(regs::TMP1, regs::VSTACK, 0);
-        asm.str(regs::TMP0, regs::VSTACK, 8);
-        asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-
-        self.stack_depth = self.stack_depth.saturating_sub(1);
-        Ok(())
+    /// Division: pop two values, push their quotient (handles both int and float).
+    fn emit_div(&mut self) -> Result<(), String> {
+        self.emit_arith_op(
+            |asm| asm.sdiv(regs::TMP0, regs::TMP0, regs::TMP1),
+            |asm| asm.fdiv_d(0, 0, 1),
+        )
     }
 
     /// Integer comparison: pop two values, push bool result.
@@ -797,6 +958,287 @@ impl JitCompiler {
         asm.ldp_post(Reg::Fp, Reg::Lr, 16);
         asm.ret();
 
+        Ok(())
+    }
+
+    /// Emit PushString operation.
+    /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Set up arguments for push_string_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = string_index
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        self.emit_load_imm64_to_reg(string_index as i64, Reg::X1);
+
+        // Load push_string_helper from JitCallContext (offset 24)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 24);
+        }
+
+        // Call the helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Push the return value onto the JIT stack
+        // Return value is in x0 (tag) and x1 (payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        self.stack_depth += 1;
+
+        Ok(())
+    }
+
+    /// Emit ArrayLen operation.
+    /// Pops a Ref from stack, calls array_len_helper to get length, pushes i64.
+    fn emit_array_len(&mut self) -> Result<(), String> {
+        // Pop the Ref from JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            // Load payload (ref index) - tag at offset 0, payload at offset 8
+            asm.ldr(regs::TMP1, regs::VSTACK, 8); // x1 = ref_index
+        }
+
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Set up arguments for array_len_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = ref_index (already in x1)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        // Load array_len_helper from JitCallContext (offset 32)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 32);
+        }
+
+        // Call the helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Push the return value onto the JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Stack depth unchanged: -1 (pop ref) + 1 (push len) = 0
+
+        Ok(())
+    }
+
+    /// Emit Syscall operation.
+    /// Pops argc arguments, calls syscall_helper, pushes result.
+    fn emit_syscall(&mut self, syscall_num: usize, argc: usize) -> Result<(), String> {
+        let args_offset = (argc as u16) * VALUE_SIZE;
+
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Calculate args pointer: x3 = VSTACK - argc * VALUE_SIZE
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            if args_offset > 0 {
+                asm.sub_imm(Reg::X3, regs::VSTACK, args_offset);
+            } else {
+                asm.mov(Reg::X3, regs::VSTACK);
+            }
+        }
+
+        // Set up arguments for syscall_helper:
+        // x0 = ctx (VM_CTX register)
+        // x1 = syscall_num
+        // x2 = argc
+        // x3 = args pointer (already set above)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+
+        self.emit_load_imm64_to_reg(syscall_num as i64, Reg::X1);
+        self.emit_load_imm64_to_reg(argc as i64, Reg::X2);
+
+        // Load syscall_helper from JitCallContext (offset 40)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 40);
+        }
+
+        // Call the helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Pop the arguments from JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, args_offset);
+        }
+
+        // Push the return value onto the JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Update stack depth: -argc + 1 (pop args, push result)
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
+
+        Ok(())
+    }
+
+    /// Emit Neg operation.
+    /// Negates the top value on the stack (int or float).
+    fn emit_neg(&mut self) -> Result<(), String> {
+        // Load tag and payload from top of stack
+        // Stack layout: [tag: 8 bytes][payload: 8 bytes]
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldur(regs::TMP0, regs::VSTACK, -(VALUE_SIZE as i16)); // tag
+            asm.ldur(regs::TMP1, regs::VSTACK, -(VALUE_SIZE as i16) + 8); // payload
+        }
+
+        // Check if it's an int (tag == 0)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cmp_imm(regs::TMP0, value_tags::TAG_INT as u16);
+        }
+
+        // Record position for conditional branch to float path
+        let bne_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // B.NE to float path (placeholder, will patch)
+            asm.b_cond(Cond::Ne, 0);
+        }
+
+        // INT path: negate using SUB from zero (NEG is alias for SUB Xd, XZR, Xn)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub(regs::TMP1, Reg::XZR, regs::TMP1);
+            // Store back the negated payload
+            // STUR for unscaled offset
+            // STUR Xt, [Xn, #simm9]: 1111 1000 000i iiii iiii 00nn nnnt tttt
+            let simm9 = (-(VALUE_SIZE as i16) + 8) as u32;
+            let inst = 0xF8000000
+                | ((simm9 & 0x1FF) << 12)
+                | ((regs::VSTACK.code() as u32) << 5)
+                | (regs::TMP1.code() as u32);
+            asm.emit_raw(inst);
+        }
+
+        // Jump over float path
+        let b_end_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder, will patch
+        }
+
+        // Patch B.NE to jump here (float path start)
+        let float_path_start = self.buf.len();
+        {
+            let offset = (float_path_start as i32) - (bne_pos as i32);
+            let code = self.buf.code_mut();
+            // B.cond encoding: 0101 0100 iiii iiii iiii iiii iii0 cccc
+            let inst = 0x54000000 | (((offset / 4) as u32 & 0x7FFFF) << 5) | (Cond::Ne as u32);
+            let bytes = inst.to_le_bytes();
+            code[bne_pos] = bytes[0];
+            code[bne_pos + 1] = bytes[1];
+            code[bne_pos + 2] = bytes[2];
+            code[bne_pos + 3] = bytes[3];
+        }
+
+        // FLOAT path: XOR sign bit (bit 63) to negate
+        // Load sign bit mask: 0x8000000000000000
+        self.emit_load_imm64_to_reg(0x8000000000000000u64 as i64, regs::TMP2);
+
+        // XOR to flip sign bit
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.eor(regs::TMP1, regs::TMP1, regs::TMP2);
+            // Store back
+            let simm9 = (-(VALUE_SIZE as i16) + 8) as u32;
+            let inst = 0xF8000000
+                | ((simm9 & 0x1FF) << 12)
+                | ((regs::VSTACK.code() as u32) << 5)
+                | (regs::TMP1.code() as u32);
+            asm.emit_raw(inst);
+        }
+
+        // Patch B to jump here (end)
+        let end_pos = self.buf.len();
+        {
+            let offset = (end_pos as i32) - (b_end_pos as i32);
+            let code = self.buf.code_mut();
+            // B encoding: 0001 01ii iiii iiii iiii iiii iiii iiii
+            let inst = 0x14000000 | ((offset / 4) as u32 & 0x03FFFFFF);
+            let bytes = inst.to_le_bytes();
+            code[b_end_pos] = bytes[0];
+            code[b_end_pos + 1] = bytes[1];
+            code[b_end_pos + 2] = bytes[2];
+            code[b_end_pos + 3] = bytes[3];
+        }
+
+        // Stack depth unchanged (we modify in-place)
         Ok(())
     }
 
