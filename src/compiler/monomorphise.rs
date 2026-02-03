@@ -389,6 +389,15 @@ impl InstantiationCollector {
                     }
                 }
             }
+            Expr::Block {
+                statements, expr, ..
+            } => {
+                // Collect from all statements and the final expression
+                for stmt in statements {
+                    self.collect_statement(stmt);
+                }
+                self.collect_expr(expr);
+            }
             // Literals and asm blocks don't contain generic calls
             Expr::Int { .. }
             | Expr::Float { .. }
@@ -986,6 +995,18 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                     }
                 })
                 .collect(),
+            span: *span,
+        },
+        Expr::Block {
+            statements,
+            expr,
+            span,
+        } => Expr::Block {
+            statements: statements
+                .iter()
+                .map(|s| substitute_statement(s, type_map))
+                .collect(),
+            expr: Box::new(substitute_expr(expr, type_map)),
             span: *span,
         },
     }

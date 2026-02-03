@@ -3,6 +3,7 @@
 
 pub mod ast;
 mod codegen;
+pub mod desugar;
 pub mod dump;
 pub mod lexer;
 mod module;
@@ -115,6 +116,9 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
         .map_err(|errors| format_type_errors(filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
 
+    // Desugar (expand syntax sugar like new literals)
+    let program = desugar::desugar_program(program);
+
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
 
@@ -180,6 +184,9 @@ pub fn run_file_capturing_output(
             .check_program(&program)
             .map_err(|errors| format_type_errors(&filename, &errors))?;
         let index_object_types = typechecker.index_object_types().clone();
+
+        // Desugar (expand syntax sugar like new literals)
+        let program = desugar::desugar_program(program);
 
         // Monomorphisation (specialize generic functions/structs)
         let program = monomorphise::monomorphise_program(program);
@@ -253,6 +260,9 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
 
+    // Desugar (expand syntax sugar like new literals)
+    let program = desugar::desugar_program(program);
+
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
 
@@ -321,6 +331,9 @@ pub fn run_file_with_dump(
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+
+    // Desugar (expand syntax sugar like new literals)
+    let program = desugar::desugar_program(program);
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
@@ -439,6 +452,9 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+
+    // Desugar (expand syntax sugar like new literals)
+    let program = desugar::desugar_program(program);
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);

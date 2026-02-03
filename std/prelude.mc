@@ -270,6 +270,17 @@ impl<T> Vec<T> {
         return Vec<T> { ptr: 0, len: 0, cap: cap };
     }
 
+    // Create an uninitialized vector with specified length (for desugar).
+    // The vector is allocated with the given capacity and length is set to capacity.
+    // Elements are uninitialized and must be set before use.
+    fun uninit(cap: int) -> Vec<T> {
+        if cap == 0 {
+            return Vec<T> { ptr: 0, len: 0, cap: 0 };
+        }
+        let data = __alloc_heap(cap);
+        return Vec<T> { ptr: data, len: cap, cap: cap };
+    }
+
     // Push a value to the end of the vector
     fun push(self, value: T) {
         if self.len >= self.cap {
@@ -537,6 +548,19 @@ impl<K, V> Map<K, V> {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
         // Initialize all buckets to 0 (empty)
+        var i = 0;
+        while i < capacity {
+            __heap_store(buckets, i, 0);
+            i = i + 1;
+        }
+        return Map<K, V> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
+    }
+
+    // Create an uninitialized empty map (for desugar).
+    // Same as `new()` - elements will be added via put.
+    fun uninit() -> Map<K, V> {
+        let capacity = 16;
+        let buckets = __alloc_heap(capacity);
         var i = 0;
         while i < capacity {
             __heap_store(buckets, i, 0);

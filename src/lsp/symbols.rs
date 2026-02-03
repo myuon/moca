@@ -269,6 +269,14 @@ impl SymbolTable {
                     }
                 }
             }
+            Expr::Block {
+                statements, expr, ..
+            } => {
+                for stmt in statements {
+                    self.collect_statement(stmt);
+                }
+                self.collect_expr(expr);
+            }
             // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }
             | Expr::Float { .. }
