@@ -163,3 +163,140 @@ jobs:
                 body: body,
               });
             }
+
+  performance-report:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build moca (release)
+        run: cargo build --release
+
+      - name: Build bench tool
+        run: cargo build --release -p bench
+
+      - name: Run benchmark on PR branch
+        run: |
+          ./target/release/bench ./target/release/moca > pr_bench.json
+          cat pr_bench.json
+
+      - name: Get main branch benchmark
+        run: |
+          git stash || true
+          git checkout ${{ github.base_ref }}
+          cargo build --release
+          ./target/release/bench ./target/release/moca > main_bench.json
+          cat main_bench.json
+          git checkout ${{ github.head_ref }}
+          git stash pop || true
+
+      - name: Generate performance report
+        run: |
+          cat > generate_report.py << 'PYTHON_SCRIPT'
+          import json
+          import sys
+
+          with open('pr_bench.json') as f:
+              pr_data = json.load(f)
+
+          with open('main_bench.json') as f:
+              main_data = json.load(f)
+
+          main_times = {r['name']: r['moca_time_secs'] for r in main_data['results']}
+
+          lines = []
+          lines.append("| Benchmark | Current | Rust | Main |")
+          lines.append("|-----------|---------|------|------|")
+
+          for result in pr_data['results']:
+              name = result['name']
+              current = result['moca_time_secs']
+              rust = result['rust_time_secs']
+              main = main_times.get(name, current)
+
+              # Calculate Rust comparison (how many times faster)
+              if rust > 0:
+                  rust_ratio = current / rust
+                  rust_str = f"{rust:.3f}s ({rust_ratio:.0f}x faster)"
+              else:
+                  rust_str = f"{rust:.3f}s"
+
+              # Calculate main comparison (percentage change)
+              if main > 0:
+                  pct_change = ((main - current) / main) * 100
+                  if pct_change > 5:
+                      icon = "🟢"
+                      sign = "+"
+                  elif pct_change < -5:
+                      icon = "🔴"
+                      sign = ""
+                  else:
+                      icon = "🟡"
+                      sign = "+" if pct_change >= 0 else ""
+                  main_str = f"{main:.3f}s {icon} {sign}{pct_change:.0f}%"
+              else:
+                  main_str = "N/A"
+
+              lines.append(f"| {name} | {current:.3f}s | {rust_str} | {main_str} |")
+
+          lines.append("")
+          lines.append("Legend: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower (vs main)")
+
+          print('\n'.join(lines))
+          PYTHON_SCRIPT
+
+          python3 generate_report.py > performance.md
+          cat performance.md
+
+      - name: Post performance comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const performance = fs.readFileSync('performance.md', 'utf8');
+            const body = `## ⚡ Performance Report\n\n${performance}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.login === 'github-actions[bot]' && c.body.includes('## ⚡ Performance Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
