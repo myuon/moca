@@ -375,6 +375,7 @@ impl VM {
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
             syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
         };
 
         // Execute the JIT code
@@ -441,6 +442,7 @@ impl VM {
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
             syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
         };
 
         // Execute the JIT code

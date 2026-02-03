@@ -362,6 +362,22 @@ impl<'a> X86_64Assembler<'a> {
         }
     }
 
+    /// SHL r64, imm8 (logical left shift)
+    pub fn shl_ri(&mut self, dst: Reg, imm: u8) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xC1); // SHL r/m64, imm8
+        self.buf.emit_u8(Self::modrm(0b11, 4, dst.code()));
+        self.buf.emit_u8(imm);
+    }
+
+    /// SHR r64, imm8 (logical right shift)
+    pub fn shr_ri(&mut self, dst: Reg, imm: u8) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xC1); // SHR r/m64, imm8
+        self.buf.emit_u8(Self::modrm(0b11, 5, dst.code()));
+        self.buf.emit_u8(imm);
+    }
+
     /// XOR r64, r64
     pub fn xor_rr(&mut self, dst: Reg, src: Reg) {
         self.emit_rex_w(src, dst);

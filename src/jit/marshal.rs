@@ -179,10 +179,14 @@ pub struct JitCallContext {
     /// Push string helper: (ctx, string_index) -> JitReturn (returns Ref)
     pub push_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
     /// Array/string length helper: (ctx, ref_index) -> JitReturn (returns i64)
+    /// Note: This is kept for compatibility but ArrayLen is now inlined in JIT code.
     pub array_len_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
     /// Syscall helper: (ctx, syscall_num, argc, args_ptr) -> JitReturn
     pub syscall_helper:
         unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
+    /// Pointer to heap memory base (for direct heap access from JIT code)
+    /// This points to the first element of the heap's memory Vec<u64>.
+    pub heap_base: *const u64,
 }
 
 /// Type signature for call helper function.

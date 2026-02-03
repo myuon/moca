@@ -219,6 +219,40 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    // ==================== Shifts ====================
+
+    /// LSL Xd, Xn, #shift (logical shift left by immediate)
+    /// LSL is an alias for UBFM Xd, Xn, #(-shift MOD 64), #(63-shift)
+    pub fn lsl_imm(&mut self, rd: Reg, rn: Reg, shift: u8) {
+        // UBFM Xd, Xn, #immr, #imms
+        // 1101 0011 01Ni iiii iiss ssss nnnn nddd
+        // For LSL: immr = -shift MOD 64, imms = 63 - shift
+        let immr = ((64 - shift as u32) % 64) & 0x3F;
+        let imms = (63 - shift as u32) & 0x3F;
+        let inst = 0xD3400000
+            | (immr << 16)
+            | (imms << 10)
+            | ((rn.code() as u32) << 5)
+            | (rd.code() as u32);
+        self.emit_raw(inst);
+    }
+
+    /// LSR Xd, Xn, #shift (logical shift right by immediate)
+    /// LSR is an alias for UBFM Xd, Xn, #shift, #63
+    pub fn lsr_imm(&mut self, rd: Reg, rn: Reg, shift: u8) {
+        // UBFM Xd, Xn, #immr, #imms
+        // 1101 0011 01Ni iiii iiss ssss nnnn nddd
+        // For LSR: immr = shift, imms = 63
+        let immr = (shift as u32) & 0x3F;
+        let imms = 63u32;
+        let inst = 0xD3400000
+            | (immr << 16)
+            | (imms << 10)
+            | ((rn.code() as u32) << 5)
+            | (rd.code() as u32);
+        self.emit_raw(inst);
+    }
+
     // ==================== Loads and Stores ====================
 
     /// LDR Xt, [Xn, #imm12] (load 64-bit, unsigned offset)
