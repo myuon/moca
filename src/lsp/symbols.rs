@@ -269,7 +269,7 @@ impl SymbolTable {
                     }
                 }
             }
-            Expr::BlockExpr {
+            Expr::Block {
                 statements, expr, ..
             } => {
                 for stmt in statements {

@@ -357,12 +357,12 @@ impl Desugar {
                 span,
             } => self.desugar_new_literal(type_name, type_args, elements, span),
 
-            // BlockExpr - desugar statements and the final expression
-            Expr::BlockExpr {
+            // Block - desugar statements and the final expression
+            Expr::Block {
                 statements,
                 expr,
                 span,
-            } => Expr::BlockExpr {
+            } => Expr::Block {
                 statements: statements
                     .into_iter()
                     .map(|stmt| self.desugar_statement(stmt))
@@ -502,8 +502,8 @@ impl Desugar {
             }
         }
 
-        // Return BlockExpr with the final expression being the variable reference
-        Expr::BlockExpr {
+        // Return Block with the final expression being the variable reference
+        Expr::Block {
             statements,
             expr: Box::new(Expr::Ident {
                 name: var_name,
@@ -584,8 +584,8 @@ impl Desugar {
             }
         }
 
-        // Return BlockExpr with the final expression being the variable reference
-        Expr::BlockExpr {
+        // Return Block with the final expression being the variable reference
+        Expr::Block {
             statements,
             expr: Box::new(Expr::Ident {
                 name: var_name,

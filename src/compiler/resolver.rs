@@ -168,7 +168,7 @@ pub enum ResolvedExpr {
         elements: Vec<ResolvedNewLiteralElement>,
     },
     /// Block expression: `{ stmt1; stmt2; expr }` - evaluates to the final expression.
-    BlockExpr {
+    Block {
         statements: Vec<ResolvedStatement>,
         expr: Box<ResolvedExpr>,
     },
@@ -1010,7 +1010,7 @@ impl<'a> Resolver<'a> {
                 })
             }
 
-            Expr::BlockExpr {
+            Expr::Block {
                 statements, expr, ..
             } => {
                 // Create a new scope for the block
@@ -1027,7 +1027,7 @@ impl<'a> Resolver<'a> {
 
                 scope.exit_scope();
 
-                Ok(ResolvedExpr::BlockExpr {
+                Ok(ResolvedExpr::Block {
                     statements: resolved_stmts,
                     expr: Box::new(resolved_expr),
                 })

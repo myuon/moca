@@ -389,7 +389,7 @@ impl InstantiationCollector {
                     }
                 }
             }
-            Expr::BlockExpr {
+            Expr::Block {
                 statements, expr, ..
             } => {
                 // Collect from all statements and the final expression
@@ -997,11 +997,11 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .collect(),
             span: *span,
         },
-        Expr::BlockExpr {
+        Expr::Block {
             statements,
             expr,
             span,
-        } => Expr::BlockExpr {
+        } => Expr::Block {
             statements: statements
                 .iter()
                 .map(|s| substitute_statement(s, type_map))

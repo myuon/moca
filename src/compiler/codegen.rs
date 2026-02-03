@@ -790,11 +790,11 @@ impl Codegen {
                 // The caller is responsible for handling the stack state
             }
             ResolvedExpr::NewLiteral { .. } => {
-                // NewLiteral should have been desugared to BlockExpr before reaching codegen.
+                // NewLiteral should have been desugared to Block before reaching codegen.
                 // If we get here, it means the desugar phase didn't run correctly.
                 panic!("NewLiteral should have been desugared before codegen");
             }
-            ResolvedExpr::BlockExpr { statements, expr } => {
+            ResolvedExpr::Block { statements, expr } => {
                 // Compile all statements in the block
                 for stmt in statements {
                     self.compile_statement(stmt, ops)?;

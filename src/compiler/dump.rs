@@ -568,16 +568,12 @@ impl<'a> AstPrinter<'a> {
                 self.write_type_suffix(expr);
                 self.newline();
             }
-            Expr::BlockExpr {
+            Expr::Block {
                 statements,
                 expr: block_expr,
                 ..
             } => {
-                self.write(&format!(
-                    "{}BlockExpr: [{} stmts]",
-                    prefix,
-                    statements.len()
-                ));
+                self.write(&format!("{}Block: [{} stmts]", prefix, statements.len()));
                 self.newline();
                 for stmt in statements.iter() {
                     let stmt_prefix = "├── ";
@@ -1244,8 +1240,8 @@ impl ResolvedProgramPrinter {
                 ));
                 self.newline();
             }
-            ResolvedExpr::BlockExpr { statements, expr } => {
-                self.write(&format!("{}BlockExpr({} stmts)", prefix, statements.len()));
+            ResolvedExpr::Block { statements, expr } => {
+                self.write(&format!("{}Block({} stmts)", prefix, statements.len()));
                 self.newline();
                 let block_child_prefix = format!("{}    ", parent_prefix);
                 for stmt in statements {
