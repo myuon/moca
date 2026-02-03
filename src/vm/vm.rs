@@ -46,6 +46,27 @@ pub struct VmGcStats {
     pub max_pause_us: u64,
 }
 
+/// Opcode execution profile data.
+#[derive(Debug, Clone, Default)]
+pub struct OpcodeProfile {
+    /// Execution counts per opcode name
+    pub counts: HashMap<&'static str, u64>,
+}
+
+impl OpcodeProfile {
+    /// Get total number of executed instructions.
+    pub fn total_instructions(&self) -> u64 {
+        self.counts.values().sum()
+    }
+
+    /// Get sorted entries by count (descending).
+    pub fn sorted_by_count(&self) -> Vec<(&'static str, u64)> {
+        let mut entries: Vec<_> = self.counts.iter().map(|(&k, &v)| (k, v)).collect();
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries
+    }
+}
+
 /// The moca virtual machine.
 pub struct VM {
     stack: Vec<Value>,
@@ -88,6 +109,10 @@ pub struct VM {
     next_fd: i64,
     /// Command-line arguments passed to the script
     cli_args: Vec<String>,
+    /// Whether opcode profiling is enabled
+    profile_opcodes: bool,
+    /// Opcode execution counts for profiling
+    opcode_profile: OpcodeProfile,
 }
 
 impl VM {
@@ -151,6 +176,8 @@ impl VM {
             listener_descriptors: HashMap::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
             cli_args: Vec::new(),
+            profile_opcodes: false,
+            opcode_profile: OpcodeProfile::default(),
         }
     }
 
@@ -158,6 +185,25 @@ impl VM {
     pub fn set_jit_config(&mut self, threshold: u32, trace: bool) {
         self.jit_threshold = threshold;
         self.trace_jit = trace;
+    }
+
+    /// Enable or disable opcode profiling.
+    pub fn set_profile_opcodes(&mut self, enabled: bool) {
+        self.profile_opcodes = enabled;
+    }
+
+    /// Get opcode execution profile.
+    pub fn opcode_profile(&self) -> &OpcodeProfile {
+        &self.opcode_profile
+    }
+
+    /// Record an opcode execution for profiling.
+    /// This is public so JIT helpers can also record their operations.
+    #[inline]
+    pub fn record_opcode(&mut self, name: &'static str) {
+        if self.profile_opcodes {
+            *self.opcode_profile.counts.entry(name).or_insert(0) += 1;
+        }
     }
 
     /// Set command-line arguments for the script.
@@ -455,6 +501,11 @@ impl VM {
             let op = func.code[frame.pc].clone();
             frame.pc += 1;
 
+            // Profile opcode execution if enabled
+            if self.profile_opcodes {
+                *self.opcode_profile.counts.entry(op.name()).or_insert(0) += 1;
+            }
+
             let result = self.execute_op(op, chunk);
             match result {
                 Ok(ControlFlow::Continue) => {}
@@ -507,6 +558,11 @@ impl VM {
 
             let op = func.code[frame.pc].clone();
             frame.pc += 1;
+
+            // Profile opcode execution if enabled
+            if self.profile_opcodes {
+                *self.opcode_profile.counts.entry(op.name()).or_insert(0) += 1;
+            }
 
             let control = self.execute_op(op, chunk);
             match control {
@@ -1747,6 +1803,9 @@ unsafe extern "C" fn jit_call_helper(
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
     let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
 
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("Call");
+
     let func_index = func_index as usize;
     let argc = argc as usize;
 
@@ -1882,6 +1941,9 @@ unsafe extern "C" fn jit_push_string_helper(
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
     let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
 
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("PushString");
+
     let idx = string_index as usize;
     let s = chunk.strings.get(idx).cloned().unwrap_or_default();
 
@@ -1903,6 +1965,9 @@ unsafe extern "C" fn jit_push_string_helper(
 unsafe extern "C" fn jit_array_len_helper(ctx: *mut JitCallContext, ref_index: u64) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("ArrayLen");
 
     let gc_ref = GcRef {
         index: ref_index as usize,
@@ -1931,6 +1996,9 @@ unsafe extern "C" fn jit_syscall_helper(
 ) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("Syscall");
 
     let argc = argc as usize;
 
