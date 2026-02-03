@@ -1,96 +1,87 @@
-# Spec.md
+# Spec.md - JIT拡張: PushString, ArrayLen, Syscall対応
 
 ## 1. Goal
-- mocaで書いたマンデルブロ集合のCLI出力コードと、Rustで書いた同等のコードを比較し、出力の完全一致と実行時間の差を検証できるようにする
+- `examples/mandelbrot.mc` がJITコンパイルされ、インタプリタより高速に実行できるようになる
+- JITコンパイラが `PushString`, `ArrayLen`, `Syscall` 操作をサポートする
 
 ## 2. Non-Goals
-- GUI/画像ファイル出力
-- カラー表示
-- インタラクティブなズーム機能
-- 並列処理による高速化
-- moca言語自体の機能拡張
+- JIT対応操作の全網羅（今回は mandelbrot.mc に必要な操作のみ）
+- JIT最適化（インライン化、ループ最適化等）
+- aarch64の動作確認（ユーザーが実施）
 
 ## 3. Target Users
-- moca言語処理系の開発者
-- moca言語の正確性・性能を検証したい人
+- moca言語ユーザー（JITによる高速実行を期待）
+- moca開発者（JITコンパイラの拡張）
 
 ## 4. Core User Flow
-1. `cargo test mandelbrot` を実行
-2. moca版マンデルブロ集合が計算・文字列生成される
-3. Rust版マンデルブロ集合が計算・文字列生成される
-4. 両者の出力が完全一致するか検証
-5. 各バージョンの実行時間と差分が表示される
-6. テスト結果（PASS/FAIL）が出力される
+1. ユーザーが `moca run examples/mandelbrot.mc` を実行
+2. ホット関数（print_char等）が閾値に達する
+3. JITコンパイラが関数をネイティブコードにコンパイル
+4. 以降の呼び出しはJITコードで実行される
+5. 出力結果はインタプリタ実行と完全一致
 
 ## 5. Inputs & Outputs
-
 ### Inputs
-- 幅: 80（固定）
-- 高さ: 24（固定）
-- 最大イテレーション回数: 変数として指定可能（デフォルト100）
-- 座標範囲: 実部 [-2.0, 1.0]、虚部 [-1.0, 1.0]（固定）
+- moca バイトコード（Op::PushString, Op::ArrayLen, Op::Syscall を含む）
+- 文字列定数テーブル（chunk.strings）
 
 ### Outputs
-- ASCII art文字列（80x24文字）
-- 文字セット: ` .:-=+*#%@`（発散速度に応じて選択）
-- 実行時間（moca版、Rust版、差分）
+- ネイティブコード（x86_64, aarch64）
+- 実行結果（インタプリタと同一）
 
 ## 6. Tech Stack
-- **moca側**: mocaの言語構文で実装
-- **Rust側**: 純粋なRust（標準ライブラリのみ）
-- **テスト**: cargo test
-- **時間計測**: `std::time::Instant`
-- **出力比較**: 文字列完全一致（`assert_eq!`）
+- 言語: Rust
+- アーキテクチャ: x86_64, aarch64
+- 実装方式: ヘルパー関数経由（既存の jit_call_helper パターン）
+- テスト: cargo test
 
 ## 7. Rules & Constraints
-- moca版とRust版は同一のアルゴリズムを使用すること
-- 浮動小数点演算の順序を揃えること（結果一致のため）
-- ASCII文字の選択ロジックを完全に一致させること
-- イテレーション回数は関数引数として受け取れるようにする
-- 出力文字列には末尾改行を含める
+- 既存の `jit_call_helper` パターンを踏襲
+- ヘルパー関数は `unsafe extern "C"` で定義
+- JitCallContext 経由で VM/Chunk にアクセス
+- 結果は JitReturn/JitValue 形式で返す
+- 既存テストが全て通ること
 
 ## 8. Open Questions
-なし
+- なし（VMの実装を踏襲）
 
 ## 9. Acceptance Criteria
-1. [ ] moca版マンデルブロ集合のコードが `examples/` に存在する
-2. [ ] Rust版マンデルブロ集合のコードが `tests/` または `src/` に存在する
-3. [ ] デフォルト設定（80x24, 100イテレーション）でmoca版とRust版の出力が完全一致する
-4. [ ] イテレーション回数を変更しても出力が一致する（50, 200で検証）
-5. [ ] テスト実行時にmoca版の実行時間が表示される
-6. [ ] テスト実行時にRust版の実行時間が表示される
-7. [ ] テスト実行時に両者の時間差が表示される
-8. [ ] `cargo test mandelbrot` で比較テストが実行できる
-9. [ ] 全てのテストがPASSする
-10. [ ] `cargo clippy` で警告が出ない
+1. `cargo run -- run examples/mandelbrot.mc --trace-jit` で `print_char` 関数がJITコンパイルされる
+2. JITコンパイル時に "Unsupported operation" エラーが出ない
+3. JIT実行時の出力がインタプリタ実行と完全一致する
+4. `cargo test mandelbrot` が全てパスする
+5. x86_64 でJITコンパイル・実行が成功する
+6. aarch64 でJITコンパイル・実行が成功する（ユーザー確認）
+7. JIT実行がインタプリタより高速（目安: 2倍以上）
+8. `cargo test` が全てパスする（既存テストへの影響なし）
+9. `cargo clippy` が警告なしでパスする
 
 ## 10. Verification Strategy
-
 ### 進捗検証
-- moca版単体で実行し、マンデルブロ集合らしい出力が得られることを目視確認
-- Rust版単体で実行し、同様の出力が得られることを目視確認
+- 各操作の実装後に `--trace-jit` で該当操作のコンパイル成功を確認
+- 単体テストで出力一致を確認
 
 ### 達成検証
-- `cargo test mandelbrot` が全てPASS
-- 出力文字列の完全一致をテストで自動検証
+- `examples/mandelbrot.mc` がJITコンパイル・実行され、出力が一致
+- インタプリタより高速であることを計測
 
 ### 漏れ検出
-- イテレーション回数を複数パターン（50, 100, 200）でテスト
-- `cargo clippy` でコード品質を確認
+- `cargo test` 全パス
+- `cargo clippy` 警告なし
 
 ## 11. Test Plan
 
-### Test 1: デフォルト設定での出力一致
-- **Given**: イテレーション回数100、サイズ80x24
-- **When**: moca版とRust版を実行
-- **Then**: 出力文字列が完全一致する
+### Scenario 1: JITコンパイル成功
+- **Given**: JIT機能が有効
+- **When**: `examples/mandelbrot.mc` を `--trace-jit --jit-threshold 100` で実行
+- **Then**: `print_char` 関数が "[JIT] Compiled function" と表示される
 
-### Test 2: イテレーション回数変更時の出力一致
-- **Given**: イテレーション回数50および200
-- **When**: moca版とRust版を各設定で実行
-- **Then**: 各設定で出力文字列が完全一致する
+### Scenario 2: 出力一致
+- **Given**: JIT機能が有効
+- **When**: `examples/mandelbrot.mc` を実行
+- **Then**: 出力が `mandelbrot_rust(100)` と完全一致
 
-### Test 3: 実行時間の計測と表示
-- **Given**: デフォルト設定
-- **When**: 比較テストを実行
-- **Then**: moca版時間、Rust版時間、差分が標準出力に表示される
+### Scenario 3: 性能向上
+- **Given**: JIT機能が有効、閾値を1に設定
+- **When**: `mandelbrot.mc` を実行し時間計測
+- **Then**: インタプリタのみの実行より高速（目安: 2倍以上）
