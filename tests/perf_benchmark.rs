@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 /// Required improvement ratio (JIT time must be <= baseline * this value)
 const IMPROVEMENT_THRESHOLD: f64 = 0.9;
 
+/// Number of warmup runs before measurement
+const WARMUP_RUNS: usize = 3;
+
+/// Number of measurement runs to average
+const MEASUREMENT_RUNS: usize = 3;
+
 /// Run a benchmark scenario and return execution time.
 fn run_benchmark(source: &str, jit_enabled: bool) -> Duration {
     // Create temp file
@@ -43,25 +49,44 @@ fn run_benchmark(source: &str, jit_enabled: bool) -> Duration {
 }
 
 /// Assert that JIT version is at least 10% faster than baseline.
+/// Uses warmup runs and averages multiple measurements for stability.
 fn assert_optimization_effect(name: &str, source: &str) {
-    let baseline = run_benchmark(source, false);
-    let optimized = run_benchmark(source, true);
+    // Warmup runs (discard results)
+    for _ in 0..WARMUP_RUNS {
+        run_benchmark(source, false);
+        run_benchmark(source, true);
+    }
 
-    let ratio = optimized.as_secs_f64() / baseline.as_secs_f64();
+    // Measurement runs
+    let mut baseline_times = Vec::with_capacity(MEASUREMENT_RUNS);
+    let mut optimized_times = Vec::with_capacity(MEASUREMENT_RUNS);
+
+    for _ in 0..MEASUREMENT_RUNS {
+        baseline_times.push(run_benchmark(source, false));
+        optimized_times.push(run_benchmark(source, true));
+    }
+
+    // Calculate averages
+    let baseline_avg: f64 =
+        baseline_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / MEASUREMENT_RUNS as f64;
+    let optimized_avg: f64 =
+        optimized_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / MEASUREMENT_RUNS as f64;
+
+    let ratio = optimized_avg / baseline_avg;
     let improvement_pct = (1.0 - ratio) * 100.0;
 
     println!(
-        "[{}] baseline: {:?}, optimized: {:?}, improvement: {:.1}%",
-        name, baseline, optimized, improvement_pct
+        "[{}] baseline avg: {:.4}s ({:?}), optimized avg: {:.4}s ({:?}), improvement: {:.1}%",
+        name, baseline_avg, baseline_times, optimized_avg, optimized_times, improvement_pct
     );
 
     assert!(
-        optimized.as_secs_f64() <= baseline.as_secs_f64() * IMPROVEMENT_THRESHOLD,
+        optimized_avg <= baseline_avg * IMPROVEMENT_THRESHOLD,
         "{}: JIT optimization did not meet 10% improvement threshold.\n\
-         baseline: {:?}, optimized: {:?}, ratio: {:.3} (need <= {})",
+         baseline avg: {:.4}s, optimized avg: {:.4}s, ratio: {:.3} (need <= {})",
         name,
-        baseline,
-        optimized,
+        baseline_avg,
+        optimized_avg,
         ratio,
         IMPROVEMENT_THRESHOLD
     );
