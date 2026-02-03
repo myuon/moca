@@ -586,7 +586,12 @@ impl<'a> AstPrinter<'a> {
                     self.print_statement(stmt, stmt_prefix, &child_prefix_str);
                 }
                 self.write_indent_with(&child_prefix);
-                self.print_expr(block_expr, "└── ", statements.is_empty(), &format!("{}    ", child_prefix));
+                self.print_expr(
+                    block_expr,
+                    "└── ",
+                    statements.is_empty(),
+                    &format!("{}    ", child_prefix),
+                );
             }
         }
     }
@@ -1474,10 +1479,6 @@ impl<'a> Disassembler<'a> {
             Op::Argc => self.output.push_str("Argc"),
             Op::Argv => self.output.push_str("Argv"),
             Op::Args => self.output.push_str("Args"),
-
-            // Type literal operations
-            Op::VecLiteral(n) => self.output.push_str(&format!("VecLiteral {}", n)),
-            Op::MapLiteral(n) => self.output.push_str(&format!("MapLiteral {}", n)),
         }
     }
 }

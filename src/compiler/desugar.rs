@@ -384,8 +384,8 @@ impl Desugar {
     /// ```text
     /// {
     ///     let __new_literal_N: Vec<T> = Vec<T>::uninit(count);
-    ///     __new_literal_N[0] = e1;
-    ///     __new_literal_N[1] = e2;
+    ///     __new_literal_N.set(0, e1);
+    ///     __new_literal_N.set(1, e2);
     ///     ...
     ///     __new_literal_N
     /// }
@@ -477,21 +477,27 @@ impl Desugar {
             span,
         });
 
-        // __new_literal_N[i] = e_i;
+        // __new_literal_N.set(i, e_i);
         for (i, elem) in elements.into_iter().enumerate() {
             if let NewLiteralElement::Value(value) = elem {
-                statements.push(Statement::IndexAssign {
-                    object: Expr::Ident {
-                        name: var_name.clone(),
+                statements.push(Statement::Expr {
+                    expr: Expr::MethodCall {
+                        object: Box::new(Expr::Ident {
+                            name: var_name.clone(),
+                            span,
+                        }),
+                        method: "set".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            Expr::Int {
+                                value: i as i64,
+                                span,
+                            },
+                            value,
+                        ],
                         span,
                     },
-                    index: Expr::Int {
-                        value: i as i64,
-                        span,
-                    },
-                    value,
                     span,
-                    object_type: None,
                 });
             }
         }
@@ -589,7 +595,6 @@ impl Desugar {
         }
     }
 }
-
 
 /// Desugar a program, expanding syntax sugar into core constructs.
 pub fn desugar_program(program: Program) -> Program {
