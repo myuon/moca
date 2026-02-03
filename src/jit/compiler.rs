@@ -963,7 +963,89 @@ impl JitCompiler {
 
     /// Emit PushString operation.
     /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    /// Emit PushString operation with string constant caching.
+    ///
+    /// JitCallContext layout:
+    /// - offset 56: string_cache (*const Option<GcRef>)
+    ///
+    /// Option<GcRef> layout (16 bytes):
+    /// - offset 0: discriminant (0=None, non-0=Some)
+    /// - offset 8: value (GcRef.index if Some)
     fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
+        // Calculate cache entry address: string_cache + string_index * 16
+        // Load string_cache pointer from JitCallContext (offset 56)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::VM_CTX, 56); // TMP0 = string_cache
+        }
+
+        // Calculate offset: string_index * 16
+        self.emit_load_imm64_to_reg((string_index * 16) as i64, regs::TMP1);
+
+        // TMP0 = string_cache + offset
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP1);
+        }
+
+        // Load discriminant (tag) from cache entry
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP1, regs::TMP0, 0); // TMP1 = discriminant
+        }
+
+        // Check if discriminant is 0 (None) - need to call helper
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cmp_imm(regs::TMP1, 0);
+        }
+
+        // Branch to helper call if None (discriminant == 0)
+        let branch_to_helper_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b_cond(Cond::Eq, 0); // B.EQ placeholder - will patch later
+        }
+
+        // === FAST PATH: Cache hit ===
+        // Load cached ref value from cache entry (offset 8)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP1, regs::TMP0, 8); // TMP1 = cached GcRef.index
+        }
+
+        // Push Ref onto JIT stack
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Store tag (4 = PTR)
+            asm.mov_imm(regs::TMP0, value_tags::TAG_PTR as u16);
+            asm.str(regs::TMP0, regs::VSTACK, 0);
+            // Store payload (ref index)
+            asm.str(regs::TMP1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Branch to end (skip slow path)
+        let branch_to_end_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // B placeholder - will patch later
+        }
+
+        // === SLOW PATH: Cache miss - call helper ===
+        let helper_start_pos = self.buf.len();
+
+        // Patch the conditional branch to jump here
+        {
+            let offset = (helper_start_pos as i32) - (branch_to_helper_pos as i32);
+            let code = self.buf.code_mut();
+            // B.cond encoding: 0101 0100 iiii iiii iiii iiii iii0 cccc
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = 0x54000000 | (imm19 << 5); // cond=0 (EQ)
+            code[branch_to_helper_pos..branch_to_helper_pos + 4]
+                .copy_from_slice(&inst.to_le_bytes());
+        }
+
         // Save callee-saved registers
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
@@ -1009,61 +1091,86 @@ impl JitCompiler {
             asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         }
 
+        // === END ===
+        let end_pos = self.buf.len();
+
+        // Patch the unconditional branch to jump here
+        {
+            let offset = (end_pos as i32) - (branch_to_end_pos as i32);
+            let code = self.buf.code_mut();
+            // B encoding: 0001 01ii iiii iiii iiii iiii iiii iiii
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = 0x14000000 | imm26;
+            code[branch_to_end_pos..branch_to_end_pos + 4].copy_from_slice(&inst.to_le_bytes());
+        }
+
         self.stack_depth += 1;
 
         Ok(())
     }
 
     /// Emit ArrayLen operation.
-    /// Pops a Ref from stack, calls array_len_helper to get length, pushes i64.
+    /// Pops a Ref from stack, reads slot_count from heap header, pushes i64.
+    ///
+    /// Heap header layout (64 bits):
+    /// - bits 30-61: slot_count (32 bits)
+    ///
+    /// JitCallContext layout:
+    /// - offset 48: heap_base (*const u64)
     fn emit_array_len(&mut self) -> Result<(), String> {
-        // Pop the Ref from JIT stack
+        // Pop the Ref from JIT stack and load ref_index
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
             // Load payload (ref index) - tag at offset 0, payload at offset 8
-            asm.ldr(regs::TMP1, regs::VSTACK, 8); // x1 = ref_index
+            asm.ldr(regs::TMP0, regs::VSTACK, 8); // TMP0 = ref_index
         }
 
-        // Save callee-saved registers
+        // Load heap_base from JitCallContext (offset 48)
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
-            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+            asm.ldr(regs::TMP1, regs::VM_CTX, 48); // TMP1 = heap_base
         }
 
-        // Set up arguments for array_len_helper:
-        // x0 = ctx (VM_CTX register)
-        // x1 = ref_index (already in x1)
+        // Calculate header address: heap_base + ref_index * 8
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.mov(Reg::X0, regs::VM_CTX);
+            // TMP0 = ref_index << 3 (multiply by 8)
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+            // TMP1 = heap_base + offset
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
         }
 
-        // Load array_len_helper from JitCallContext (offset 32)
+        // Load header from memory
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldr(regs::TMP4, regs::VM_CTX, 32);
+            asm.ldr(regs::TMP0, regs::TMP1, 0); // TMP0 = header
         }
 
-        // Call the helper
+        // Extract slot_count: (header >> 30) & 0xFFFFFFFF
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.blr(regs::TMP4);
+            // Shift right by 30 bits
+            asm.lsr_imm(regs::TMP0, regs::TMP0, 30);
+            // Mask to 32 bits (AND with 0xFFFFFFFF)
+            // On AArch64, we can use UBFX or just use the lower 32 bits
+            // Since we shifted by 30, we have at most 34 bits, but slot_count is 32 bits
+            // We need to mask: AND with 0xFFFFFFFF
+            self.emit_load_imm64_to_reg(0xFFFFFFFF, regs::TMP1);
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.and(regs::TMP0, regs::TMP0, regs::TMP1);
         }
 
-        // Restore saved registers
+        // Push result as i64 onto the JIT stack
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
-            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
-        }
-
-        // Push the return value onto the JIT stack
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.str(Reg::X0, regs::VSTACK, 0);
-            asm.str(Reg::X1, regs::VSTACK, 8);
+            // Store tag (0 = int)
+            asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+            asm.str(regs::TMP1, regs::VSTACK, 0);
+            // Store slot_count as payload
+            asm.str(regs::TMP0, regs::VSTACK, 8);
             asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         }
 

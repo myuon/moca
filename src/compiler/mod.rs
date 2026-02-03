@@ -370,6 +370,7 @@ pub fn run_file_with_dump(
     // Execution with runtime configuration
     let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
     vm.set_jit_config(config.jit_threshold, config.trace_jit);
+    vm.set_profile_opcodes(config.profile_opcodes);
     vm.set_cli_args(cli_args);
 
     vm.run(&chunk)?;
@@ -381,6 +382,24 @@ pub fn run_file_with_dump(
             "[GC] Collections: {}, Total pause: {}us, Max pause: {}us",
             stats.cycles, stats.total_pause_us, stats.max_pause_us
         );
+    }
+
+    // Print opcode profile if requested
+    if config.profile_opcodes {
+        let profile = vm.opcode_profile();
+        eprintln!("\n== Opcode Profile ==");
+        eprintln!(
+            "Total instructions executed: {}",
+            profile.total_instructions()
+        );
+        eprintln!("\nExecution counts by opcode:");
+        eprintln!("{:<20} {:>15} {:>10}", "Opcode", "Count", "Percent");
+        eprintln!("{:-<47}", "");
+        let total = profile.total_instructions() as f64;
+        for (name, count) in profile.sorted_by_count() {
+            let percent = (count as f64 / total) * 100.0;
+            eprintln!("{:<20} {:>15} {:>9.2}%", name, count, percent);
+        }
     }
 
     Ok(())

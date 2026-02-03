@@ -104,6 +104,10 @@ enum Commands {
         /// Dump bytecode to stderr, or to a file with --dump-bytecode=path
         #[arg(long, value_name = "FILE", num_args = 0..=1)]
         dump_bytecode: Option<Option<PathBuf>>,
+
+        /// Profile opcode execution counts
+        #[arg(long)]
+        profile_opcodes: bool,
     },
     /// Start the language server
     Lsp,
@@ -146,6 +150,7 @@ fn main() -> ExitCode {
             dump_ast,
             dump_resolved,
             dump_bytecode,
+            profile_opcodes,
         } => {
             let path = match file {
                 Some(p) => p,
@@ -171,6 +176,7 @@ fn main() -> ExitCode {
                 trace_jit,
                 gc_mode: gc_mode.into(),
                 gc_stats,
+                profile_opcodes,
                 ..Default::default()
             };
 

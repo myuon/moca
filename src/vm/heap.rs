@@ -286,6 +286,16 @@ impl Heap {
         }
     }
 
+    /// Get a raw pointer to the heap memory base.
+    /// This is used by JIT code to directly access heap objects.
+    ///
+    /// # Safety
+    /// The returned pointer is valid as long as no heap reallocation occurs.
+    /// JIT code should only use this during a single execution without GC.
+    pub fn memory_base_ptr(&self) -> *const u64 {
+        self.memory.as_ptr()
+    }
+
     /// Check if allocation would exceed heap limit.
     fn check_heap_limit(&self, additional_bytes: usize) -> Result<(), String> {
         if let Some(limit) = self.heap_limit {

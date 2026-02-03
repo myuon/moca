@@ -35,6 +35,8 @@ pub struct RuntimeConfig {
     pub gc_enabled: bool,
     /// Hard limit on heap size in bytes (None = unlimited)
     pub heap_limit: Option<usize>,
+    /// Whether to profile opcode execution counts
+    pub profile_opcodes: bool,
 }
 
 impl Default for RuntimeConfig {
@@ -47,6 +49,7 @@ impl Default for RuntimeConfig {
             gc_stats: false,
             gc_enabled: true,
             heap_limit: None,
+            profile_opcodes: false,
         }
     }
 }

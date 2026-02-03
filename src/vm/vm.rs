@@ -46,6 +46,27 @@ pub struct VmGcStats {
     pub max_pause_us: u64,
 }
 
+/// Opcode execution profile data.
+#[derive(Debug, Clone, Default)]
+pub struct OpcodeProfile {
+    /// Execution counts per opcode name
+    pub counts: HashMap<&'static str, u64>,
+}
+
+impl OpcodeProfile {
+    /// Get total number of executed instructions.
+    pub fn total_instructions(&self) -> u64 {
+        self.counts.values().sum()
+    }
+
+    /// Get sorted entries by count (descending).
+    pub fn sorted_by_count(&self) -> Vec<(&'static str, u64)> {
+        let mut entries: Vec<_> = self.counts.iter().map(|(&k, &v)| (k, v)).collect();
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries
+    }
+}
+
 /// The moca virtual machine.
 pub struct VM {
     stack: Vec<Value>,
@@ -88,6 +109,13 @@ pub struct VM {
     next_fd: i64,
     /// Command-line arguments passed to the script
     cli_args: Vec<String>,
+    /// Whether opcode profiling is enabled
+    profile_opcodes: bool,
+    /// Opcode execution counts for profiling
+    opcode_profile: OpcodeProfile,
+    /// String constant cache: maps string index to heap reference
+    /// Once a string constant is allocated, it's cached here for reuse.
+    string_cache: Vec<Option<GcRef>>,
 }
 
 impl VM {
@@ -151,13 +179,66 @@ impl VM {
             listener_descriptors: HashMap::new(),
             next_fd: 3, // fd 0, 1, 2 are reserved for stdin, stdout, stderr
             cli_args: Vec::new(),
+            profile_opcodes: false,
+            opcode_profile: OpcodeProfile::default(),
+            string_cache: Vec::new(),
         }
+    }
+
+    /// Initialize string constant cache for a chunk.
+    fn init_string_cache(&mut self, chunk: &Chunk) {
+        self.string_cache = vec![None; chunk.strings.len()];
+    }
+
+    /// Get or allocate a string constant.
+    /// Returns the cached reference if available, otherwise allocates and caches.
+    fn get_or_alloc_string(&mut self, idx: usize, chunk: &Chunk) -> Result<GcRef, String> {
+        // Check cache first
+        if let Some(Some(r)) = self.string_cache.get(idx) {
+            return Ok(*r);
+        }
+
+        // Allocate and cache
+        let s = chunk.strings.get(idx).cloned().unwrap_or_default();
+        let r = self.heap.alloc_string(s)?;
+
+        // Store in cache
+        if idx < self.string_cache.len() {
+            self.string_cache[idx] = Some(r);
+        }
+
+        Ok(r)
+    }
+
+    /// Get the string cache base pointer for JIT access.
+    /// Returns pointer to the first element of the cache Vec.
+    pub fn string_cache_ptr(&self) -> *const Option<GcRef> {
+        self.string_cache.as_ptr()
     }
 
     /// Configure JIT settings.
     pub fn set_jit_config(&mut self, threshold: u32, trace: bool) {
         self.jit_threshold = threshold;
         self.trace_jit = trace;
+    }
+
+    /// Enable or disable opcode profiling.
+    pub fn set_profile_opcodes(&mut self, enabled: bool) {
+        self.profile_opcodes = enabled;
+    }
+
+    /// Get opcode execution profile.
+    pub fn opcode_profile(&self) -> &OpcodeProfile {
+        &self.opcode_profile
+    }
+
+    /// Record an opcode execution for profiling.
+    /// This is public so JIT helpers can also record their operations.
+    #[inline]
+    pub fn record_opcode(&mut self, name: &'static str) {
+        if self.profile_opcodes {
+            *self.opcode_profile.counts.entry(name).or_insert(0) += 1;
+        }
     }
 
     /// Set command-line arguments for the script.
@@ -329,6 +410,9 @@ impl VM {
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
             syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
+            string_cache: self.string_cache.as_ptr() as *const u64,
+            string_cache_len: self.string_cache.len() as u64,
         };
 
         // Execute the JIT code
@@ -395,6 +479,9 @@ impl VM {
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
             syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
+            string_cache: self.string_cache.as_ptr() as *const u64,
+            string_cache_len: self.string_cache.len() as u64,
         };
 
         // Execute the JIT code
@@ -426,6 +513,8 @@ impl VM {
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), String> {
         // Initialize call counts for JIT
         self.init_call_counts(chunk);
+        // Initialize string constant cache
+        self.init_string_cache(chunk);
 
         // Start with main
         self.frames.push(Frame {
@@ -454,6 +543,11 @@ impl VM {
 
             let op = func.code[frame.pc].clone();
             frame.pc += 1;
+
+            // Profile opcode execution if enabled
+            if self.profile_opcodes {
+                *self.opcode_profile.counts.entry(op.name()).or_insert(0) += 1;
+            }
 
             let result = self.execute_op(op, chunk);
             match result {
@@ -508,6 +602,11 @@ impl VM {
             let op = func.code[frame.pc].clone();
             frame.pc += 1;
 
+            // Profile opcode execution if enabled
+            if self.profile_opcodes {
+                *self.opcode_profile.counts.entry(op.name()).or_insert(0) += 1;
+            }
+
             let control = self.execute_op(op, chunk);
             match control {
                 Ok(ControlFlow::Continue) => {}
@@ -553,8 +652,7 @@ impl VM {
                 self.stack.push(Value::Null);
             }
             Op::PushString(idx) => {
-                let s = chunk.strings.get(idx).cloned().unwrap_or_default();
-                let r = self.heap.alloc_string(s)?;
+                let r = self.get_or_alloc_string(idx, chunk)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::Pop => {
@@ -1293,7 +1391,13 @@ impl VM {
 
     fn collect_garbage(&mut self) {
         // Collect all roots from the stack
-        let roots: Vec<Value> = self.stack.clone();
+        let mut roots: Vec<Value> = self.stack.clone();
+
+        // Add string cache references as roots
+        for r in self.string_cache.iter().flatten() {
+            roots.push(Value::Ref(*r));
+        }
+
         self.heap.collect(&roots);
     }
 
@@ -1747,6 +1851,9 @@ unsafe extern "C" fn jit_call_helper(
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
     let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
 
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("Call");
+
     let func_index = func_index as usize;
     let argc = argc as usize;
 
@@ -1882,10 +1989,13 @@ unsafe extern "C" fn jit_push_string_helper(
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
     let chunk = unsafe { &*(ctx_ref.chunk as *const Chunk) };
 
-    let idx = string_index as usize;
-    let s = chunk.strings.get(idx).cloned().unwrap_or_default();
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("PushString");
 
-    match vm.heap.alloc_string(s) {
+    let idx = string_index as usize;
+
+    // Use get_or_alloc_string which handles caching
+    match vm.get_or_alloc_string(idx, chunk) {
         Ok(r) => JitReturn {
             tag: 4, // TAG_PTR
             payload: r.index as u64,
@@ -1903,6 +2013,9 @@ unsafe extern "C" fn jit_push_string_helper(
 unsafe extern "C" fn jit_array_len_helper(ctx: *mut JitCallContext, ref_index: u64) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("ArrayLen");
 
     let gc_ref = GcRef {
         index: ref_index as usize,
@@ -1931,6 +2044,9 @@ unsafe extern "C" fn jit_syscall_helper(
 ) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    // Record opcode for profiling (JIT path)
+    vm.record_opcode("Syscall");
 
     let argc = argc as usize;
 

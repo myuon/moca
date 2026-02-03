@@ -1292,36 +1292,110 @@ impl JitCompiler {
 
     /// Emit PushString operation.
     /// Calls push_string_helper to allocate string on heap and push Ref to stack.
+    /// Emit PushString operation with string constant caching.
+    ///
+    /// JitCallContext layout:
+    /// - offset 56: string_cache (*const Option<GcRef>)
+    ///
+    /// Option<GcRef> layout (16 bytes):
+    /// - offset 0: discriminant (0=None, non-0=Some)
+    /// - offset 8: value (GcRef.index if Some)
     fn emit_push_string(&mut self, string_index: usize) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Calculate cache entry address: string_cache + string_index * 16
+        // Load string_cache pointer from JitCallContext (offset 56)
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::VM_CTX, 56); // TMP0 = string_cache
 
-        // Save callee-saved registers
-        asm.push(regs::VM_CTX);
-        asm.push(regs::VSTACK);
-        asm.push(regs::LOCALS);
+            // Calculate offset and add: TMP0 = string_cache + string_index * 16
+            asm.add_ri32(regs::TMP0, (string_index * 16) as i32);
 
-        // Set up arguments for push_string_helper:
-        // RDI = ctx (VM_CTX register)
-        // RSI = string_index
-        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_ri64(Reg::Rsi, string_index as i64);
+            // Load discriminant (tag) from cache entry
+            asm.mov_rm(regs::TMP1, regs::TMP0, 0); // TMP1 = discriminant
 
-        // Load push_string_helper from JitCallContext (offset 24)
-        asm.mov_rm(regs::TMP4, regs::VM_CTX, 24);
+            // Check if discriminant is 0 (None) - need to call helper
+            asm.test_rr(regs::TMP1, regs::TMP1);
+        }
 
-        // Call the helper
-        asm.call_r(regs::TMP4);
+        // JE (jump if equal/zero) to helper - placeholder
+        let je_to_helper_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.je_rel32(0); // Will patch later
+        }
 
-        // Restore saved registers
-        asm.pop(regs::LOCALS);
-        asm.pop(regs::VSTACK);
-        asm.pop(regs::VM_CTX);
+        // === FAST PATH: Cache hit ===
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Load cached ref value from cache entry (offset 8)
+            asm.mov_rm(regs::TMP1, regs::TMP0, 8); // TMP1 = cached GcRef.index
 
-        // Push the return value onto the JIT stack
-        // Return value is in RAX (tag) and RDX (payload)
-        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
-        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
-        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+            // Push Ref onto JIT stack
+            // Store tag (4 = PTR)
+            asm.mov_ri64(regs::TMP0, value_tags::TAG_PTR as i64);
+            asm.mov_mr(regs::VSTACK, 0, regs::TMP0);
+            // Store payload (ref index)
+            asm.mov_mr(regs::VSTACK, 8, regs::TMP1);
+            asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+        }
+
+        // JMP to end (skip slow path) - placeholder
+        let jmp_to_end_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // Will patch later
+        }
+
+        // === SLOW PATH: Cache miss - call helper ===
+        let helper_start_pos = self.buf.len();
+
+        // Patch JE to jump here
+        {
+            let offset = (helper_start_pos as i32) - (je_to_helper_pos as i32) - 6; // 6 = size of JE rel32
+            let code = self.buf.code_mut();
+            code[je_to_helper_pos + 2..je_to_helper_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        // Save callee-saved registers and call helper
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.push(regs::VM_CTX);
+            asm.push(regs::VSTACK);
+            asm.push(regs::LOCALS);
+
+            // Set up arguments for push_string_helper:
+            // RDI = ctx (VM_CTX register)
+            // RSI = string_index
+            asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+            asm.mov_ri64(Reg::Rsi, string_index as i64);
+
+            // Load push_string_helper from JitCallContext (offset 24)
+            asm.mov_rm(regs::TMP4, regs::VM_CTX, 24);
+
+            // Call the helper
+            asm.call_r(regs::TMP4);
+
+            // Restore saved registers
+            asm.pop(regs::LOCALS);
+            asm.pop(regs::VSTACK);
+            asm.pop(regs::VM_CTX);
+
+            // Push the return value onto the JIT stack
+            // Return value is in RAX (tag) and RDX (payload)
+            asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
+            asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
+            asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+        }
+
+        // === END ===
+        let end_pos = self.buf.len();
+
+        // Patch JMP to jump here
+        {
+            let offset = (end_pos as i32) - (jmp_to_end_pos as i32) - 5; // 5 = size of JMP rel32
+            let code = self.buf.code_mut();
+            code[jmp_to_end_pos + 1..jmp_to_end_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
 
         self.stack_depth += 1;
 
@@ -1329,40 +1403,45 @@ impl JitCompiler {
     }
 
     /// Emit ArrayLen operation.
-    /// Pops a Ref from stack, calls array_len_helper to get length, pushes i64.
+    /// Pops a Ref from stack, reads slot_count from heap header, pushes i64.
+    ///
+    /// Heap header layout (64 bits):
+    /// - bits 30-61: slot_count (32 bits)
+    ///
+    /// JitCallContext layout:
+    /// - offset 48: heap_base (*const u64)
     fn emit_array_len(&mut self) -> Result<(), String> {
         let mut asm = X86_64Assembler::new(&mut self.buf);
 
         // Pop the Ref from JIT stack
         asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
         // Load payload (ref index) - tag at offset 0, payload at offset 8
-        asm.mov_rm(regs::TMP1, regs::VSTACK, 8); // TMP1 = ref_index
+        asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // TMP0 = ref_index
 
-        // Save callee-saved registers
-        asm.push(regs::VM_CTX);
-        asm.push(regs::VSTACK);
-        asm.push(regs::LOCALS);
+        // Load heap_base from JitCallContext (offset 48)
+        asm.mov_rm(regs::TMP1, regs::VM_CTX, 48); // TMP1 = heap_base
 
-        // Set up arguments for array_len_helper:
-        // RDI = ctx (VM_CTX register)
-        // RSI = ref_index
-        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rr(Reg::Rsi, regs::TMP1);
+        // Calculate header address: heap_base + ref_index * 8
+        // TMP0 = ref_index << 3 (multiply by 8)
+        asm.shl_ri(regs::TMP0, 3);
+        // TMP1 = heap_base + offset
+        asm.add_rr(regs::TMP1, regs::TMP0);
 
-        // Load array_len_helper from JitCallContext (offset 32)
-        asm.mov_rm(regs::TMP4, regs::VM_CTX, 32);
+        // Load header from memory: TMP0 = *TMP1
+        asm.mov_rm(regs::TMP0, regs::TMP1, 0);
 
-        // Call the helper
-        asm.call_r(regs::TMP4);
+        // Extract slot_count: (header >> 30) & 0xFFFFFFFF
+        asm.shr_ri(regs::TMP0, 30);
+        // Mask to 32 bits: AND with 0xFFFFFFFF
+        asm.mov_ri64(regs::TMP1, 0xFFFFFFFF);
+        asm.and_rr(regs::TMP0, regs::TMP1);
 
-        // Restore saved registers
-        asm.pop(regs::LOCALS);
-        asm.pop(regs::VSTACK);
-        asm.pop(regs::VM_CTX);
-
-        // Push the return value onto the JIT stack
-        asm.mov_mr(regs::VSTACK, 0, Reg::Rax);
-        asm.mov_mr(regs::VSTACK, 8, Reg::Rdx);
+        // Push result as i64 onto the JIT stack
+        // Store tag (0 = int)
+        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
+        asm.mov_mr(regs::VSTACK, 0, regs::TMP1);
+        // Store slot_count as payload
+        asm.mov_mr(regs::VSTACK, 8, regs::TMP0);
         asm.add_ri32(regs::VSTACK, VALUE_SIZE);
 
         // Stack depth unchanged: -1 (pop ref) + 1 (push len) = 0

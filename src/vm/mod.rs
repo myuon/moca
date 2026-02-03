@@ -23,6 +23,9 @@ pub use value::Value;
 // Verifier for bytecode validation (used by embedders/tools)
 #[allow(unused_imports)]
 pub use verifier::{Verifier, VerifyError};
+// OpcodeProfile exported for external profiling tools
+#[allow(unused_imports)]
+pub use vm::OpcodeProfile;
 pub use vm::VM;
 
 /// A compiled function.
