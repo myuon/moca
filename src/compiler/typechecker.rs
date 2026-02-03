@@ -1051,19 +1051,18 @@ impl TypeChecker {
                 let idx_type = self.infer_expr(index, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Index should be int
-                if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
-                    self.errors.push(e);
-                }
-
                 // Record the object type for codegen
                 let resolved_obj_type = self.substitution.apply(&obj_type);
                 self.index_object_types
                     .insert(*span, resolved_obj_type.clone());
 
-                // Object can be array<T>, Vector<T>, or Vec<T> generic struct
+                // Object can be array<T>, Vector<T>, Vec<T>, or Map<K,V> generic struct
                 match resolved_obj_type {
                     Type::Array(elem) | Type::Vector(elem) => {
+                        // Index should be int for Array/Vector
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
                         if let Err(e) = self.unify(&val_type, &elem, *span) {
                             self.errors.push(e);
                         }
@@ -1073,9 +1072,29 @@ impl TypeChecker {
                         ref type_args,
                         ..
                     } if name == "Vec" => {
-                        // Vec<T> - check element type
+                        // Vec<T> - index should be int, check element type
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
                         if let Some(elem) = type_args.first()
                             && let Err(e) = self.unify(&val_type, elem, *span)
+                        {
+                            self.errors.push(e);
+                        }
+                    }
+                    Type::GenericStruct {
+                        ref name,
+                        ref type_args,
+                        ..
+                    } if name == "Map" => {
+                        // Map<K,V> - index should be key type K, check value type V
+                        if let Some(key_type) = type_args.first()
+                            && let Err(e) = self.unify(&idx_type, key_type, *span)
+                        {
+                            self.errors.push(e);
+                        }
+                        if let Some(val_elem) = type_args.get(1)
+                            && let Err(e) = self.unify(&val_type, val_elem, *span)
                         {
                             self.errors.push(e);
                         }
@@ -1235,22 +1254,69 @@ impl TypeChecker {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
 
-                // Index should be int
-                if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
-                    self.errors.push(e);
-                }
-
                 // Record the object type for codegen
                 let resolved_obj_type = self.substitution.apply(&obj_type);
                 self.index_object_types
                     .insert(*span, resolved_obj_type.clone());
 
-                // Object can be array<T>, Vector<T>, string, or struct (structs are compiled as arrays)
+                // Object can be array<T>, Vector<T>, Vec<T>, Map<K,V>, string, or struct
                 match resolved_obj_type {
-                    Type::Array(elem) => self.substitution.apply(&elem),
-                    Type::Vector(elem) => self.substitution.apply(&elem),
-                    Type::String => Type::Int, // String index returns byte value as int
+                    Type::Array(elem) => {
+                        // Index should be int for Array
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
+                        self.substitution.apply(&elem)
+                    }
+                    Type::Vector(elem) => {
+                        // Index should be int for Vector
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
+                        self.substitution.apply(&elem)
+                    }
+                    Type::String => {
+                        // Index should be int for String
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
+                        Type::Int // String index returns byte value as int
+                    }
+                    Type::GenericStruct {
+                        ref name,
+                        ref type_args,
+                        ..
+                    } if name == "Vec" => {
+                        // Vec<T> - index should be int, return element type T
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
+                        type_args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| self.fresh_var())
+                    }
+                    Type::GenericStruct {
+                        ref name,
+                        ref type_args,
+                        ..
+                    } if name == "Map" => {
+                        // Map<K,V> - index should be key type K, return value type V
+                        if let Some(key_type) = type_args.first()
+                            && let Err(e) = self.unify(&idx_type, key_type, *span)
+                        {
+                            self.errors.push(e);
+                        }
+                        type_args
+                            .get(1)
+                            .cloned()
+                            .unwrap_or_else(|| self.fresh_var())
+                    }
                     Type::Struct { fields, .. } => {
+                        // Index should be int for Struct
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
                         // For structs, index access returns a type variable
                         // (we'd need to know the index value at compile time to be precise)
                         // All fields may have different types, so return a fresh var
@@ -1268,7 +1334,7 @@ impl TypeChecker {
                     _ => {
                         self.errors.push(TypeError::new(
                             format!(
-                                "expected array, Vector, string or struct, found `{}`",
+                                "expected array, Vector, Vec, Map, string or struct, found `{}`",
                                 obj_type
                             ),
                             *span,
