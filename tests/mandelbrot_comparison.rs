@@ -247,6 +247,21 @@ fn mandelbrot_comparison_200() {
     compare_mandelbrot(200);
 }
 
+#[test]
+fn mandelbrot_comparison_300() {
+    compare_mandelbrot(300);
+}
+
+#[test]
+fn mandelbrot_comparison_500() {
+    compare_mandelbrot(500);
+}
+
+#[test]
+fn mandelbrot_comparison_800() {
+    compare_mandelbrot(800);
+}
+
 /// Verify that the examples/mandelbrot.mc file produces the expected output.
 #[test]
 fn mandelbrot_example_file() {
