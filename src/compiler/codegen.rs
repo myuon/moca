@@ -823,6 +823,14 @@ impl Codegen {
                     ops.push(Op::VecLiteral(elements.len()));
                 }
             }
+            ResolvedExpr::BlockExpr { statements, expr } => {
+                // Compile all statements in the block
+                for stmt in statements {
+                    self.compile_statement(stmt, ops)?;
+                }
+                // Compile the final expression - its result is the block's result
+                self.compile_expr(expr, ops)?;
+            }
         }
 
         Ok(())

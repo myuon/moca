@@ -167,6 +167,11 @@ pub enum ResolvedExpr {
         type_args: Vec<crate::compiler::types::TypeAnnotation>,
         elements: Vec<ResolvedNewLiteralElement>,
     },
+    /// Block expression: `{ stmt1; stmt2; expr }` - evaluates to the final expression.
+    BlockExpr {
+        statements: Vec<ResolvedStatement>,
+        expr: Box<ResolvedExpr>,
+    },
 }
 
 /// An element in a resolved new literal.
@@ -1002,6 +1007,29 @@ impl<'a> Resolver<'a> {
                     type_name,
                     type_args,
                     elements: resolved_elements,
+                })
+            }
+
+            Expr::BlockExpr {
+                statements, expr, ..
+            } => {
+                // Create a new scope for the block
+                scope.enter_scope();
+
+                // Resolve all statements in the block
+                let resolved_stmts: Vec<ResolvedStatement> = statements
+                    .into_iter()
+                    .map(|stmt| self.resolve_statement(stmt, scope))
+                    .collect::<Result<_, _>>()?;
+
+                // Resolve the final expression
+                let resolved_expr = self.resolve_expr(*expr, scope)?;
+
+                scope.exit_scope();
+
+                Ok(ResolvedExpr::BlockExpr {
+                    statements: resolved_stmts,
+                    expr: Box::new(resolved_expr),
                 })
             }
         }

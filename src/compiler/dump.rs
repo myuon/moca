@@ -568,6 +568,26 @@ impl<'a> AstPrinter<'a> {
                 self.write_type_suffix(expr);
                 self.newline();
             }
+            Expr::BlockExpr {
+                statements,
+                expr: block_expr,
+                ..
+            } => {
+                self.write(&format!(
+                    "{}BlockExpr: [{} stmts]",
+                    prefix,
+                    statements.len()
+                ));
+                self.newline();
+                for stmt in statements.iter() {
+                    let stmt_prefix = "├── ";
+                    let child_prefix_str = format!("{}│   ", child_prefix);
+                    self.write_indent_with(&child_prefix);
+                    self.print_statement(stmt, stmt_prefix, &child_prefix_str);
+                }
+                self.write_indent_with(&child_prefix);
+                self.print_expr(block_expr, "└── ", statements.is_empty(), &format!("{}    ", child_prefix));
+            }
         }
     }
 
@@ -1218,6 +1238,17 @@ impl ResolvedProgramPrinter {
                     elements.len()
                 ));
                 self.newline();
+            }
+            ResolvedExpr::BlockExpr { statements, expr } => {
+                self.write(&format!("{}BlockExpr({} stmts)", prefix, statements.len()));
+                self.newline();
+                let block_child_prefix = format!("{}    ", parent_prefix);
+                for stmt in statements {
+                    self.write_indent_with(parent_prefix);
+                    self.print_statement(stmt, "├── ", &block_child_prefix);
+                }
+                self.write_indent_with(parent_prefix);
+                self.print_expr(expr, "└── result: ", &block_child_prefix);
             }
         }
     }

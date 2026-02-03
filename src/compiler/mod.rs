@@ -3,6 +3,7 @@
 
 pub mod ast;
 mod codegen;
+pub mod desugar;
 pub mod dump;
 pub mod lexer;
 mod module;
