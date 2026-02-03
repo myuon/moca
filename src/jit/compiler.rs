@@ -263,6 +263,7 @@ impl JitCompiler {
             Op::PushString(idx) => self.emit_push_string(*idx),
             Op::ArrayLen => self.emit_array_len(),
             Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
+            Op::Neg => self.emit_neg(),
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -986,6 +987,102 @@ impl JitCompiler {
         // Update stack depth: -argc + 1 (pop args, push result)
         self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
 
+        Ok(())
+    }
+
+    /// Emit Neg operation.
+    /// Negates the top value on the stack (int or float).
+    fn emit_neg(&mut self) -> Result<(), String> {
+        // Load tag and payload from top of stack
+        // Stack layout: [tag: 8 bytes][payload: 8 bytes]
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldur(regs::TMP0, regs::VSTACK, -(VALUE_SIZE as i16)); // tag
+            asm.ldur(regs::TMP1, regs::VSTACK, -(VALUE_SIZE as i16) + 8); // payload
+        }
+
+        // Check if it's an int (tag == 0)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cmp_imm(regs::TMP0, value_tags::TAG_INT as u16);
+        }
+
+        // Record position for conditional branch to float path
+        let bne_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // B.NE to float path (placeholder, will patch)
+            asm.b_cond(Cond::Ne, 0);
+        }
+
+        // INT path: negate using SUB from zero (NEG is alias for SUB Xd, XZR, Xn)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub(regs::TMP1, Reg::XZR, regs::TMP1);
+            // Store back the negated payload
+            // STUR for unscaled offset
+            // STUR Xt, [Xn, #simm9]: 1111 1000 000i iiii iiii 00nn nnnt tttt
+            let simm9 = (-(VALUE_SIZE as i16) + 8) as u32;
+            let inst = 0xF8000000
+                | ((simm9 & 0x1FF) << 12)
+                | ((regs::VSTACK.code() as u32) << 5)
+                | (regs::TMP1.code() as u32);
+            asm.emit_raw(inst);
+        }
+
+        // Jump over float path
+        let b_end_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder, will patch
+        }
+
+        // Patch B.NE to jump here (float path start)
+        let float_path_start = self.buf.len();
+        {
+            let offset = (float_path_start as i32) - (bne_pos as i32);
+            let code = self.buf.code_mut();
+            // B.cond encoding: 0101 0100 iiii iiii iiii iiii iii0 cccc
+            let inst = 0x54000000 | (((offset / 4) as u32 & 0x7FFFF) << 5) | (Cond::Ne as u32);
+            let bytes = inst.to_le_bytes();
+            code[bne_pos] = bytes[0];
+            code[bne_pos + 1] = bytes[1];
+            code[bne_pos + 2] = bytes[2];
+            code[bne_pos + 3] = bytes[3];
+        }
+
+        // FLOAT path: XOR sign bit (bit 63) to negate
+        // Load sign bit mask: 0x8000000000000000
+        self.emit_load_imm64_to_reg(0x8000000000000000u64 as i64, regs::TMP2);
+
+        // XOR to flip sign bit
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.eor(regs::TMP1, regs::TMP1, regs::TMP2);
+            // Store back
+            let simm9 = (-(VALUE_SIZE as i16) + 8) as u32;
+            let inst = 0xF8000000
+                | ((simm9 & 0x1FF) << 12)
+                | ((regs::VSTACK.code() as u32) << 5)
+                | (regs::TMP1.code() as u32);
+            asm.emit_raw(inst);
+        }
+
+        // Patch B to jump here (end)
+        let end_pos = self.buf.len();
+        {
+            let offset = (end_pos as i32) - (b_end_pos as i32);
+            let code = self.buf.code_mut();
+            // B encoding: 0001 01ii iiii iiii iiii iiii iiii iiii
+            let inst = 0x14000000 | ((offset / 4) as u32 & 0x03FFFFFF);
+            let bytes = inst.to_le_bytes();
+            code[b_end_pos] = bytes[0];
+            code[b_end_pos + 1] = bytes[1];
+            code[b_end_pos + 2] = bytes[2];
+            code[b_end_pos + 3] = bytes[3];
+        }
+
+        // Stack depth unchanged (we modify in-place)
         Ok(())
     }
 

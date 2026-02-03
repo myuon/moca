@@ -187,11 +187,13 @@ pub struct JitCallContext {
 
 /// Type signature for call helper function.
 /// Called from JIT code to execute a function call via VM.
+///
 /// Arguments:
 ///   - ctx: *mut JitCallContext - context with VM and chunk pointers
 ///   - func_index: u64 - index of function to call
 ///   - argc: u64 - number of arguments
 ///   - args: *const JitValue - pointer to arguments array (argc values)
+///
 /// Returns: JitReturn with the function's return value
 pub type CallHelperFn =
     unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn;

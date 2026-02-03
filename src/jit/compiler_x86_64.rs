@@ -236,6 +236,7 @@ impl JitCompiler {
             Op::PushString(idx) => self.emit_push_string(*idx),
             Op::ArrayLen => self.emit_array_len(),
             Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
+            Op::Neg => self.emit_neg(),
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -608,56 +609,54 @@ impl JitCompiler {
     /// 3. Calling entry point directly (offset 0)
     /// 4. Deallocating locals
     fn emit_call_self(&mut self, argc: usize) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
-
         let args_offset = (argc as i32) * VALUE_SIZE;
         let locals_size = (self.self_locals_count as i32) * VALUE_SIZE;
-
-        // Save callee-saved registers
-        asm.push(regs::VM_CTX); // R12
-        asm.push(regs::VSTACK); // R13
-        asm.push(regs::LOCALS); // R14
-
         // Allocate new locals on native stack
         // We need locals_count * 16 bytes, but must maintain 16-byte alignment
         // After 3 pushes (24 bytes) + prologue (48 bytes) = 72 bytes from entry RSP-8
         // Total: 72 + 8 = 80 bytes, which is 16-byte aligned
         // Adding locals_size must keep alignment, so round up to multiple of 16
         let aligned_locals_size = ((locals_size + 15) / 16) * 16;
-        if aligned_locals_size > 0 {
-            asm.sub_ri32(Reg::Rsp, aligned_locals_size);
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+
+            // Save callee-saved registers
+            asm.push(regs::VM_CTX); // R12
+            asm.push(regs::VSTACK); // R13
+            asm.push(regs::LOCALS); // R14
+
+            if aligned_locals_size > 0 {
+                asm.sub_ri32(Reg::Rsp, aligned_locals_size);
+            }
+
+            // Copy arguments from VSTACK to new locals (first argc slots)
+            // Arguments are at [VSTACK - argc*16, VSTACK)
+            // New locals are at [RSP, RSP + locals_size)
+            for i in 0..argc {
+                let src_offset = -((argc - i) as i32) * VALUE_SIZE; // Relative to VSTACK
+                let dst_offset = (i as i32) * VALUE_SIZE; // Relative to RSP
+
+                // Load tag and payload from VSTACK
+                asm.mov_rm(regs::TMP0, regs::VSTACK, src_offset); // tag
+                asm.mov_rm(regs::TMP1, regs::VSTACK, src_offset + 8); // payload
+
+                // Store to new locals on stack
+                asm.mov_mr(Reg::Rsp, dst_offset, regs::TMP0); // tag
+                asm.mov_mr(Reg::Rsp, dst_offset + 8, regs::TMP1); // payload
+            }
+
+            // DON'T adjust VSTACK here - callee starts at our current VSTACK position
+            // This way callee's stack operations don't overwrite our stack values
+            // We'll pop the args AFTER the call returns
+
+            // Set up call arguments:
+            // RDI = VM_CTX (R12) - same context
+            // RSI = VSTACK (R13) - callee starts here (after our args)
+            // RDX = new locals (RSP)
+            asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+            asm.mov_rr(Reg::Rsi, regs::VSTACK);
+            asm.mov_rr(Reg::Rdx, Reg::Rsp);
         }
-
-        // Copy arguments from VSTACK to new locals (first argc slots)
-        // Arguments are at [VSTACK - argc*16, VSTACK)
-        // New locals are at [RSP, RSP + locals_size)
-        for i in 0..argc {
-            let src_offset = -((argc - i) as i32) * VALUE_SIZE; // Relative to VSTACK
-            let dst_offset = (i as i32) * VALUE_SIZE; // Relative to RSP
-
-            // Load tag and payload from VSTACK
-            asm.mov_rm(regs::TMP0, regs::VSTACK, src_offset); // tag
-            asm.mov_rm(regs::TMP1, regs::VSTACK, src_offset + 8); // payload
-
-            // Store to new locals on stack
-            asm.mov_mr(Reg::Rsp, dst_offset, regs::TMP0); // tag
-            asm.mov_mr(Reg::Rsp, dst_offset + 8, regs::TMP1); // payload
-        }
-
-        // DON'T adjust VSTACK here - callee starts at our current VSTACK position
-        // This way callee's stack operations don't overwrite our stack values
-        // We'll pop the args AFTER the call returns
-
-        // Set up call arguments:
-        // RDI = VM_CTX (R12) - same context
-        // RSI = VSTACK (R13) - callee starts here (after our args)
-        // RDX = new locals (RSP)
-        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rr(Reg::Rsi, regs::VSTACK);
-        asm.mov_rr(Reg::Rdx, Reg::Rsp);
-
-        // Drop asm to release the borrow before getting buf.len()
-        drop(asm);
 
         // Call self (entry point is at offset 0 from function start)
         // We need to compute the relative offset from current position to entry
@@ -916,6 +915,74 @@ impl JitCompiler {
         // Update stack depth: -argc + 1 (pop args, push result)
         self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
 
+        Ok(())
+    }
+
+    /// Emit Neg operation.
+    /// Negates the top value on the stack (int or float).
+    fn emit_neg(&mut self) -> Result<(), String> {
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+
+            // Load tag and payload from top of stack
+            // Stack layout: [tag: 8 bytes][payload: 8 bytes]
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -VALUE_SIZE); // tag
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // payload
+
+            // Check if it's an int (tag == 0)
+            asm.cmp_ri32(regs::TMP0, value_tags::TAG_INT as i32);
+        }
+
+        // Record position for conditional jump
+        let jne_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ne, 0); // placeholder, will patch
+        }
+
+        // INT path: negate using neg instruction
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.neg(regs::TMP1);
+            // Store back
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP1);
+        }
+
+        // Jump over float path
+        let jmp_end_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // placeholder, will patch
+        }
+
+        // Patch the JNE to jump here (float path)
+        let float_path_start = self.buf.len();
+        {
+            let rel_offset = (float_path_start as i32) - (jne_pos as i32) - 6; // Jcc rel32 is 6 bytes
+            let code = self.buf.code_mut();
+            code[jne_pos + 2..jne_pos + 6].copy_from_slice(&rel_offset.to_le_bytes());
+        }
+
+        // FLOAT path: XOR sign bit (bit 63) to negate
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Load sign bit mask: 0x8000000000000000
+            asm.mov_ri64(regs::TMP2, 0x8000000000000000u64 as i64);
+            // XOR to flip sign bit
+            asm.xor_rr(regs::TMP1, regs::TMP2);
+            // Store back
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP1);
+        }
+
+        // Patch the JMP to jump here (end)
+        let end_pos = self.buf.len();
+        {
+            let rel_offset = (end_pos as i32) - (jmp_end_pos as i32) - 5; // JMP rel32 is 5 bytes
+            let code = self.buf.code_mut();
+            code[jmp_end_pos + 1..jmp_end_pos + 5].copy_from_slice(&rel_offset.to_le_bytes());
+        }
+
+        // Stack depth unchanged (pop 1, push 1)
         Ok(())
     }
 

@@ -1776,8 +1776,8 @@ unsafe extern "C" fn jit_call_helper(
         let mut locals = [JitValue { tag: 3, payload: 0 }; MAX_LOCALS];
 
         // Copy arguments to locals (arguments are the first `argc` locals)
-        for i in 0..argc {
-            locals[i] = unsafe { *args.add(i) };
+        for (i, local) in locals.iter_mut().take(argc).enumerate() {
+            *local = unsafe { *args.add(i) };
         }
 
         // Use stack-allocated value stack
@@ -1824,6 +1824,7 @@ unsafe extern "C" fn jit_call_helper(
         });
 
         // Run until the function returns (when frame depth returns to starting level)
+        #[allow(clippy::while_let_loop)]
         loop {
             let frame = match vm.frames.last_mut() {
                 Some(f) => f,
