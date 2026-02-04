@@ -644,11 +644,11 @@ fn rust_sum_loop() -> i64 {
 }
 
 #[cfg(feature = "jit")]
-fn rust_nested_loop() -> i64 {
+fn rust_nested_loop(n: i64) -> i64 {
     let mut sum: i64 = 0;
-    for i in 0..1000 {
-        for j in 0..1000 {
-            sum += i * j;
+    for i in 0..n {
+        for j in 0..n {
+            sum = std::hint::black_box(sum + i * j);
         }
     }
     sum
@@ -741,10 +741,12 @@ fn run_performance_benchmark(
 
 /// Run a performance test for a single .mc file
 /// Asserts that JIT on is at least 10% faster than JIT off
+/// rust_impl returns the expected output string, which is compared against moca's output
+/// to both verify correctness and prevent compiler optimization
 #[cfg(feature = "jit")]
-fn run_performance_test<F>(test_path: &Path, expected_output: Option<&str>, rust_impl: F)
+fn run_performance_test<F>(test_path: &Path, rust_impl: F)
 where
-    F: Fn(),
+    F: Fn() -> String,
 {
     use std::time::{Duration, Instant};
 
@@ -754,7 +756,7 @@ where
     for _ in 0..PERF_WARMUP_RUNS {
         run_performance_benchmark(test_path, false);
         run_performance_benchmark(test_path, true);
-        rust_impl();
+        let _ = rust_impl();
     }
 
     // Measurement runs
@@ -763,6 +765,7 @@ where
     let mut rust_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
     let mut jit_on_output = String::new();
     let mut jit_compile_count = 0;
+    let mut rust_result = String::new();
 
     for _ in 0..PERF_MEASUREMENT_RUNS {
         let (elapsed, _, _) = run_performance_benchmark(test_path, false);
@@ -774,7 +777,7 @@ where
         jit_compile_count = count;
 
         let start = Instant::now();
-        rust_impl();
+        rust_result = rust_impl();
         rust_times.push(start.elapsed());
     }
 
@@ -785,15 +788,14 @@ where
         test_name
     );
 
-    // Verify output correctness if expected output is provided
-    if let Some(expected) = expected_output {
-        assert_eq!(
-            jit_on_output.trim(),
-            expected,
-            "[{}] Output mismatch",
-            test_name
-        );
-    }
+    // Verify output correctness: compare moca output with Rust result
+    // This also prevents compiler from optimizing away the Rust computation
+    assert_eq!(
+        jit_on_output.trim(),
+        rust_result,
+        "[{}] Moca output doesn't match Rust reference implementation",
+        test_name
+    );
 
     // Calculate averages
     let jit_off_avg =
@@ -843,30 +845,22 @@ fn snapshot_performance() {
 
     // Test sum_loop with Rust reference
     let sum_loop_path = perf_dir.join("sum_loop.mc");
-    let expected_sum = rust_sum_loop().to_string();
-    run_performance_test(&sum_loop_path, Some(&expected_sum), || {
-        std::hint::black_box(rust_sum_loop());
-    });
+    run_performance_test(&sum_loop_path, || rust_sum_loop().to_string());
 
     // Test nested_loop with Rust reference
     let nested_loop_path = perf_dir.join("nested_loop.mc");
-    let expected_nested = rust_nested_loop().to_string();
-    run_performance_test(&nested_loop_path, Some(&expected_nested), || {
-        std::hint::black_box(rust_nested_loop());
+    run_performance_test(&nested_loop_path, || {
+        rust_nested_loop(std::hint::black_box(1000)).to_string()
     });
 
     // Test mandelbrot with Rust reference
     let mandelbrot_path = perf_dir.join("mandelbrot.mc");
-    let expected_mandelbrot = rust_mandelbrot(1000).to_string();
-    run_performance_test(&mandelbrot_path, Some(&expected_mandelbrot), || {
-        std::hint::black_box(rust_mandelbrot(1000));
-    });
+    run_performance_test(&mandelbrot_path, || rust_mandelbrot(1000).to_string());
 
     // Test fibonacci with Rust reference
     let fibonacci_path = perf_dir.join("fibonacci.mc");
-    let expected_fib = rust_fibonacci(30).to_string();
-    run_performance_test(&fibonacci_path, Some(&expected_fib), || {
-        std::hint::black_box(rust_fibonacci(30));
+    run_performance_test(&fibonacci_path, || {
+        rust_fibonacci(std::hint::black_box(30)).to_string()
     });
 }
 
