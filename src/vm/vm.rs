@@ -781,6 +781,16 @@ impl VM {
             }
             Op::Jmp(target) => {
                 let frame = self.frames.last_mut().unwrap();
+                let current_pc = frame.pc.saturating_sub(1); // PC was already incremented
+                let func_index = frame.func_index;
+
+                // Detect backward branch (loop)
+                if target < current_pc {
+                    let key = (func_index, current_pc);
+                    let count = self.loop_counts.entry(key).or_insert(0);
+                    *count += 1;
+                }
+
                 frame.pc = target;
             }
             Op::JmpIfFalse(target) => {
