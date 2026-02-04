@@ -335,6 +335,41 @@ mod x86_64;
 mod compiler_x86_64;
 ```
 
+## Implementation Notes
+
+### AArch64 LDR Offset Convention
+
+The `ldr` function in the assembler takes a **byte offset** and internally divides by 8 for AArch64 encoding (64-bit loads are scaled by 8).
+
+```rust
+// Correct: load from offset 8 bytes (payload)
+asm.ldr(regs::TMP0, regs::VSTACK, 8);  // scaled: 8/8 = 1
+
+// WRONG: this loads from offset 0 (tag), not offset 8!
+asm.ldr(regs::TMP0, regs::VSTACK, 1);  // scaled: 1/8 = 0
+```
+
+Value layout on stack (16 bytes per value):
+- Offset 0: tag (8 bytes)
+- Offset 8: payload (8 bytes)
+
+### Hot Loop JIT
+
+Loops are detected via backward jumps and compiled when iteration count reaches the threshold:
+
+1. VM detects backward jump (`Op::Jmp(target)` where `target < current_pc`)
+2. Increment loop counter for `(func_index, back_jump_pc)` key
+3. When count reaches threshold, compile loop body to native code
+4. Subsequent iterations execute JIT code directly
+
+Loop exit condition (`JmpIfFalse` targeting outside loop) generates:
+```asm
+; Pop condition, check if false (0), branch to epilogue
+sub VSTACK, VSTACK, #16      ; pop value
+ldr TMP0, [VSTACK, #8]       ; load payload (boolean)
+cbz TMP0, exit_label         ; branch if zero (false)
+```
+
 ## Performance Considerations
 
 - Quickening provides 1.5-2x speedup for type-stable code
