@@ -221,28 +221,29 @@ jobs:
           with open('main_bench.json') as f:
               main_data = json.load(f)
 
-          main_times = {r['name']: r['moca_time_secs'] for r in main_data['results']}
+          main_times = {r['name']: r['moca_jit_on_secs'] for r in main_data['results']}
 
           lines = []
-          lines.append("| Benchmark | Current | Rust | Main |")
-          lines.append("|-----------|---------|------|------|")
+          lines.append("| Benchmark | Current (JIT) | Current (no JIT) | Rust | Main |")
+          lines.append("|-----------|---------------|------------------|------|------|")
 
           for result in pr_data['results']:
               name = result['name']
-              current = result['moca_time_secs']
+              current_jit = result['moca_jit_on_secs']
+              current_no_jit = result['moca_jit_off_secs']
               rust = result['rust_time_secs']
-              main = main_times.get(name, current)
+              main = main_times.get(name, current_jit)
 
               # Calculate Rust comparison (how many times faster)
               if rust > 0:
-                  rust_ratio = current / rust
+                  rust_ratio = current_jit / rust
                   rust_str = f"{rust:.3f}s ({rust_ratio:.0f}x faster)"
               else:
                   rust_str = f"{rust:.3f}s"
 
               # Calculate main comparison (percentage change)
               if main > 0:
-                  pct_change = ((main - current) / main) * 100
+                  pct_change = ((main - current_jit) / main) * 100
                   if pct_change > 5:
                       icon = "🟢"
                       sign = "+"
@@ -256,7 +257,7 @@ jobs:
               else:
                   main_str = "N/A"
 
-              lines.append(f"| {name} | {current:.3f}s | {rust_str} | {main_str} |")
+              lines.append(f"| {name} | {current_jit:.3f}s | {current_no_jit:.3f}s | {rust_str} | {main_str} |")
 
           lines.append("")
           lines.append("Legend: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower (vs main)")
