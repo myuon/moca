@@ -42,13 +42,22 @@ fn run_benchmark(source: &str, jit_enabled: bool) -> Duration {
     };
 
     let start = Instant::now();
-    let (_output, result) = run_file_capturing_output(&temp_file, &config);
+    let (output, result) = run_file_capturing_output(&temp_file, &config);
     let elapsed = start.elapsed();
 
     // Cleanup
     std::fs::remove_file(&temp_file).ok();
 
     result.expect("benchmark execution failed");
+
+    // Verify that JIT compilation actually occurred when enabled
+    if jit_enabled {
+        assert!(
+            output.jit_compile_count > 0,
+            "JIT was enabled but no functions were JIT compiled"
+        );
+    }
+
     elapsed
 }
 
@@ -116,6 +125,13 @@ fn run_jit_correctness_test(source: &str) -> String {
     let (output, result) = run_file_capturing_output(&temp_file, &config);
     std::fs::remove_file(&temp_file).ok();
     result.expect("JIT execution failed");
+
+    // Verify that JIT compilation actually occurred
+    assert!(
+        output.jit_compile_count > 0,
+        "JIT correctness test: no functions were JIT compiled"
+    );
+
     output.stdout
 }
 
