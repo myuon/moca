@@ -621,6 +621,220 @@ fn snapshot_http_server() {
 /// Endpoints:
 /// - GET / : Returns "Hello from test server!"
 /// - POST /echo : Returns the request body as-is
+// ============================================================================
+// Performance Benchmark Tests
+// ============================================================================
+
+/// Performance test configuration
+#[cfg(feature = "jit")]
+const PERF_WARMUP_RUNS: usize = 3;
+#[cfg(feature = "jit")]
+const PERF_MEASUREMENT_RUNS: usize = 3;
+
+// Rust reference implementations for correctness verification
+#[cfg(feature = "jit")]
+fn rust_sum_loop() -> i64 {
+    let mut sum: i64 = 0;
+    for i in 1..=10_000_000 {
+        sum += i;
+    }
+    sum
+}
+
+#[cfg(feature = "jit")]
+fn rust_nested_loop(n: i64) -> i64 {
+    let mut sum: i64 = 0;
+    for i in 0..n {
+        for j in 0..n {
+            sum = std::hint::black_box(sum + i * j);
+        }
+    }
+    sum
+}
+
+#[cfg(feature = "jit")]
+fn rust_fibonacci(n: i32) -> i32 {
+    if n <= 1 {
+        n
+    } else {
+        rust_fibonacci(n - 1) + rust_fibonacci(n - 2)
+    }
+}
+
+#[cfg(feature = "jit")]
+fn rust_mandelbrot(max_iter: i32) -> i32 {
+    let width = 80;
+    let height = 24;
+    let mut escape_count = 0;
+
+    let x_min = -2.0_f64;
+    let x_max = 1.0_f64;
+    let y_min = -1.0_f64;
+    let y_max = 1.0_f64;
+
+    let x_step = (x_max - x_min) / 80.0;
+    let y_step = (y_max - y_min) / 24.0;
+
+    let mut cy = y_min;
+    for _ in 0..height {
+        let mut cx = x_min;
+        for _ in 0..width {
+            let mut zr = 0.0_f64;
+            let mut zi = 0.0_f64;
+            let mut iter = 0;
+
+            while iter < max_iter {
+                let zr2 = zr * zr;
+                let zi2 = zi * zi;
+
+                if zr2 + zi2 > 4.0 {
+                    escape_count += 1;
+                    break;
+                }
+
+                let new_zr = zr2 - zi2 + cx;
+                let new_zi = 2.0 * zr * zi + cy;
+                zr = new_zr;
+                zi = new_zi;
+                iter += 1;
+            }
+
+            cx += x_step;
+        }
+        cy += y_step;
+    }
+
+    escape_count
+}
+
+/// Run a moca file with JIT enabled and measure execution time
+#[cfg(feature = "jit")]
+fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
+    use std::time::Instant;
+
+    let config = RuntimeConfig {
+        jit_mode: JitMode::On,
+        jit_threshold: 1,
+        ..Default::default()
+    };
+
+    let start = Instant::now();
+    let (output, result) = run_file_capturing_output(path, &config);
+    let elapsed = start.elapsed();
+
+    result.unwrap_or_else(|e| panic!("Benchmark execution failed for {:?}: {}", path, e));
+
+    (elapsed, output.stdout, output.jit_compile_count)
+}
+
+/// Run a performance test for a single .mc file
+/// Compares moca JIT performance against Rust reference implementation
+/// rust_impl returns the expected output string, which is compared against moca's output
+/// to both verify correctness and prevent compiler optimization
+#[cfg(feature = "jit")]
+fn run_performance_test<F>(test_path: &Path, rust_impl: F)
+where
+    F: Fn() -> String,
+{
+    use std::time::{Duration, Instant};
+
+    let test_name = test_path.file_stem().unwrap().to_string_lossy().to_string();
+
+    // Warmup runs (discard results)
+    for _ in 0..PERF_WARMUP_RUNS {
+        run_performance_benchmark(test_path);
+        let _ = rust_impl();
+    }
+
+    // Measurement runs
+    let mut moca_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
+    let mut rust_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
+    let mut moca_output = String::new();
+    let mut jit_compile_count = 0;
+    let mut rust_result = String::new();
+
+    for _ in 0..PERF_MEASUREMENT_RUNS {
+        let (elapsed, output, count) = run_performance_benchmark(test_path);
+        moca_times.push(elapsed);
+        moca_output = output;
+        jit_compile_count = count;
+
+        let start = Instant::now();
+        rust_result = rust_impl();
+        rust_times.push(start.elapsed());
+    }
+
+    // Verify JIT compilation occurred
+    assert!(
+        jit_compile_count > 0,
+        "[{}] JIT was enabled but no functions were compiled",
+        test_name
+    );
+
+    // Verify output correctness: compare moca output with Rust result
+    // This also prevents compiler from optimizing away the Rust computation
+    assert_eq!(
+        moca_output.trim(),
+        rust_result,
+        "[{}] Moca output doesn't match Rust reference implementation",
+        test_name
+    );
+
+    // Calculate averages
+    let moca_avg =
+        moca_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
+    let rust_avg =
+        rust_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
+
+    let vs_rust = if rust_avg > 0.0 {
+        moca_avg / rust_avg
+    } else {
+        0.0
+    };
+
+    println!(
+        "[{}] moca: {:.4}s, Rust: {:.4}s, vs_rust: {:.1}x",
+        test_name, moca_avg, rust_avg, vs_rust
+    );
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn snapshot_performance() {
+    let perf_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("performance");
+
+    if !perf_dir.exists() {
+        panic!("Performance test directory not found: {:?}", perf_dir);
+    }
+
+    // Test sum_loop with Rust reference
+    let sum_loop_path = perf_dir.join("sum_loop.mc");
+    run_performance_test(&sum_loop_path, || rust_sum_loop().to_string());
+
+    // Test nested_loop with Rust reference
+    let nested_loop_path = perf_dir.join("nested_loop.mc");
+    run_performance_test(&nested_loop_path, || {
+        rust_nested_loop(std::hint::black_box(3000)).to_string()
+    });
+
+    // Test mandelbrot with Rust reference
+    let mandelbrot_path = perf_dir.join("mandelbrot.mc");
+    run_performance_test(&mandelbrot_path, || rust_mandelbrot(5000).to_string());
+
+    // Test fibonacci with Rust reference
+    let fibonacci_path = perf_dir.join("fibonacci.mc");
+    run_performance_test(&fibonacci_path, || {
+        rust_fibonacci(std::hint::black_box(35)).to_string()
+    });
+}
+
+// ============================================================================
+// HTTP Client Snapshot Tests
+// ============================================================================
+
 #[test]
 fn snapshot_http() {
     use http_body_util::{BodyExt, Full};

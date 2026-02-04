@@ -190,91 +190,77 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build moca (release)
-        run: cargo build --release
-
-      - name: Build bench tool
-        run: cargo build --release -p bench
-
-      - name: Run benchmark on PR branch
+      - name: Run performance test on PR branch
         run: |
-          ./target/release/bench ./target/release/moca > pr_bench.json
-          cat pr_bench.json
+          cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee pr_perf.txt
+          cat pr_perf.txt
 
-      - name: Get main branch benchmark
+      - name: Get main branch performance
         run: |
           git stash || true
           git checkout ${{ github.base_ref }}
-          # Clean to ensure full rebuild from main branch source
           cargo clean
-          cargo build --release
-          cargo build --release -p bench
-          ./target/release/bench ./target/release/moca > main_bench.json
-          cat main_bench.json
+          cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee main_perf.txt
+          cat main_perf.txt
           git checkout ${{ github.head_ref }}
           git stash pop || true
 
       - name: Generate performance report
         run: |
           cat > generate_report.py << 'PYTHON_SCRIPT'
-          import json
+          import re
           import sys
 
-          with open('pr_bench.json') as f:
-              pr_data = json.load(f)
+          def parse_perf_output(filename):
+              results = {}
+              with open(filename) as f:
+                  for line in f:
+                      # Parse: [name] moca: X.XXXXs, Rust: X.XXXXs, vs_rust: X.Xx
+                      match = re.match(r'\[(\w+)\] moca: ([\d.]+)s, Rust: ([\d.]+)s, vs_rust: ([\d.]+)x', line)
+                      if match:
+                          name = match.group(1)
+                          moca = float(match.group(2))
+                          rust = float(match.group(3))
+                          vs_rust = float(match.group(4))
+                          results[name] = {'moca': moca, 'rust': rust, 'vs_rust': vs_rust}
+              return results
 
-          with open('main_bench.json') as f:
-              main_data = json.load(f)
-
-          main_times = {r['name']: r['moca_jit_on_secs'] for r in main_data['results']}
+          pr_results = parse_perf_output('pr_perf.txt')
+          main_results = parse_perf_output('main_perf.txt')
 
           lines = []
-          lines.append("| Benchmark | Current (JIT) | no JIT | Rust | vs Main |")
-          lines.append("|-----------|---------------|--------|------|---------|")
+          lines.append("| Benchmark | moca | Rust | vs Rust | vs Main |")
+          lines.append("|-----------|------|------|---------|---------|")
 
-          for result in pr_data['results']:
-              name = result['name']
-              current_jit = result['moca_jit_on_secs']
-              current_no_jit = result['moca_jit_off_secs']
-              rust = result['rust_time_secs']
-              main = main_times.get(name, current_jit)
+          for name, pr in pr_results.items():
+              moca = pr['moca']
+              rust = pr['rust']
+              vs_rust = pr['vs_rust']
 
-              # Calculate no-JIT vs JIT ratio (baseline = JIT)
-              if current_jit > 0:
-                  no_jit_ratio = current_no_jit / current_jit
-                  no_jit_str = f"{current_no_jit:.3f}s ({no_jit_ratio:.1f}x)"
-              else:
-                  no_jit_str = f"{current_no_jit:.3f}s"
-
-              # Calculate Rust comparison (how many times slower than Rust)
-              if rust > 0:
-                  rust_ratio = current_jit / rust
-                  rust_str = f"{rust:.4f}s ({rust_ratio:.0f}x)"
-              else:
-                  rust_str = f"{rust:.4f}s"
-
-              # Calculate main comparison (percentage change)
-              if main > 0:
-                  pct_change = ((main - current_jit) / main) * 100
-                  if pct_change > 5:
-                      icon = "🟢"
-                      sign = "+"
-                  elif pct_change < -5:
-                      icon = "🔴"
-                      sign = ""
+              # Calculate vs main
+              if name in main_results:
+                  main_moca = main_results[name]['moca']
+                  if main_moca > 0:
+                      pct_change = ((main_moca - moca) / main_moca) * 100
+                      if pct_change > 5:
+                          icon = "🟢"
+                          sign = "+"
+                      elif pct_change < -5:
+                          icon = "🔴"
+                          sign = ""
+                      else:
+                          icon = "🟡"
+                          sign = "+" if pct_change >= 0 else ""
+                      main_str = f"{icon} {sign}{pct_change:.0f}%"
                   else:
-                      icon = "🟡"
-                      sign = "+" if pct_change >= 0 else ""
-                  main_str = f"{icon} {sign}{pct_change:.0f}%"
+                      main_str = "N/A"
               else:
-                  main_str = "N/A"
+                  main_str = "new"
 
-              lines.append(f"| {name} | {current_jit:.3f}s | {no_jit_str} | {rust_str} | {main_str} |")
+              lines.append(f"| {name} | {moca:.4f}s | {rust:.4f}s | {vs_rust:.1f}x | {main_str} |")
 
           lines.append("")
-          lines.append("_no JIT: times slower than JIT. Rust: times slower than native Rust._")
-          lines.append("")
-          lines.append("_vs Main: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower_")
+          lines.append("_vs Rust: times slower than native Rust. vs Main: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower_")
 
           print('\n'.join(lines))
           PYTHON_SCRIPT
