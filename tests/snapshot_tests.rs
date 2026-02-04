@@ -654,7 +654,7 @@ fn rust_nested_loop() -> i64 {
     sum
 }
 
-#[cfg(all(feature = "jit", not(target_arch = "aarch64")))]
+#[cfg(feature = "jit")]
 fn rust_fibonacci(n: i32) -> i32 {
     if n <= 1 {
         n
@@ -841,13 +841,9 @@ fn snapshot_performance() {
     run_performance_test(&mandelbrot_path, Some(&expected_mandelbrot));
 
     // Test fibonacci with Rust reference
-    // Note: Skip on aarch64 if emit_call_self is not supported
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        let fibonacci_path = perf_dir.join("fibonacci.mc");
-        let expected_fib = rust_fibonacci(30).to_string();
-        run_performance_test(&fibonacci_path, Some(&expected_fib));
-    }
+    let fibonacci_path = perf_dir.join("fibonacci.mc");
+    let expected_fib = rust_fibonacci(30).to_string();
+    run_performance_test(&fibonacci_path, Some(&expected_fib));
 }
 
 // ============================================================================

@@ -1320,10 +1320,71 @@ impl JitCompiler {
     /// 7. Restore registers
     /// 8. Pop args and push return value
     fn emit_call_self(&mut self, argc: usize) -> Result<(), String> {
-        // TODO: Implement direct BL optimization for aarch64
-        // For now, fall back to jit_call_helper which has overhead
-        // but works correctly
-        self.emit_call(self.self_func_index, argc)
+        // Use emit_call's structure but with direct BL instead of blr to call_helper
+        // This tests if the issue is with BL or with the call structure
+        let args_offset = (argc as u16) * VALUE_SIZE;
+
+        // Save callee-saved registers (same as emit_call)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::VSTACK, -16);
+            asm.stp_pre(regs::LOCALS, regs::CONSTS, -16);
+        }
+
+        // Calculate args pointer: x3 = VSTACK - argc * VALUE_SIZE
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            if args_offset > 0 {
+                asm.sub_imm(Reg::X3, regs::VSTACK, args_offset);
+            } else {
+                asm.mov(Reg::X3, regs::VSTACK);
+            }
+        }
+
+        // Set up arguments for the recursive call:
+        // x0 = ctx (VM_CTX register)
+        // x1 = VSTACK (current position, callee will use its own view)
+        // x2 = args pointer (x3, where args start on VSTACK)
+        // NOTE: For self-recursion, we pass args pointer as x2 (locals).
+        // The callee will treat these as its local variables.
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+            asm.mov(Reg::X1, regs::VSTACK);
+            asm.mov(Reg::X2, Reg::X3); // locals = args pointer
+        }
+
+        // Emit BL to entry point (offset 0)
+        let bl_site = self.buf.len();
+        let rel_offset = -(bl_site as i32);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.bl(rel_offset);
+        }
+
+        // Restore saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(regs::LOCALS, regs::CONSTS, 16);
+            asm.ldp_post(regs::VM_CTX, regs::VSTACK, 16);
+        }
+
+        // Pop arguments from VSTACK
+        if args_offset > 0 {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, args_offset);
+        }
+
+        // Push return value onto VSTACK
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::VSTACK, 0);
+            asm.str(Reg::X1, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        self.stack_depth = self.stack_depth.saturating_sub(argc) + 1;
+        Ok(())
     }
 
     fn emit_ret(&mut self) -> Result<(), String> {
