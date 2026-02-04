@@ -8,9 +8,9 @@ use crate::vm::threads::{Channel, ThreadSpawner};
 use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
-use crate::jit::compiler::{CompiledCode, JitCompiler};
+use crate::jit::compiler::{CompiledCode, CompiledLoop, JitCompiler};
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
-use crate::jit::compiler_x86_64::{CompiledCode, JitCompiler};
+use crate::jit::compiler_x86_64::{CompiledCode, CompiledLoop, JitCompiler};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
 use crate::jit::marshal::{JitCallContext, JitContext, JitReturn, JitValue};
 
@@ -116,6 +116,15 @@ pub struct VM {
     /// String constant cache: maps string index to heap reference
     /// Once a string constant is allocated, it's cached here for reuse.
     string_cache: Vec<Option<GcRef>>,
+    /// Loop iteration counters for hot loop detection.
+    /// Key: (function_index, backward_jump_pc), Value: iteration count
+    loop_counts: HashMap<(usize, usize), u32>,
+    /// JIT compiled loops (only on AArch64 with jit feature)
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    jit_loops: HashMap<(usize, usize), CompiledLoop>,
+    /// JIT compiled loops (only on x86-64 with jit feature)
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    jit_loops: HashMap<(usize, usize), CompiledLoop>,
 }
 
 impl VM {
@@ -182,6 +191,11 @@ impl VM {
             profile_opcodes: false,
             opcode_profile: OpcodeProfile::default(),
             string_cache: Vec::new(),
+            loop_counts: HashMap::new(),
+            #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+            jit_loops: HashMap::new(),
+            #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+            jit_loops: HashMap::new(),
         }
     }
 
@@ -302,6 +316,29 @@ impl VM {
         false
     }
 
+    /// Check if a loop should be JIT compiled based on iteration count.
+    /// Returns true when the loop reaches the hot threshold.
+    fn should_jit_compile_loop(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        let key = (func_index, back_jump_pc);
+        if let Some(&count) = self.loop_counts.get(&key) {
+            count == self.jit_threshold
+        } else {
+            false
+        }
+    }
+
+    /// Check if a loop has already been JIT compiled.
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn is_loop_jit_compiled(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        self.jit_loops.contains_key(&(func_index, back_jump_pc))
+    }
+
+    /// Check if a loop has already been JIT compiled.
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn is_loop_jit_compiled(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        self.jit_loops.contains_key(&(func_index, back_jump_pc))
+    }
+
     /// Compile a function to native code (AArch64 with jit feature only).
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
@@ -368,6 +405,252 @@ impl VM {
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn is_jit_compiled(&self, func_index: usize) -> bool {
         self.jit_functions.contains_key(&func_index)
+    }
+
+    /// Compile a hot loop to native code (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn jit_compile_loop(
+        &mut self,
+        func: &Function,
+        func_index: usize,
+        loop_start_pc: usize,
+        loop_end_pc: usize,
+    ) {
+        let key = (func_index, loop_end_pc);
+        if self.jit_loops.contains_key(&key) {
+            return; // Already compiled
+        }
+
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Hot loop detected in '{}' at PC {}..{} (iterations: {})",
+                func.name, loop_start_pc, loop_end_pc, self.jit_threshold
+            );
+        }
+
+        let compiler = JitCompiler::new();
+        let jit_compiled_funcs: std::collections::HashSet<usize> =
+            self.jit_functions.keys().copied().collect();
+        match compiler.compile_loop(func, loop_start_pc, loop_end_pc, &jit_compiled_funcs) {
+            Ok(compiled) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Compiled loop in '{}' PC {}..{} ({} bytes)",
+                        func.name,
+                        loop_start_pc,
+                        loop_end_pc,
+                        compiled.memory.size()
+                    );
+                }
+                self.jit_loops.insert(key, compiled);
+                self.jit_compile_count += 1;
+            }
+            Err(e) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Failed to compile loop in '{}' PC {}..{}: {}",
+                        func.name, loop_start_pc, loop_end_pc, e
+                    );
+                }
+            }
+        }
+    }
+
+    /// Compile a hot loop to native code (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn jit_compile_loop(
+        &mut self,
+        func: &Function,
+        func_index: usize,
+        loop_start_pc: usize,
+        loop_end_pc: usize,
+    ) {
+        let key = (func_index, loop_end_pc);
+        if self.jit_loops.contains_key(&key) {
+            return; // Already compiled
+        }
+
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Hot loop detected in '{}' at PC {}..{} (iterations: {})",
+                func.name, loop_start_pc, loop_end_pc, self.jit_threshold
+            );
+        }
+
+        let compiler = JitCompiler::new();
+        let jit_compiled_funcs: std::collections::HashSet<usize> =
+            self.jit_functions.keys().copied().collect();
+        match compiler.compile_loop(func, loop_start_pc, loop_end_pc, &jit_compiled_funcs) {
+            Ok(compiled) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Compiled loop in '{}' PC {}..{} ({} bytes)",
+                        func.name,
+                        loop_start_pc,
+                        loop_end_pc,
+                        compiled.memory.size()
+                    );
+                }
+                self.jit_loops.insert(key, compiled);
+                self.jit_compile_count += 1;
+            }
+            Err(e) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Failed to compile loop in '{}' PC {}..{}: {}",
+                        func.name, loop_start_pc, loop_end_pc, e
+                    );
+                }
+            }
+        }
+    }
+
+    /// Execute a JIT compiled loop (x86-64 with jit feature only).
+    ///
+    /// Returns the PC to continue from after the loop (loop_end_pc + 1).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn execute_jit_loop(
+        &mut self,
+        func_index: usize,
+        loop_end_pc: usize,
+        func: &Function,
+        chunk: &Chunk,
+    ) -> Result<usize, String> {
+        let key = (func_index, loop_end_pc);
+
+        // Get the entry point first to avoid borrow conflicts
+        let (entry, loop_end): (
+            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            usize,
+        ) = {
+            let compiled = self.jit_loops.get(&key).unwrap();
+            (unsafe { compiled.entry_point() }, compiled.loop_end_pc)
+        };
+
+        // Create JIT context with locals
+        let locals_count = func.locals_count;
+        let mut ctx = JitContext::new(locals_count);
+
+        // Copy current locals from VM to JIT context
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
+            }
+        }
+
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+            push_string_helper: jit_push_string_helper,
+            array_len_helper: jit_array_len_helper,
+            syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
+            string_cache: self.string_cache.as_ptr() as *const u64,
+            string_cache_len: self.string_cache.len() as u64,
+        };
+
+        // Execute the JIT loop code
+        let _result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
+
+        if self.trace_jit {
+            eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
+        }
+
+        // Copy locals back from JIT context to VM
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                let jit_val = ctx.get_local(i);
+                self.stack[stack_base + i] = jit_val.to_value();
+            }
+        }
+
+        // Return the PC to continue from (after the loop)
+        Ok(loop_end + 1)
+    }
+
+    /// Execute a JIT compiled loop (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn execute_jit_loop(
+        &mut self,
+        func_index: usize,
+        loop_end_pc: usize,
+        func: &Function,
+        chunk: &Chunk,
+    ) -> Result<usize, String> {
+        let key = (func_index, loop_end_pc);
+
+        // Get the entry point first to avoid borrow conflicts
+        let (entry, loop_end): (
+            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            usize,
+        ) = {
+            let compiled = self.jit_loops.get(&key).unwrap();
+            (unsafe { compiled.entry_point() }, compiled.loop_end_pc)
+        };
+
+        // Create JIT context with locals
+        let locals_count = func.locals_count;
+        let mut ctx = JitContext::new(locals_count);
+
+        // Copy current locals from VM to JIT context
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
+            }
+        }
+
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+            push_string_helper: jit_push_string_helper,
+            array_len_helper: jit_array_len_helper,
+            syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
+            string_cache: self.string_cache.as_ptr() as *const u64,
+            string_cache_len: self.string_cache.len() as u64,
+        };
+
+        // Execute the JIT loop code
+        let _result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
+
+        if self.trace_jit {
+            eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
+        }
+
+        // Copy locals back from JIT context to VM
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                let jit_val = ctx.get_local(i);
+                self.stack[stack_base + i] = jit_val.to_value();
+            }
+        }
+
+        // Return the PC to continue from (after the loop)
+        Ok(loop_end + 1)
     }
 
     /// Execute a JIT compiled function (x86-64 with jit feature only).
@@ -766,6 +1049,82 @@ impl VM {
                 self.stack.push(Value::Bool(!a.is_truthy()));
             }
             Op::Jmp(target) => {
+                // Get frame info without holding mutable borrow
+                let (current_pc, func_index) = {
+                    let frame = self.frames.last().unwrap();
+                    (frame.pc.saturating_sub(1), frame.func_index) // PC was already incremented
+                };
+
+                // Detect backward branch (loop)
+                if target < current_pc {
+                    let key = (func_index, current_pc);
+                    let count = self.loop_counts.entry(key).or_insert(0);
+                    *count += 1;
+
+                    // Loop range: start_pc = target, end_pc = current_pc
+                    let loop_start_pc = target;
+                    let loop_end_pc = current_pc;
+
+                    // Check if this loop should be JIT compiled
+                    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                    {
+                        if self.should_jit_compile_loop(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                        }
+                    }
+
+                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    {
+                        if self.should_jit_compile_loop(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                        }
+                    }
+
+                    // Execute JIT compiled loop if available
+                    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                    {
+                        if self.is_loop_jit_compiled(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            let next_pc =
+                                self.execute_jit_loop(func_index, current_pc, func, chunk)?;
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.pc = next_pc;
+                            return Ok(ControlFlow::Continue);
+                        }
+                    }
+
+                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    {
+                        if self.is_loop_jit_compiled(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            let next_pc =
+                                self.execute_jit_loop(func_index, current_pc, func, chunk)?;
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.pc = next_pc;
+                            return Ok(ControlFlow::Continue);
+                        }
+                    }
+                }
+
+                // Update PC (fallback to interpreter)
                 let frame = self.frames.last_mut().unwrap();
                 frame.pc = target;
             }

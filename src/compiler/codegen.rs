@@ -118,6 +118,7 @@ impl Codegen {
         }
 
         // Compile main body
+        let main_locals_count = program.main_locals_count;
         let mut main_ops = Vec::new();
         for stmt in program.main_body {
             self.compile_statement(&stmt, &mut main_ops)?;
@@ -129,7 +130,7 @@ impl Codegen {
         let main_func = Function {
             name: "__main__".to_string(),
             arity: 0,
-            locals_count: 0, // TODO: track main locals
+            locals_count: main_locals_count,
             code: main_ops,
             stackmap: None, // TODO: generate StackMap
         };

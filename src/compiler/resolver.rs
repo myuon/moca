@@ -17,6 +17,8 @@ pub struct ResolvedProgram {
     pub functions: Vec<ResolvedFunction>,
     pub main_body: Vec<ResolvedStatement>,
     pub structs: Vec<ResolvedStruct>,
+    /// Number of local variables in the main body
+    pub main_locals_count: usize,
 }
 
 /// Information about a resolved struct.
@@ -403,11 +405,13 @@ impl<'a> Resolver<'a> {
         // Resolve main body
         let mut scope = Scope::new();
         let resolved_main = self.resolve_statements(main_stmts, &mut scope)?;
+        let main_locals_count = scope.locals_count;
 
         Ok(ResolvedProgram {
             functions: resolved_functions,
             main_body: resolved_main,
             structs: self.resolved_structs.clone(),
+            main_locals_count,
         })
     }
 

@@ -71,6 +71,8 @@ jobs:
       - name: Get base branch coverage
         run: |
           git checkout ${{ github.base_ref }}
+          # Clean to ensure coverage is measured from base branch source
+          cargo clean
           cargo llvm-cov --no-report --ignore-run-fail > /dev/null 2>&1
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
             file = $1
@@ -203,7 +205,10 @@ jobs:
         run: |
           git stash || true
           git checkout ${{ github.base_ref }}
+          # Clean to ensure full rebuild from main branch source
+          cargo clean
           cargo build --release
+          cargo build --release -p bench
           ./target/release/bench ./target/release/moca > main_bench.json
           cat main_bench.json
           git checkout ${{ github.head_ref }}

@@ -12,7 +12,7 @@ use super::memory::ExecutableMemory;
 #[cfg(target_arch = "aarch64")]
 use crate::vm::{Function, Op};
 #[cfg(target_arch = "aarch64")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Value tag constants for JIT code.
 /// Values are represented as 128-bit (tag: u64, payload: u64).
@@ -67,6 +67,38 @@ pub struct CompiledCode {
 
 #[cfg(target_arch = "aarch64")]
 impl CompiledCode {
+    /// Get the entry point as a function pointer.
+    ///
+    /// # Safety
+    /// The caller must ensure the function signature matches the expected ABI.
+    pub unsafe fn entry_point<F>(&self) -> F
+    where
+        F: Copy,
+    {
+        unsafe {
+            let ptr = self.memory.as_ptr().add(self.entry_offset);
+            std::mem::transmute_copy(&ptr)
+        }
+    }
+}
+
+/// Compiled JIT code for a hot loop.
+#[cfg(target_arch = "aarch64")]
+pub struct CompiledLoop {
+    /// The executable memory containing the compiled code
+    pub memory: ExecutableMemory,
+    /// Entry point offset within the memory
+    pub entry_offset: usize,
+    /// Bytecode PC where the loop starts (backward jump target)
+    pub loop_start_pc: usize,
+    /// Bytecode PC where the loop ends (backward jump instruction)
+    pub loop_end_pc: usize,
+    /// Stack map for GC (pc_offset -> bitmap of stack slots with refs)
+    pub stack_map: HashMap<usize, Vec<bool>>,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl CompiledLoop {
     /// Get the entry point as a function pointer.
     ///
     /// # Safety
@@ -168,6 +200,140 @@ impl JitCompiler {
             entry_offset,
             stack_map: self.stack_map,
         })
+    }
+
+    /// Compile a loop to native code.
+    ///
+    /// # Arguments
+    /// * `func` - The function containing the loop
+    /// * `loop_start_pc` - Bytecode PC where loop begins (backward jump target)
+    /// * `loop_end_pc` - Bytecode PC of the backward jump instruction
+    ///
+    /// # Returns
+    /// * `CompiledLoop` - The compiled loop code
+    pub fn compile_loop(
+        mut self,
+        func: &Function,
+        loop_start_pc: usize,
+        loop_end_pc: usize,
+        jit_compiled_funcs: &HashSet<usize>,
+    ) -> Result<CompiledLoop, String> {
+        // Check for unsupported operations in the loop
+        // Call instructions are only allowed if the target function is already JIT compiled
+        for pc in loop_start_pc..=loop_end_pc {
+            if let Some(Op::Call(target_func_index, _)) = func.code.get(pc)
+                && !jit_compiled_funcs.contains(target_func_index)
+            {
+                return Err(format!(
+                    "Loop contains Call to non-JIT-compiled function {}",
+                    target_func_index
+                ));
+            }
+        }
+
+        // Store function info
+        self.self_locals_count = func.locals_count;
+
+        // Emit prologue (same as function)
+        self.emit_prologue(func);
+
+        // Record entry point after prologue
+        let entry_offset = 0;
+
+        // Compile instructions from loop_start_pc to loop_end_pc (inclusive)
+        for pc in loop_start_pc..=loop_end_pc {
+            if pc >= func.code.len() {
+                return Err(format!(
+                    "Loop PC {} out of bounds (function has {} instructions)",
+                    pc,
+                    func.code.len()
+                ));
+            }
+
+            let op = &func.code[pc];
+
+            // Record label for this bytecode PC
+            self.labels.insert(pc, self.buf.len());
+
+            // Handle jumps that exit the loop specially
+            match op {
+                Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                    // This is a loop exit condition - jump to epilogue
+                    self.emit_loop_exit_check(func.code.len())?;
+                }
+                Op::Jmp(target) if *target == loop_start_pc => {
+                    // This is the backward branch - jump to loop start
+                    self.emit_jmp(loop_start_pc)?;
+                }
+                _ => {
+                    // Regular instruction
+                    self.compile_op(op, pc)?;
+                }
+            }
+        }
+
+        // Emit epilogue label (for loop exit) - must be before patch_forward_refs
+        // so the exit jump target is available for patching
+        self.labels.insert(func.code.len(), self.buf.len());
+        self.emit_epilogue();
+
+        // Patch forward references (including loop exit jump)
+        self.patch_forward_refs();
+
+        // Get the raw code bytes
+        let code = self.buf.into_code();
+
+        // Allocate executable memory
+        let mut memory = ExecutableMemory::new(code.len())
+            .map_err(|e| format!("Failed to allocate executable memory: {}", e))?;
+
+        // Copy code to executable memory
+        memory
+            .write(0, &code)
+            .map_err(|e| format!("Failed to write code: {}", e))?;
+
+        // Make executable
+        memory
+            .make_executable()
+            .map_err(|e| format!("Failed to make memory executable: {}", e))?;
+
+        Ok(CompiledLoop {
+            memory,
+            entry_offset,
+            loop_start_pc,
+            loop_end_pc,
+            stack_map: self.stack_map,
+        })
+    }
+
+    /// Emit code to check loop exit condition and jump to epilogue.
+    /// This pops the condition value and jumps to epilogue if false.
+    fn emit_loop_exit_check(&mut self, exit_label: usize) -> Result<(), String> {
+        // Pop condition value (tag is at VSTACK-16, payload at VSTACK-8)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+
+        // Load payload (boolean value) from [VSTACK + 8]
+        // ldr imm12 is scaled by 8 for 64-bit loads, so offset 8 = imm12 of 1
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::VSTACK, 1);
+        }
+
+        // Record forward reference for conditional jump
+        let jmp_offset = self.buf.len();
+        self.forward_refs.push((jmp_offset, exit_label));
+
+        // CBZ (compare and branch if zero) to exit - placeholder offset
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbz(regs::TMP0, 0); // Placeholder, will be patched
+        }
+
+        Ok(())
     }
 
     /// Emit function prologue.
