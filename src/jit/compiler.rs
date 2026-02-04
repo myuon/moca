@@ -82,6 +82,38 @@ impl CompiledCode {
     }
 }
 
+/// Compiled JIT code for a hot loop.
+#[cfg(target_arch = "aarch64")]
+pub struct CompiledLoop {
+    /// The executable memory containing the compiled code
+    pub memory: ExecutableMemory,
+    /// Entry point offset within the memory
+    pub entry_offset: usize,
+    /// Bytecode PC where the loop starts (backward jump target)
+    pub loop_start_pc: usize,
+    /// Bytecode PC where the loop ends (backward jump instruction)
+    pub loop_end_pc: usize,
+    /// Stack map for GC (pc_offset -> bitmap of stack slots with refs)
+    pub stack_map: HashMap<usize, Vec<bool>>,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl CompiledLoop {
+    /// Get the entry point as a function pointer.
+    ///
+    /// # Safety
+    /// The caller must ensure the function signature matches the expected ABI.
+    pub unsafe fn entry_point<F>(&self) -> F
+    where
+        F: Copy,
+    {
+        unsafe {
+            let ptr = self.memory.as_ptr().add(self.entry_offset);
+            std::mem::transmute_copy(&ptr)
+        }
+    }
+}
+
 /// JIT compiler for moca functions.
 #[cfg(target_arch = "aarch64")]
 pub struct JitCompiler {

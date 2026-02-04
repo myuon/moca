@@ -8,9 +8,9 @@ use crate::vm::threads::{Channel, ThreadSpawner};
 use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
-use crate::jit::compiler::{CompiledCode, JitCompiler};
+use crate::jit::compiler::{CompiledCode, CompiledLoop, JitCompiler};
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
-use crate::jit::compiler_x86_64::{CompiledCode, JitCompiler};
+use crate::jit::compiler_x86_64::{CompiledCode, CompiledLoop, JitCompiler};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
 use crate::jit::marshal::{JitCallContext, JitContext, JitReturn, JitValue};
 
@@ -116,6 +116,15 @@ pub struct VM {
     /// String constant cache: maps string index to heap reference
     /// Once a string constant is allocated, it's cached here for reuse.
     string_cache: Vec<Option<GcRef>>,
+    /// Loop iteration counters for hot loop detection.
+    /// Key: (function_index, backward_jump_pc), Value: iteration count
+    loop_counts: HashMap<(usize, usize), u32>,
+    /// JIT compiled loops (only on AArch64 with jit feature)
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    jit_loops: HashMap<(usize, usize), CompiledLoop>,
+    /// JIT compiled loops (only on x86-64 with jit feature)
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    jit_loops: HashMap<(usize, usize), CompiledLoop>,
 }
 
 impl VM {
@@ -182,6 +191,11 @@ impl VM {
             profile_opcodes: false,
             opcode_profile: OpcodeProfile::default(),
             string_cache: Vec::new(),
+            loop_counts: HashMap::new(),
+            #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+            jit_loops: HashMap::new(),
+            #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+            jit_loops: HashMap::new(),
         }
     }
 
