@@ -475,13 +475,29 @@ impl VM {
             );
         }
 
-        // TODO: Implement loop JIT compilation in task 6
-        // For now, just log that we would compile
-        if self.trace_jit {
-            eprintln!(
-                "[JIT] Loop compilation not yet implemented for '{}' PC {}..{}",
-                func.name, loop_start_pc, loop_end_pc
-            );
+        let compiler = JitCompiler::new();
+        match compiler.compile_loop(func, loop_start_pc, loop_end_pc) {
+            Ok(compiled) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Compiled loop in '{}' PC {}..{} ({} bytes)",
+                        func.name,
+                        loop_start_pc,
+                        loop_end_pc,
+                        compiled.memory.size()
+                    );
+                }
+                self.jit_loops.insert(key, compiled);
+                self.jit_compile_count += 1;
+            }
+            Err(e) => {
+                if self.trace_jit {
+                    eprintln!(
+                        "[JIT] Failed to compile loop in '{}' PC {}..{}: {}",
+                        func.name, loop_start_pc, loop_end_pc, e
+                    );
+                }
+            }
         }
     }
 
