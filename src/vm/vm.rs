@@ -501,6 +501,154 @@ impl VM {
         }
     }
 
+    /// Execute a JIT compiled loop (x86-64 with jit feature only).
+    ///
+    /// Returns the PC to continue from after the loop (loop_end_pc + 1).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn execute_jit_loop(
+        &mut self,
+        func_index: usize,
+        loop_end_pc: usize,
+        func: &Function,
+        chunk: &Chunk,
+    ) -> Result<usize, String> {
+        let key = (func_index, loop_end_pc);
+
+        // Get the entry point first to avoid borrow conflicts
+        let (entry, loop_end): (
+            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            usize,
+        ) = {
+            let compiled = self.jit_loops.get(&key).unwrap();
+            (unsafe { compiled.entry_point() }, compiled.loop_end_pc)
+        };
+
+        // Create JIT context with locals
+        let locals_count = func.locals_count;
+        let mut ctx = JitContext::new(locals_count);
+
+        // Copy current locals from VM to JIT context
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
+            }
+        }
+
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+            push_string_helper: jit_push_string_helper,
+            array_len_helper: jit_array_len_helper,
+            syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
+            string_cache: self.string_cache.as_ptr() as *const u64,
+            string_cache_len: self.string_cache.len() as u64,
+        };
+
+        // Execute the JIT loop code
+        let _result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
+
+        if self.trace_jit {
+            eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
+        }
+
+        // Copy locals back from JIT context to VM
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                let jit_val = ctx.get_local(i);
+                self.stack[stack_base + i] = jit_val.to_value();
+            }
+        }
+
+        // Return the PC to continue from (after the loop)
+        Ok(loop_end + 1)
+    }
+
+    /// Execute a JIT compiled loop (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn execute_jit_loop(
+        &mut self,
+        func_index: usize,
+        loop_end_pc: usize,
+        func: &Function,
+        chunk: &Chunk,
+    ) -> Result<usize, String> {
+        let key = (func_index, loop_end_pc);
+
+        // Get the entry point first to avoid borrow conflicts
+        let (entry, loop_end): (
+            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            usize,
+        ) = {
+            let compiled = self.jit_loops.get(&key).unwrap();
+            (unsafe { compiled.entry_point() }, compiled.loop_end_pc)
+        };
+
+        // Create JIT context with locals
+        let locals_count = func.locals_count;
+        let mut ctx = JitContext::new(locals_count);
+
+        // Copy current locals from VM to JIT context
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
+            }
+        }
+
+        // Set up JitCallContext for runtime calls from JIT code
+        let mut call_ctx = JitCallContext {
+            vm: self as *mut VM as *mut u8,
+            chunk: chunk as *const Chunk as *const u8,
+            call_helper: jit_call_helper,
+            push_string_helper: jit_push_string_helper,
+            array_len_helper: jit_array_len_helper,
+            syscall_helper: jit_syscall_helper,
+            heap_base: self.heap.memory_base_ptr(),
+            string_cache: self.string_cache.as_ptr() as *const u64,
+            string_cache_len: self.string_cache.len() as u64,
+        };
+
+        // Execute the JIT loop code
+        let _result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                ctx.stack,
+                ctx.locals,
+            )
+        };
+
+        if self.trace_jit {
+            eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
+        }
+
+        // Copy locals back from JIT context to VM
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        for i in 0..locals_count {
+            if stack_base + i < self.stack.len() {
+                let jit_val = ctx.get_local(i);
+                self.stack[stack_base + i] = jit_val.to_value();
+            }
+        }
+
+        // Return the PC to continue from (after the loop)
+        Ok(loop_end + 1)
+    }
+
     /// Execute a JIT compiled function (x86-64 with jit feature only).
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn execute_jit_function(
@@ -937,9 +1085,42 @@ impl VM {
                             self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
                         }
                     }
+
+                    // Execute JIT compiled loop if available
+                    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                    {
+                        if self.is_loop_jit_compiled(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            let next_pc =
+                                self.execute_jit_loop(func_index, current_pc, func, chunk)?;
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.pc = next_pc;
+                            return Ok(ControlFlow::Continue);
+                        }
+                    }
+
+                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    {
+                        if self.is_loop_jit_compiled(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            let next_pc =
+                                self.execute_jit_loop(func_index, current_pc, func, chunk)?;
+                            let frame = self.frames.last_mut().unwrap();
+                            frame.pc = next_pc;
+                            return Ok(ControlFlow::Continue);
+                        }
+                    }
                 }
 
-                // Update PC
+                // Update PC (fallback to interpreter)
                 let frame = self.frames.last_mut().unwrap();
                 frame.pc = target;
             }
