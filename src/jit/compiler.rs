@@ -403,10 +403,10 @@ impl JitCompiler {
             Op::Mul => self.emit_mul(),
             Op::Div => self.emit_div(),
 
-            Op::Lt => self.emit_cmp_int(Cond::Lt),
-            Op::Le => self.emit_cmp_int(Cond::Le),
-            Op::Gt => self.emit_cmp_int(Cond::Gt),
-            Op::Ge => self.emit_cmp_int(Cond::Ge),
+            Op::Lt => self.emit_cmp(Cond::Lt),
+            Op::Le => self.emit_cmp(Cond::Le),
+            Op::Gt => self.emit_cmp(Cond::Gt),
+            Op::Ge => self.emit_cmp(Cond::Ge),
             Op::Eq => self.emit_eq(),
             Op::Ne => self.emit_ne(),
 
@@ -855,22 +855,44 @@ impl JitCompiler {
         )
     }
 
-    /// Integer comparison: pop two values, push bool result.
-    fn emit_cmp_int(&mut self, cond: Cond) -> Result<(), String> {
-        let mut asm = AArch64Assembler::new(&mut self.buf);
+    /// Comparison: pop two values, push bool result.
+    /// Handles both integer and floating-point comparisons.
+    fn emit_cmp(&mut self, cond: Cond) -> Result<(), String> {
+        // Load both operands with tags
+        // Stack: [..., a, b] where each is (tag, payload)
+        // TMP0 = a_payload, TMP1 = b_payload
+        // TMP2 = a_tag, TMP3 = b_tag
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Load b (top of stack)
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            asm.ldr(regs::TMP3, regs::VSTACK, 0); // b_tag
+            asm.ldr(regs::TMP1, regs::VSTACK, 8); // b_payload
 
-        // Pop two operands
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
-        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        asm.ldr(regs::TMP0, regs::VSTACK, 8); // a
+            // Load a
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            asm.ldr(regs::TMP2, regs::VSTACK, 0); // a_tag
+            asm.ldr(regs::TMP0, regs::VSTACK, 8); // a_payload
 
-        // Compare
-        asm.cmp(regs::TMP0, regs::TMP1);
+            // Check if both are INT: (a_tag | b_tag) == 0
+            asm.orr(regs::TMP4, regs::TMP2, regs::TMP3);
+        }
 
-        // Set result based on condition
-        // CSET Xd, cond -> if cond then Xd = 1 else Xd = 0
-        // CSET is alias for CSINC Xd, XZR, XZR, invert(cond)
+        // Branch to float path if not both INT
+        let cbnz_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP4, 0); // placeholder offset
+        }
+
+        // INT path: TMP0 = a, TMP1 = b
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Compare integers
+            asm.cmp(regs::TMP0, regs::TMP1);
+        }
+
+        // CSET for condition
         let inv_cond = match cond {
             Cond::Lt => Cond::Ge,
             Cond::Le => Cond::Gt,
@@ -880,16 +902,211 @@ impl JitCompiler {
             Cond::Ne => Cond::Eq,
             _ => cond,
         };
-        // CSINC Xd, XZR, XZR, inv_cond
-        // 1001 1010 1001 1111 cccc 0111 1111 dddd
-        let inst = 0x9A9F07E0 | ((inv_cond as u32) << 12) | (regs::TMP0.code() as u32);
-        asm.emit_raw(inst);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // CSINC Xd, XZR, XZR, inv_cond
+            let inst = 0x9A9F07E0 | ((inv_cond as u32) << 12) | (regs::TMP0.code() as u32);
+            asm.emit_raw(inst);
 
-        // Push bool result
-        asm.mov_imm(regs::TMP1, value_tags::TAG_BOOL as u16);
-        asm.str(regs::TMP1, regs::VSTACK, 0);
-        asm.str(regs::TMP0, regs::VSTACK, 8);
-        asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            // Push bool result
+            asm.mov_imm(regs::TMP1, value_tags::TAG_BOOL as u16);
+            asm.str(regs::TMP1, regs::VSTACK, 0);
+            asm.str(regs::TMP0, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // Jump to end
+        let b_end_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder offset
+        }
+
+        // FLOAT path
+        let float_path_start = self.buf.len();
+
+        // Patch CBNZ to jump here
+        {
+            let offset = (float_path_start as i32) - (cbnz_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[cbnz_pos],
+                code[cbnz_pos + 1],
+                code[cbnz_pos + 2],
+                code[cbnz_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[cbnz_pos..cbnz_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Convert a to float if needed (TMP2 = a_tag, TMP0 = a_payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP2, 0); // if a_tag != 0, already float
+        }
+        let a_is_int_pos = self.buf.len() - 4;
+
+        // a is INT, convert to float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.scvtf_d_x(0, regs::TMP0); // D0 = (double)TMP0
+        }
+        let a_conv_done_b = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // jump past the float case
+        }
+
+        // a is FLOAT
+        let a_is_float_pos = self.buf.len();
+        {
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[a_is_int_pos],
+                code[a_is_int_pos + 1],
+                code[a_is_int_pos + 2],
+                code[a_is_int_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[a_is_int_pos..a_is_int_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_d_x(0, regs::TMP0); // D0 = TMP0 (as bits)
+        }
+
+        // Patch the branch after a conversion
+        let a_conv_merge = self.buf.len();
+        {
+            let offset = (a_conv_merge as i32) - (a_conv_done_b as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[a_conv_done_b],
+                code[a_conv_done_b + 1],
+                code[a_conv_done_b + 2],
+                code[a_conv_done_b + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[a_conv_done_b..a_conv_done_b + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Convert b to float if needed (TMP3 = b_tag, TMP1 = b_payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP3, 0); // if b_tag != 0, already float
+        }
+        let b_is_int_pos = self.buf.len() - 4;
+
+        // b is INT, convert to float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.scvtf_d_x(1, regs::TMP1); // D1 = (double)TMP1
+        }
+        let b_conv_done_b = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // jump past the float case
+        }
+
+        // b is FLOAT
+        let b_is_float_pos = self.buf.len();
+        {
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[b_is_int_pos],
+                code[b_is_int_pos + 1],
+                code[b_is_int_pos + 2],
+                code[b_is_int_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[b_is_int_pos..b_is_int_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_d_x(1, regs::TMP1); // D1 = TMP1 (as bits)
+        }
+
+        // Patch the branch after b conversion
+        let b_conv_merge = self.buf.len();
+        {
+            let offset = (b_conv_merge as i32) - (b_conv_done_b as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[b_conv_done_b],
+                code[b_conv_done_b + 1],
+                code[b_conv_done_b + 2],
+                code[b_conv_done_b + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[b_conv_done_b..b_conv_done_b + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Perform float comparison: fcmp D0, D1
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fcmp_d(0, 1);
+        }
+
+        // CSET for float condition
+        // For floating-point comparisons after FCMP, the condition codes work as follows:
+        // GT (Greater Than): MI=0, EQ=0, C=1, V=0 -> use GT
+        // GE (Greater or Equal): N=0, Z=0, C=1, V=0 OR Z=1 -> use GE
+        // LT (Less Than): N=1, V=0 -> use MI (minus/negative)
+        // LE (Less or Equal): N=1, V=0 OR Z=1 -> use LE works but MI is for unordered
+        // For AArch64 FCMP: LT maps to MI, LE maps to LS, GT maps to GT, GE maps to GE
+        let fp_cond = match cond {
+            Cond::Lt => Cond::Mi, // MI = negative (less than for FP)
+            Cond::Le => Cond::Ls, // LS = less than or same (unsigned, but works for FP after FCMP)
+            _ => cond,            // GT, GE, EQ, NE work the same
+        };
+        let fp_inv_cond = match fp_cond {
+            Cond::Lt => Cond::Ge,
+            Cond::Le => Cond::Gt,
+            Cond::Gt => Cond::Le,
+            Cond::Ge => Cond::Lt,
+            Cond::Eq => Cond::Ne,
+            Cond::Ne => Cond::Eq,
+            Cond::Mi => Cond::Pl, // MI -> PL (plus/positive or zero)
+            Cond::Ls => Cond::Hi, // LS -> HI (higher)
+            _ => fp_cond,
+        };
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // CSINC Xd, XZR, XZR, inv_cond
+            let inst = 0x9A9F07E0 | ((fp_inv_cond as u32) << 12) | (regs::TMP0.code() as u32);
+            asm.emit_raw(inst);
+
+            // Push bool result
+            asm.mov_imm(regs::TMP1, value_tags::TAG_BOOL as u16);
+            asm.str(regs::TMP1, regs::VSTACK, 0);
+            asm.str(regs::TMP0, regs::VSTACK, 8);
+            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        }
+
+        // End
+        let end_pos = self.buf.len();
+
+        // Patch the B (jump to end) from INT path
+        {
+            let offset = (end_pos as i32) - (b_end_pos as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[b_end_pos],
+                code[b_end_pos + 1],
+                code[b_end_pos + 2],
+                code[b_end_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[b_end_pos..b_end_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
@@ -897,12 +1114,12 @@ impl JitCompiler {
 
     /// Equality comparison.
     fn emit_eq(&mut self) -> Result<(), String> {
-        self.emit_cmp_int(Cond::Eq)
+        self.emit_cmp(Cond::Eq)
     }
 
     /// Not-equal comparison.
     fn emit_ne(&mut self) -> Result<(), String> {
-        self.emit_cmp_int(Cond::Ne)
+        self.emit_cmp(Cond::Ne)
     }
 
     /// Unconditional jump.

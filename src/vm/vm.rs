@@ -301,6 +301,10 @@ impl VM {
 
     /// Increment call count and check if function should be JIT compiled.
     fn should_jit_compile(&mut self, func_index: usize, func_name: &str) -> bool {
+        if !self.jit_enabled {
+            return false;
+        }
+
         if func_index >= self.call_counts.len() {
             return false;
         }
