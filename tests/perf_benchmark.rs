@@ -18,9 +18,13 @@ const MEASUREMENT_RUNS: usize = 3;
 
 /// Run a benchmark scenario and return execution time.
 fn run_benchmark(source: &str, jit_enabled: bool) -> Duration {
-    // Create temp file
+    // Create temp file with unique name using both process ID and thread ID
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("moca_perf_{}.mc", std::process::id()));
+    let temp_file = temp_dir.join(format!(
+        "moca_perf_{}_{:?}.mc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(&temp_file, source).expect("failed to write temp file");
 
     let config = if jit_enabled {
@@ -96,7 +100,11 @@ fn assert_optimization_effect(name: &str, source: &str) {
 /// Used for scenarios where JIT correctness matters but performance improvement isn't expected.
 fn run_jit_correctness_test(source: &str) -> String {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("moca_test_{}.mc", std::process::id()));
+    let temp_file = temp_dir.join(format!(
+        "moca_test_{}_{:?}.mc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(&temp_file, source).expect("failed to write temp file");
 
     let config = RuntimeConfig {
