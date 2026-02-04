@@ -317,10 +317,10 @@ impl JitCompiler {
         self.stack_depth = self.stack_depth.saturating_sub(1);
 
         // Load payload (boolean value) from [VSTACK + 8]
-        // ldr imm12 is scaled by 8 for 64-bit loads, so offset 8 = imm12 of 1
+        // ldr takes byte offset (internally divides by 8 for AArch64 encoding)
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldr(regs::TMP0, regs::VSTACK, 1);
+            asm.ldr(regs::TMP0, regs::VSTACK, 8);
         }
 
         // Record forward reference for conditional jump
@@ -1632,6 +1632,83 @@ mod tests {
 
         let compiler = JitCompiler::new();
         let result = compiler.compile(&func, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compile_loop_hot_loop() {
+        // Test compiling just the hot loop portion (PC 2..10)
+        // This is the code pattern for: while x < 10 { x = x + 1; }
+        let func = Function {
+            name: "hot_loop".to_string(),
+            arity: 0,
+            locals_count: 1,
+            code: vec![
+                Op::PushInt(0),     // 0: push 0
+                Op::SetL(0),        // 1: x = 0
+                Op::GetL(0),        // 2: push x (loop start)
+                Op::PushInt(10),    // 3: push 10
+                Op::Lt,             // 4: x < 10
+                Op::JmpIfFalse(11), // 5: if false, exit loop (target > loop_end)
+                Op::GetL(0),        // 6: push x
+                Op::PushInt(1),     // 7: push 1
+                Op::Add,            // 8: x + 1
+                Op::SetL(0),        // 9: x = x + 1
+                Op::Jmp(2),         // 10: goto loop start (backward jump)
+                Op::GetL(0),        // 11: after loop
+                Op::Ret,            // 12: return
+            ],
+            stackmap: None,
+        };
+
+        let compiler = JitCompiler::new();
+        let jit_compiled_funcs = HashSet::new();
+
+        // Compile just the loop body (PC 2 to PC 10)
+        let result = compiler.compile_loop(&func, 2, 10, &jit_compiled_funcs);
+        assert!(
+            result.is_ok(),
+            "Loop compilation failed: {:?}",
+            result.err()
+        );
+
+        let compiled = result.unwrap();
+        assert_eq!(compiled.loop_start_pc, 2);
+        assert_eq!(compiled.loop_end_pc, 10);
+        // Verify we got some code
+        assert!(compiled.memory.size() > 0);
+    }
+
+    #[test]
+    fn test_compile_loop_with_nested_condition() {
+        // Test a loop with a more complex exit condition
+        // while x < 100 { x = x + 1; }
+        let func = Function {
+            name: "nested_cond".to_string(),
+            arity: 0,
+            locals_count: 1,
+            code: vec![
+                Op::PushInt(0),     // 0: push 0
+                Op::SetL(0),        // 1: x = 0
+                Op::GetL(0),        // 2: push x (loop start)
+                Op::PushInt(100),   // 3: push 100
+                Op::Lt,             // 4: x < 100
+                Op::JmpIfFalse(11), // 5: if false, exit
+                Op::GetL(0),        // 6: push x
+                Op::PushInt(1),     // 7: push 1
+                Op::Add,            // 8: x + 1
+                Op::SetL(0),        // 9: x = x + 1
+                Op::Jmp(2),         // 10: backward jump
+                Op::GetL(0),        // 11: after loop
+                Op::Ret,            // 12: return
+            ],
+            stackmap: None,
+        };
+
+        let compiler = JitCompiler::new();
+        let jit_compiled_funcs = HashSet::new();
+
+        let result = compiler.compile_loop(&func, 2, 10, &jit_compiled_funcs);
         assert!(result.is_ok());
     }
 }
