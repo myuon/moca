@@ -6,7 +6,8 @@ use std::time::Instant;
 #[derive(Serialize)]
 struct BenchmarkResult {
     name: String,
-    moca_time_secs: f64,
+    moca_jit_on_secs: f64,
+    moca_jit_off_secs: f64,
     rust_time_secs: f64,
 }
 
@@ -97,7 +98,7 @@ where
     start.elapsed().as_secs_f64()
 }
 
-fn run_moca_benchmark(moca_path: &str, bench_file: &str) -> f64 {
+fn run_moca_benchmark(moca_path: &str, bench_file: &str, jit: &str) -> f64 {
     let bench_path = format!(
         "{}/bench/moca/{}.mc",
         env!("CARGO_MANIFEST_DIR").trim_end_matches("/bench"),
@@ -108,7 +109,7 @@ fn run_moca_benchmark(moca_path: &str, bench_file: &str) -> f64 {
     let output = Command::new(moca_path)
         .arg("run")
         .arg("--jit")
-        .arg("on")
+        .arg(jit)
         .arg(&bench_path)
         .output()
         .expect("Failed to run moca");
@@ -117,8 +118,9 @@ fn run_moca_benchmark(moca_path: &str, bench_file: &str) -> f64 {
 
     if !output.status.success() {
         eprintln!(
-            "Moca benchmark {} failed: {}",
+            "Moca benchmark {} (jit={}) failed: {}",
             bench_file,
+            jit,
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -137,37 +139,45 @@ fn main() {
 
     // sum_loop benchmark
     let rust_time = time_rust(rust_sum_loop);
-    let moca_time = run_moca_benchmark(moca_path, "sum_loop");
+    let moca_jit_on = run_moca_benchmark(moca_path, "sum_loop", "on");
+    let moca_jit_off = run_moca_benchmark(moca_path, "sum_loop", "off");
     results.push(BenchmarkResult {
         name: "sum_loop".to_string(),
-        moca_time_secs: moca_time,
+        moca_jit_on_secs: moca_jit_on,
+        moca_jit_off_secs: moca_jit_off,
         rust_time_secs: rust_time,
     });
 
     // nested_loop benchmark
     let rust_time = time_rust(rust_nested_loop);
-    let moca_time = run_moca_benchmark(moca_path, "nested_loop");
+    let moca_jit_on = run_moca_benchmark(moca_path, "nested_loop", "on");
+    let moca_jit_off = run_moca_benchmark(moca_path, "nested_loop", "off");
     results.push(BenchmarkResult {
         name: "nested_loop".to_string(),
-        moca_time_secs: moca_time,
+        moca_jit_on_secs: moca_jit_on,
+        moca_jit_off_secs: moca_jit_off,
         rust_time_secs: rust_time,
     });
 
     // fibonacci benchmark
     let rust_time = time_rust(|| eprintln!("{}", rust_fibonacci(30)));
-    let moca_time = run_moca_benchmark(moca_path, "fibonacci");
+    let moca_jit_on = run_moca_benchmark(moca_path, "fibonacci", "on");
+    let moca_jit_off = run_moca_benchmark(moca_path, "fibonacci", "off");
     results.push(BenchmarkResult {
         name: "fibonacci".to_string(),
-        moca_time_secs: moca_time,
+        moca_jit_on_secs: moca_jit_on,
+        moca_jit_off_secs: moca_jit_off,
         rust_time_secs: rust_time,
     });
 
     // mandelbrot benchmark
     let rust_time = time_rust(|| eprintln!("{}", rust_mandelbrot(200)));
-    let moca_time = run_moca_benchmark(moca_path, "mandelbrot");
+    let moca_jit_on = run_moca_benchmark(moca_path, "mandelbrot", "on");
+    let moca_jit_off = run_moca_benchmark(moca_path, "mandelbrot", "off");
     results.push(BenchmarkResult {
         name: "mandelbrot".to_string(),
-        moca_time_secs: moca_time,
+        moca_jit_on_secs: moca_jit_on,
+        moca_jit_off_secs: moca_jit_off,
         rust_time_secs: rust_time,
     });
 
