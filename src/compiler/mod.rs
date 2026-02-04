@@ -24,7 +24,7 @@ pub use typechecker::TypeChecker;
 pub const STDLIB_PRELUDE: &str = include_str!("../../std/prelude.mc");
 
 use crate::compiler::ast::{Item, Program};
-use crate::config::RuntimeConfig;
+use crate::config::{JitMode, RuntimeConfig};
 use std::collections::HashSet;
 
 /// Parse and prepend stdlib to a user program.
@@ -207,7 +207,11 @@ pub fn run_file_capturing_output(
             Box::new(SharedWriter(stdout_clone)),
             Box::new(SharedWriter(stderr_clone)),
         );
-        vm.set_jit_config(config.jit_threshold, config.trace_jit);
+        vm.set_jit_config(
+            config.jit_mode != JitMode::Off,
+            config.jit_threshold,
+            config.trace_jit,
+        );
 
         vm.run(&chunk)?;
 
@@ -285,7 +289,11 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Execution with runtime configuration
     let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
-    vm.set_jit_config(config.jit_threshold, config.trace_jit);
+    vm.set_jit_config(
+        config.jit_mode != JitMode::Off,
+        config.jit_threshold,
+        config.trace_jit,
+    );
 
     vm.run(&chunk)?;
 
@@ -369,7 +377,120 @@ pub fn run_file_with_dump(
 
     // Execution with runtime configuration
     let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
-    vm.set_jit_config(config.jit_threshold, config.trace_jit);
+    vm.set_jit_config(
+        config.jit_mode != JitMode::Off,
+        config.jit_threshold,
+        config.trace_jit,
+    );
+    vm.set_profile_opcodes(config.profile_opcodes);
+    vm.set_cli_args(cli_args);
+
+    vm.run(&chunk)?;
+
+    // Print GC stats if requested
+    if config.gc_stats {
+        let stats = vm.gc_stats();
+        eprintln!(
+            "[GC] Collections: {}, Total pause: {}us, Max pause: {}us",
+            stats.cycles, stats.total_pause_us, stats.max_pause_us
+        );
+    }
+
+    // Print opcode profile if requested
+    if config.profile_opcodes {
+        let profile = vm.opcode_profile();
+        eprintln!("\n== Opcode Profile ==");
+        eprintln!(
+            "Total instructions executed: {}",
+            profile.total_instructions()
+        );
+        eprintln!("\nExecution counts by opcode:");
+        eprintln!("{:<20} {:>15} {:>10}", "Opcode", "Count", "Percent");
+        eprintln!("{:-<47}", "");
+        let total = profile.total_instructions() as f64;
+        for (name, count) in profile.sorted_by_count() {
+            let percent = (count as f64 / total) * 100.0;
+            eprintln!("{:<20} {:>15} {:>9.2}%", name, count, percent);
+        }
+    }
+
+    Ok(())
+}
+
+/// Compile and run source code from a string (e.g., stdin).
+/// This does not support imports since there's no file path context.
+pub fn run_source(
+    source: &str,
+    config: &RuntimeConfig,
+    dump_opts: &DumpOptions,
+    cli_args: Vec<String>,
+) -> Result<(), String> {
+    let filename = "<stdin>".to_string();
+
+    // Parse the source
+    let mut lexer = Lexer::new(&filename, source);
+    let tokens = lexer.scan_tokens()?;
+    let mut parser = Parser::new(&filename, tokens);
+    let user_program = parser.parse()?;
+
+    // Prepend standard library
+    let program = prepend_stdlib(user_program)?;
+
+    // Dump AST if requested
+    if let Some(ref output_path) = dump_opts.dump_ast {
+        let ast_str = dump::format_ast(&program);
+        write_dump(&ast_str, output_path.as_ref(), "AST")?;
+    }
+
+    // Type checking
+    let mut typechecker = TypeChecker::new(&filename);
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
+    let index_object_types = typechecker.index_object_types().clone();
+
+    // Desugar
+    let program = desugar::desugar_program(program, index_object_types.clone());
+
+    // Monomorphisation
+    let program = monomorphise::monomorphise_program(program);
+
+    // Name resolution
+    let mut resolver = Resolver::new(&filename);
+    let resolved = resolver.resolve(program)?;
+
+    // Dump resolved program if requested
+    if let Some(ref output_path) = dump_opts.dump_resolved {
+        let resolved_str = dump::format_resolved(&resolved);
+        write_dump(&resolved_str, output_path.as_ref(), "Resolved")?;
+    }
+
+    // Code generation
+    let mut codegen = Codegen::new();
+    codegen.set_index_object_types(index_object_types);
+    let chunk = codegen.compile(resolved)?;
+
+    // Dump bytecode if requested
+    if let Some(ref output_path) = dump_opts.dump_bytecode {
+        let bytecode_str = dump::format_bytecode(&chunk);
+        write_dump(&bytecode_str, output_path.as_ref(), "Bytecode")?;
+    }
+
+    // Log JIT settings if tracing is enabled
+    if config.trace_jit {
+        eprintln!(
+            "[JIT] Mode: {:?}, Threshold: {}",
+            config.jit_mode, config.jit_threshold
+        );
+    }
+
+    // Execution with runtime configuration
+    let mut vm = VM::new_with_heap_config(config.heap_limit, config.gc_enabled);
+    vm.set_jit_config(
+        config.jit_mode != JitMode::Off,
+        config.jit_threshold,
+        config.trace_jit,
+    );
     vm.set_profile_opcodes(config.profile_opcodes);
     vm.set_cli_args(cli_args);
 
