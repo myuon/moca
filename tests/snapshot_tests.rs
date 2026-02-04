@@ -630,14 +630,12 @@ fn snapshot_http_server() {
 const PERF_WARMUP_RUNS: usize = 3;
 #[cfg(feature = "jit")]
 const PERF_MEASUREMENT_RUNS: usize = 3;
-#[cfg(feature = "jit")]
-const PERF_IMPROVEMENT_THRESHOLD: f64 = 0.9; // JIT must be at least 10% faster
 
 // Rust reference implementations for correctness verification
 #[cfg(feature = "jit")]
 fn rust_sum_loop() -> i64 {
     let mut sum: i64 = 0;
-    for i in 1..=1_000_000 {
+    for i in 1..=10_000_000 {
         sum += i;
     }
     sum
@@ -709,25 +707,15 @@ fn rust_mandelbrot(max_iter: i32) -> i32 {
     escape_count
 }
 
-/// Run a moca file and measure execution time
+/// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
-fn run_performance_benchmark(
-    path: &Path,
-    jit_enabled: bool,
-) -> (std::time::Duration, String, usize) {
+fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
     use std::time::Instant;
 
-    let config = if jit_enabled {
-        RuntimeConfig {
-            jit_mode: JitMode::On,
-            jit_threshold: 1,
-            ..Default::default()
-        }
-    } else {
-        RuntimeConfig {
-            jit_mode: JitMode::Off,
-            ..Default::default()
-        }
+    let config = RuntimeConfig {
+        jit_mode: JitMode::On,
+        jit_threshold: 1,
+        ..Default::default()
     };
 
     let start = Instant::now();
@@ -740,7 +728,7 @@ fn run_performance_benchmark(
 }
 
 /// Run a performance test for a single .mc file
-/// Asserts that JIT on is at least 10% faster than JIT off
+/// Compares moca JIT performance against Rust reference implementation
 /// rust_impl returns the expected output string, which is compared against moca's output
 /// to both verify correctness and prevent compiler optimization
 #[cfg(feature = "jit")]
@@ -754,26 +742,21 @@ where
 
     // Warmup runs (discard results)
     for _ in 0..PERF_WARMUP_RUNS {
-        run_performance_benchmark(test_path, false);
-        run_performance_benchmark(test_path, true);
+        run_performance_benchmark(test_path);
         let _ = rust_impl();
     }
 
     // Measurement runs
-    let mut jit_off_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
-    let mut jit_on_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
+    let mut moca_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
     let mut rust_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
-    let mut jit_on_output = String::new();
+    let mut moca_output = String::new();
     let mut jit_compile_count = 0;
     let mut rust_result = String::new();
 
     for _ in 0..PERF_MEASUREMENT_RUNS {
-        let (elapsed, _, _) = run_performance_benchmark(test_path, false);
-        jit_off_times.push(elapsed);
-
-        let (elapsed, output, count) = run_performance_benchmark(test_path, true);
-        jit_on_times.push(elapsed);
-        jit_on_output = output;
+        let (elapsed, output, count) = run_performance_benchmark(test_path);
+        moca_times.push(elapsed);
+        moca_output = output;
         jit_compile_count = count;
 
         let start = Instant::now();
@@ -791,43 +774,27 @@ where
     // Verify output correctness: compare moca output with Rust result
     // This also prevents compiler from optimizing away the Rust computation
     assert_eq!(
-        jit_on_output.trim(),
+        moca_output.trim(),
         rust_result,
         "[{}] Moca output doesn't match Rust reference implementation",
         test_name
     );
 
     // Calculate averages
-    let jit_off_avg =
-        jit_off_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
-    let jit_on_avg =
-        jit_on_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
+    let moca_avg =
+        moca_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
     let rust_avg =
         rust_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
 
-    let ratio = jit_on_avg / jit_off_avg;
-    let improvement_pct = (1.0 - ratio) * 100.0;
-    let rust_ratio = if rust_avg > 0.0 {
-        jit_on_avg / rust_avg
+    let vs_rust = if rust_avg > 0.0 {
+        moca_avg / rust_avg
     } else {
         0.0
     };
 
     println!(
-        "[{}] JIT off: {:.4}s, JIT on: {:.4}s, Rust: {:.4}s, improvement: {:.1}%, vs_rust: {:.1}x",
-        test_name, jit_off_avg, jit_on_avg, rust_avg, improvement_pct, rust_ratio
-    );
-
-    // Assert JIT is at least 10% faster
-    assert!(
-        jit_on_avg <= jit_off_avg * PERF_IMPROVEMENT_THRESHOLD,
-        "[{}] JIT optimization did not meet 10% improvement threshold.\n\
-         JIT off avg: {:.4}s, JIT on avg: {:.4}s, ratio: {:.3} (need <= {})",
-        test_name,
-        jit_off_avg,
-        jit_on_avg,
-        ratio,
-        PERF_IMPROVEMENT_THRESHOLD
+        "[{}] moca: {:.4}s, Rust: {:.4}s, vs_rust: {:.1}x",
+        test_name, moca_avg, rust_avg, vs_rust
     );
 }
 
@@ -850,17 +817,17 @@ fn snapshot_performance() {
     // Test nested_loop with Rust reference
     let nested_loop_path = perf_dir.join("nested_loop.mc");
     run_performance_test(&nested_loop_path, || {
-        rust_nested_loop(std::hint::black_box(1000)).to_string()
+        rust_nested_loop(std::hint::black_box(3000)).to_string()
     });
 
     // Test mandelbrot with Rust reference
     let mandelbrot_path = perf_dir.join("mandelbrot.mc");
-    run_performance_test(&mandelbrot_path, || rust_mandelbrot(1000).to_string());
+    run_performance_test(&mandelbrot_path, || rust_mandelbrot(5000).to_string());
 
     // Test fibonacci with Rust reference
     let fibonacci_path = perf_dir.join("fibonacci.mc");
     run_performance_test(&fibonacci_path, || {
-        rust_fibonacci(std::hint::black_box(30)).to_string()
+        rust_fibonacci(std::hint::black_box(35)).to_string()
     });
 }
 

@@ -1,4 +1,4 @@
-// Benchmark: fibonacci(30) recursive
+// Benchmark: fibonacci(35) recursive
 fun fib(n: int) -> int {
     if n <= 1 {
         return n;
@@ -6,4 +6,4 @@ fun fib(n: int) -> int {
     return fib(n - 1) + fib(n - 2);
 }
 
-print(fib(30));
+print(fib(35));

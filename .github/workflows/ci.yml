@@ -215,36 +215,33 @@ jobs:
               results = {}
               with open(filename) as f:
                   for line in f:
-                      # Parse: [name] JIT off: X.XXXXs, JIT on: X.XXXXs, Rust: X.XXXXs, improvement: XX.X%, vs_rust: X.Xx
-                      match = re.match(r'\[(\w+)\] JIT off: ([\d.]+)s, JIT on: ([\d.]+)s, Rust: ([\d.]+)s, improvement: ([\d.-]+)%, vs_rust: ([\d.]+)x', line)
+                      # Parse: [name] moca: X.XXXXs, Rust: X.XXXXs, vs_rust: X.Xx
+                      match = re.match(r'\[(\w+)\] moca: ([\d.]+)s, Rust: ([\d.]+)s, vs_rust: ([\d.]+)x', line)
                       if match:
                           name = match.group(1)
-                          jit_off = float(match.group(2))
-                          jit_on = float(match.group(3))
-                          rust = float(match.group(4))
-                          improvement = float(match.group(5))
-                          vs_rust = float(match.group(6))
-                          results[name] = {'jit_off': jit_off, 'jit_on': jit_on, 'rust': rust, 'improvement': improvement, 'vs_rust': vs_rust}
+                          moca = float(match.group(2))
+                          rust = float(match.group(3))
+                          vs_rust = float(match.group(4))
+                          results[name] = {'moca': moca, 'rust': rust, 'vs_rust': vs_rust}
               return results
 
           pr_results = parse_perf_output('pr_perf.txt')
           main_results = parse_perf_output('main_perf.txt')
 
           lines = []
-          lines.append("| Benchmark | JIT on | JIT off | Rust | vs Rust | vs Main |")
-          lines.append("|-----------|--------|---------|------|---------|---------|")
+          lines.append("| Benchmark | moca | Rust | vs Rust | vs Main |")
+          lines.append("|-----------|------|------|---------|---------|")
 
           for name, pr in pr_results.items():
-              jit_on = pr['jit_on']
-              jit_off = pr['jit_off']
+              moca = pr['moca']
               rust = pr['rust']
               vs_rust = pr['vs_rust']
 
               # Calculate vs main
               if name in main_results:
-                  main_jit_on = main_results[name]['jit_on']
-                  if main_jit_on > 0:
-                      pct_change = ((main_jit_on - jit_on) / main_jit_on) * 100
+                  main_moca = main_results[name]['moca']
+                  if main_moca > 0:
+                      pct_change = ((main_moca - moca) / main_moca) * 100
                       if pct_change > 5:
                           icon = "🟢"
                           sign = "+"
@@ -260,7 +257,7 @@ jobs:
               else:
                   main_str = "new"
 
-              lines.append(f"| {name} | {jit_on:.4f}s | {jit_off:.4f}s | {rust:.4f}s | {vs_rust:.1f}x | {main_str} |")
+              lines.append(f"| {name} | {moca:.4f}s | {rust:.4f}s | {vs_rust:.1f}x | {main_str} |")
 
           lines.append("")
           lines.append("_vs Rust: times slower than native Rust. vs Main: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower_")
