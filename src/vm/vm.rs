@@ -75,6 +75,8 @@ pub struct VM {
     try_frames: Vec<TryFrame>,
     /// Function call counters for JIT (index matches Chunk::functions)
     call_counts: Vec<u32>,
+    /// Whether JIT compilation is enabled
+    jit_enabled: bool,
     /// JIT threshold
     jit_threshold: u32,
     /// Whether to trace JIT events
@@ -170,6 +172,7 @@ impl VM {
             heap: Heap::new_with_config(heap_limit, gc_enabled),
             try_frames: Vec::new(),
             call_counts: Vec::new(),
+            jit_enabled: true,
             jit_threshold: 1000,
             trace_jit: false,
             gc_stats: VmGcStats::default(),
@@ -231,7 +234,8 @@ impl VM {
     }
 
     /// Configure JIT settings.
-    pub fn set_jit_config(&mut self, threshold: u32, trace: bool) {
+    pub fn set_jit_config(&mut self, enabled: bool, threshold: u32, trace: bool) {
+        self.jit_enabled = enabled;
         self.jit_threshold = threshold;
         self.trace_jit = trace;
     }
@@ -297,6 +301,10 @@ impl VM {
 
     /// Increment call count and check if function should be JIT compiled.
     fn should_jit_compile(&mut self, func_index: usize, func_name: &str) -> bool {
+        if !self.jit_enabled {
+            return false;
+        }
+
         if func_index >= self.call_counts.len() {
             return false;
         }
@@ -317,8 +325,11 @@ impl VM {
     }
 
     /// Check if a loop should be JIT compiled based on iteration count.
-    /// Returns true when the loop reaches the hot threshold.
+    /// Returns true when the loop reaches the hot threshold and JIT is enabled.
     fn should_jit_compile_loop(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        if !self.jit_enabled {
+            return false;
+        }
         let key = (func_index, back_jump_pc);
         if let Some(&count) = self.loop_counts.get(&key) {
             count == self.jit_threshold
@@ -330,13 +341,13 @@ impl VM {
     /// Check if a loop has already been JIT compiled.
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn is_loop_jit_compiled(&self, func_index: usize, back_jump_pc: usize) -> bool {
-        self.jit_loops.contains_key(&(func_index, back_jump_pc))
+        self.jit_enabled && self.jit_loops.contains_key(&(func_index, back_jump_pc))
     }
 
     /// Check if a loop has already been JIT compiled.
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn is_loop_jit_compiled(&self, func_index: usize, back_jump_pc: usize) -> bool {
-        self.jit_loops.contains_key(&(func_index, back_jump_pc))
+        self.jit_enabled && self.jit_loops.contains_key(&(func_index, back_jump_pc))
     }
 
     /// Compile a function to native code (AArch64 with jit feature only).

@@ -73,6 +73,14 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         script_args: Vec<String>,
 
+        /// Execute code directly from command line
+        #[arg(short = 'c', long)]
+        code: Option<String>,
+
+        /// Execution timeout in seconds (0 = no timeout)
+        #[arg(long, default_value = "0")]
+        timeout: u64,
+
         /// JIT compilation mode (off, on, auto)
         #[arg(long, value_enum, default_value = "auto")]
         jit: JitModeArg,
@@ -142,6 +150,8 @@ fn main() -> ExitCode {
         Commands::Run {
             file,
             script_args,
+            code,
+            timeout,
             jit,
             jit_threshold,
             trace_jit,
@@ -152,24 +162,6 @@ fn main() -> ExitCode {
             dump_bytecode,
             profile_opcodes,
         } => {
-            let path = match file {
-                Some(p) => p,
-                None => {
-                    // Try to find pkg.toml and use entry point
-                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                    match package::PackageManifest::load(&cwd) {
-                        Ok(manifest) => cwd.join(&manifest.package.entry),
-                        Err(_) => {
-                            eprintln!("error: no file specified and no pkg.toml found");
-                            eprintln!(
-                                "usage: moca run <file> or run from a moca project directory"
-                            );
-                            return ExitCode::FAILURE;
-                        }
-                    }
-                }
-            };
-
             let config = RuntimeConfig {
                 jit_mode: jit.into(),
                 jit_threshold,
@@ -186,11 +178,86 @@ fn main() -> ExitCode {
                 dump_bytecode,
             };
 
-            // Build CLI args: argv[0] = script path, argv[1..] = script_args
-            let mut cli_args = vec![path.to_string_lossy().to_string()];
-            cli_args.extend(script_args);
+            // Run with timeout if specified
+            let run_result = if timeout > 0 {
+                use std::sync::mpsc;
+                use std::thread;
+                use std::time::Duration;
 
-            if let Err(e) = run_file(&path, &config, &dump_opts, cli_args) {
+                let (tx, rx) = mpsc::channel();
+                let code_clone = code.clone();
+                let config_clone = config.clone();
+                let dump_opts_clone = dump_opts.clone();
+                let script_args_clone = script_args.clone();
+                let file_clone = file.clone();
+
+                let handle = thread::spawn(move || {
+                    let result = if let Some(source) = code_clone {
+                        let mut cli_args = vec!["<code>".to_string()];
+                        cli_args.extend(script_args_clone);
+                        compiler::run_source(&source, &config_clone, &dump_opts_clone, cli_args)
+                    } else {
+                        let path = match file_clone {
+                            Some(p) => p,
+                            None => {
+                                let cwd =
+                                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                                match package::PackageManifest::load(&cwd) {
+                                    Ok(manifest) => cwd.join(&manifest.package.entry),
+                                    Err(_) => {
+                                        return Err(
+                                            "no file specified and no pkg.toml found".to_string()
+                                        );
+                                    }
+                                }
+                            }
+                        };
+                        let mut cli_args = vec![path.to_string_lossy().to_string()];
+                        cli_args.extend(script_args_clone);
+                        run_file(&path, &config_clone, &dump_opts_clone, cli_args)
+                    };
+                    let _ = tx.send(());
+                    result
+                });
+
+                match rx.recv_timeout(Duration::from_secs(timeout)) {
+                    Ok(()) => handle
+                        .join()
+                        .unwrap_or_else(|_| Err("thread panicked".to_string())),
+                    Err(_) => {
+                        eprintln!("error: execution timed out after {} seconds", timeout);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else if let Some(source) = code {
+                // Direct code execution without timeout
+                let mut cli_args = vec!["<code>".to_string()];
+                cli_args.extend(script_args);
+                compiler::run_source(&source, &config, &dump_opts, cli_args)
+            } else {
+                // File execution without timeout
+                let path = match file {
+                    Some(p) => p,
+                    None => {
+                        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                        match package::PackageManifest::load(&cwd) {
+                            Ok(manifest) => cwd.join(&manifest.package.entry),
+                            Err(_) => {
+                                eprintln!("error: no file specified and no pkg.toml found");
+                                eprintln!(
+                                    "usage: moca run <file> or run from a moca project directory"
+                                );
+                                return ExitCode::FAILURE;
+                            }
+                        }
+                    }
+                };
+                let mut cli_args = vec![path.to_string_lossy().to_string()];
+                cli_args.extend(script_args);
+                run_file(&path, &config, &dump_opts, cli_args)
+            };
+
+            if let Err(e) = run_result {
                 eprintln!("{}", e);
                 return ExitCode::FAILURE;
             }

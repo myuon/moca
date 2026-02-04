@@ -449,6 +449,14 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// FCMP Dn, Dm (double-precision floating-point compare)
+    /// Sets NZCV flags based on comparison result.
+    pub fn fcmp_d(&mut self, fn_: u8, fm: u8) {
+        // 0001 1110 011m mmmm 0010 00nn nnn0 0000
+        let inst = 0x1E602000 | ((fm as u32) << 16) | ((fn_ as u32) << 5);
+        self.emit_raw(inst);
+    }
+
     // ==================== NOP ====================
 
     /// NOP (no operation)

@@ -229,8 +229,8 @@ jobs:
           main_times = {r['name']: r['moca_jit_on_secs'] for r in main_data['results']}
 
           lines = []
-          lines.append("| Benchmark | Current (JIT) | Current (no JIT) | Rust | Main |")
-          lines.append("|-----------|---------------|------------------|------|------|")
+          lines.append("| Benchmark | Current (JIT) | no JIT | Rust | vs Main |")
+          lines.append("|-----------|---------------|--------|------|---------|")
 
           for result in pr_data['results']:
               name = result['name']
@@ -239,12 +239,19 @@ jobs:
               rust = result['rust_time_secs']
               main = main_times.get(name, current_jit)
 
-              # Calculate Rust comparison (how many times faster)
+              # Calculate no-JIT vs JIT ratio (baseline = JIT)
+              if current_jit > 0:
+                  no_jit_ratio = current_no_jit / current_jit
+                  no_jit_str = f"{current_no_jit:.3f}s ({no_jit_ratio:.1f}x)"
+              else:
+                  no_jit_str = f"{current_no_jit:.3f}s"
+
+              # Calculate Rust comparison (how many times slower than Rust)
               if rust > 0:
                   rust_ratio = current_jit / rust
-                  rust_str = f"{rust:.3f}s ({rust_ratio:.0f}x faster)"
+                  rust_str = f"{rust:.4f}s ({rust_ratio:.0f}x)"
               else:
-                  rust_str = f"{rust:.3f}s"
+                  rust_str = f"{rust:.4f}s"
 
               # Calculate main comparison (percentage change)
               if main > 0:
@@ -258,14 +265,16 @@ jobs:
                   else:
                       icon = "🟡"
                       sign = "+" if pct_change >= 0 else ""
-                  main_str = f"{main:.3f}s {icon} {sign}{pct_change:.0f}%"
+                  main_str = f"{icon} {sign}{pct_change:.0f}%"
               else:
                   main_str = "N/A"
 
-              lines.append(f"| {name} | {current_jit:.3f}s | {current_no_jit:.3f}s | {rust_str} | {main_str} |")
+              lines.append(f"| {name} | {current_jit:.3f}s | {no_jit_str} | {rust_str} | {main_str} |")
 
           lines.append("")
-          lines.append("Legend: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower (vs main)")
+          lines.append("_no JIT: times slower than JIT. Rust: times slower than native Rust._")
+          lines.append("")
+          lines.append("_vs Main: 🟢 >5% faster, 🟡 ±5%, 🔴 >5% slower_")
 
           print('\n'.join(lines))
           PYTHON_SCRIPT

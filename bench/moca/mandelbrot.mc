@@ -1,4 +1,4 @@
-// Benchmark: Mandelbrot set computation with max_iter=200
+// Benchmark: Mandelbrot set computation with max_iter=1000
 // Simplified version for benchmarking (no output, just computation)
 fun mandelbrot_bench(max_iter: int) -> int {
     let width = 80;
@@ -50,4 +50,4 @@ fun mandelbrot_bench(max_iter: int) -> int {
     return escape_count;
 }
 
-print(mandelbrot_bench(200));
+print(mandelbrot_bench(1000));

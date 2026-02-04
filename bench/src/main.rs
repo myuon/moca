@@ -29,8 +29,8 @@ fn rust_sum_loop() {
 
 fn rust_nested_loop() {
     let mut sum: i64 = 0;
-    for i in 0..500 {
-        for j in 0..500 {
+    for i in 0..1000 {
+        for j in 0..1000 {
             sum += i * j;
         }
     }
@@ -167,7 +167,7 @@ fn main() {
     });
 
     // mandelbrot benchmark
-    let rust_time = time_rust(|| eprintln!("{}", rust_mandelbrot(200)));
+    let rust_time = time_rust(|| eprintln!("{}", rust_mandelbrot(1000)));
     let moca_jit_on = run_moca_benchmark("mandelbrot", true);
     let moca_jit_off = run_moca_benchmark("mandelbrot", false);
     results.push(BenchmarkResult {
