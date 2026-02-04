@@ -1,6 +1,7 @@
+use moca::compiler::run_file_capturing_output;
+use moca::config::{JitMode, RuntimeConfig};
 use serde::Serialize;
-use std::env;
-use std::process::Command;
+use std::path::Path;
 use std::time::Instant;
 
 #[derive(Serialize)]
@@ -98,30 +99,31 @@ where
     start.elapsed().as_secs_f64()
 }
 
-fn run_moca_benchmark(moca_path: &str, bench_file: &str, jit: &str) -> f64 {
+fn run_moca_benchmark(bench_file: &str, jit_enabled: bool) -> f64 {
     let bench_path = format!(
         "{}/bench/moca/{}.mc",
         env!("CARGO_MANIFEST_DIR").trim_end_matches("/bench"),
         bench_file
     );
 
-    let start = Instant::now();
-    let output = Command::new(moca_path)
-        .arg("run")
-        .arg("--jit")
-        .arg(jit)
-        .arg(&bench_path)
-        .output()
-        .expect("Failed to run moca");
+    let config = RuntimeConfig {
+        jit_mode: if jit_enabled {
+            JitMode::On
+        } else {
+            JitMode::Off
+        },
+        jit_threshold: 1, // Compile immediately for benchmarking
+        ..Default::default()
+    };
 
+    let start = Instant::now();
+    let (_output, result) = run_file_capturing_output(Path::new(&bench_path), &config);
     let elapsed = start.elapsed().as_secs_f64();
 
-    if !output.status.success() {
+    if let Err(e) = result {
         eprintln!(
             "Moca benchmark {} (jit={}) failed: {}",
-            bench_file,
-            jit,
-            String::from_utf8_lossy(&output.stderr)
+            bench_file, jit_enabled, e
         );
     }
 
@@ -129,18 +131,12 @@ fn run_moca_benchmark(moca_path: &str, bench_file: &str, jit: &str) -> f64 {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let moca_path = args
-        .get(1)
-        .map(|s| s.as_str())
-        .unwrap_or("./target/release/moca");
-
     let mut results = Vec::new();
 
     // sum_loop benchmark
     let rust_time = time_rust(rust_sum_loop);
-    let moca_jit_on = run_moca_benchmark(moca_path, "sum_loop", "on");
-    let moca_jit_off = run_moca_benchmark(moca_path, "sum_loop", "off");
+    let moca_jit_on = run_moca_benchmark("sum_loop", true);
+    let moca_jit_off = run_moca_benchmark("sum_loop", false);
     results.push(BenchmarkResult {
         name: "sum_loop".to_string(),
         moca_jit_on_secs: moca_jit_on,
@@ -150,8 +146,8 @@ fn main() {
 
     // nested_loop benchmark
     let rust_time = time_rust(rust_nested_loop);
-    let moca_jit_on = run_moca_benchmark(moca_path, "nested_loop", "on");
-    let moca_jit_off = run_moca_benchmark(moca_path, "nested_loop", "off");
+    let moca_jit_on = run_moca_benchmark("nested_loop", true);
+    let moca_jit_off = run_moca_benchmark("nested_loop", false);
     results.push(BenchmarkResult {
         name: "nested_loop".to_string(),
         moca_jit_on_secs: moca_jit_on,
@@ -161,8 +157,8 @@ fn main() {
 
     // fibonacci benchmark
     let rust_time = time_rust(|| eprintln!("{}", rust_fibonacci(30)));
-    let moca_jit_on = run_moca_benchmark(moca_path, "fibonacci", "on");
-    let moca_jit_off = run_moca_benchmark(moca_path, "fibonacci", "off");
+    let moca_jit_on = run_moca_benchmark("fibonacci", true);
+    let moca_jit_off = run_moca_benchmark("fibonacci", false);
     results.push(BenchmarkResult {
         name: "fibonacci".to_string(),
         moca_jit_on_secs: moca_jit_on,
@@ -172,8 +168,8 @@ fn main() {
 
     // mandelbrot benchmark
     let rust_time = time_rust(|| eprintln!("{}", rust_mandelbrot(200)));
-    let moca_jit_on = run_moca_benchmark(moca_path, "mandelbrot", "on");
-    let moca_jit_off = run_moca_benchmark(moca_path, "mandelbrot", "off");
+    let moca_jit_on = run_moca_benchmark("mandelbrot", true);
+    let moca_jit_off = run_moca_benchmark("mandelbrot", false);
     results.push(BenchmarkResult {
         name: "mandelbrot".to_string(),
         moca_jit_on_secs: moca_jit_on,
