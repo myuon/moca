@@ -316,10 +316,11 @@ impl JitCompiler {
         }
         self.stack_depth = self.stack_depth.saturating_sub(1);
 
-        // Load payload (boolean value)
+        // Load payload (boolean value) from [VSTACK + 8]
+        // ldr imm12 is scaled by 8 for 64-bit loads, so offset 8 = imm12 of 1
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldr_offset(regs::TMP0, regs::VSTACK, 8);
+            asm.ldr(regs::TMP0, regs::VSTACK, 1);
         }
 
         // Record forward reference for conditional jump
