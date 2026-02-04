@@ -316,6 +316,29 @@ impl VM {
         false
     }
 
+    /// Check if a loop should be JIT compiled based on iteration count.
+    /// Returns true when the loop reaches the hot threshold.
+    fn should_jit_compile_loop(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        let key = (func_index, back_jump_pc);
+        if let Some(&count) = self.loop_counts.get(&key) {
+            count == self.jit_threshold
+        } else {
+            false
+        }
+    }
+
+    /// Check if a loop has already been JIT compiled.
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn is_loop_jit_compiled(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        self.jit_loops.contains_key(&(func_index, back_jump_pc))
+    }
+
+    /// Check if a loop has already been JIT compiled.
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn is_loop_jit_compiled(&self, func_index: usize, back_jump_pc: usize) -> bool {
+        self.jit_loops.contains_key(&(func_index, back_jump_pc))
+    }
+
     /// Compile a function to native code (AArch64 with jit feature only).
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
