@@ -188,6 +188,130 @@ impl JitCompiler {
         })
     }
 
+    /// Compile a loop to native code.
+    ///
+    /// # Arguments
+    /// * `func` - The function containing the loop
+    /// * `loop_start_pc` - Bytecode PC where loop begins (backward jump target)
+    /// * `loop_end_pc` - Bytecode PC of the backward jump instruction
+    ///
+    /// # Returns
+    /// * `CompiledLoop` - The compiled loop code
+    pub fn compile_loop(
+        mut self,
+        func: &Function,
+        loop_start_pc: usize,
+        loop_end_pc: usize,
+    ) -> Result<CompiledLoop, String> {
+        // Store function info
+        self.self_locals_count = func.locals_count;
+
+        // Emit prologue (same as function)
+        self.emit_prologue(func);
+
+        // Record entry point after prologue
+        let entry_offset = 0;
+
+        // Compile instructions from loop_start_pc to loop_end_pc (inclusive)
+        for pc in loop_start_pc..=loop_end_pc {
+            if pc >= func.code.len() {
+                return Err(format!(
+                    "Loop PC {} out of bounds (function has {} instructions)",
+                    pc,
+                    func.code.len()
+                ));
+            }
+
+            let op = &func.code[pc];
+
+            // Record label for this bytecode PC
+            self.labels.insert(pc, self.buf.len());
+
+            // Handle jumps that exit the loop specially
+            match op {
+                Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                    // This is a loop exit condition - jump to epilogue
+                    self.emit_loop_exit_check(func.code.len())?;
+                }
+                Op::Jmp(target) if *target == loop_start_pc => {
+                    // This is the backward branch - jump to loop start
+                    self.emit_jmp(loop_start_pc)?;
+                }
+                _ => {
+                    // Regular instruction
+                    self.compile_op(op, pc)?;
+                }
+            }
+        }
+
+        // Patch forward references
+        self.patch_forward_refs();
+
+        // Emit epilogue label (for loop exit)
+        self.labels.insert(func.code.len(), self.buf.len());
+        self.emit_epilogue();
+
+        // Get the raw code bytes
+        let code = self.buf.into_code();
+
+        // Allocate executable memory
+        let mut memory = ExecutableMemory::new(code.len())
+            .map_err(|e| format!("Failed to allocate executable memory: {}", e))?;
+
+        // Copy code to executable memory
+        memory
+            .write(0, &code)
+            .map_err(|e| format!("Failed to write code: {}", e))?;
+
+        // Make executable
+        memory
+            .make_executable()
+            .map_err(|e| format!("Failed to make memory executable: {}", e))?;
+
+        Ok(CompiledLoop {
+            memory,
+            entry_offset,
+            loop_start_pc,
+            loop_end_pc,
+            stack_map: self.stack_map,
+        })
+    }
+
+    /// Emit code to check loop exit condition and jump to epilogue.
+    /// This pops the condition value and jumps to epilogue if false.
+    fn emit_loop_exit_check(&mut self, exit_label: usize) -> Result<(), String> {
+        // Pop condition value (tag is at VSTACK-16, payload at VSTACK-8)
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        }
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+
+        // Load payload (boolean value)
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, 8);
+        }
+
+        // Test if false (0)
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.test_rr(regs::TMP0, regs::TMP0);
+        }
+
+        // Record forward reference for conditional jump
+        let jmp_offset = self.buf.len();
+        self.forward_refs.push((jmp_offset, exit_label));
+
+        // JE (jump if zero/false) to exit - placeholder offset
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.je_rel32(0);
+        }
+
+        Ok(())
+    }
+
     /// Emit function prologue.
     fn emit_prologue(&mut self, _func: &Function) {
         let mut asm = X86_64Assembler::new(&mut self.buf);
