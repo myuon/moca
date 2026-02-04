@@ -12,7 +12,7 @@ use super::memory::ExecutableMemory;
 #[cfg(target_arch = "aarch64")]
 use crate::vm::{Function, Op};
 #[cfg(target_arch = "aarch64")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Value tag constants for JIT code.
 /// Values are represented as 128-bit (tag: u64, payload: u64).
@@ -216,15 +216,18 @@ impl JitCompiler {
         func: &Function,
         loop_start_pc: usize,
         loop_end_pc: usize,
+        jit_compiled_funcs: &HashSet<usize>,
     ) -> Result<CompiledLoop, String> {
         // Check for unsupported operations in the loop
-        // Currently, loops containing Call instructions are not supported
-        // due to complex interaction with the JIT call context
+        // Call instructions are only allowed if the target function is already JIT compiled
         for pc in loop_start_pc..=loop_end_pc {
-            if let Some(op) = func.code.get(pc)
-                && matches!(op, Op::Call(_, _))
+            if let Some(Op::Call(target_func_index, _)) = func.code.get(pc)
+                && !jit_compiled_funcs.contains(target_func_index)
             {
-                return Err("Loop contains Call instruction (not yet supported)".to_string());
+                return Err(format!(
+                    "Loop contains Call to non-JIT-compiled function {}",
+                    target_func_index
+                ));
             }
         }
 

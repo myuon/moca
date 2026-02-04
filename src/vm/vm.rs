@@ -429,7 +429,9 @@ impl VM {
         }
 
         let compiler = JitCompiler::new();
-        match compiler.compile_loop(func, loop_start_pc, loop_end_pc) {
+        let jit_compiled_funcs: std::collections::HashSet<usize> =
+            self.jit_functions.keys().copied().collect();
+        match compiler.compile_loop(func, loop_start_pc, loop_end_pc, &jit_compiled_funcs) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -476,7 +478,9 @@ impl VM {
         }
 
         let compiler = JitCompiler::new();
-        match compiler.compile_loop(func, loop_start_pc, loop_end_pc) {
+        let jit_compiled_funcs: std::collections::HashSet<usize> =
+            self.jit_functions.keys().copied().collect();
+        match compiler.compile_loop(func, loop_start_pc, loop_end_pc, &jit_compiled_funcs) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -524,12 +528,20 @@ impl VM {
         };
 
         // Create JIT context with locals
-        let locals_count = func.locals_count;
+        // Note: func.locals_count may be 0 for __main__ (due to compiler TODO),
+        // so we calculate actual locals from the VM stack when needed.
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        let locals_count = if func.locals_count == 0 && func_index == usize::MAX {
+            // For __main__, calculate locals from current stack
+            // At loop entry, expression stack should be empty, so all values are locals
+            self.stack.len() - stack_base
+        } else {
+            func.locals_count
+        };
         let mut ctx = JitContext::new(locals_count);
 
         // Copy current locals from VM to JIT context
-        let frame = self.frames.last().unwrap();
-        let stack_base = frame.stack_base;
         for i in 0..locals_count {
             if stack_base + i < self.stack.len() {
                 ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
@@ -597,12 +609,20 @@ impl VM {
         };
 
         // Create JIT context with locals
-        let locals_count = func.locals_count;
+        // Note: func.locals_count may be 0 for __main__ (due to compiler TODO),
+        // so we calculate actual locals from the VM stack when needed.
+        let frame = self.frames.last().unwrap();
+        let stack_base = frame.stack_base;
+        let locals_count = if func.locals_count == 0 && func_index == usize::MAX {
+            // For __main__, calculate locals from current stack
+            // At loop entry, expression stack should be empty, so all values are locals
+            self.stack.len() - stack_base
+        } else {
+            func.locals_count
+        };
         let mut ctx = JitContext::new(locals_count);
 
         // Copy current locals from VM to JIT context
-        let frame = self.frames.last().unwrap();
-        let stack_base = frame.stack_base;
         for i in 0..locals_count {
             if stack_base + i < self.stack.len() {
                 ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
