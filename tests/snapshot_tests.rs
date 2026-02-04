@@ -8,12 +8,12 @@ use std::path::Path;
 use moca::compiler::{dump_ast, dump_bytecode, run_file_capturing_output, run_tests};
 use moca::config::{JitMode, RuntimeConfig};
 
-/// Run a .mc file in-process and return (stdout, stderr, exit_code)
-fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, String, i32) {
+/// Run a .mc file in-process and return (stdout, stderr, exit_code, jit_compile_count)
+fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, String, i32, usize) {
     let (output, result) = run_file_capturing_output(path, config);
 
     match result {
-        Ok(()) => (output.stdout, output.stderr, 0),
+        Ok(()) => (output.stdout, output.stderr, 0, output.jit_compile_count),
         Err(e) => {
             // Combine captured stderr with error message
             let stderr = if output.stderr.is_empty() {
@@ -21,7 +21,7 @@ fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, Stri
             } else {
                 format!("{}{}", output.stderr, e)
             };
-            (output.stdout, stderr, 1)
+            (output.stdout, stderr, 1, output.jit_compile_count)
         }
     }
 }
@@ -106,15 +106,25 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
     };
 
     // Determine how to run the test
-    let (actual_stdout, actual_stderr, actual_exitcode) =
+    let (actual_stdout, actual_stderr, actual_exitcode, jit_compile_count) =
         if let Some(dump_type) = is_dump_test(&base_path) {
             // Dump test (AST or bytecode)
-            run_dump_test(&moca_path, dump_type)
+            let (stdout, stderr, exitcode) = run_dump_test(&moca_path, dump_type);
+            (stdout, stderr, exitcode, 0)
         } else {
             // Regular test
             let config = get_config_for_dir(dir_name);
             run_moca_file_inprocess(&moca_path, &config)
         };
+
+    // For JIT tests, verify that JIT compilation actually occurred
+    if dir_name == "jit" && actual_exitcode == 0 {
+        assert!(
+            jit_compile_count > 0,
+            "JIT test {:?}: no functions were JIT compiled",
+            moca_path
+        );
+    }
 
     // Check stdout (exact match)
     let stdout_path = base_path.with_extension("stdout");
@@ -277,7 +287,7 @@ fn run_gc_snapshot_test(test_path: &Path) {
     // 1. Run with GC enabled (normal mode) - should succeed
     {
         let config = RuntimeConfig::default();
-        let (actual_stdout, actual_stderr, actual_exitcode) =
+        let (actual_stdout, actual_stderr, actual_exitcode, _) =
             run_moca_file_inprocess(test_path, &config);
 
         // Check expected stdout if exists
@@ -319,7 +329,7 @@ fn run_gc_snapshot_test(test_path: &Path) {
             ..Default::default()
         };
 
-        let (_, actual_stderr, actual_exitcode) =
+        let (_, actual_stderr, actual_exitcode, _) =
             run_moca_file_inprocess(&gc_disabled_path, &config);
 
         // Check expected stderr if exists
@@ -574,7 +584,7 @@ fn snapshot_http_server() {
     server_thread.join().expect("Server thread panicked");
 
     // Verify server output
-    let (actual_stdout, actual_stderr, actual_exitcode) =
+    let (actual_stdout, actual_stderr, actual_exitcode, _) =
         rx.recv().expect("Failed to receive server result");
 
     // Check expected stdout
@@ -738,7 +748,7 @@ fn snapshot_http() {
 
         // Run the moca file
         let config = RuntimeConfig::default();
-        let (actual_stdout, actual_stderr, actual_exitcode) =
+        let (actual_stdout, actual_stderr, actual_exitcode, _) =
             run_moca_file_inprocess(&temp_file, &config);
 
         // Clean up temp file

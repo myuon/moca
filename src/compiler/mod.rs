@@ -150,6 +150,8 @@ pub struct CapturedOutput {
     pub stdout: String,
     /// Standard error output
     pub stderr: String,
+    /// Number of functions that were JIT compiled
+    pub jit_compile_count: usize,
 }
 
 /// Compile and run a file, capturing output for testing.
@@ -166,7 +168,7 @@ pub fn run_file_capturing_output(
     let stdout_clone = Arc::clone(&stdout_buffer);
     let stderr_clone = Arc::clone(&stderr_buffer);
 
-    let result = (|| {
+    let result: Result<usize, String> = (|| {
         let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let mut loader = ModuleLoader::new(root_dir);
 
@@ -215,16 +217,22 @@ pub fn run_file_capturing_output(
 
         vm.run(&chunk)?;
 
-        Ok(())
+        Ok(vm.jit_compile_count())
     })();
 
     // Extract the output from the buffers
+    let (jit_compile_count, result) = match result {
+        Ok(count) => (count, Ok(())),
+        Err(e) => (0, Err(e)),
+    };
+
     let output = {
         let stdout = stdout_buffer.lock().unwrap();
         let stderr = stderr_buffer.lock().unwrap();
         CapturedOutput {
             stdout: String::from_utf8_lossy(stdout.get_ref()).to_string(),
             stderr: String::from_utf8_lossy(stderr.get_ref()).to_string(),
+            jit_compile_count,
         }
     };
 
