@@ -621,6 +621,239 @@ fn snapshot_http_server() {
 /// Endpoints:
 /// - GET / : Returns "Hello from test server!"
 /// - POST /echo : Returns the request body as-is
+// ============================================================================
+// Performance Benchmark Tests
+// ============================================================================
+
+/// Performance test configuration
+#[cfg(feature = "jit")]
+const PERF_WARMUP_RUNS: usize = 3;
+#[cfg(feature = "jit")]
+const PERF_MEASUREMENT_RUNS: usize = 3;
+#[cfg(feature = "jit")]
+const PERF_IMPROVEMENT_THRESHOLD: f64 = 0.9; // JIT must be at least 10% faster
+
+// Rust reference implementations for correctness verification
+#[cfg(feature = "jit")]
+fn rust_sum_loop() -> i64 {
+    let mut sum: i64 = 0;
+    for i in 1..=1_000_000 {
+        sum += i;
+    }
+    sum
+}
+
+#[cfg(feature = "jit")]
+fn rust_nested_loop() -> i64 {
+    let mut sum: i64 = 0;
+    for i in 0..1000 {
+        for j in 0..1000 {
+            sum += i * j;
+        }
+    }
+    sum
+}
+
+#[cfg(all(feature = "jit", not(target_arch = "aarch64")))]
+fn rust_fibonacci(n: i32) -> i32 {
+    if n <= 1 {
+        n
+    } else {
+        rust_fibonacci(n - 1) + rust_fibonacci(n - 2)
+    }
+}
+
+#[cfg(feature = "jit")]
+fn rust_mandelbrot(max_iter: i32) -> i32 {
+    let width = 80;
+    let height = 24;
+    let mut escape_count = 0;
+
+    let x_min = -2.0_f64;
+    let x_max = 1.0_f64;
+    let y_min = -1.0_f64;
+    let y_max = 1.0_f64;
+
+    let x_step = (x_max - x_min) / 80.0;
+    let y_step = (y_max - y_min) / 24.0;
+
+    let mut cy = y_min;
+    for _ in 0..height {
+        let mut cx = x_min;
+        for _ in 0..width {
+            let mut zr = 0.0_f64;
+            let mut zi = 0.0_f64;
+            let mut iter = 0;
+
+            while iter < max_iter {
+                let zr2 = zr * zr;
+                let zi2 = zi * zi;
+
+                if zr2 + zi2 > 4.0 {
+                    escape_count += 1;
+                    break;
+                }
+
+                let new_zr = zr2 - zi2 + cx;
+                let new_zi = 2.0 * zr * zi + cy;
+                zr = new_zr;
+                zi = new_zi;
+                iter += 1;
+            }
+
+            cx += x_step;
+        }
+        cy += y_step;
+    }
+
+    escape_count
+}
+
+/// Run a moca file and measure execution time
+#[cfg(feature = "jit")]
+fn run_performance_benchmark(
+    path: &Path,
+    jit_enabled: bool,
+) -> (std::time::Duration, String, usize) {
+    use std::time::Instant;
+
+    let config = if jit_enabled {
+        RuntimeConfig {
+            jit_mode: JitMode::On,
+            jit_threshold: 1,
+            ..Default::default()
+        }
+    } else {
+        RuntimeConfig {
+            jit_mode: JitMode::Off,
+            ..Default::default()
+        }
+    };
+
+    let start = Instant::now();
+    let (output, result) = run_file_capturing_output(path, &config);
+    let elapsed = start.elapsed();
+
+    result.unwrap_or_else(|e| panic!("Benchmark execution failed for {:?}: {}", path, e));
+
+    (elapsed, output.stdout, output.jit_compile_count)
+}
+
+/// Run a performance test for a single .mc file
+/// Asserts that JIT on is at least 10% faster than JIT off
+#[cfg(feature = "jit")]
+fn run_performance_test(test_path: &Path, expected_output: Option<&str>) {
+    use std::time::Duration;
+
+    let test_name = test_path.file_stem().unwrap().to_string_lossy().to_string();
+
+    // Warmup runs (discard results)
+    for _ in 0..PERF_WARMUP_RUNS {
+        run_performance_benchmark(test_path, false);
+        run_performance_benchmark(test_path, true);
+    }
+
+    // Measurement runs
+    let mut jit_off_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
+    let mut jit_on_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
+    let mut jit_on_output = String::new();
+    let mut jit_compile_count = 0;
+
+    for _ in 0..PERF_MEASUREMENT_RUNS {
+        let (elapsed, _, _) = run_performance_benchmark(test_path, false);
+        jit_off_times.push(elapsed);
+
+        let (elapsed, output, count) = run_performance_benchmark(test_path, true);
+        jit_on_times.push(elapsed);
+        jit_on_output = output;
+        jit_compile_count = count;
+    }
+
+    // Verify JIT compilation occurred
+    assert!(
+        jit_compile_count > 0,
+        "[{}] JIT was enabled but no functions were compiled",
+        test_name
+    );
+
+    // Verify output correctness if expected output is provided
+    if let Some(expected) = expected_output {
+        assert_eq!(
+            jit_on_output.trim(),
+            expected,
+            "[{}] Output mismatch",
+            test_name
+        );
+    }
+
+    // Calculate averages
+    let jit_off_avg =
+        jit_off_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
+    let jit_on_avg =
+        jit_on_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
+
+    let ratio = jit_on_avg / jit_off_avg;
+    let improvement_pct = (1.0 - ratio) * 100.0;
+
+    println!(
+        "[{}] JIT off: {:.4}s, JIT on: {:.4}s, improvement: {:.1}%",
+        test_name, jit_off_avg, jit_on_avg, improvement_pct
+    );
+
+    // Assert JIT is at least 10% faster
+    assert!(
+        jit_on_avg <= jit_off_avg * PERF_IMPROVEMENT_THRESHOLD,
+        "[{}] JIT optimization did not meet 10% improvement threshold.\n\
+         JIT off avg: {:.4}s, JIT on avg: {:.4}s, ratio: {:.3} (need <= {})",
+        test_name,
+        jit_off_avg,
+        jit_on_avg,
+        ratio,
+        PERF_IMPROVEMENT_THRESHOLD
+    );
+}
+
+#[test]
+#[cfg(feature = "jit")]
+fn snapshot_performance() {
+    let perf_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("performance");
+
+    if !perf_dir.exists() {
+        panic!("Performance test directory not found: {:?}", perf_dir);
+    }
+
+    // Test sum_loop with Rust reference
+    let sum_loop_path = perf_dir.join("sum_loop.mc");
+    let expected_sum = rust_sum_loop().to_string();
+    run_performance_test(&sum_loop_path, Some(&expected_sum));
+
+    // Test nested_loop with Rust reference
+    let nested_loop_path = perf_dir.join("nested_loop.mc");
+    let expected_nested = rust_nested_loop().to_string();
+    run_performance_test(&nested_loop_path, Some(&expected_nested));
+
+    // Test mandelbrot with Rust reference
+    let mandelbrot_path = perf_dir.join("mandelbrot.mc");
+    let expected_mandelbrot = rust_mandelbrot(1000).to_string();
+    run_performance_test(&mandelbrot_path, Some(&expected_mandelbrot));
+
+    // Test fibonacci with Rust reference
+    // Note: Skip on aarch64 if emit_call_self is not supported
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let fibonacci_path = perf_dir.join("fibonacci.mc");
+        let expected_fib = rust_fibonacci(30).to_string();
+        run_performance_test(&fibonacci_path, Some(&expected_fib));
+    }
+}
+
+// ============================================================================
+// HTTP Client Snapshot Tests
+// ============================================================================
+
 #[test]
 fn snapshot_http() {
     use http_body_util::{BodyExt, Full};
