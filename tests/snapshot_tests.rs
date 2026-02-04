@@ -742,8 +742,11 @@ fn run_performance_benchmark(
 /// Run a performance test for a single .mc file
 /// Asserts that JIT on is at least 10% faster than JIT off
 #[cfg(feature = "jit")]
-fn run_performance_test(test_path: &Path, expected_output: Option<&str>) {
-    use std::time::Duration;
+fn run_performance_test<F>(test_path: &Path, expected_output: Option<&str>, rust_impl: F)
+where
+    F: Fn(),
+{
+    use std::time::{Duration, Instant};
 
     let test_name = test_path.file_stem().unwrap().to_string_lossy().to_string();
 
@@ -751,11 +754,13 @@ fn run_performance_test(test_path: &Path, expected_output: Option<&str>) {
     for _ in 0..PERF_WARMUP_RUNS {
         run_performance_benchmark(test_path, false);
         run_performance_benchmark(test_path, true);
+        rust_impl();
     }
 
     // Measurement runs
     let mut jit_off_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
     let mut jit_on_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
+    let mut rust_times: Vec<Duration> = Vec::with_capacity(PERF_MEASUREMENT_RUNS);
     let mut jit_on_output = String::new();
     let mut jit_compile_count = 0;
 
@@ -767,6 +772,10 @@ fn run_performance_test(test_path: &Path, expected_output: Option<&str>) {
         jit_on_times.push(elapsed);
         jit_on_output = output;
         jit_compile_count = count;
+
+        let start = Instant::now();
+        rust_impl();
+        rust_times.push(start.elapsed());
     }
 
     // Verify JIT compilation occurred
@@ -791,13 +800,20 @@ fn run_performance_test(test_path: &Path, expected_output: Option<&str>) {
         jit_off_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
     let jit_on_avg =
         jit_on_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
+    let rust_avg =
+        rust_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / PERF_MEASUREMENT_RUNS as f64;
 
     let ratio = jit_on_avg / jit_off_avg;
     let improvement_pct = (1.0 - ratio) * 100.0;
+    let rust_ratio = if rust_avg > 0.0 {
+        jit_on_avg / rust_avg
+    } else {
+        0.0
+    };
 
     println!(
-        "[{}] JIT off: {:.4}s, JIT on: {:.4}s, improvement: {:.1}%",
-        test_name, jit_off_avg, jit_on_avg, improvement_pct
+        "[{}] JIT off: {:.4}s, JIT on: {:.4}s, Rust: {:.4}s, improvement: {:.1}%, vs_rust: {:.1}x",
+        test_name, jit_off_avg, jit_on_avg, rust_avg, improvement_pct, rust_ratio
     );
 
     // Assert JIT is at least 10% faster
@@ -828,22 +844,30 @@ fn snapshot_performance() {
     // Test sum_loop with Rust reference
     let sum_loop_path = perf_dir.join("sum_loop.mc");
     let expected_sum = rust_sum_loop().to_string();
-    run_performance_test(&sum_loop_path, Some(&expected_sum));
+    run_performance_test(&sum_loop_path, Some(&expected_sum), || {
+        std::hint::black_box(rust_sum_loop());
+    });
 
     // Test nested_loop with Rust reference
     let nested_loop_path = perf_dir.join("nested_loop.mc");
     let expected_nested = rust_nested_loop().to_string();
-    run_performance_test(&nested_loop_path, Some(&expected_nested));
+    run_performance_test(&nested_loop_path, Some(&expected_nested), || {
+        std::hint::black_box(rust_nested_loop());
+    });
 
     // Test mandelbrot with Rust reference
     let mandelbrot_path = perf_dir.join("mandelbrot.mc");
     let expected_mandelbrot = rust_mandelbrot(1000).to_string();
-    run_performance_test(&mandelbrot_path, Some(&expected_mandelbrot));
+    run_performance_test(&mandelbrot_path, Some(&expected_mandelbrot), || {
+        std::hint::black_box(rust_mandelbrot(1000));
+    });
 
     // Test fibonacci with Rust reference
     let fibonacci_path = perf_dir.join("fibonacci.mc");
     let expected_fib = rust_fibonacci(30).to_string();
-    run_performance_test(&fibonacci_path, Some(&expected_fib));
+    run_performance_test(&fibonacci_path, Some(&expected_fib), || {
+        std::hint::black_box(rust_fibonacci(30));
+    });
 }
 
 // ============================================================================
