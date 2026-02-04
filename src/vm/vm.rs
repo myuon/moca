@@ -407,6 +407,68 @@ impl VM {
         self.jit_functions.contains_key(&func_index)
     }
 
+    /// Compile a hot loop to native code (x86-64 with jit feature only).
+    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+    fn jit_compile_loop(
+        &mut self,
+        func: &Function,
+        func_index: usize,
+        loop_start_pc: usize,
+        loop_end_pc: usize,
+    ) {
+        let key = (func_index, loop_end_pc);
+        if self.jit_loops.contains_key(&key) {
+            return; // Already compiled
+        }
+
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Hot loop detected in '{}' at PC {}..{} (iterations: {})",
+                func.name, loop_start_pc, loop_end_pc, self.jit_threshold
+            );
+        }
+
+        // TODO: Implement loop JIT compilation in task 5
+        // For now, just log that we would compile
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Loop compilation not yet implemented for '{}' PC {}..{}",
+                func.name, loop_start_pc, loop_end_pc
+            );
+        }
+    }
+
+    /// Compile a hot loop to native code (AArch64 with jit feature only).
+    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+    fn jit_compile_loop(
+        &mut self,
+        func: &Function,
+        func_index: usize,
+        loop_start_pc: usize,
+        loop_end_pc: usize,
+    ) {
+        let key = (func_index, loop_end_pc);
+        if self.jit_loops.contains_key(&key) {
+            return; // Already compiled
+        }
+
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Hot loop detected in '{}' at PC {}..{} (iterations: {})",
+                func.name, loop_start_pc, loop_end_pc, self.jit_threshold
+            );
+        }
+
+        // TODO: Implement loop JIT compilation in task 6
+        // For now, just log that we would compile
+        if self.trace_jit {
+            eprintln!(
+                "[JIT] Loop compilation not yet implemented for '{}' PC {}..{}",
+                func.name, loop_start_pc, loop_end_pc
+            );
+        }
+    }
+
     /// Execute a JIT compiled function (x86-64 with jit feature only).
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn execute_jit_function(
@@ -803,17 +865,50 @@ impl VM {
                 self.stack.push(Value::Bool(!a.is_truthy()));
             }
             Op::Jmp(target) => {
-                let frame = self.frames.last_mut().unwrap();
-                let current_pc = frame.pc.saturating_sub(1); // PC was already incremented
-                let func_index = frame.func_index;
+                // Get frame info without holding mutable borrow
+                let (current_pc, func_index) = {
+                    let frame = self.frames.last().unwrap();
+                    (frame.pc.saturating_sub(1), frame.func_index) // PC was already incremented
+                };
 
                 // Detect backward branch (loop)
                 if target < current_pc {
                     let key = (func_index, current_pc);
                     let count = self.loop_counts.entry(key).or_insert(0);
                     *count += 1;
+
+                    // Loop range: start_pc = target, end_pc = current_pc
+                    let loop_start_pc = target;
+                    let loop_end_pc = current_pc;
+
+                    // Check if this loop should be JIT compiled
+                    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                    {
+                        if self.should_jit_compile_loop(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                        }
+                    }
+
+                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    {
+                        if self.should_jit_compile_loop(func_index, current_pc) {
+                            let func = if func_index == usize::MAX {
+                                &chunk.main
+                            } else {
+                                &chunk.functions[func_index]
+                            };
+                            self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                        }
+                    }
                 }
 
+                // Update PC
+                let frame = self.frames.last_mut().unwrap();
                 frame.pc = target;
             }
             Op::JmpIfFalse(target) => {
