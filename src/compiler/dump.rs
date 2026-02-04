@@ -716,7 +716,7 @@ impl ResolvedProgramPrinter {
 
         // Print main body
         if !program.main_body.is_empty() {
-            self.writeln("Main:");
+            self.writeln(&format!("Main [locals: {}]:", program.main_locals_count));
             self.indent += 1;
             for (i, stmt) in program.main_body.iter().enumerate() {
                 let is_last = i == program.main_body.len() - 1;
@@ -1549,7 +1549,7 @@ mod tests {
         let resolved = resolve("let x = 42;");
         let output = format_resolved(&resolved);
         assert!(output.contains("ResolvedProgram"));
-        assert!(output.contains("Main:"));
+        assert!(output.contains("Main [locals: 1]:"));
         assert!(output.contains("Let slot:0"));
         assert!(output.contains("Int(42)"));
     }
