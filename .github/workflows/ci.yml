@@ -206,6 +206,7 @@ jobs:
           # Clean to ensure full rebuild from main branch source
           cargo clean
           cargo build --release
+          cargo build --release -p bench
           ./target/release/bench ./target/release/moca > main_bench.json
           cat main_bench.json
           git checkout ${{ github.head_ref }}
