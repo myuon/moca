@@ -217,6 +217,17 @@ impl JitCompiler {
         loop_start_pc: usize,
         loop_end_pc: usize,
     ) -> Result<CompiledLoop, String> {
+        // Check for unsupported operations in the loop
+        // Currently, loops containing Call instructions are not supported
+        // due to complex interaction with the JIT call context
+        for pc in loop_start_pc..=loop_end_pc {
+            if let Some(op) = func.code.get(pc)
+                && matches!(op, Op::Call(_, _))
+            {
+                return Err("Loop contains Call instruction (not yet supported)".to_string());
+            }
+        }
+
         // Store function info
         self.self_locals_count = func.locals_count;
 
@@ -258,12 +269,13 @@ impl JitCompiler {
             }
         }
 
-        // Patch forward references
-        self.patch_forward_refs();
-
-        // Emit epilogue label (for loop exit)
+        // Emit epilogue label (for loop exit) - must be before patch_forward_refs
+        // so the exit jump target is available for patching
         self.labels.insert(func.code.len(), self.buf.len());
         self.emit_epilogue();
+
+        // Patch forward references (including loop exit jump)
+        self.patch_forward_refs();
 
         // Get the raw code bytes
         let code = self.buf.into_code();
