@@ -3,6 +3,14 @@ use crate::compiler::lexer::Lexer;
 use crate::compiler::parser::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Timing information from loading modules
+#[derive(Debug, Clone, Default)]
+pub struct LoadTimings {
+    pub lexer: Duration,
+    pub parser: Duration,
+}
 
 /// A module loader that resolves import paths and loads module files.
 pub struct ModuleLoader {
@@ -87,6 +95,15 @@ impl ModuleLoader {
 
     /// Load a module from a file path.
     pub fn load_module(&mut self, path: &Path) -> Result<&Program, String> {
+        self.load_module_timed(path, None)
+    }
+
+    /// Load a module from a file path, optionally tracking timing.
+    pub fn load_module_timed(
+        &mut self,
+        path: &Path,
+        mut timings: Option<&mut LoadTimings>,
+    ) -> Result<&Program, String> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if self.cache.contains_key(&canonical) {
@@ -98,10 +115,20 @@ impl ModuleLoader {
             .map_err(|e| format!("failed to read module '{}': {}", path.display(), e))?;
 
         let filename = path.to_string_lossy().to_string();
+
+        let start = Instant::now();
         let mut lexer = Lexer::new(&filename, &source);
         let tokens = lexer.scan_tokens()?;
+        if let Some(ref mut t) = timings {
+            t.lexer += start.elapsed();
+        }
+
+        let start = Instant::now();
         let mut parser = Parser::new(&filename, tokens);
         let program = parser.parse()?;
+        if let Some(t) = timings {
+            t.parser += start.elapsed();
+        }
 
         self.cache.insert(canonical.clone(), program);
         Ok(self.cache.get(&canonical).unwrap())
@@ -109,15 +136,35 @@ impl ModuleLoader {
 
     /// Load all imports for a program and return a combined program.
     pub fn load_with_imports(&mut self, main_path: &Path) -> Result<Program, String> {
+        self.load_with_imports_timed(main_path, None)
+            .map(|(program, _)| program)
+    }
+
+    /// Load all imports for a program and return a combined program with timing info.
+    pub fn load_with_imports_timed(
+        &mut self,
+        main_path: &Path,
+        timings: Option<&mut LoadTimings>,
+    ) -> Result<(Program, LoadTimings), String> {
+        let mut load_timings = LoadTimings::default();
+
         let main_program = {
             let source = std::fs::read_to_string(main_path)
                 .map_err(|e| format!("failed to read '{}': {}", main_path.display(), e))?;
 
             let filename = main_path.to_string_lossy().to_string();
+
+            let start = Instant::now();
             let mut lexer = Lexer::new(&filename, &source);
             let tokens = lexer.scan_tokens()?;
+            load_timings.lexer += start.elapsed();
+
+            let start = Instant::now();
             let mut parser = Parser::new(&filename, tokens);
-            parser.parse()?
+            let program = parser.parse()?;
+            load_timings.parser += start.elapsed();
+
+            program
         };
 
         // Collect imports
@@ -138,7 +185,7 @@ impl ModuleLoader {
 
         for import in imports {
             let module_path = self.resolve_import(&import, main_path)?;
-            let module = self.load_module(&module_path)?;
+            let module = self.load_module_timed(&module_path, Some(&mut load_timings))?;
 
             // Add non-import items from the module
             for item in &module.items {
@@ -174,7 +221,13 @@ impl ModuleLoader {
             }
         }
 
-        Ok(Program { items: all_items })
+        // Update external timings if provided
+        if let Some(t) = timings {
+            t.lexer += load_timings.lexer;
+            t.parser += load_timings.parser;
+        }
+
+        Ok((Program { items: all_items }, load_timings))
     }
 }
 

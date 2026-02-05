@@ -331,17 +331,19 @@ pub fn run_file_with_dump(
     let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut loader = ModuleLoader::new(root_dir);
 
-    // Load main file with all imports
-    let start = Instant::now();
-    let user_program = loader.load_with_imports(path)?;
-    timings.import = start.elapsed();
+    // Load main file with all imports (includes lexer/parser timing)
+    let (user_program, load_timings) = loader.load_with_imports_timed(path, None)?;
+    timings.lexer = load_timings.lexer;
+    timings.parser = load_timings.parser;
 
     // Prepend standard library (includes lexing and parsing of stdlib)
     let start = Instant::now();
     let program = prepend_stdlib(user_program)?;
-    // Note: stdlib lexing/parsing is included in the import phase timing above
-    // This just adds the time for prepending
-    timings.import += start.elapsed();
+    // Stdlib lexing/parsing time is added to lexer/parser
+    let stdlib_time = start.elapsed();
+    // Approximate: split stdlib time between lexer and parser (rough estimate)
+    timings.lexer += stdlib_time / 2;
+    timings.parser += stdlib_time / 2;
 
     let filename = path.to_string_lossy().to_string();
 
@@ -475,10 +477,13 @@ pub fn run_source(
     let user_program = parser.parse()?;
     timings.parser = start.elapsed();
 
-    // Prepend standard library
+    // Prepend standard library (includes lexing and parsing of stdlib)
     let start = Instant::now();
     let program = prepend_stdlib(user_program)?;
-    timings.import = start.elapsed();
+    // Stdlib lexing/parsing time is added to lexer/parser
+    let stdlib_time = start.elapsed();
+    timings.lexer += stdlib_time / 2;
+    timings.parser += stdlib_time / 2;
 
     // Dump AST if requested
     if let Some(ref output_path) = dump_opts.dump_ast {

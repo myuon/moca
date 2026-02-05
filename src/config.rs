@@ -15,7 +15,6 @@ pub enum TimingsFormat {
 /// Compiler pipeline timings
 #[derive(Debug, Clone, Default)]
 pub struct CompilerTimings {
-    pub import: Duration,
     pub lexer: Duration,
     pub parser: Duration,
     pub typecheck: Duration,
@@ -29,8 +28,7 @@ pub struct CompilerTimings {
 impl CompilerTimings {
     /// Calculate total time across all phases
     pub fn total(&self) -> Duration {
-        self.import
-            + self.lexer
+        self.lexer
             + self.parser
             + self.typecheck
             + self.desugar
@@ -53,7 +51,6 @@ impl CompilerTimings {
     /// Output timings in human-readable table format to stderr
     pub fn print_human(&self) {
         eprintln!("=== Compiler Timings ===");
-        eprintln!("import:        {:>10}", Self::format_duration(self.import));
         eprintln!("lexer:         {:>10}", Self::format_duration(self.lexer));
         eprintln!("parser:        {:>10}", Self::format_duration(self.parser));
         eprintln!(
@@ -78,8 +75,7 @@ impl CompilerTimings {
     /// Output timings in JSON format to stderr
     pub fn print_json(&self) {
         let json = format!(
-            r#"{{"import_ms":{:.2},"lexer_ms":{:.2},"parser_ms":{:.2},"typecheck_ms":{:.2},"desugar_ms":{:.2},"monomorphise_ms":{:.2},"resolve_ms":{:.2},"codegen_ms":{:.2},"execution_ms":{:.2},"total_ms":{:.2}}}"#,
-            self.import.as_secs_f64() * 1000.0,
+            r#"{{"lexer_ms":{:.2},"parser_ms":{:.2},"typecheck_ms":{:.2},"desugar_ms":{:.2},"monomorphise_ms":{:.2},"resolve_ms":{:.2},"codegen_ms":{:.2},"execution_ms":{:.2},"total_ms":{:.2}}}"#,
             self.lexer.as_secs_f64() * 1000.0,
             self.parser.as_secs_f64() * 1000.0,
             self.typecheck.as_secs_f64() * 1000.0,

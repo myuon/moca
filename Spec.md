@@ -33,22 +33,21 @@
 **human形式（デフォルト）:**
 ```
 === Compiler Timings ===
-import:        1.23ms
-lexer:         0.45ms
-parser:        4.56ms
-typecheck:    12.34ms
-desugar:       0.89ms
-monomorphise:  2.34ms
-resolve:       1.12ms
-codegen:       3.45ms
-execution:   156.78ms
+lexer:             2.12ms
+parser:            2.13ms
+typecheck:         1.79ms
+desugar:           0.30ms
+monomorphise:      2.57ms
+resolve:           1.84ms
+codegen:           0.82ms
+execution:         0.19ms
 ------------------------
-total:       183.16ms
+total:            11.77ms
 ```
 
 **json形式:**
 ```json
-{"import_ms":1.23,"lexer_ms":0.45,"parser_ms":4.56,"typecheck_ms":12.34,"desugar_ms":0.89,"monomorphise_ms":2.34,"resolve_ms":1.12,"codegen_ms":3.45,"execution_ms":156.78,"total_ms":183.16}
+{"lexer_ms":2.12,"parser_ms":2.13,"typecheck_ms":1.79,"desugar_ms":0.30,"monomorphise_ms":2.57,"resolve_ms":1.84,"codegen_ms":0.82,"execution_ms":0.19,"total_ms":11.77}
 ```
 
 ### 時間表示の精度
@@ -75,7 +74,7 @@ total:       183.16ms
 1. `moca run --timings file.moca` で計測結果がstderrにテーブル形式で出力される
 2. `moca run --timings=human file.moca` で計測結果がstderrにテーブル形式で出力される
 3. `moca run --timings=json file.moca` で計測結果がstderrにJSON形式で出力される
-4. 計測対象は import, lexer, parser, typecheck, desugar, monomorphise, resolve, codegen, execution の9フェーズ
+4. 計測対象は lexer, parser, typecheck, desugar, monomorphise, resolve, codegen, execution の8フェーズ
 5. totalが各フェーズの合計と一致する
 6. 1秒以上の時間は `Xs` 形式、1秒未満は `Xms` 形式で表示される
 7. `--timings` なしで実行した場合、計測結果は出力されない
