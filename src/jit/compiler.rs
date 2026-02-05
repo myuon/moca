@@ -10,7 +10,7 @@ use super::codebuf::CodeBuffer;
 #[cfg(target_arch = "aarch64")]
 use super::memory::ExecutableMemory;
 #[cfg(target_arch = "aarch64")]
-use crate::vm::{Function, Op};
+use crate::vm::{Function, Op, ValueType};
 #[cfg(target_arch = "aarch64")]
 use std::collections::{HashMap, HashSet};
 
@@ -130,6 +130,10 @@ pub struct JitCompiler {
     self_func_index: usize,
     /// Number of locals in the function being compiled
     self_locals_count: usize,
+    /// Type information for local variables (for type specialization)
+    local_types: Vec<ValueType>,
+    /// Type stack tracking value types during compilation
+    type_stack: Vec<ValueType>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -143,6 +147,8 @@ impl JitCompiler {
             stack_depth: 0,
             self_func_index: 0,
             self_locals_count: 0,
+            local_types: Vec::new(),
+            type_stack: Vec::new(),
         }
     }
 
@@ -155,6 +161,7 @@ impl JitCompiler {
         // Store function info for self-recursion detection
         self.self_func_index = func_index;
         self.self_locals_count = func.locals_count;
+        self.local_types = func.local_types.clone();
 
         // Emit prologue
         self.emit_prologue(func);
@@ -189,12 +196,14 @@ impl JitCompiler {
                 let next_op = &func.code[next_pc];
                 match next_op {
                     Op::JmpIfFalse(target) => {
+                        self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
                         self.labels.insert(next_pc, self.buf.len());
                         pc += 2;
                         continue;
                     }
                     Op::JmpIfTrue(target) => {
+                        self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
                         self.labels.insert(next_pc, self.buf.len());
                         pc += 2;
@@ -271,6 +280,7 @@ impl JitCompiler {
 
         // Store function info
         self.self_locals_count = func.locals_count;
+        self.local_types = func.local_types.clone();
 
         // Emit prologue (same as function)
         self.emit_prologue(func);
@@ -313,6 +323,7 @@ impl JitCompiler {
                 match next_op {
                     Op::JmpIfFalse(target) if *target > loop_end_pc => {
                         // Fused comparison + loop exit
+                        self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, func.code.len(), true)?;
                         self.labels.insert(next_pc, self.buf.len());
                         pc += 2;
@@ -320,6 +331,7 @@ impl JitCompiler {
                     }
                     Op::JmpIfFalse(target) => {
                         // Fused comparison + internal branch
+                        self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
                         self.labels.insert(next_pc, self.buf.len());
                         pc += 2;
@@ -327,6 +339,7 @@ impl JitCompiler {
                     }
                     Op::JmpIfTrue(target) => {
                         // Fused comparison + conditional jump
+                        self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
                         self.labels.insert(next_pc, self.buf.len());
                         pc += 2;
@@ -340,6 +353,7 @@ impl JitCompiler {
             match op {
                 Op::JmpIfFalse(target) if *target > loop_end_pc => {
                     // This is a loop exit condition - jump to epilogue
+                    self.type_stack.pop();
                     self.emit_loop_exit_check(func.code.len())?;
                 }
                 Op::Jmp(target) if *target == loop_start_pc => {
@@ -468,51 +482,162 @@ impl JitCompiler {
         asm.ret();
     }
 
-    /// Compile a single bytecode operation.
+    /// Compile a single bytecode operation with type tracking.
     fn compile_op(&mut self, op: &Op, _pc: usize) -> Result<(), String> {
         match op {
-            Op::PushInt(n) => self.emit_push_int(*n),
-            Op::PushFloat(f) => self.emit_push_float(*f),
-            Op::PushTrue => self.emit_push_bool(true),
-            Op::PushFalse => self.emit_push_bool(false),
-            Op::PushNull => self.emit_push_nil(),
-            Op::Pop => self.emit_pop(),
+            Op::PushInt(n) => {
+                self.type_stack.push(ValueType::Int);
+                self.emit_push_int(*n)
+            }
+            Op::PushFloat(f) => {
+                self.type_stack.push(ValueType::Float);
+                self.emit_push_float(*f)
+            }
+            Op::PushTrue => {
+                self.type_stack.push(ValueType::Bool);
+                self.emit_push_bool(true)
+            }
+            Op::PushFalse => {
+                self.type_stack.push(ValueType::Bool);
+                self.emit_push_bool(false)
+            }
+            Op::PushNull => {
+                self.type_stack.push(ValueType::Unknown);
+                self.emit_push_nil()
+            }
+            Op::Pop => {
+                self.type_stack.pop();
+                self.emit_pop()
+            }
 
-            Op::GetL(idx) => self.emit_load_local(*idx),
-            Op::SetL(idx) => self.emit_store_local(*idx),
+            Op::GetL(idx) => {
+                self.type_stack.push(self.local_type(*idx));
+                self.emit_load_local(*idx)
+            }
+            Op::SetL(idx) => {
+                self.type_stack.pop();
+                self.emit_store_local(*idx)
+            }
 
-            Op::Add => self.emit_add(),
-            Op::Sub => self.emit_sub(),
-            Op::Mul => self.emit_mul(),
-            Op::Div => self.emit_div(),
+            Op::Add => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_add_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_add()
+                }
+            }
+            Op::Sub => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_sub_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_sub()
+                }
+            }
+            Op::Mul => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_mul_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_mul()
+                }
+            }
+            Op::Div => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_div_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_div()
+                }
+            }
 
-            Op::Lt => self.emit_cmp(Cond::Lt),
-            Op::Le => self.emit_cmp(Cond::Le),
-            Op::Gt => self.emit_cmp(Cond::Gt),
-            Op::Ge => self.emit_cmp(Cond::Ge),
-            Op::Eq => self.emit_eq(),
-            Op::Ne => self.emit_ne(),
+            Op::Lt => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp(Cond::Lt)
+            }
+            Op::Le => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp(Cond::Le)
+            }
+            Op::Gt => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp(Cond::Gt)
+            }
+            Op::Ge => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp(Cond::Ge)
+            }
+            Op::Eq => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_eq()
+            }
+            Op::Ne => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_ne()
+            }
 
             Op::Jmp(target) => self.emit_jmp(*target),
-            Op::JmpIfFalse(target) => self.emit_jmp_if_false(*target),
-            Op::JmpIfTrue(target) => self.emit_jmp_if_true(*target),
+            Op::JmpIfFalse(target) => {
+                self.type_stack.pop();
+                self.emit_jmp_if_false(*target)
+            }
+            Op::JmpIfTrue(target) => {
+                self.type_stack.pop();
+                self.emit_jmp_if_true(*target)
+            }
 
-            Op::Ret => self.emit_ret(),
+            Op::Ret => {
+                self.type_stack.pop();
+                self.emit_ret()
+            }
 
             Op::Call(func_index, argc) => {
+                for _ in 0..*argc {
+                    self.type_stack.pop();
+                }
+                self.type_stack.push(ValueType::Unknown);
                 if *func_index == self.self_func_index {
-                    // Self-recursion: use optimized direct call
                     self.emit_call_self(*argc)
                 } else {
-                    // External call: use jit_call_helper
                     self.emit_call(*func_index, *argc)
                 }
             }
 
-            Op::PushString(idx) => self.emit_push_string(*idx),
-            Op::ArrayLen => self.emit_array_len(),
-            Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
-            Op::Neg => self.emit_neg(),
+            Op::PushString(idx) => {
+                self.type_stack.push(ValueType::String);
+                self.emit_push_string(*idx)
+            }
+            Op::ArrayLen => {
+                self.type_stack.pop();
+                self.type_stack.push(ValueType::Int);
+                self.emit_array_len()
+            }
+            Op::Syscall(syscall_num, argc) => {
+                for _ in 0..*argc {
+                    self.type_stack.pop();
+                }
+                self.type_stack.push(ValueType::Unknown);
+                self.emit_syscall(*syscall_num, *argc)
+            }
+            Op::Neg => {
+                // Neg preserves the type
+                self.emit_neg()
+            }
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -681,6 +806,75 @@ impl JitCompiler {
         // Load value from stack
         asm.ldr(regs::TMP0, regs::VSTACK, 8);
         asm.str(regs::TMP0, regs::LOCALS, offset + 8);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Get the type of a local variable for specialization.
+    fn local_type(&self, idx: usize) -> ValueType {
+        self.local_types
+            .get(idx)
+            .copied()
+            .unwrap_or(ValueType::Unknown)
+    }
+
+    /// Pop two types from the type stack and return them (a, b).
+    fn pop2_types(&mut self) -> (ValueType, ValueType) {
+        let b = self.type_stack.pop().unwrap_or(ValueType::Unknown);
+        let a = self.type_stack.pop().unwrap_or(ValueType::Unknown);
+        (a, b)
+    }
+
+    /// Int-specialized addition: skip tag checks, directly add payloads.
+    fn emit_add_int(&mut self) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load payloads only (tags known to be INT=0)
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
+        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a (at VSTACK - VALUE_SIZE + 8)
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP1);
+        // a's tag slot is already TAG_INT (0), just write result payload
+        asm.str(regs::TMP0, regs::VSTACK, -8);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Int-specialized subtraction: skip tag checks, directly subtract payloads.
+    fn emit_sub_int(&mut self) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
+        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a
+        asm.sub(regs::TMP0, regs::TMP0, regs::TMP1);
+        asm.str(regs::TMP0, regs::VSTACK, -8);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Int-specialized multiplication: skip tag checks, directly multiply payloads.
+    fn emit_mul_int(&mut self) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
+        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a
+        asm.mul(regs::TMP0, regs::TMP0, regs::TMP1);
+        asm.str(regs::TMP0, regs::VSTACK, -8);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Int-specialized division: skip tag checks, use sdiv.
+    fn emit_div_int(&mut self) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP1, regs::VSTACK, 8); // b (divisor)
+        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a (dividend)
+        asm.sdiv(regs::TMP0, regs::TMP0, regs::TMP1);
+        asm.str(regs::TMP0, regs::VSTACK, -8);
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
