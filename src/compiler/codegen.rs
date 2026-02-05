@@ -133,6 +133,7 @@ impl Codegen {
             locals_count: main_locals_count,
             code: main_ops,
             stackmap: None, // TODO: generate StackMap
+            local_types: vec![],
         };
 
         let debug = if self.emit_debug {
@@ -168,6 +169,7 @@ impl Codegen {
             locals_count: func.locals_count,
             code: ops,
             stackmap: None, // TODO: generate StackMap
+            local_types: vec![],
         })
     }
 

@@ -1861,6 +1861,7 @@ mod tests {
             locals_count: 1,
             code: vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0), Op::Ret],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();
@@ -1878,6 +1879,7 @@ mod tests {
             locals_count: 0,
             code: vec![Op::PushInt(10), Op::PushInt(20), Op::Add, Op::Ret],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();
@@ -1906,6 +1908,7 @@ mod tests {
                 Op::Ret,           // 11: return
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();
@@ -1937,6 +1940,7 @@ mod tests {
                 Op::Ret,            // 12: return
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();
@@ -1981,6 +1985,7 @@ mod tests {
                 Op::Ret,            // 12: return
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();

@@ -454,6 +454,7 @@ mod tests {
             locals_count: 0,
             code,
             stackmap: None,
+            local_types: vec![],
         }
     }
 
@@ -573,6 +574,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: Some(FunctionStackMap::new()), // Empty stackmap
+            local_types: vec![],
         };
 
         // Should fail because Call is a safepoint but no StackMap entry exists
@@ -604,6 +606,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: None, // No stackmap, verification skipped
+            local_types: vec![],
         };
 
         // Should pass because stackmap is None
@@ -629,6 +632,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let result = verifier.verify_function(&func);
@@ -659,6 +663,7 @@ mod tests {
                 Op::Ret, // Proper return
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         // Should pass verification
@@ -686,6 +691,7 @@ mod tests {
                 Op::Ret,           // 6: merge point - heights don't match!
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let result = verifier.verify_function(&func);
@@ -715,6 +721,7 @@ mod tests {
                 Op::Ret,           // 5: merge point - heights match!
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let result = verifier.verify_function(&func);
@@ -741,6 +748,7 @@ mod tests {
                 Op::Ret,        // 2: return
             ],
             stackmap: Some(stackmap),
+            local_types: vec![],
         };
 
         assert!(verifier.verify_function(&func).is_ok());
@@ -767,6 +775,7 @@ mod tests {
                 Op::Ret,          // 3: return
             ],
             stackmap: Some(stackmap),
+            local_types: vec![],
         };
 
         assert!(verifier.verify_function(&func).is_ok());
@@ -795,6 +804,7 @@ mod tests {
                 Op::Ret,           // 4: return
             ],
             stackmap: Some(stackmap),
+            local_types: vec![],
         };
 
         assert!(verifier.verify_function(&func).is_ok());
@@ -813,6 +823,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let result = verifier.verify_function(&func);
@@ -843,6 +854,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: None,
+            local_types: vec![],
         };
         assert!(verifier.verify_function(&func).is_ok());
 
@@ -864,6 +876,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: None,
+            local_types: vec![],
         };
         assert!(verifier.verify_function(&func).is_ok());
     }
@@ -888,6 +901,7 @@ mod tests {
                 Op::Ret,
             ],
             stackmap: None,
+            local_types: vec![],
         };
         assert!(verifier.verify_function(&func).is_ok());
     }
