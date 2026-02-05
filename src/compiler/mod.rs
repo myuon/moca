@@ -24,8 +24,9 @@ pub use typechecker::TypeChecker;
 pub const STDLIB_PRELUDE: &str = include_str!("../../std/prelude.mc");
 
 use crate::compiler::ast::{Item, Program};
-use crate::config::{JitMode, RuntimeConfig};
+use crate::config::{CompilerTimings, JitMode, RuntimeConfig, TimingsFormat};
 use std::collections::HashSet;
+use std::time::Instant;
 
 /// Parse and prepend stdlib to a user program.
 /// The stdlib functions are added at the beginning so they are available globally.
@@ -323,15 +324,24 @@ pub fn run_file_with_dump(
     config: &RuntimeConfig,
     dump_opts: &DumpOptions,
     cli_args: Vec<String>,
+    timings_format: Option<TimingsFormat>,
 ) -> Result<(), String> {
+    let mut timings = CompilerTimings::default();
+
     let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut loader = ModuleLoader::new(root_dir);
 
     // Load main file with all imports
+    let start = Instant::now();
     let user_program = loader.load_with_imports(path)?;
+    timings.import = start.elapsed();
 
-    // Prepend standard library
+    // Prepend standard library (includes lexing and parsing of stdlib)
+    let start = Instant::now();
     let program = prepend_stdlib(user_program)?;
+    // Note: stdlib lexing/parsing is included in the import phase timing above
+    // This just adds the time for prepending
+    timings.import += start.elapsed();
 
     let filename = path.to_string_lossy().to_string();
 
@@ -342,21 +352,29 @@ pub fn run_file_with_dump(
     }
 
     // Type checking
+    let start = Instant::now();
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    timings.typecheck = start.elapsed();
 
     // Desugar (expand syntax sugar like new literals, index operations)
+    let start = Instant::now();
     let program = desugar::desugar_program(program, index_object_types.clone());
+    timings.desugar = start.elapsed();
 
     // Monomorphisation (specialize generic functions/structs)
+    let start = Instant::now();
     let program = monomorphise::monomorphise_program(program);
+    timings.monomorphise = start.elapsed();
 
     // Name resolution
+    let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
     let resolved = resolver.resolve(program)?;
+    timings.resolve = start.elapsed();
 
     // Dump resolved program if requested
     if let Some(ref output_path) = dump_opts.dump_resolved {
@@ -365,9 +383,11 @@ pub fn run_file_with_dump(
     }
 
     // Code generation
+    let start = Instant::now();
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
     let chunk = codegen.compile(resolved)?;
+    timings.codegen = start.elapsed();
 
     // Dump bytecode if requested
     if let Some(ref output_path) = dump_opts.dump_bytecode {
@@ -393,7 +413,9 @@ pub fn run_file_with_dump(
     vm.set_profile_opcodes(config.profile_opcodes);
     vm.set_cli_args(cli_args);
 
+    let start = Instant::now();
     vm.run(&chunk)?;
+    timings.execution = start.elapsed();
 
     // Print GC stats if requested
     if config.gc_stats {
@@ -420,6 +442,11 @@ pub fn run_file_with_dump(
             let percent = (count as f64 / total) * 100.0;
             eprintln!("{:<20} {:>15} {:>9.2}%", name, count, percent);
         }
+    }
+
+    // Print timings if requested
+    if let Some(format) = timings_format {
+        timings.print(format);
     }
 
     Ok(())
@@ -432,17 +459,26 @@ pub fn run_source(
     config: &RuntimeConfig,
     dump_opts: &DumpOptions,
     cli_args: Vec<String>,
+    timings_format: Option<TimingsFormat>,
 ) -> Result<(), String> {
+    let mut timings = CompilerTimings::default();
     let filename = "<stdin>".to_string();
 
-    // Parse the source
+    // Parse the source (lexer + parser)
+    let start = Instant::now();
     let mut lexer = Lexer::new(&filename, source);
     let tokens = lexer.scan_tokens()?;
+    timings.lexer = start.elapsed();
+
+    let start = Instant::now();
     let mut parser = Parser::new(&filename, tokens);
     let user_program = parser.parse()?;
+    timings.parser = start.elapsed();
 
     // Prepend standard library
+    let start = Instant::now();
     let program = prepend_stdlib(user_program)?;
+    timings.import = start.elapsed();
 
     // Dump AST if requested
     if let Some(ref output_path) = dump_opts.dump_ast {
@@ -451,21 +487,29 @@ pub fn run_source(
     }
 
     // Type checking
+    let start = Instant::now();
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    timings.typecheck = start.elapsed();
 
     // Desugar
+    let start = Instant::now();
     let program = desugar::desugar_program(program, index_object_types.clone());
+    timings.desugar = start.elapsed();
 
     // Monomorphisation
+    let start = Instant::now();
     let program = monomorphise::monomorphise_program(program);
+    timings.monomorphise = start.elapsed();
 
     // Name resolution
+    let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
     let resolved = resolver.resolve(program)?;
+    timings.resolve = start.elapsed();
 
     // Dump resolved program if requested
     if let Some(ref output_path) = dump_opts.dump_resolved {
@@ -474,9 +518,11 @@ pub fn run_source(
     }
 
     // Code generation
+    let start = Instant::now();
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
     let chunk = codegen.compile(resolved)?;
+    timings.codegen = start.elapsed();
 
     // Dump bytecode if requested
     if let Some(ref output_path) = dump_opts.dump_bytecode {
@@ -502,7 +548,9 @@ pub fn run_source(
     vm.set_profile_opcodes(config.profile_opcodes);
     vm.set_cli_args(cli_args);
 
+    let start = Instant::now();
     vm.run(&chunk)?;
+    timings.execution = start.elapsed();
 
     // Print GC stats if requested
     if config.gc_stats {
@@ -529,6 +577,11 @@ pub fn run_source(
             let percent = (count as f64 / total) * 100.0;
             eprintln!("{:<20} {:>15} {:>9.2}%", name, count, percent);
         }
+    }
+
+    // Print timings if requested
+    if let Some(format) = timings_format {
+        timings.print(format);
     }
 
     Ok(())
