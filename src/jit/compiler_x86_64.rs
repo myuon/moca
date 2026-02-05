@@ -148,13 +148,51 @@ impl JitCompiler {
         // Record entry point after prologue
         let entry_offset = 0; // Prologue is at the start
 
-        // Compile each instruction
-        for (pc, op) in func.code.iter().enumerate() {
+        // Pre-compute jump targets for peephole safety check
+        let jump_targets: HashSet<usize> = func
+            .code
+            .iter()
+            .filter_map(|op| match op {
+                Op::Jmp(t) | Op::JmpIfFalse(t) | Op::JmpIfTrue(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+
+        // Compile each instruction with peephole optimization
+        let mut pc = 0;
+        while pc < func.code.len() {
             // Record label for this bytecode PC
             self.labels.insert(pc, self.buf.len());
 
+            let op = &func.code[pc];
+
+            // Peephole optimization: fuse comparison + conditional jump
+            let next_pc = pc + 1;
+            if next_pc < func.code.len()
+                && !jump_targets.contains(&next_pc)
+                && let Some(cmp_cond) = Self::get_cmp_cond(op)
+            {
+                let next_op = &func.code[next_pc];
+                match next_op {
+                    Op::JmpIfFalse(target) => {
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfTrue(target) => {
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
             // Compile the operation
             self.compile_op(op, pc)?;
+            pc += 1;
         }
 
         // Patch forward references
@@ -226,8 +264,18 @@ impl JitCompiler {
         // Record entry point after prologue
         let entry_offset = 0;
 
+        // Pre-compute jump targets within the loop for peephole safety check.
+        // If an instruction is a jump target, we cannot fuse it with its predecessor.
+        let jump_targets: HashSet<usize> = (loop_start_pc..=loop_end_pc)
+            .filter_map(|check_pc| match func.code.get(check_pc) {
+                Some(Op::Jmp(t)) | Some(Op::JmpIfFalse(t)) | Some(Op::JmpIfTrue(t)) => Some(*t),
+                _ => None,
+            })
+            .collect();
+
         // Compile instructions from loop_start_pc to loop_end_pc (inclusive)
-        for pc in loop_start_pc..=loop_end_pc {
+        let mut pc = loop_start_pc;
+        while pc <= loop_end_pc {
             if pc >= func.code.len() {
                 return Err(format!(
                     "Loop PC {} out of bounds (function has {} instructions)",
@@ -241,7 +289,40 @@ impl JitCompiler {
             // Record label for this bytecode PC
             self.labels.insert(pc, self.buf.len());
 
-            // Handle jumps that exit the loop specially
+            // Peephole optimization: fuse comparison + conditional jump
+            let next_pc = pc + 1;
+            if next_pc <= loop_end_pc
+                && !jump_targets.contains(&next_pc)
+                && let Some(cmp_cond) = Self::get_cmp_cond(op)
+            {
+                let next_op = &func.code[next_pc];
+                match next_op {
+                    Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                        // Fused comparison + loop exit
+                        self.emit_fused_cmp_jmp(cmp_cond, func.code.len(), true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfFalse(target) => {
+                        // Fused comparison + internal branch
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfTrue(target) => {
+                        // Fused comparison + conditional jump
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Non-fused path
             match op {
                 Op::JmpIfFalse(target) if *target > loop_end_pc => {
                     // This is a loop exit condition - jump to epilogue
@@ -256,6 +337,8 @@ impl JitCompiler {
                     self.compile_op(op, pc)?;
                 }
             }
+
+            pc += 1;
         }
 
         // Emit epilogue label (for loop exit) - must be before patch_forward_refs
@@ -1139,6 +1222,58 @@ impl JitCompiler {
         }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Map a bytecode comparison Op to its x86-64 condition code.
+    fn get_cmp_cond(op: &Op) -> Option<Cond> {
+        match op {
+            Op::Lt => Some(Cond::L),
+            Op::Le => Some(Cond::Le),
+            Op::Gt => Some(Cond::G),
+            Op::Ge => Some(Cond::Ge),
+            Op::Eq => Some(Cond::E),
+            Op::Ne => Some(Cond::Ne),
+            _ => None,
+        }
+    }
+
+    /// Fused compare + conditional jump: pop two values, compare, and jump directly.
+    /// Eliminates the intermediate boolean push/pop from separate cmp + jmpif.
+    ///
+    /// For JmpIfFalse: jumps when comparison is FALSE (inverted condition)
+    /// For JmpIfTrue: jumps when comparison is TRUE (original condition)
+    fn emit_fused_cmp_jmp(
+        &mut self,
+        cmp_cond: Cond,
+        target_pc: usize,
+        invert: bool,
+    ) -> Result<(), String> {
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Pop two operands
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_rm(regs::TMP1, regs::VSTACK, 8); // b (rhs)
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // a (lhs)
+            // Compare a vs b
+            asm.cmp_rr(regs::TMP0, regs::TMP1);
+        }
+
+        // For JmpIfFalse: jump when comparison is FALSE -> invert condition
+        // For JmpIfTrue: jump when comparison is TRUE -> use original condition
+        let jmp_cond = if invert { cmp_cond.invert() } else { cmp_cond };
+
+        // Record forward reference and emit conditional jump
+        let current = self.buf.len();
+        self.forward_refs.push((current, target_pc));
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(jmp_cond, 0);
+        }
+
+        // Consumed 2 stack values, pushed none
+        self.stack_depth = self.stack_depth.saturating_sub(2);
         Ok(())
     }
 
