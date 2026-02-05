@@ -1,6 +1,6 @@
 use crate::compiler::ast::*;
 use crate::compiler::lexer::Span;
-use crate::compiler::types::TypeAnnotation;
+use crate::compiler::types::{Type, TypeAnnotation};
 use std::collections::HashMap;
 
 /// A resolved asm instruction.
@@ -19,6 +19,8 @@ pub struct ResolvedProgram {
     pub structs: Vec<ResolvedStruct>,
     /// Number of local variables in the main body
     pub main_locals_count: usize,
+    /// Type information for main body local variables (indexed by slot)
+    pub main_local_types: Vec<Type>,
 }
 
 /// Information about a resolved struct.
@@ -35,6 +37,8 @@ pub struct ResolvedFunction {
     pub params: Vec<String>,
     pub locals_count: usize,
     pub body: Vec<ResolvedStatement>,
+    /// Type information for local variables (indexed by slot number)
+    pub local_types: Vec<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +213,8 @@ pub struct Resolver<'a> {
     structs: HashMap<String, StructDefInfo>,
     /// Resolved struct list (for output)
     resolved_structs: Vec<ResolvedStruct>,
+    /// Local variable types from typechecker: fn_name -> [(var_name, type)]
+    variable_types: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -242,7 +248,30 @@ impl<'a> Resolver<'a> {
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),
+            variable_types: HashMap::new(),
         }
+    }
+
+    /// Set local variable types from the typechecker for slot-to-type mapping.
+    pub fn set_variable_types(&mut self, types: HashMap<String, Vec<(String, Type)>>) {
+        self.variable_types = types;
+    }
+
+    /// Build a Vec<Type> indexed by slot number for a function,
+    /// using the slot_names from Scope and the variable_types from typechecker.
+    fn build_local_types(&self, fn_name: &str, scope: &Scope) -> Vec<Type> {
+        let mut local_types = vec![Type::Any; scope.locals_count];
+        if let Some(var_types) = self.variable_types.get(fn_name) {
+            // Build a name -> type map for this function
+            let type_map: HashMap<&str, &Type> =
+                var_types.iter().map(|(n, t)| (n.as_str(), t)).collect();
+            for (slot, name) in scope.slot_names.iter().enumerate() {
+                if let Some(ty) = type_map.get(name.as_str()) {
+                    local_types[slot] = (*ty).clone();
+                }
+            }
+        }
+        local_types
     }
 
     pub fn resolve(&mut self, program: Program) -> Result<ResolvedProgram, String> {
@@ -406,12 +435,14 @@ impl<'a> Resolver<'a> {
         let mut scope = Scope::new();
         let resolved_main = self.resolve_statements(main_stmts, &mut scope)?;
         let main_locals_count = scope.locals_count;
+        let main_local_types = self.build_local_types("__main__", &scope);
 
         Ok(ResolvedProgram {
             functions: resolved_functions,
             main_body: resolved_main,
             structs: self.resolved_structs.clone(),
             main_locals_count,
+            main_local_types,
         })
     }
 
@@ -445,11 +476,14 @@ impl<'a> Resolver<'a> {
             format!("{}::{}", struct_name, method.name)
         };
 
+        let local_types = self.build_local_types(&func_name, &scope);
+
         Ok(ResolvedFunction {
             name: func_name,
             params: param_names,
             locals_count: scope.locals_count,
             body,
+            local_types,
         })
     }
 
@@ -463,12 +497,14 @@ impl<'a> Resolver<'a> {
         }
 
         let body = self.resolve_statements(fn_def.body.statements, &mut scope)?;
+        let local_types = self.build_local_types(&fn_def.name, &scope);
 
         Ok(ResolvedFunction {
             name: fn_def.name,
             params: param_names,
             locals_count: scope.locals_count,
             body,
+            local_types,
         })
     }
 
@@ -1055,6 +1091,8 @@ type LocalInfo = (usize, bool, Option<String>);
 struct Scope {
     locals: Vec<HashMap<String, LocalInfo>>,
     locals_count: usize,
+    /// Maps slot number → variable name (accumulated across all scopes).
+    slot_names: Vec<String>,
 }
 
 impl Scope {
@@ -1062,6 +1100,7 @@ impl Scope {
         Self {
             locals: vec![HashMap::new()],
             locals_count: 0,
+            slot_names: Vec::new(),
         }
     }
 
@@ -1077,6 +1116,7 @@ impl Scope {
     ) -> usize {
         let slot = self.locals_count;
         self.locals_count += 1;
+        self.slot_names.push(name.clone());
         self.locals
             .last_mut()
             .unwrap()

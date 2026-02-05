@@ -222,6 +222,12 @@ pub struct TypeChecker {
     index_object_types: HashMap<Span, Type>,
     /// Current type parameters in scope (during function signature inference)
     current_type_params: Vec<String>,
+    /// Name of the function currently being type-checked (None for top-level)
+    current_function_name: Option<String>,
+    /// Local variable types collected during type checking.
+    /// Maps function name -> [(variable name, type)].
+    /// Used to propagate type info to JIT compiler via codegen.
+    local_variable_types: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl TypeChecker {
@@ -236,12 +242,38 @@ impl TypeChecker {
             substitution: Substitution::new(),
             index_object_types: HashMap::new(),
             current_type_params: Vec::new(),
+            current_function_name: None,
+            local_variable_types: HashMap::new(),
         }
     }
 
     /// Get the index object types map (for codegen)
     pub fn index_object_types(&self) -> &HashMap<Span, Type> {
         &self.index_object_types
+    }
+
+    /// Get the local variable types map with substitution applied.
+    /// Returns fn_name -> [(var_name, resolved_type)].
+    pub fn local_variable_types(&self) -> HashMap<String, Vec<(String, Type)>> {
+        let mut result = self.local_variable_types.clone();
+        for vars in result.values_mut() {
+            for (_, ty) in vars.iter_mut() {
+                *ty = self.substitution.apply(ty);
+            }
+        }
+        result
+    }
+
+    /// Record a local variable's type during type checking.
+    fn record_local_var(&mut self, var_name: &str, ty: &Type) {
+        let fn_name = self
+            .current_function_name
+            .clone()
+            .unwrap_or_else(|| "__main__".to_string());
+        self.local_variable_types
+            .entry(fn_name)
+            .or_default()
+            .push((var_name.to_string(), ty.clone()));
     }
 
     /// Generate a fresh type variable.
@@ -686,19 +718,24 @@ impl TypeChecker {
         // Set current type params for generic functions
         self.current_type_params = fn_def.type_params.clone();
 
+        // Track current function name for local variable type collection
+        self.current_function_name = Some(fn_def.name.clone());
+
         // Get function type
         let fn_type = self.functions.get(&fn_def.name).cloned();
         let (param_types, expected_ret) = match fn_type {
             Some(Type::Function { params, ret }) => (params, *ret),
             _ => {
                 self.current_type_params.clear();
+                self.current_function_name = None;
                 return;
             }
         };
 
-        // Bind parameters
+        // Bind parameters and record their types
         for (param, param_type) in fn_def.params.iter().zip(param_types.iter()) {
             env.bind(param.name.clone(), param_type.clone());
+            self.record_local_var(&param.name, param_type);
         }
 
         // Infer body type
@@ -709,8 +746,9 @@ impl TypeChecker {
             self.errors.push(e);
         }
 
-        // Clear current type params
+        // Clear current type params and function name
         self.current_type_params.clear();
+        self.current_function_name = None;
     }
 
     /// Register a struct definition.
@@ -945,6 +983,12 @@ impl TypeChecker {
                 } else {
                     env.bind(name.clone(), init_type);
                 }
+
+                // Record the resolved type for JIT optimization
+                if let Some(ty) = env.lookup(name).cloned() {
+                    self.record_local_var(name, &ty);
+                }
+
                 Type::Nil
             }
 
@@ -1024,7 +1068,8 @@ impl TypeChecker {
                 };
 
                 env.enter_scope();
-                env.bind(var.clone(), elem_type);
+                env.bind(var.clone(), elem_type.clone());
+                self.record_local_var(var, &elem_type);
                 self.infer_block(body, env);
                 env.exit_scope();
                 Type::Nil
