@@ -73,6 +73,29 @@ pub enum Cond {
     Al = 0b1110, // Always
 }
 
+impl Cond {
+    /// Invert the condition (toggle the least significant bit).
+    pub fn invert(self) -> Self {
+        match self {
+            Cond::Eq => Cond::Ne,
+            Cond::Ne => Cond::Eq,
+            Cond::Cs => Cond::Cc,
+            Cond::Cc => Cond::Cs,
+            Cond::Mi => Cond::Pl,
+            Cond::Pl => Cond::Mi,
+            Cond::Vs => Cond::Vc,
+            Cond::Vc => Cond::Vs,
+            Cond::Hi => Cond::Ls,
+            Cond::Ls => Cond::Hi,
+            Cond::Ge => Cond::Lt,
+            Cond::Lt => Cond::Ge,
+            Cond::Gt => Cond::Le,
+            Cond::Le => Cond::Gt,
+            Cond::Al => Cond::Al,
+        }
+    }
+}
+
 /// AArch64 assembler.
 pub struct AArch64Assembler<'a> {
     buf: &'a mut CodeBuffer,

@@ -162,13 +162,51 @@ impl JitCompiler {
         // Record entry point after prologue
         let entry_offset = 0; // Prologue is at the start
 
-        // Compile each instruction
-        for (pc, op) in func.code.iter().enumerate() {
+        // Pre-compute jump targets for peephole safety check
+        let jump_targets: HashSet<usize> = func
+            .code
+            .iter()
+            .filter_map(|op| match op {
+                Op::Jmp(t) | Op::JmpIfFalse(t) | Op::JmpIfTrue(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+
+        // Compile each instruction with peephole optimization
+        let mut pc = 0;
+        while pc < func.code.len() {
             // Record label for this bytecode PC
             self.labels.insert(pc, self.buf.len());
 
+            let op = &func.code[pc];
+
+            // Peephole optimization: fuse comparison + conditional jump
+            let next_pc = pc + 1;
+            if next_pc < func.code.len()
+                && !jump_targets.contains(&next_pc)
+                && let Some(cmp_cond) = Self::get_cmp_cond(op)
+            {
+                let next_op = &func.code[next_pc];
+                match next_op {
+                    Op::JmpIfFalse(target) => {
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfTrue(target) => {
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
             // Compile the operation
             self.compile_op(op, pc)?;
+            pc += 1;
         }
 
         // Patch forward references
@@ -240,8 +278,18 @@ impl JitCompiler {
         // Record entry point after prologue
         let entry_offset = 0;
 
+        // Pre-compute jump targets within the loop for peephole safety check.
+        // If an instruction is a jump target, we cannot fuse it with its predecessor.
+        let jump_targets: HashSet<usize> = (loop_start_pc..=loop_end_pc)
+            .filter_map(|check_pc| match func.code.get(check_pc) {
+                Some(Op::Jmp(t)) | Some(Op::JmpIfFalse(t)) | Some(Op::JmpIfTrue(t)) => Some(*t),
+                _ => None,
+            })
+            .collect();
+
         // Compile instructions from loop_start_pc to loop_end_pc (inclusive)
-        for pc in loop_start_pc..=loop_end_pc {
+        let mut pc = loop_start_pc;
+        while pc <= loop_end_pc {
             if pc >= func.code.len() {
                 return Err(format!(
                     "Loop PC {} out of bounds (function has {} instructions)",
@@ -255,7 +303,40 @@ impl JitCompiler {
             // Record label for this bytecode PC
             self.labels.insert(pc, self.buf.len());
 
-            // Handle jumps that exit the loop specially
+            // Peephole optimization: fuse comparison + conditional jump
+            let next_pc = pc + 1;
+            if next_pc <= loop_end_pc
+                && !jump_targets.contains(&next_pc)
+                && let Some(cmp_cond) = Self::get_cmp_cond(op)
+            {
+                let next_op = &func.code[next_pc];
+                match next_op {
+                    Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                        // Fused comparison + loop exit
+                        self.emit_fused_cmp_jmp(cmp_cond, func.code.len(), true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfFalse(target) => {
+                        // Fused comparison + internal branch
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfTrue(target) => {
+                        // Fused comparison + conditional jump
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Non-fused path
             match op {
                 Op::JmpIfFalse(target) if *target > loop_end_pc => {
                     // This is a loop exit condition - jump to epilogue
@@ -270,6 +351,8 @@ impl JitCompiler {
                     self.compile_op(op, pc)?;
                 }
             }
+
+            pc += 1;
         }
 
         // Emit epilogue label (for loop exit) - must be before patch_forward_refs
@@ -853,6 +936,247 @@ impl JitCompiler {
             |asm| asm.sdiv(regs::TMP0, regs::TMP0, regs::TMP1),
             |asm| asm.fdiv_d(0, 0, 1),
         )
+    }
+
+    /// Map a bytecode comparison Op to its AArch64 condition code.
+    fn get_cmp_cond(op: &Op) -> Option<Cond> {
+        match op {
+            Op::Lt => Some(Cond::Lt),
+            Op::Le => Some(Cond::Le),
+            Op::Gt => Some(Cond::Gt),
+            Op::Ge => Some(Cond::Ge),
+            Op::Eq => Some(Cond::Eq),
+            Op::Ne => Some(Cond::Ne),
+            _ => None,
+        }
+    }
+
+    /// Fused compare + conditional branch: pop two values, compare, and branch directly.
+    /// Eliminates the intermediate boolean push/pop from separate cmp + jmpif.
+    /// Handles both integer and floating-point comparisons.
+    ///
+    /// For JmpIfFalse: branches when comparison is FALSE (inverted condition)
+    /// For JmpIfTrue: branches when comparison is TRUE (original condition)
+    fn emit_fused_cmp_jmp(
+        &mut self,
+        cmp_cond: Cond,
+        target_pc: usize,
+        invert: bool,
+    ) -> Result<(), String> {
+        // Pop both operands with tags
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Load b (top of stack)
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            asm.ldr(regs::TMP3, regs::VSTACK, 0); // b_tag
+            asm.ldr(regs::TMP1, regs::VSTACK, 8); // b_payload
+
+            // Load a
+            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+            asm.ldr(regs::TMP2, regs::VSTACK, 0); // a_tag
+            asm.ldr(regs::TMP0, regs::VSTACK, 8); // a_payload
+
+            // Check if both are INT: (a_tag | b_tag) == 0
+            asm.orr(regs::TMP4, regs::TMP2, regs::TMP3);
+        }
+
+        // Branch to float path if not both INT
+        let cbnz_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP4, 0); // placeholder offset
+        }
+
+        // INT path: CMP + B.cond directly
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cmp(regs::TMP0, regs::TMP1);
+        }
+
+        let int_jmp_cond = if invert { cmp_cond.invert() } else { cmp_cond };
+
+        // Conditional branch to target
+        let int_bcond_pos = self.buf.len();
+        self.forward_refs.push((int_bcond_pos, target_pc));
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b_cond(int_jmp_cond, 0); // placeholder, will be patched
+        }
+
+        // Jump past float path to merge
+        let b_merge_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder
+        }
+
+        // FLOAT path
+        let float_path_start = self.buf.len();
+
+        // Patch CBNZ to jump here
+        {
+            let offset = (float_path_start as i32) - (cbnz_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[cbnz_pos],
+                code[cbnz_pos + 1],
+                code[cbnz_pos + 2],
+                code[cbnz_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[cbnz_pos..cbnz_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Convert a to float if needed (TMP2 = a_tag, TMP0 = a_payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP2, 0); // if a_tag != 0, already float
+        }
+        let a_is_int_pos = self.buf.len() - 4;
+
+        // a is INT, convert to float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.scvtf_d_x(0, regs::TMP0); // D0 = (double)TMP0
+        }
+        let a_conv_done_b = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // jump past the float case
+        }
+
+        // a is FLOAT
+        let a_is_float_pos = self.buf.len();
+        {
+            let offset = (a_is_float_pos as i32) - (a_is_int_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[a_is_int_pos],
+                code[a_is_int_pos + 1],
+                code[a_is_int_pos + 2],
+                code[a_is_int_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[a_is_int_pos..a_is_int_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_d_x(0, regs::TMP0); // D0 = TMP0 (as bits)
+        }
+
+        // Patch the branch after a conversion
+        let a_conv_merge = self.buf.len();
+        {
+            let offset = (a_conv_merge as i32) - (a_conv_done_b as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[a_conv_done_b],
+                code[a_conv_done_b + 1],
+                code[a_conv_done_b + 2],
+                code[a_conv_done_b + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[a_conv_done_b..a_conv_done_b + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Convert b to float if needed (TMP3 = b_tag, TMP1 = b_payload)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbnz(regs::TMP3, 0); // if b_tag != 0, already float
+        }
+        let b_is_int_pos = self.buf.len() - 4;
+
+        // b is INT, convert to float
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.scvtf_d_x(1, regs::TMP1); // D1 = (double)TMP1
+        }
+        let b_conv_done_b = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // jump past the float case
+        }
+
+        // b is FLOAT
+        let b_is_float_pos = self.buf.len();
+        {
+            let offset = (b_is_float_pos as i32) - (b_is_int_pos as i32);
+            let code = self.buf.code_mut();
+            let imm19 = ((offset / 4) as u32) & 0x7FFFF;
+            let inst = u32::from_le_bytes([
+                code[b_is_int_pos],
+                code[b_is_int_pos + 1],
+                code[b_is_int_pos + 2],
+                code[b_is_int_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFF00001F) | (imm19 << 5);
+            code[b_is_int_pos..b_is_int_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fmov_d_x(1, regs::TMP1); // D1 = TMP1 (as bits)
+        }
+
+        // Patch the branch after b conversion
+        let b_conv_merge = self.buf.len();
+        {
+            let offset = (b_conv_merge as i32) - (b_conv_done_b as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[b_conv_done_b],
+                code[b_conv_done_b + 1],
+                code[b_conv_done_b + 2],
+                code[b_conv_done_b + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[b_conv_done_b..b_conv_done_b + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Perform float comparison: fcmp D0, D1
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.fcmp_d(0, 1);
+        }
+
+        // Map condition for floating-point
+        let fp_cond = match cmp_cond {
+            Cond::Lt => Cond::Mi, // MI = negative (less than for FP)
+            Cond::Le => Cond::Ls, // LS = less than or same
+            _ => cmp_cond,        // GT, GE, EQ, NE work the same
+        };
+        let fp_jmp_cond = if invert { fp_cond.invert() } else { fp_cond };
+
+        // Conditional branch to target from float path
+        let float_bcond_pos = self.buf.len();
+        self.forward_refs.push((float_bcond_pos, target_pc));
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b_cond(fp_jmp_cond, 0); // placeholder, will be patched
+        }
+
+        // Merge point: patch the B from int path to here
+        let merge_pos = self.buf.len();
+        {
+            let offset = (merge_pos as i32) - (b_merge_pos as i32);
+            let code = self.buf.code_mut();
+            let imm26 = ((offset / 4) as u32) & 0x03FFFFFF;
+            let inst = u32::from_le_bytes([
+                code[b_merge_pos],
+                code[b_merge_pos + 1],
+                code[b_merge_pos + 2],
+                code[b_merge_pos + 3],
+            ]);
+            let new_inst = (inst & 0xFC000000) | imm26;
+            code[b_merge_pos..b_merge_pos + 4].copy_from_slice(&new_inst.to_le_bytes());
+        }
+
+        // Consumed 2 stack values, pushed none
+        self.stack_depth = self.stack_depth.saturating_sub(2);
+        Ok(())
     }
 
     /// Comparison: pop two values, push bool result.
@@ -1820,6 +2144,10 @@ impl JitCompiler {
                     // CBNZ instruction
                     let reg = inst & 0x1F;
                     0xB5000000 | (((offset as u32 / 4) & 0x7FFFF) << 5) | reg
+                } else if (inst & 0xFF000010) == 0x54000000 {
+                    // B.cond instruction
+                    let cond_bits = inst & 0x0F;
+                    0x54000000 | (((offset as u32 / 4) & 0x7FFFF) << 5) | cond_bits
                 } else {
                     // Unknown instruction type, leave as-is
                     inst
