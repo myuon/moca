@@ -715,6 +715,33 @@ fn rust_mandelbrot<W: Write>(max_iter: i32, writer: &mut W) {
     writeln!(writer, "{}", escape_count).unwrap();
 }
 
+#[cfg(feature = "jit")]
+fn rust_is_even(n: i32) -> i32 {
+    if n == 0 {
+        1
+    } else {
+        rust_is_odd(std::hint::black_box(n - 1))
+    }
+}
+
+#[cfg(feature = "jit")]
+fn rust_is_odd(n: i32) -> i32 {
+    if n == 0 {
+        0
+    } else {
+        rust_is_even(std::hint::black_box(n - 1))
+    }
+}
+
+#[cfg(feature = "jit")]
+fn rust_mutual_recursion<W: Write>(iterations: i32, writer: &mut W) {
+    let mut sum: i64 = 0;
+    for i in 0..iterations {
+        sum += rust_is_even(std::hint::black_box(i % 200)) as i64;
+    }
+    writeln!(writer, "{}", sum).unwrap();
+}
+
 /// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
 fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
@@ -840,6 +867,12 @@ fn snapshot_performance() {
     let fibonacci_path = perf_dir.join("fibonacci.mc");
     run_performance_test(&fibonacci_path, |w| {
         rust_fibonacci(std::hint::black_box(35), w)
+    });
+
+    // Test mutual recursion (is_even/is_odd) with Rust reference
+    let mutual_recursion_path = perf_dir.join("mutual_recursion.mc");
+    run_performance_test(&mutual_recursion_path, |w| {
+        rust_mutual_recursion(std::hint::black_box(20000), w)
     });
 }
 
