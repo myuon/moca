@@ -3,6 +3,7 @@
 //! All tests run in-process to contribute to coverage measurement.
 
 use std::fs;
+use std::io::{Cursor, Write};
 use std::path::Path;
 
 use moca::compiler::{dump_ast, dump_bytecode, run_file_capturing_output, run_tests};
@@ -632,37 +633,44 @@ const PERF_WARMUP_RUNS: usize = 3;
 const PERF_MEASUREMENT_RUNS: usize = 3;
 
 // Rust reference implementations for correctness verification
+// Each function writes output to a Writer to match moca's I/O behavior
 #[cfg(feature = "jit")]
-fn rust_sum_loop() -> i64 {
+fn rust_sum_loop<W: Write>(writer: &mut W) {
     let mut sum: i64 = 0;
     for i in 1..=10_000_000 {
         sum += i;
     }
-    sum
+    writeln!(writer, "{}", sum).unwrap();
 }
 
 #[cfg(feature = "jit")]
-fn rust_nested_loop(n: i64) -> i64 {
+fn rust_nested_loop<W: Write>(n: i64, writer: &mut W) {
     let mut sum: i64 = 0;
     for i in 0..n {
         for j in 0..n {
             sum = std::hint::black_box(sum + i * j);
         }
     }
-    sum
+    writeln!(writer, "{}", sum).unwrap();
 }
 
 #[cfg(feature = "jit")]
-fn rust_fibonacci(n: i32) -> i32 {
+fn rust_fibonacci_impl(n: i32) -> i32 {
     if n <= 1 {
         n
     } else {
-        rust_fibonacci(n - 1) + rust_fibonacci(n - 2)
+        rust_fibonacci_impl(n - 1) + rust_fibonacci_impl(n - 2)
     }
 }
 
 #[cfg(feature = "jit")]
-fn rust_mandelbrot(max_iter: i32) -> i32 {
+fn rust_fibonacci<W: Write>(n: i32, writer: &mut W) {
+    let result = rust_fibonacci_impl(n);
+    writeln!(writer, "{}", result).unwrap();
+}
+
+#[cfg(feature = "jit")]
+fn rust_mandelbrot<W: Write>(max_iter: i32, writer: &mut W) {
     let width = 80;
     let height = 24;
     let mut escape_count = 0;
@@ -704,7 +712,7 @@ fn rust_mandelbrot(max_iter: i32) -> i32 {
         cy += y_step;
     }
 
-    escape_count
+    writeln!(writer, "{}", escape_count).unwrap();
 }
 
 /// Run a moca file with JIT enabled and measure execution time
@@ -729,12 +737,12 @@ fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize
 
 /// Run a performance test for a single .mc file
 /// Compares moca JIT performance against Rust reference implementation
-/// rust_impl returns the expected output string, which is compared against moca's output
-/// to both verify correctness and prevent compiler optimization
+/// rust_impl writes output to a Writer, which is compared against moca's output
+/// to both verify correctness and ensure fair I/O condition comparison
 #[cfg(feature = "jit")]
 fn run_performance_test<F>(test_path: &Path, rust_impl: F)
 where
-    F: Fn() -> String,
+    F: Fn(&mut Cursor<Vec<u8>>),
 {
     use std::time::{Duration, Instant};
 
@@ -743,7 +751,8 @@ where
     // Warmup runs (discard results)
     for _ in 0..PERF_WARMUP_RUNS {
         run_performance_benchmark(test_path);
-        let _ = rust_impl();
+        let mut buffer = Cursor::new(Vec::new());
+        rust_impl(&mut buffer);
     }
 
     // Measurement runs
@@ -759,8 +768,11 @@ where
         moca_output = output;
         jit_compile_count = count;
 
+        // Run Rust version with stdout capture (same I/O conditions as moca)
         let start = Instant::now();
-        rust_result = rust_impl();
+        let mut buffer = Cursor::new(Vec::new());
+        rust_impl(&mut buffer);
+        rust_result = String::from_utf8(buffer.into_inner()).unwrap();
         rust_times.push(start.elapsed());
     }
 
@@ -775,7 +787,7 @@ where
     // This also prevents compiler from optimizing away the Rust computation
     assert_eq!(
         moca_output.trim(),
-        rust_result,
+        rust_result.trim(),
         "[{}] Moca output doesn't match Rust reference implementation",
         test_name
     );
@@ -812,22 +824,22 @@ fn snapshot_performance() {
 
     // Test sum_loop with Rust reference
     let sum_loop_path = perf_dir.join("sum_loop.mc");
-    run_performance_test(&sum_loop_path, || rust_sum_loop().to_string());
+    run_performance_test(&sum_loop_path, |w| rust_sum_loop(w));
 
     // Test nested_loop with Rust reference
     let nested_loop_path = perf_dir.join("nested_loop.mc");
-    run_performance_test(&nested_loop_path, || {
-        rust_nested_loop(std::hint::black_box(3000)).to_string()
+    run_performance_test(&nested_loop_path, |w| {
+        rust_nested_loop(std::hint::black_box(3000), w)
     });
 
     // Test mandelbrot with Rust reference
     let mandelbrot_path = perf_dir.join("mandelbrot.mc");
-    run_performance_test(&mandelbrot_path, || rust_mandelbrot(5000).to_string());
+    run_performance_test(&mandelbrot_path, |w| rust_mandelbrot(5000, w));
 
     // Test fibonacci with Rust reference
     let fibonacci_path = perf_dir.join("fibonacci.mc");
-    run_performance_test(&fibonacci_path, || {
-        rust_fibonacci(std::hint::black_box(35)).to_string()
+    run_performance_test(&fibonacci_path, |w| {
+        rust_fibonacci(std::hint::black_box(35), w)
     });
 }
 

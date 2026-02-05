@@ -3,6 +3,7 @@
 //! Compares the output of the moca implementation with a Rust implementation
 //! to verify correctness and measure performance differences.
 
+use std::io::{Cursor, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -16,12 +17,12 @@ const CHARS: [char; 10] = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 
 /// Generate Mandelbrot set ASCII art using the same algorithm as the moca version.
 ///
+/// Writes output to the provided writer to match moca's I/O behavior.
+///
 /// # Arguments
 /// * `max_iter` - Maximum number of iterations before considering a point in the set
-///
-/// # Returns
-/// A string containing the 80x24 ASCII art representation
-fn mandelbrot_rust(max_iter: i32) -> String {
+/// * `writer` - Output writer for the ASCII art
+fn mandelbrot_rust<W: Write>(max_iter: i32, writer: &mut W) {
     let width = 80;
     let height = 24;
 
@@ -33,8 +34,6 @@ fn mandelbrot_rust(max_iter: i32) -> String {
 
     let x_step = (x_max - x_min) / 80.0;
     let y_step = (y_max - y_min) / 24.0;
-
-    let mut result = String::new();
 
     let mut cy = y_min;
     for _ in 0..height {
@@ -77,15 +76,13 @@ fn mandelbrot_rust(max_iter: i32) -> String {
             }
             // If iter == max_iter, point is in the set (char_idx = 0, space)
 
-            result.push(CHARS[char_idx as usize]);
+            write!(writer, "{}", CHARS[char_idx as usize]).unwrap();
             cx += x_step;
         }
 
-        result.push('\n');
+        writeln!(writer).unwrap();
         cy += y_step;
     }
-
-    result
 }
 
 /// Generate moca source code for mandelbrot with given max_iter
@@ -187,9 +184,11 @@ fn run_moca_mandelbrot(max_iter: i32) -> String {
 fn compare_mandelbrot(max_iter: i32) {
     println!("\n=== Mandelbrot Comparison (max_iter={}) ===", max_iter);
 
-    // Run Rust version with timing
+    // Run Rust version with timing (using Cursor to capture output like moca)
     let rust_start = Instant::now();
-    let rust_output = mandelbrot_rust(max_iter);
+    let mut rust_buffer = Cursor::new(Vec::new());
+    mandelbrot_rust(max_iter, &mut rust_buffer);
+    let rust_output = String::from_utf8(rust_buffer.into_inner()).unwrap();
     let rust_duration = rust_start.elapsed();
 
     // Run moca version with timing
@@ -275,7 +274,9 @@ fn mandelbrot_example_file() {
             }
 
             // Compare with Rust implementation
-            let rust_output = mandelbrot_rust(100);
+            let mut rust_buffer = Cursor::new(Vec::new());
+            mandelbrot_rust(100, &mut rust_buffer);
+            let rust_output = String::from_utf8(rust_buffer.into_inner()).unwrap();
             assert_eq!(
                 output.stdout, rust_output,
                 "examples/mandelbrot.mc output does not match Rust implementation"
