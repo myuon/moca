@@ -1333,6 +1333,7 @@ impl VM {
                             Op::Ret,                 // Return the result
                         ],
                         stackmap: None,
+                        local_types: vec![],
                     };
 
                     let thread_chunk = Chunk {
@@ -2468,6 +2469,7 @@ mod tests {
                 locals_count: 0,
                 code: ops,
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec![],
             debug: None,
@@ -2487,6 +2489,7 @@ mod tests {
                 locals_count: 0,
                 code: ops,
                 stackmap: None,
+                local_types: vec![],
             },
             strings,
             debug: None,
@@ -2699,6 +2702,7 @@ mod tests {
                     Op::Syscall(3, 1), // syscall_close
                 ],
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec![path_str.clone(), "hello".to_string()],
             debug: None,
@@ -2785,6 +2789,7 @@ mod tests {
                     Op::GetL(1), // push content ref
                 ],
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec![path_str.clone()],
             debug: None,
@@ -2857,6 +2862,7 @@ mod tests {
                     Op::GetL(1), // push content ref
                 ],
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec![path_str.clone()],
             debug: None,
@@ -3027,6 +3033,7 @@ mod tests {
                     Op::GetL(1), // push response ref
                 ],
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec!["127.0.0.1".to_string(), http_request],
             debug: None,

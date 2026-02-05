@@ -196,6 +196,7 @@ fn read_function<R: Read>(r: &mut R) -> Result<Function, BytecodeError> {
         locals_count,
         code,
         stackmap,
+        local_types: vec![],
     })
 }
 
@@ -584,6 +585,7 @@ mod tests {
                     Op::Ret,
                 ],
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec!["hello".to_string(), "world".to_string()],
             debug: None,
@@ -608,6 +610,7 @@ mod tests {
                 locals_count: 2,
                 code: vec![Op::GetL(0), Op::GetL(1), Op::Add, Op::Ret],
                 stackmap: None,
+                local_types: vec![],
             }],
             main: Function {
                 name: "main".to_string(),
@@ -621,6 +624,7 @@ mod tests {
                     Op::Ret,
                 ],
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec![],
             debug: None,
@@ -651,6 +655,7 @@ mod tests {
                 locals_count: 4,
                 code: vec![Op::AllocHeap(2), Op::Ret],
                 stackmap: Some(stackmap),
+                local_types: vec![],
             },
             strings: vec![],
             debug: None,
@@ -754,6 +759,7 @@ mod tests {
                 locals_count: 0,
                 code: ops.clone(),
                 stackmap: None,
+                local_types: vec![],
             },
             strings: vec![],
             debug: None,

@@ -6,7 +6,7 @@
 use super::codebuf::CodeBuffer;
 use super::memory::ExecutableMemory;
 use super::x86_64::{Cond, Reg, X86_64Assembler};
-use crate::vm::{Function, Op};
+use crate::vm::{Function, Op, ValueType};
 use std::collections::{HashMap, HashSet};
 
 /// Value tag constants for JIT code.
@@ -118,6 +118,10 @@ pub struct JitCompiler {
     self_func_index: Option<usize>,
     /// Number of locals for the function being compiled
     self_locals_count: usize,
+    /// Type information for local variables (for type specialization)
+    local_types: Vec<ValueType>,
+    /// Type stack tracking value types during compilation
+    type_stack: Vec<ValueType>,
 }
 
 impl JitCompiler {
@@ -130,6 +134,8 @@ impl JitCompiler {
             stack_depth: 0,
             self_func_index: None,
             self_locals_count: 0,
+            local_types: Vec::new(),
+            type_stack: Vec::new(),
         }
     }
 
@@ -142,19 +148,60 @@ impl JitCompiler {
         // Store function info for self-recursion detection
         self.self_func_index = Some(func_index);
         self.self_locals_count = func.locals_count;
+        self.local_types = func.local_types.clone();
         // Emit prologue
         self.emit_prologue(func);
 
         // Record entry point after prologue
         let entry_offset = 0; // Prologue is at the start
 
-        // Compile each instruction
-        for (pc, op) in func.code.iter().enumerate() {
+        // Pre-compute jump targets for peephole safety check
+        let jump_targets: HashSet<usize> = func
+            .code
+            .iter()
+            .filter_map(|op| match op {
+                Op::Jmp(t) | Op::JmpIfFalse(t) | Op::JmpIfTrue(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+
+        // Compile each instruction with peephole optimization
+        let mut pc = 0;
+        while pc < func.code.len() {
             // Record label for this bytecode PC
             self.labels.insert(pc, self.buf.len());
 
+            let op = &func.code[pc];
+
+            // Peephole optimization: fuse comparison + conditional jump
+            let next_pc = pc + 1;
+            if next_pc < func.code.len()
+                && !jump_targets.contains(&next_pc)
+                && let Some(cmp_cond) = Self::get_cmp_cond(op)
+            {
+                let next_op = &func.code[next_pc];
+                match next_op {
+                    Op::JmpIfFalse(target) => {
+                        self.pop2_types(); // cmp pops 2, jmpif pops the bool
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfTrue(target) => {
+                        self.pop2_types();
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
             // Compile the operation
             self.compile_op(op, pc)?;
+            pc += 1;
         }
 
         // Patch forward references
@@ -219,6 +266,7 @@ impl JitCompiler {
 
         // Store function info
         self.self_locals_count = func.locals_count;
+        self.local_types = func.local_types.clone();
 
         // Emit prologue (same as function)
         self.emit_prologue(func);
@@ -226,8 +274,18 @@ impl JitCompiler {
         // Record entry point after prologue
         let entry_offset = 0;
 
+        // Pre-compute jump targets within the loop for peephole safety check.
+        // If an instruction is a jump target, we cannot fuse it with its predecessor.
+        let jump_targets: HashSet<usize> = (loop_start_pc..=loop_end_pc)
+            .filter_map(|check_pc| match func.code.get(check_pc) {
+                Some(Op::Jmp(t)) | Some(Op::JmpIfFalse(t)) | Some(Op::JmpIfTrue(t)) => Some(*t),
+                _ => None,
+            })
+            .collect();
+
         // Compile instructions from loop_start_pc to loop_end_pc (inclusive)
-        for pc in loop_start_pc..=loop_end_pc {
+        let mut pc = loop_start_pc;
+        while pc <= loop_end_pc {
             if pc >= func.code.len() {
                 return Err(format!(
                     "Loop PC {} out of bounds (function has {} instructions)",
@@ -241,10 +299,47 @@ impl JitCompiler {
             // Record label for this bytecode PC
             self.labels.insert(pc, self.buf.len());
 
-            // Handle jumps that exit the loop specially
+            // Peephole optimization: fuse comparison + conditional jump
+            let next_pc = pc + 1;
+            if next_pc <= loop_end_pc
+                && !jump_targets.contains(&next_pc)
+                && let Some(cmp_cond) = Self::get_cmp_cond(op)
+            {
+                let next_op = &func.code[next_pc];
+                match next_op {
+                    Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                        // Fused comparison + loop exit
+                        self.pop2_types();
+                        self.emit_fused_cmp_jmp(cmp_cond, func.code.len(), true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfFalse(target) => {
+                        // Fused comparison + internal branch
+                        self.pop2_types();
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    Op::JmpIfTrue(target) => {
+                        // Fused comparison + conditional jump
+                        self.pop2_types();
+                        self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Non-fused path
             match op {
                 Op::JmpIfFalse(target) if *target > loop_end_pc => {
                     // This is a loop exit condition - jump to epilogue
+                    self.type_stack.pop();
                     self.emit_loop_exit_check(func.code.len())?;
                 }
                 Op::Jmp(target) if *target == loop_start_pc => {
@@ -256,6 +351,8 @@ impl JitCompiler {
                     self.compile_op(op, pc)?;
                 }
             }
+
+            pc += 1;
         }
 
         // Emit epilogue label (for loop exit) - must be before patch_forward_refs
@@ -369,43 +466,158 @@ impl JitCompiler {
         asm.ret();
     }
 
-    /// Compile a single bytecode operation.
+    /// Compile a single bytecode operation with type tracking.
     fn compile_op(&mut self, op: &Op, _pc: usize) -> Result<(), String> {
         match op {
-            Op::PushInt(n) => self.emit_push_int(*n),
-            Op::PushFloat(f) => self.emit_push_float(*f),
-            Op::PushTrue => self.emit_push_bool(true),
-            Op::PushFalse => self.emit_push_bool(false),
-            Op::PushNull => self.emit_push_nil(),
-            Op::Pop => self.emit_pop(),
+            Op::PushInt(n) => {
+                self.type_stack.push(ValueType::Int);
+                self.emit_push_int(*n)
+            }
+            Op::PushFloat(f) => {
+                self.type_stack.push(ValueType::Float);
+                self.emit_push_float(*f)
+            }
+            Op::PushTrue => {
+                self.type_stack.push(ValueType::Bool);
+                self.emit_push_bool(true)
+            }
+            Op::PushFalse => {
+                self.type_stack.push(ValueType::Bool);
+                self.emit_push_bool(false)
+            }
+            Op::PushNull => {
+                self.type_stack.push(ValueType::Unknown);
+                self.emit_push_nil()
+            }
+            Op::Pop => {
+                self.type_stack.pop();
+                self.emit_pop()
+            }
 
-            Op::GetL(idx) => self.emit_load_local(*idx),
-            Op::SetL(idx) => self.emit_store_local(*idx),
+            Op::GetL(idx) => {
+                self.type_stack.push(self.local_type(*idx));
+                self.emit_load_local(*idx)
+            }
+            Op::SetL(idx) => {
+                self.type_stack.pop();
+                self.emit_store_local(*idx)
+            }
 
-            Op::Add => self.emit_add(),
-            Op::Sub => self.emit_sub(),
-            Op::Mul => self.emit_mul(),
-            Op::Div => self.emit_div(),
+            Op::Add => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_add_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_add()
+                }
+            }
+            Op::Sub => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_sub_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_sub()
+                }
+            }
+            Op::Mul => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_mul_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_mul()
+                }
+            }
+            Op::Div => {
+                let (a, b) = self.pop2_types();
+                if a == ValueType::Int && b == ValueType::Int {
+                    self.type_stack.push(ValueType::Int);
+                    self.emit_div_int()
+                } else {
+                    self.type_stack.push(ValueType::Unknown);
+                    self.emit_div()
+                }
+            }
 
-            Op::Lt => self.emit_cmp_int(Cond::L),
-            Op::Le => self.emit_cmp_int(Cond::Le),
-            Op::Gt => self.emit_cmp_int(Cond::G),
-            Op::Ge => self.emit_cmp_int(Cond::Ge),
-            Op::Eq => self.emit_eq(),
-            Op::Ne => self.emit_ne(),
+            Op::Lt => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp_int(Cond::L)
+            }
+            Op::Le => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp_int(Cond::Le)
+            }
+            Op::Gt => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp_int(Cond::G)
+            }
+            Op::Ge => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_cmp_int(Cond::Ge)
+            }
+            Op::Eq => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_eq()
+            }
+            Op::Ne => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::Bool);
+                self.emit_ne()
+            }
 
             Op::Jmp(target) => self.emit_jmp(*target),
-            Op::JmpIfFalse(target) => self.emit_jmp_if_false(*target),
-            Op::JmpIfTrue(target) => self.emit_jmp_if_true(*target),
+            Op::JmpIfFalse(target) => {
+                self.type_stack.pop();
+                self.emit_jmp_if_false(*target)
+            }
+            Op::JmpIfTrue(target) => {
+                self.type_stack.pop();
+                self.emit_jmp_if_true(*target)
+            }
 
-            Op::Ret => self.emit_ret(),
+            Op::Ret => {
+                self.type_stack.pop();
+                self.emit_ret()
+            }
 
-            Op::Call(func_index, argc) => self.emit_call(*func_index, *argc),
+            Op::Call(func_index, argc) => {
+                for _ in 0..*argc {
+                    self.type_stack.pop();
+                }
+                self.type_stack.push(ValueType::Unknown);
+                self.emit_call(*func_index, *argc)
+            }
 
-            Op::PushString(idx) => self.emit_push_string(*idx),
-            Op::ArrayLen => self.emit_array_len(),
-            Op::Syscall(syscall_num, argc) => self.emit_syscall(*syscall_num, *argc),
-            Op::Neg => self.emit_neg(),
+            Op::PushString(idx) => {
+                self.type_stack.push(ValueType::String);
+                self.emit_push_string(*idx)
+            }
+            Op::ArrayLen => {
+                self.type_stack.pop();
+                self.type_stack.push(ValueType::Int);
+                self.emit_array_len()
+            }
+            Op::Syscall(syscall_num, argc) => {
+                for _ in 0..*argc {
+                    self.type_stack.pop();
+                }
+                self.type_stack.push(ValueType::Unknown);
+                self.emit_syscall(*syscall_num, *argc)
+            }
+            Op::Neg => {
+                // Neg preserves the type
+                self.emit_neg()
+            }
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -535,6 +747,79 @@ impl JitCompiler {
         // Load value from stack
         asm.mov_rm(regs::TMP0, regs::VSTACK, 8);
         asm.mov_mr(regs::LOCALS, offset + 8, regs::TMP0);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Get the type of a local variable for specialization.
+    fn local_type(&self, idx: usize) -> ValueType {
+        self.local_types
+            .get(idx)
+            .copied()
+            .unwrap_or(ValueType::Unknown)
+    }
+
+    /// Pop two types from the type stack and return them (a, b).
+    fn pop2_types(&mut self) -> (ValueType, ValueType) {
+        let b = self.type_stack.pop().unwrap_or(ValueType::Unknown);
+        let a = self.type_stack.pop().unwrap_or(ValueType::Unknown);
+        (a, b)
+    }
+
+    /// Int-specialized addition: skip tag checks, directly add payloads.
+    fn emit_add_int(&mut self) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a
+        asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b
+        asm.add_rr(regs::TMP0, regs::TMP1);
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        // a's tag slot is already TAG_INT (0), just write result payload
+        asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Int-specialized subtraction: skip tag checks, directly subtract payloads.
+    fn emit_sub_int(&mut self) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a
+        asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b
+        asm.sub_rr(regs::TMP0, regs::TMP1);
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Int-specialized multiplication: skip tag checks, directly multiply payloads.
+    fn emit_mul_int(&mut self) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a
+        asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b
+        asm.imul_rr(regs::TMP0, regs::TMP1);
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0);
+
+        self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Int-specialized division: skip tag checks, use idiv.
+    fn emit_div_int(&mut self) -> Result<(), String> {
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, -2 * VALUE_SIZE + 8); // a (dividend)
+            asm.mov_rm(regs::TMP1, regs::VSTACK, -VALUE_SIZE + 8); // b (divisor)
+            // idiv divides RDX:RAX by operand, result in RAX
+            // Sign-extend RAX into RDX (cqo)
+            asm.cqo();
+            asm.idiv(regs::TMP1);
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_mr(regs::VSTACK, -VALUE_SIZE + 8, regs::TMP0); // RAX = quotient
+        }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
@@ -1139,6 +1424,58 @@ impl JitCompiler {
         }
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
+        Ok(())
+    }
+
+    /// Map a bytecode comparison Op to its x86-64 condition code.
+    fn get_cmp_cond(op: &Op) -> Option<Cond> {
+        match op {
+            Op::Lt => Some(Cond::L),
+            Op::Le => Some(Cond::Le),
+            Op::Gt => Some(Cond::G),
+            Op::Ge => Some(Cond::Ge),
+            Op::Eq => Some(Cond::E),
+            Op::Ne => Some(Cond::Ne),
+            _ => None,
+        }
+    }
+
+    /// Fused compare + conditional jump: pop two values, compare, and jump directly.
+    /// Eliminates the intermediate boolean push/pop from separate cmp + jmpif.
+    ///
+    /// For JmpIfFalse: jumps when comparison is FALSE (inverted condition)
+    /// For JmpIfTrue: jumps when comparison is TRUE (original condition)
+    fn emit_fused_cmp_jmp(
+        &mut self,
+        cmp_cond: Cond,
+        target_pc: usize,
+        invert: bool,
+    ) -> Result<(), String> {
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Pop two operands
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_rm(regs::TMP1, regs::VSTACK, 8); // b (rhs)
+            asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+            asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // a (lhs)
+            // Compare a vs b
+            asm.cmp_rr(regs::TMP0, regs::TMP1);
+        }
+
+        // For JmpIfFalse: jump when comparison is FALSE -> invert condition
+        // For JmpIfTrue: jump when comparison is TRUE -> use original condition
+        let jmp_cond = if invert { cmp_cond.invert() } else { cmp_cond };
+
+        // Record forward reference and emit conditional jump
+        let current = self.buf.len();
+        self.forward_refs.push((current, target_pc));
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(jmp_cond, 0);
+        }
+
+        // Consumed 2 stack values, pushed none
+        self.stack_depth = self.stack_depth.saturating_sub(2);
         Ok(())
     }
 
@@ -1799,6 +2136,7 @@ mod tests {
             locals_count: 1,
             code: vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0), Op::Ret],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();
@@ -1816,6 +2154,7 @@ mod tests {
             locals_count: 0,
             code: vec![Op::PushInt(10), Op::PushInt(20), Op::Add, Op::Ret],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();
@@ -1844,6 +2183,7 @@ mod tests {
                 Op::Ret,           // 11: return
             ],
             stackmap: None,
+            local_types: vec![],
         };
 
         let compiler = JitCompiler::new();

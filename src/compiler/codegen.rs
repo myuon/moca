@@ -5,7 +5,7 @@ use crate::compiler::resolver::{
     ResolvedStruct,
 };
 use crate::compiler::types::Type;
-use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op};
+use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op, ValueType};
 use std::collections::HashMap;
 
 /// Code generator that compiles resolved AST to bytecode.
@@ -61,6 +61,23 @@ impl Codegen {
     /// Set index object types from typechecker.
     pub fn set_index_object_types(&mut self, types: HashMap<Span, Type>) {
         self.index_object_types = types;
+    }
+
+    /// Convert the typechecker's full Type to a simplified ValueType for JIT.
+    fn type_to_value_type(ty: &Type) -> ValueType {
+        match ty {
+            Type::Int => ValueType::Int,
+            Type::Float => ValueType::Float,
+            Type::Bool => ValueType::Bool,
+            Type::String => ValueType::String,
+            Type::Array(_)
+            | Type::Vector(_)
+            | Type::Map(_, _)
+            | Type::Struct { .. }
+            | Type::GenericStruct { .. }
+            | Type::Object(_) => ValueType::Ptr,
+            _ => ValueType::Unknown,
+        }
     }
 
     /// Initialize struct field indices from resolved program.
@@ -127,12 +144,19 @@ impl Codegen {
         main_ops.push(Op::PushNull); // Return value for main
         main_ops.push(Op::Ret);
 
+        let main_local_types = program
+            .main_local_types
+            .iter()
+            .map(Self::type_to_value_type)
+            .collect();
+
         let main_func = Function {
             name: "__main__".to_string(),
             arity: 0,
             locals_count: main_locals_count,
             code: main_ops,
             stackmap: None, // TODO: generate StackMap
+            local_types: main_local_types,
         };
 
         let debug = if self.emit_debug {
@@ -162,12 +186,19 @@ impl Codegen {
             ops.push(Op::Ret);
         }
 
+        let local_types = func
+            .local_types
+            .iter()
+            .map(Self::type_to_value_type)
+            .collect();
+
         Ok(Function {
             name: func.name.clone(),
             arity: func.params.len(),
             locals_count: func.locals_count,
             code: ops,
             stackmap: None, // TODO: generate StackMap
+            local_types,
         })
     }
 

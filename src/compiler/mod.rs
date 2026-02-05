@@ -116,6 +116,7 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
         .check_program(&program)
         .map_err(|errors| format_type_errors(filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    let local_variable_types = typechecker.local_variable_types();
 
     // Desugar (expand syntax sugar like new literals, index operations)
     let program = desugar::desugar_program(program, index_object_types.clone());
@@ -125,6 +126,7 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
 
     // Name resolution
     let mut resolver = Resolver::new(filename);
+    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
 
     // Code generation
@@ -188,6 +190,7 @@ pub fn run_file_capturing_output(
             .map_err(|errors| format_type_errors(&filename, &errors))?;
         let index_object_types = typechecker.index_object_types().clone();
 
+        let local_variable_types = typechecker.local_variable_types();
         // Desugar (expand syntax sugar like new literals, index operations)
         let program = desugar::desugar_program(program, index_object_types.clone());
 
@@ -196,6 +199,7 @@ pub fn run_file_capturing_output(
 
         // Name resolution
         let mut resolver = Resolver::new(&filename);
+        resolver.set_variable_types(local_variable_types);
         let resolved = resolver.resolve(program)?;
 
         // Code generation
@@ -273,6 +277,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
 
+    let local_variable_types = typechecker.local_variable_types();
     // Desugar (expand syntax sugar like new literals, index operations)
     let program = desugar::desugar_program(program, index_object_types.clone());
 
@@ -281,6 +286,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
+    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
 
     // Code generation
@@ -361,6 +367,7 @@ pub fn run_file_with_dump(
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
     timings.typecheck = start.elapsed();
+    let local_variable_types = typechecker.local_variable_types();
 
     // Desugar (expand syntax sugar like new literals, index operations)
     let start = Instant::now();
@@ -375,6 +382,7 @@ pub fn run_file_with_dump(
     // Name resolution
     let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
+    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
     timings.resolve = start.elapsed();
 
@@ -499,6 +507,7 @@ pub fn run_source(
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
     timings.typecheck = start.elapsed();
+    let local_variable_types = typechecker.local_variable_types();
 
     // Desugar
     let start = Instant::now();
@@ -513,6 +522,7 @@ pub fn run_source(
     // Name resolution
     let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
+    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
     timings.resolve = start.elapsed();
 
@@ -659,6 +669,7 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
 
+    let local_variable_types = typechecker.local_variable_types();
     // Desugar (expand syntax sugar like new literals, index operations)
     let program = desugar::desugar_program(program, index_object_types.clone());
 
@@ -667,6 +678,7 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
+    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
 
     // Code generation
