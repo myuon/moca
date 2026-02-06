@@ -173,12 +173,12 @@ pub fn is_safepoint(op: &super::ops::Op, pc: usize) -> bool {
         Op::Call(_, _) => true,
 
         // Heap allocation is also a safepoint
-        Op::AllocHeap(_) => true,
+        Op::HeapAlloc(_) => true,
 
         // Backward jumps are safepoints
         Op::Jmp(target) => *target < pc,
-        Op::JmpIfTrue(target) => *target < pc,
-        Op::JmpIfFalse(target) => *target < pc,
+        Op::BrIf(target) => *target < pc,
+        Op::BrIfFalse(target) => *target < pc,
 
         // Thread operations may allocate
         Op::ThreadSpawn(_) | Op::ChannelCreate => true,
@@ -280,14 +280,14 @@ mod tests {
         assert!(!is_safepoint(&Op::Jmp(10), 5)); // 10 > 5, forward
 
         // Forward conditional is not safepoint
-        assert!(!is_safepoint(&Op::JmpIfTrue(10), 5));
+        assert!(!is_safepoint(&Op::BrIf(10), 5));
 
         // Backward conditional is safepoint
-        assert!(is_safepoint(&Op::JmpIfTrue(0), 5));
+        assert!(is_safepoint(&Op::BrIf(0), 5));
 
         // Regular ops are not safepoints
-        assert!(!is_safepoint(&Op::Add, 5));
-        assert!(!is_safepoint(&Op::GetL(0), 5));
+        assert!(!is_safepoint(&Op::I64Add, 5));
+        assert!(!is_safepoint(&Op::LocalGet(0), 5));
     }
 
     // ============================================================
@@ -359,7 +359,7 @@ mod tests {
         use super::super::ops::Op;
 
         // Heap allocation can trigger GC
-        assert!(is_safepoint(&Op::AllocHeap(10), 5));
+        assert!(is_safepoint(&Op::HeapAlloc(10), 5));
     }
 
     /// Test: Spec 7.4 - FunctionStackMap lookup by PC
@@ -394,8 +394,8 @@ mod tests {
         use super::super::ops::Op;
 
         // Heap allocation
-        assert!(is_safepoint(&Op::AllocHeap(0), 0));
-        assert!(is_safepoint(&Op::AllocHeap(100), 0));
+        assert!(is_safepoint(&Op::HeapAlloc(0), 0));
+        assert!(is_safepoint(&Op::HeapAlloc(100), 0));
 
         // Function call (may allocate)
         assert!(is_safepoint(&Op::Call(0, 0), 0));

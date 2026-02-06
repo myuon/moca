@@ -172,94 +172,75 @@ struct Frame {
 
 ## Bytecode Instruction Set
 
-### Stack Operations
+The VM uses **typed opcodes** following WASM conventions. See [spec-typed-opcodes.md](spec-typed-opcodes.md) for the complete instruction reference.
+
+### Overview
+
+Instructions are type-specific (e.g., `I64Add` for integer addition, `F64Add` for float addition). This enables:
+- Efficient execution without runtime type checks
+- Clear semantics for verification and JIT compilation
+
+### Constants
 
 ```
-PUSH_INT <i64>      // Push integer
-PUSH_FLOAT <f64>    // Push float
-PUSH_TRUE           // Push true
-PUSH_FALSE          // Push false
-PUSH_STRING <idx>   // Push string from constant pool
-PUSH_NIL            // Push nil
-POP                 // Discard stack top
+I64Const <i64>      // Push 64-bit integer
+F64Const <f64>      // Push 64-bit float
+I32Const <i32>      // Push 32-bit integer (used for booleans)
+RefNull             // Push null reference
+StringConst <idx>   // Push string from constant pool
 ```
 
 ### Local Variables
 
 ```
-LOAD_LOCAL <idx>    // Push locals[idx]
-STORE_LOCAL <idx>   // Pop to locals[idx]
+LocalGet <idx>      // Push locals[idx]
+LocalSet <idx>      // Pop to locals[idx]
 ```
 
-### Global Variables and Functions
+### Stack Operations
 
 ```
-LOAD_GLOBAL <idx>   // Push globals[idx]
-CALL <argc>         // Call function with argc arguments
+Drop                // Discard stack top
+Dup                 // Duplicate stack top
+Pick <n>            // Copy n-th element to top
 ```
 
-### Arithmetic
+### Arithmetic (Type-Specific)
 
 ```
-ADD                 // a + b
-SUB                 // a - b
-MUL                 // a * b
-DIV                 // a / b
-MOD                 // a % b
-NEG                 // Unary minus
+I64Add, I64Sub, I64Mul, I64DivS, I64RemS, I64Neg  // 64-bit integer
+F64Add, F64Sub, F64Mul, F64Div, F64Neg            // 64-bit float
+I32Add, I32Sub, I32Mul, I32DivS, I32RemS, I32Eqz  // 32-bit integer
 ```
 
-### Comparison
+### Comparison (Returns i32 boolean)
 
 ```
-EQ                  // a == b
-NE                  // a != b
-LT                  // a < b
-LE                  // a <= b
-GT                  // a > b
-GE                  // a >= b
-```
-
-### Logic
-
-```
-NOT                 // Logical negation
-// && and || use JMP for short-circuit evaluation
+I64Eq, I64Ne, I64LtS, I64LeS, I64GtS, I64GeS      // 64-bit integer
+F64Eq, F64Ne, F64Lt, F64Le, F64Gt, F64Ge          // 64-bit float
+RefEq, RefIsNull                                   // Reference
 ```
 
 ### Control Flow
 
 ```
-JMP <offset>           // Unconditional jump
-JMP_IF_FALSE <offset>  // Jump if false
-JMP_IF_TRUE <offset>   // Jump if true (for short-circuit)
-RET                    // Return from function
+Jmp <offset>        // Unconditional jump
+BrIfFalse <offset>  // Jump if i32 == 0
+BrIf <offset>       // Jump if i32 != 0
+Call <idx> <argc>   // Call function
+Ret                 // Return from function
 ```
 
-### Array Operations
-
-Arrays are stored as `MocaSlots` with elements directly in slots (no length prefix).
+### Heap Operations
 
 ```
-ALLOC_HEAP <n>      // Allocate array with n elements
-ARRAY_LEN           // Get array length via slots.len()
-HEAP_LOAD_DYN       // arr[index] - direct slot access
-HEAP_STORE_DYN      // arr[index] = value - direct slot store
-```
-
-**Note**: `typeof(array)` returns `"slots"` (arrays and strings share the same type).
-
-### Heap Slot Operations
-
-Low-level operations for heap-allocated objects with indexed slots.
-
-```
-ALLOC_HEAP <n>      // Allocate object with n slots, push ref
-ALLOC_HEAP_DYN      // Pop size, allocate dynamically, push ref
-HEAP_LOAD <idx>     // Pop ref, push slots[idx]
-HEAP_STORE <idx>    // Pop ref and value, store to slots[idx]
-HEAP_LOAD_DYN       // Pop ref and index, push slots[index]
-HEAP_STORE_DYN      // Pop ref, index, and value, store to slots[index]
+HeapAlloc <n>       // Allocate object with n slots, push ref
+HeapAllocDyn        // Pop size, allocate dynamically, push ref
+HeapLoad <idx>      // Pop ref, push slots[idx]
+HeapStore <idx>     // Pop ref and value, store to slots[idx]
+HeapLoadDyn         // Pop ref and index, push slots[index]
+HeapStoreDyn        // Pop ref, index, and value, store to slots[index]
+ArrayLen            // Get array length
 ```
 
 ### Vector Operations

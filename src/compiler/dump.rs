@@ -1359,13 +1359,13 @@ impl<'a> Disassembler<'a> {
 
     fn disassemble_op(&mut self, op: &Op) {
         match op {
-            // Stack operations
-            Op::PushInt(v) => self.output.push_str(&format!("PushInt {}", v)),
-            Op::PushFloat(v) => self.output.push_str(&format!("PushFloat {}", v)),
-            Op::PushTrue => self.output.push_str("PushTrue"),
-            Op::PushFalse => self.output.push_str("PushFalse"),
-            Op::PushNull => self.output.push_str("PushNil"),
-            Op::PushString(idx) => {
+            // Constants
+            Op::I32Const(v) => self.output.push_str(&format!("I32Const {}", v)),
+            Op::I64Const(v) => self.output.push_str(&format!("I64Const {}", v)),
+            Op::F32Const(v) => self.output.push_str(&format!("F32Const {}", v)),
+            Op::F64Const(v) => self.output.push_str(&format!("F64Const {}", v)),
+            Op::RefNull => self.output.push_str("RefNull"),
+            Op::StringConst(idx) => {
                 let s = self
                     .chunk
                     .strings
@@ -1374,41 +1374,104 @@ impl<'a> Disassembler<'a> {
                     .unwrap_or("<?>");
                 let escaped = s.replace('\n', "\\n").replace('\t', "\\t");
                 self.output
-                    .push_str(&format!("PushString {} ; \"{}\"", idx, escaped));
+                    .push_str(&format!("StringConst {} ; \"{}\"", idx, escaped));
             }
-            Op::Pop => self.output.push_str("Pop"),
+
+            // Local variables
+            Op::LocalGet(slot) => self.output.push_str(&format!("LocalGet {}", slot)),
+            Op::LocalSet(slot) => self.output.push_str(&format!("LocalSet {}", slot)),
+
+            // Stack manipulation
+            Op::Drop => self.output.push_str("Drop"),
             Op::Dup => self.output.push_str("Dup"),
-            Op::Swap => self.output.push_str("Swap"),
             Op::Pick(n) => self.output.push_str(&format!("Pick {}", n)),
             Op::PickDyn => self.output.push_str("PickDyn"),
 
-            // Local variables
-            Op::GetL(slot) => self.output.push_str(&format!("GetL {}", slot)),
-            Op::SetL(slot) => self.output.push_str(&format!("SetL {}", slot)),
+            // i32 Arithmetic
+            Op::I32Add => self.output.push_str("I32Add"),
+            Op::I32Sub => self.output.push_str("I32Sub"),
+            Op::I32Mul => self.output.push_str("I32Mul"),
+            Op::I32DivS => self.output.push_str("I32DivS"),
+            Op::I32RemS => self.output.push_str("I32RemS"),
+            Op::I32Eqz => self.output.push_str("I32Eqz"),
 
-            // Arithmetic
-            Op::Add => self.output.push_str("Add"),
-            Op::Sub => self.output.push_str("Sub"),
-            Op::Mul => self.output.push_str("Mul"),
-            Op::Div => self.output.push_str("Div"),
-            Op::Mod => self.output.push_str("Mod"),
-            Op::Neg => self.output.push_str("Neg"),
+            // i64 Arithmetic
+            Op::I64Add => self.output.push_str("I64Add"),
+            Op::I64Sub => self.output.push_str("I64Sub"),
+            Op::I64Mul => self.output.push_str("I64Mul"),
+            Op::I64DivS => self.output.push_str("I64DivS"),
+            Op::I64RemS => self.output.push_str("I64RemS"),
+            Op::I64Neg => self.output.push_str("I64Neg"),
 
-            // Comparison
-            Op::Eq => self.output.push_str("Eq"),
-            Op::Ne => self.output.push_str("Ne"),
-            Op::Lt => self.output.push_str("Lt"),
-            Op::Le => self.output.push_str("Le"),
-            Op::Gt => self.output.push_str("Gt"),
-            Op::Ge => self.output.push_str("Ge"),
+            // f32 Arithmetic
+            Op::F32Add => self.output.push_str("F32Add"),
+            Op::F32Sub => self.output.push_str("F32Sub"),
+            Op::F32Mul => self.output.push_str("F32Mul"),
+            Op::F32Div => self.output.push_str("F32Div"),
+            Op::F32Neg => self.output.push_str("F32Neg"),
 
-            // Logical
-            Op::Not => self.output.push_str("Not"),
+            // f64 Arithmetic
+            Op::F64Add => self.output.push_str("F64Add"),
+            Op::F64Sub => self.output.push_str("F64Sub"),
+            Op::F64Mul => self.output.push_str("F64Mul"),
+            Op::F64Div => self.output.push_str("F64Div"),
+            Op::F64Neg => self.output.push_str("F64Neg"),
+
+            // i32 Comparison
+            Op::I32Eq => self.output.push_str("I32Eq"),
+            Op::I32Ne => self.output.push_str("I32Ne"),
+            Op::I32LtS => self.output.push_str("I32LtS"),
+            Op::I32LeS => self.output.push_str("I32LeS"),
+            Op::I32GtS => self.output.push_str("I32GtS"),
+            Op::I32GeS => self.output.push_str("I32GeS"),
+
+            // i64 Comparison
+            Op::I64Eq => self.output.push_str("I64Eq"),
+            Op::I64Ne => self.output.push_str("I64Ne"),
+            Op::I64LtS => self.output.push_str("I64LtS"),
+            Op::I64LeS => self.output.push_str("I64LeS"),
+            Op::I64GtS => self.output.push_str("I64GtS"),
+            Op::I64GeS => self.output.push_str("I64GeS"),
+
+            // f32 Comparison
+            Op::F32Eq => self.output.push_str("F32Eq"),
+            Op::F32Ne => self.output.push_str("F32Ne"),
+            Op::F32Lt => self.output.push_str("F32Lt"),
+            Op::F32Le => self.output.push_str("F32Le"),
+            Op::F32Gt => self.output.push_str("F32Gt"),
+            Op::F32Ge => self.output.push_str("F32Ge"),
+
+            // f64 Comparison
+            Op::F64Eq => self.output.push_str("F64Eq"),
+            Op::F64Ne => self.output.push_str("F64Ne"),
+            Op::F64Lt => self.output.push_str("F64Lt"),
+            Op::F64Le => self.output.push_str("F64Le"),
+            Op::F64Gt => self.output.push_str("F64Gt"),
+            Op::F64Ge => self.output.push_str("F64Ge"),
+
+            // Ref Comparison
+            Op::RefEq => self.output.push_str("RefEq"),
+            Op::RefIsNull => self.output.push_str("RefIsNull"),
+
+            // Type Conversion
+            Op::I32WrapI64 => self.output.push_str("I32WrapI64"),
+            Op::I64ExtendI32S => self.output.push_str("I64ExtendI32S"),
+            Op::I64ExtendI32U => self.output.push_str("I64ExtendI32U"),
+            Op::F64ConvertI64S => self.output.push_str("F64ConvertI64S"),
+            Op::I64TruncF64S => self.output.push_str("I64TruncF64S"),
+            Op::F64ConvertI32S => self.output.push_str("F64ConvertI32S"),
+            Op::F32ConvertI32S => self.output.push_str("F32ConvertI32S"),
+            Op::F32ConvertI64S => self.output.push_str("F32ConvertI64S"),
+            Op::I32TruncF32S => self.output.push_str("I32TruncF32S"),
+            Op::I32TruncF64S => self.output.push_str("I32TruncF64S"),
+            Op::I64TruncF32S => self.output.push_str("I64TruncF32S"),
+            Op::F32DemoteF64 => self.output.push_str("F32DemoteF64"),
+            Op::F64PromoteF32 => self.output.push_str("F64PromoteF32"),
 
             // Control flow
             Op::Jmp(target) => self.output.push_str(&format!("Jmp {}", target)),
-            Op::JmpIfFalse(target) => self.output.push_str(&format!("JmpIfFalse {}", target)),
-            Op::JmpIfTrue(target) => self.output.push_str(&format!("JmpIfTrue {}", target)),
+            Op::BrIf(target) => self.output.push_str(&format!("BrIf {}", target)),
+            Op::BrIfFalse(target) => self.output.push_str(&format!("BrIfFalse {}", target)),
 
             // Functions
             Op::Call(func_idx, argc) => {
@@ -1423,10 +1486,20 @@ impl<'a> Disassembler<'a> {
             }
             Op::Ret => self.output.push_str("Ret"),
 
-            // Array operations (legacy)
+            // Heap operations
+            Op::HeapAlloc(n) => self.output.push_str(&format!("HeapAlloc {}", n)),
+            Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
+            Op::HeapAllocDynSimple => self.output.push_str("HeapAllocDynSimple"),
+            Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
+            Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
+            Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
+            Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
             Op::ArrayLen => self.output.push_str("ArrayLen"),
 
-            // Type operations
+            // System / Builtins
+            Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
+            Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
+            Op::PrintDebug => self.output.push_str("PrintDebug"),
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::ToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
@@ -1437,13 +1510,12 @@ impl<'a> Disassembler<'a> {
             Op::TryBegin(target) => self.output.push_str(&format!("TryBegin {}", target)),
             Op::TryEnd => self.output.push_str("TryEnd"),
 
-            // Builtins
-            Op::PrintDebug => self.output.push_str("PrintDebug"),
+            // CLI arguments
+            Op::Argc => self.output.push_str("Argc"),
+            Op::Argv => self.output.push_str("Argv"),
+            Op::Args => self.output.push_str("Args"),
 
-            // GC hint
-            Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
-
-            // Thread operations
+            // Threading
             Op::ThreadSpawn(func_idx) => {
                 let func_name = self
                     .chunk
@@ -1458,23 +1530,6 @@ impl<'a> Disassembler<'a> {
             Op::ChannelSend => self.output.push_str("ChannelSend"),
             Op::ChannelRecv => self.output.push_str("ChannelRecv"),
             Op::ThreadJoin => self.output.push_str("ThreadJoin"),
-
-            // Heap slot operations
-            Op::AllocHeap(n) => self.output.push_str(&format!("AllocHeap {}", n)),
-            Op::AllocHeapDyn => self.output.push_str("AllocHeapDyn"),
-            Op::AllocHeapDynSimple => self.output.push_str("AllocHeapDynSimple"),
-            Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
-            Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
-            Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
-            Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
-
-            // Syscall operations
-            Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
-
-            // CLI argument operations
-            Op::Argc => self.output.push_str("Argc"),
-            Op::Argv => self.output.push_str("Argv"),
-            Op::Args => self.output.push_str("Args"),
         }
     }
 }
@@ -1598,9 +1653,9 @@ mod tests {
         let chunk = compile("let x = 42; print_debug(x);");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Main =="));
-        assert!(output.contains("PushInt 42"));
-        assert!(output.contains("SetL")); // renamed from StoreLocal
-        assert!(output.contains("GetL")); // renamed from LoadLocal
+        assert!(output.contains("I64Const 42"));
+        assert!(output.contains("LocalSet"));
+        assert!(output.contains("LocalGet"));
         assert!(output.contains("PrintDebug"));
     }
 
@@ -1609,9 +1664,9 @@ mod tests {
         let chunk = compile("fun add(a, b) { return a + b; } print_debug(add(1, 2));");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Function[0]: add"));
-        assert!(output.contains("GetL 0")); // renamed from LoadLocal
-        assert!(output.contains("GetL 1")); // renamed from LoadLocal
-        assert!(output.contains("Add"));
+        assert!(output.contains("LocalGet 0"));
+        assert!(output.contains("LocalGet 1"));
+        assert!(output.contains("I64Add"));
         assert!(output.contains("Ret"));
         assert!(output.contains("Call 0, 2 ; add"));
     }
@@ -1620,8 +1675,8 @@ mod tests {
     fn test_bytecode_control_flow() {
         let chunk = compile("if true { print_debug(1); } else { print_debug(2); }");
         let output = format_bytecode(&chunk);
-        assert!(output.contains("PushTrue"));
-        assert!(output.contains("JmpIfFalse"));
+        assert!(output.contains("I32Const 1"));
+        assert!(output.contains("BrIfFalse"));
         assert!(output.contains("Jmp"));
     }
 
@@ -1631,6 +1686,6 @@ mod tests {
         let output = format_bytecode(&chunk);
         assert!(output.contains("== String Constants =="));
         assert!(output.contains("\"hello\""));
-        assert!(output.contains("PushString"));
+        assert!(output.contains("StringConst"));
     }
 }

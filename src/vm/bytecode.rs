@@ -9,14 +9,14 @@
 //! - Debug info (optional)
 
 use super::stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
-use super::{Chunk, Function, Op};
+use super::{Chunk, Function, Op, ValueType};
 use std::io::{self, Read, Write};
 
 /// Magic bytes for moca bytecode files
 pub const MAGIC: &[u8; 4] = b"MOCA";
 
 /// Current bytecode format version
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Error type for bytecode operations
 #[derive(Debug)]
@@ -33,6 +33,8 @@ pub enum BytecodeError {
     Io(io::Error),
     /// Invalid UTF-8 in string
     InvalidUtf8,
+    /// Invalid value type tag
+    InvalidValueType(u8),
 }
 
 impl From<io::Error> for BytecodeError {
@@ -50,6 +52,7 @@ impl std::fmt::Display for BytecodeError {
             BytecodeError::InvalidOpcode(op) => write!(f, "invalid opcode: {}", op),
             BytecodeError::Io(e) => write!(f, "I/O error: {}", e),
             BytecodeError::InvalidUtf8 => write!(f, "invalid UTF-8 string"),
+            BytecodeError::InvalidValueType(t) => write!(f, "invalid value type tag: {}", t),
         }
     }
 }
@@ -153,6 +156,12 @@ fn write_function<W: Write>(w: &mut W, func: &Function) -> io::Result<()> {
     write_u32(w, func.arity as u32)?;
     write_u32(w, func.locals_count as u32)?;
 
+    // Local types
+    write_u32(w, func.local_types.len() as u32)?;
+    for vt in &func.local_types {
+        write_value_type(w, *vt)?;
+    }
+
     // Code
     write_u32(w, func.code.len() as u32)?;
     for op in &func.code {
@@ -175,6 +184,13 @@ fn read_function<R: Read>(r: &mut R) -> Result<Function, BytecodeError> {
     let arity = read_u32(r)? as usize;
     let locals_count = read_u32(r)? as usize;
 
+    // Local types
+    let local_types_len = read_u32(r)? as usize;
+    let mut local_types = Vec::with_capacity(local_types_len);
+    for _ in 0..local_types_len {
+        local_types.push(read_value_type(r)?);
+    }
+
     // Code
     let code_len = read_u32(r)? as usize;
     let mut code = Vec::with_capacity(code_len);
@@ -196,7 +212,7 @@ fn read_function<R: Read>(r: &mut R) -> Result<Function, BytecodeError> {
         locals_count,
         code,
         stackmap,
-        local_types: vec![],
+        local_types,
     })
 }
 
@@ -235,124 +251,288 @@ fn read_stackmap<R: Read>(r: &mut R) -> Result<FunctionStackMap, BytecodeError> 
     Ok(fsm)
 }
 
-// Opcode tags
-const OP_PUSH_INT: u8 = 0;
-const OP_PUSH_FLOAT: u8 = 1;
-const OP_PUSH_TRUE: u8 = 2;
-const OP_PUSH_FALSE: u8 = 3;
-const OP_PUSH_NULL: u8 = 4;
-const OP_PUSH_STRING: u8 = 5;
-const OP_POP: u8 = 6;
-const OP_DUP: u8 = 7;
-const OP_GET_L: u8 = 8;
-const OP_SET_L: u8 = 9;
-const OP_ADD: u8 = 10;
-const OP_SUB: u8 = 11;
-const OP_MUL: u8 = 12;
-const OP_DIV: u8 = 13;
-const OP_MOD: u8 = 14;
-const OP_NEG: u8 = 15;
-const OP_EQ: u8 = 24;
-const OP_NE: u8 = 25;
-const OP_LT: u8 = 26;
-const OP_LE: u8 = 27;
-const OP_GT: u8 = 28;
-const OP_GE: u8 = 29;
-const OP_NOT: u8 = 35;
-const OP_JMP: u8 = 36;
-const OP_JMP_IF_FALSE: u8 = 37;
-const OP_JMP_IF_TRUE: u8 = 38;
-const OP_CALL: u8 = 39;
-const OP_RET: u8 = 40;
-// Legacy opcodes 41, 42, 43 reserved (New, GetF, SetF - object type removed)
-// Legacy opcodes 46, 48, 49, 50, 51 removed (AllocArray, ArrayGet, ArraySet, ArrayPush, ArrayPop)
-const OP_ARRAY_LEN: u8 = 47;
-const OP_TYPE_OF: u8 = 55;
-const OP_TO_STRING: u8 = 56;
-const OP_PARSE_INT: u8 = 57;
-const OP_THROW: u8 = 58;
-const OP_TRY_BEGIN: u8 = 59;
-const OP_TRY_END: u8 = 60;
-const OP_PRINT_DEBUG: u8 = 61;
-const OP_GC_HINT: u8 = 62;
-const OP_THREAD_SPAWN: u8 = 63;
-const OP_CHANNEL_CREATE: u8 = 64;
-const OP_CHANNEL_SEND: u8 = 65;
-const OP_CHANNEL_RECV: u8 = 66;
-const OP_THREAD_JOIN: u8 = 67;
-const OP_ALLOC_HEAP: u8 = 68;
-const OP_HEAP_LOAD: u8 = 69;
-const OP_HEAP_STORE: u8 = 70;
-const OP_HEAP_LOAD_DYN: u8 = 71;
-const OP_HEAP_STORE_DYN: u8 = 72;
-const OP_STR_LEN: u8 = 73;
-// Legacy opcodes 74, 75, 76, 77 removed (AllocVector, AllocVectorCap, VectorPush, VectorPop)
-const OP_SYSCALL: u8 = 78;
-const OP_SWAP: u8 = 79;
-const OP_PICK: u8 = 80;
-const OP_ALLOC_HEAP_DYN: u8 = 81;
-const OP_PICK_DYN: u8 = 82;
-const OP_ALLOC_HEAP_DYN_SIMPLE: u8 = 83;
-const OP_ARGC: u8 = 84;
-const OP_ARGV: u8 = 85;
-const OP_ARGS: u8 = 86;
+// ============================================================
+// Opcode tags — sequential u8, no gaps
+// ============================================================
+
+// Constants
+const OP_I32_CONST: u8 = 0;
+const OP_I64_CONST: u8 = 1;
+const OP_F32_CONST: u8 = 2;
+const OP_F64_CONST: u8 = 3;
+const OP_REF_NULL: u8 = 4;
+const OP_STRING_CONST: u8 = 5;
+
+// Local Variables
+const OP_LOCAL_GET: u8 = 6;
+const OP_LOCAL_SET: u8 = 7;
+
+// Stack Manipulation
+const OP_DROP: u8 = 8;
+const OP_DUP: u8 = 9;
+const OP_PICK: u8 = 10;
+const OP_PICK_DYN: u8 = 11;
+
+// i32 Arithmetic
+const OP_I32_ADD: u8 = 12;
+const OP_I32_SUB: u8 = 13;
+const OP_I32_MUL: u8 = 14;
+const OP_I32_DIV_S: u8 = 15;
+const OP_I32_REM_S: u8 = 16;
+const OP_I32_EQZ: u8 = 17;
+
+// i64 Arithmetic
+const OP_I64_ADD: u8 = 18;
+const OP_I64_SUB: u8 = 19;
+const OP_I64_MUL: u8 = 20;
+const OP_I64_DIV_S: u8 = 21;
+const OP_I64_REM_S: u8 = 22;
+const OP_I64_NEG: u8 = 23;
+
+// f32 Arithmetic
+const OP_F32_ADD: u8 = 24;
+const OP_F32_SUB: u8 = 25;
+const OP_F32_MUL: u8 = 26;
+const OP_F32_DIV: u8 = 27;
+const OP_F32_NEG: u8 = 28;
+
+// f64 Arithmetic
+const OP_F64_ADD: u8 = 29;
+const OP_F64_SUB: u8 = 30;
+const OP_F64_MUL: u8 = 31;
+const OP_F64_DIV: u8 = 32;
+const OP_F64_NEG: u8 = 33;
+
+// i32 Comparison
+const OP_I32_EQ: u8 = 34;
+const OP_I32_NE: u8 = 35;
+const OP_I32_LT_S: u8 = 36;
+const OP_I32_LE_S: u8 = 37;
+const OP_I32_GT_S: u8 = 38;
+const OP_I32_GE_S: u8 = 39;
+
+// i64 Comparison
+const OP_I64_EQ: u8 = 40;
+const OP_I64_NE: u8 = 41;
+const OP_I64_LT_S: u8 = 42;
+const OP_I64_LE_S: u8 = 43;
+const OP_I64_GT_S: u8 = 44;
+const OP_I64_GE_S: u8 = 45;
+
+// f32 Comparison
+const OP_F32_EQ: u8 = 46;
+const OP_F32_NE: u8 = 47;
+const OP_F32_LT: u8 = 48;
+const OP_F32_LE: u8 = 49;
+const OP_F32_GT: u8 = 50;
+const OP_F32_GE: u8 = 51;
+
+// f64 Comparison
+const OP_F64_EQ: u8 = 52;
+const OP_F64_NE: u8 = 53;
+const OP_F64_LT: u8 = 54;
+const OP_F64_LE: u8 = 55;
+const OP_F64_GT: u8 = 56;
+const OP_F64_GE: u8 = 57;
+
+// Ref Comparison
+const OP_REF_EQ: u8 = 58;
+const OP_REF_IS_NULL: u8 = 59;
+
+// Type Conversion
+const OP_I32_WRAP_I64: u8 = 60;
+const OP_I64_EXTEND_I32_S: u8 = 61;
+const OP_I64_EXTEND_I32_U: u8 = 62;
+const OP_F64_CONVERT_I64_S: u8 = 63;
+const OP_I64_TRUNC_F64_S: u8 = 64;
+const OP_F64_CONVERT_I32_S: u8 = 65;
+const OP_F32_CONVERT_I32_S: u8 = 66;
+const OP_F32_CONVERT_I64_S: u8 = 67;
+const OP_I32_TRUNC_F32_S: u8 = 68;
+const OP_I32_TRUNC_F64_S: u8 = 69;
+const OP_I64_TRUNC_F32_S: u8 = 70;
+const OP_F32_DEMOTE_F64: u8 = 71;
+const OP_F64_PROMOTE_F32: u8 = 72;
+
+// Control Flow
+const OP_JMP: u8 = 73;
+const OP_BR_IF: u8 = 74;
+const OP_BR_IF_FALSE: u8 = 75;
+const OP_CALL: u8 = 76;
+const OP_RET: u8 = 77;
+
+// Heap Operations
+const OP_HEAP_ALLOC: u8 = 78;
+const OP_HEAP_ALLOC_DYN: u8 = 79;
+const OP_HEAP_ALLOC_DYN_SIMPLE: u8 = 80;
+const OP_HEAP_LOAD: u8 = 81;
+const OP_HEAP_STORE: u8 = 82;
+const OP_HEAP_LOAD_DYN: u8 = 83;
+const OP_HEAP_STORE_DYN: u8 = 84;
+const OP_ARRAY_LEN: u8 = 85;
+
+// System / Builtins
+const OP_SYSCALL: u8 = 86;
+const OP_GC_HINT: u8 = 87;
+const OP_PRINT_DEBUG: u8 = 88;
+const OP_TYPE_OF: u8 = 89;
+const OP_TO_STRING: u8 = 90;
+const OP_PARSE_INT: u8 = 91;
+const OP_STR_LEN: u8 = 92;
+
+// Exception Handling
+const OP_THROW: u8 = 93;
+const OP_TRY_BEGIN: u8 = 94;
+const OP_TRY_END: u8 = 95;
+
+// CLI Arguments
+const OP_ARGC: u8 = 96;
+const OP_ARGV: u8 = 97;
+const OP_ARGS: u8 = 98;
+
+// Threading
+const OP_THREAD_SPAWN: u8 = 99;
+const OP_CHANNEL_CREATE: u8 = 100;
+const OP_CHANNEL_SEND: u8 = 101;
+const OP_CHANNEL_RECV: u8 = 102;
+const OP_THREAD_JOIN: u8 = 103;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
-        Op::PushInt(v) => {
-            w.write_all(&[OP_PUSH_INT])?;
+        // Constants
+        Op::I32Const(v) => {
+            w.write_all(&[OP_I32_CONST])?;
+            write_i32(w, *v)?;
+        }
+        Op::I64Const(v) => {
+            w.write_all(&[OP_I64_CONST])?;
             write_i64(w, *v)?;
         }
-        Op::PushFloat(v) => {
-            w.write_all(&[OP_PUSH_FLOAT])?;
+        Op::F32Const(v) => {
+            w.write_all(&[OP_F32_CONST])?;
+            write_f32(w, *v)?;
+        }
+        Op::F64Const(v) => {
+            w.write_all(&[OP_F64_CONST])?;
             write_f64(w, *v)?;
         }
-        Op::PushTrue => w.write_all(&[OP_PUSH_TRUE])?,
-        Op::PushFalse => w.write_all(&[OP_PUSH_FALSE])?,
-        Op::PushNull => w.write_all(&[OP_PUSH_NULL])?,
-        Op::PushString(idx) => {
-            w.write_all(&[OP_PUSH_STRING])?;
+        Op::RefNull => w.write_all(&[OP_REF_NULL])?,
+        Op::StringConst(idx) => {
+            w.write_all(&[OP_STRING_CONST])?;
             write_u32(w, *idx as u32)?;
         }
-        Op::Pop => w.write_all(&[OP_POP])?,
+
+        // Local Variables
+        Op::LocalGet(idx) => {
+            w.write_all(&[OP_LOCAL_GET])?;
+            write_u32(w, *idx as u32)?;
+        }
+        Op::LocalSet(idx) => {
+            w.write_all(&[OP_LOCAL_SET])?;
+            write_u32(w, *idx as u32)?;
+        }
+
+        // Stack Manipulation
+        Op::Drop => w.write_all(&[OP_DROP])?,
         Op::Dup => w.write_all(&[OP_DUP])?,
-        Op::Swap => w.write_all(&[OP_SWAP])?,
         Op::Pick(n) => {
             w.write_all(&[OP_PICK])?;
             write_u32(w, *n as u32)?;
         }
         Op::PickDyn => w.write_all(&[OP_PICK_DYN])?,
-        Op::GetL(idx) => {
-            w.write_all(&[OP_GET_L])?;
-            write_u32(w, *idx as u32)?;
-        }
-        Op::SetL(idx) => {
-            w.write_all(&[OP_SET_L])?;
-            write_u32(w, *idx as u32)?;
-        }
-        Op::Add => w.write_all(&[OP_ADD])?,
-        Op::Sub => w.write_all(&[OP_SUB])?,
-        Op::Mul => w.write_all(&[OP_MUL])?,
-        Op::Div => w.write_all(&[OP_DIV])?,
-        Op::Mod => w.write_all(&[OP_MOD])?,
-        Op::Neg => w.write_all(&[OP_NEG])?,
-        Op::Eq => w.write_all(&[OP_EQ])?,
-        Op::Ne => w.write_all(&[OP_NE])?,
-        Op::Lt => w.write_all(&[OP_LT])?,
-        Op::Le => w.write_all(&[OP_LE])?,
-        Op::Gt => w.write_all(&[OP_GT])?,
-        Op::Ge => w.write_all(&[OP_GE])?,
-        Op::Not => w.write_all(&[OP_NOT])?,
+
+        // i32 Arithmetic
+        Op::I32Add => w.write_all(&[OP_I32_ADD])?,
+        Op::I32Sub => w.write_all(&[OP_I32_SUB])?,
+        Op::I32Mul => w.write_all(&[OP_I32_MUL])?,
+        Op::I32DivS => w.write_all(&[OP_I32_DIV_S])?,
+        Op::I32RemS => w.write_all(&[OP_I32_REM_S])?,
+        Op::I32Eqz => w.write_all(&[OP_I32_EQZ])?,
+
+        // i64 Arithmetic
+        Op::I64Add => w.write_all(&[OP_I64_ADD])?,
+        Op::I64Sub => w.write_all(&[OP_I64_SUB])?,
+        Op::I64Mul => w.write_all(&[OP_I64_MUL])?,
+        Op::I64DivS => w.write_all(&[OP_I64_DIV_S])?,
+        Op::I64RemS => w.write_all(&[OP_I64_REM_S])?,
+        Op::I64Neg => w.write_all(&[OP_I64_NEG])?,
+
+        // f32 Arithmetic
+        Op::F32Add => w.write_all(&[OP_F32_ADD])?,
+        Op::F32Sub => w.write_all(&[OP_F32_SUB])?,
+        Op::F32Mul => w.write_all(&[OP_F32_MUL])?,
+        Op::F32Div => w.write_all(&[OP_F32_DIV])?,
+        Op::F32Neg => w.write_all(&[OP_F32_NEG])?,
+
+        // f64 Arithmetic
+        Op::F64Add => w.write_all(&[OP_F64_ADD])?,
+        Op::F64Sub => w.write_all(&[OP_F64_SUB])?,
+        Op::F64Mul => w.write_all(&[OP_F64_MUL])?,
+        Op::F64Div => w.write_all(&[OP_F64_DIV])?,
+        Op::F64Neg => w.write_all(&[OP_F64_NEG])?,
+
+        // i32 Comparison
+        Op::I32Eq => w.write_all(&[OP_I32_EQ])?,
+        Op::I32Ne => w.write_all(&[OP_I32_NE])?,
+        Op::I32LtS => w.write_all(&[OP_I32_LT_S])?,
+        Op::I32LeS => w.write_all(&[OP_I32_LE_S])?,
+        Op::I32GtS => w.write_all(&[OP_I32_GT_S])?,
+        Op::I32GeS => w.write_all(&[OP_I32_GE_S])?,
+
+        // i64 Comparison
+        Op::I64Eq => w.write_all(&[OP_I64_EQ])?,
+        Op::I64Ne => w.write_all(&[OP_I64_NE])?,
+        Op::I64LtS => w.write_all(&[OP_I64_LT_S])?,
+        Op::I64LeS => w.write_all(&[OP_I64_LE_S])?,
+        Op::I64GtS => w.write_all(&[OP_I64_GT_S])?,
+        Op::I64GeS => w.write_all(&[OP_I64_GE_S])?,
+
+        // f32 Comparison
+        Op::F32Eq => w.write_all(&[OP_F32_EQ])?,
+        Op::F32Ne => w.write_all(&[OP_F32_NE])?,
+        Op::F32Lt => w.write_all(&[OP_F32_LT])?,
+        Op::F32Le => w.write_all(&[OP_F32_LE])?,
+        Op::F32Gt => w.write_all(&[OP_F32_GT])?,
+        Op::F32Ge => w.write_all(&[OP_F32_GE])?,
+
+        // f64 Comparison
+        Op::F64Eq => w.write_all(&[OP_F64_EQ])?,
+        Op::F64Ne => w.write_all(&[OP_F64_NE])?,
+        Op::F64Lt => w.write_all(&[OP_F64_LT])?,
+        Op::F64Le => w.write_all(&[OP_F64_LE])?,
+        Op::F64Gt => w.write_all(&[OP_F64_GT])?,
+        Op::F64Ge => w.write_all(&[OP_F64_GE])?,
+
+        // Ref Comparison
+        Op::RefEq => w.write_all(&[OP_REF_EQ])?,
+        Op::RefIsNull => w.write_all(&[OP_REF_IS_NULL])?,
+
+        // Type Conversion
+        Op::I32WrapI64 => w.write_all(&[OP_I32_WRAP_I64])?,
+        Op::I64ExtendI32S => w.write_all(&[OP_I64_EXTEND_I32_S])?,
+        Op::I64ExtendI32U => w.write_all(&[OP_I64_EXTEND_I32_U])?,
+        Op::F64ConvertI64S => w.write_all(&[OP_F64_CONVERT_I64_S])?,
+        Op::I64TruncF64S => w.write_all(&[OP_I64_TRUNC_F64_S])?,
+        Op::F64ConvertI32S => w.write_all(&[OP_F64_CONVERT_I32_S])?,
+        Op::F32ConvertI32S => w.write_all(&[OP_F32_CONVERT_I32_S])?,
+        Op::F32ConvertI64S => w.write_all(&[OP_F32_CONVERT_I64_S])?,
+        Op::I32TruncF32S => w.write_all(&[OP_I32_TRUNC_F32_S])?,
+        Op::I32TruncF64S => w.write_all(&[OP_I32_TRUNC_F64_S])?,
+        Op::I64TruncF32S => w.write_all(&[OP_I64_TRUNC_F32_S])?,
+        Op::F32DemoteF64 => w.write_all(&[OP_F32_DEMOTE_F64])?,
+        Op::F64PromoteF32 => w.write_all(&[OP_F64_PROMOTE_F32])?,
+
+        // Control Flow
         Op::Jmp(target) => {
             w.write_all(&[OP_JMP])?;
             write_u32(w, *target as u32)?;
         }
-        Op::JmpIfFalse(target) => {
-            w.write_all(&[OP_JMP_IF_FALSE])?;
+        Op::BrIf(target) => {
+            w.write_all(&[OP_BR_IF])?;
             write_u32(w, *target as u32)?;
         }
-        Op::JmpIfTrue(target) => {
-            w.write_all(&[OP_JMP_IF_TRUE])?;
+        Op::BrIfFalse(target) => {
+            w.write_all(&[OP_BR_IF_FALSE])?;
             write_u32(w, *target as u32)?;
         }
         Op::Call(func_idx, argc) => {
@@ -361,36 +541,14 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *argc as u32)?;
         }
         Op::Ret => w.write_all(&[OP_RET])?,
-        Op::ArrayLen => w.write_all(&[OP_ARRAY_LEN])?,
-        Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
-        Op::ToString => w.write_all(&[OP_TO_STRING])?,
-        Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
-        Op::StrLen => w.write_all(&[OP_STR_LEN])?,
-        Op::Throw => w.write_all(&[OP_THROW])?,
-        Op::TryBegin(target) => {
-            w.write_all(&[OP_TRY_BEGIN])?;
-            write_u32(w, *target as u32)?;
-        }
-        Op::TryEnd => w.write_all(&[OP_TRY_END])?,
-        Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
-        Op::GcHint(size) => {
-            w.write_all(&[OP_GC_HINT])?;
+
+        // Heap Operations
+        Op::HeapAlloc(size) => {
+            w.write_all(&[OP_HEAP_ALLOC])?;
             write_u32(w, *size as u32)?;
         }
-        Op::ThreadSpawn(func_idx) => {
-            w.write_all(&[OP_THREAD_SPAWN])?;
-            write_u32(w, *func_idx as u32)?;
-        }
-        Op::ChannelCreate => w.write_all(&[OP_CHANNEL_CREATE])?,
-        Op::ChannelSend => w.write_all(&[OP_CHANNEL_SEND])?,
-        Op::ChannelRecv => w.write_all(&[OP_CHANNEL_RECV])?,
-        Op::ThreadJoin => w.write_all(&[OP_THREAD_JOIN])?,
-        Op::AllocHeap(size) => {
-            w.write_all(&[OP_ALLOC_HEAP])?;
-            write_u32(w, *size as u32)?;
-        }
-        Op::AllocHeapDyn => w.write_all(&[OP_ALLOC_HEAP_DYN])?,
-        Op::AllocHeapDynSimple => w.write_all(&[OP_ALLOC_HEAP_DYN_SIMPLE])?,
+        Op::HeapAllocDyn => w.write_all(&[OP_HEAP_ALLOC_DYN])?,
+        Op::HeapAllocDynSimple => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -401,14 +559,46 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
+        Op::ArrayLen => w.write_all(&[OP_ARRAY_LEN])?,
+
+        // System / Builtins
         Op::Syscall(num, argc) => {
             w.write_all(&[OP_SYSCALL])?;
             write_u32(w, *num as u32)?;
             write_u32(w, *argc as u32)?;
         }
+        Op::GcHint(size) => {
+            w.write_all(&[OP_GC_HINT])?;
+            write_u32(w, *size as u32)?;
+        }
+        Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
+        Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
+        Op::ToString => w.write_all(&[OP_TO_STRING])?,
+        Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
+        Op::StrLen => w.write_all(&[OP_STR_LEN])?,
+
+        // Exception Handling
+        Op::Throw => w.write_all(&[OP_THROW])?,
+        Op::TryBegin(target) => {
+            w.write_all(&[OP_TRY_BEGIN])?;
+            write_u32(w, *target as u32)?;
+        }
+        Op::TryEnd => w.write_all(&[OP_TRY_END])?,
+
+        // CLI Arguments
         Op::Argc => w.write_all(&[OP_ARGC])?,
         Op::Argv => w.write_all(&[OP_ARGV])?,
         Op::Args => w.write_all(&[OP_ARGS])?,
+
+        // Threading
+        Op::ThreadSpawn(func_idx) => {
+            w.write_all(&[OP_THREAD_SPAWN])?;
+            write_u32(w, *func_idx as u32)?;
+        }
+        Op::ChannelCreate => w.write_all(&[OP_CHANNEL_CREATE])?,
+        Op::ChannelSend => w.write_all(&[OP_CHANNEL_SEND])?,
+        Op::ChannelRecv => w.write_all(&[OP_CHANNEL_RECV])?,
+        Op::ThreadJoin => w.write_all(&[OP_THREAD_JOIN])?,
     }
     Ok(())
 }
@@ -416,73 +606,193 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
 fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
     let tag = read_u8(r)?;
     let op = match tag {
-        OP_PUSH_INT => Op::PushInt(read_i64(r)?),
-        OP_PUSH_FLOAT => Op::PushFloat(read_f64(r)?),
-        OP_PUSH_TRUE => Op::PushTrue,
-        OP_PUSH_FALSE => Op::PushFalse,
-        OP_PUSH_NULL => Op::PushNull,
-        OP_PUSH_STRING => Op::PushString(read_u32(r)? as usize),
-        OP_POP => Op::Pop,
+        // Constants
+        OP_I32_CONST => Op::I32Const(read_i32(r)?),
+        OP_I64_CONST => Op::I64Const(read_i64(r)?),
+        OP_F32_CONST => Op::F32Const(read_f32(r)?),
+        OP_F64_CONST => Op::F64Const(read_f64(r)?),
+        OP_REF_NULL => Op::RefNull,
+        OP_STRING_CONST => Op::StringConst(read_u32(r)? as usize),
+
+        // Local Variables
+        OP_LOCAL_GET => Op::LocalGet(read_u32(r)? as usize),
+        OP_LOCAL_SET => Op::LocalSet(read_u32(r)? as usize),
+
+        // Stack Manipulation
+        OP_DROP => Op::Drop,
         OP_DUP => Op::Dup,
-        OP_SWAP => Op::Swap,
         OP_PICK => Op::Pick(read_u32(r)? as usize),
         OP_PICK_DYN => Op::PickDyn,
-        OP_GET_L => Op::GetL(read_u32(r)? as usize),
-        OP_SET_L => Op::SetL(read_u32(r)? as usize),
-        OP_ADD => Op::Add,
-        OP_SUB => Op::Sub,
-        OP_MUL => Op::Mul,
-        OP_DIV => Op::Div,
-        OP_MOD => Op::Mod,
-        OP_NEG => Op::Neg,
-        OP_EQ => Op::Eq,
-        OP_NE => Op::Ne,
-        OP_LT => Op::Lt,
-        OP_LE => Op::Le,
-        OP_GT => Op::Gt,
-        OP_GE => Op::Ge,
-        OP_NOT => Op::Not,
+
+        // i32 Arithmetic
+        OP_I32_ADD => Op::I32Add,
+        OP_I32_SUB => Op::I32Sub,
+        OP_I32_MUL => Op::I32Mul,
+        OP_I32_DIV_S => Op::I32DivS,
+        OP_I32_REM_S => Op::I32RemS,
+        OP_I32_EQZ => Op::I32Eqz,
+
+        // i64 Arithmetic
+        OP_I64_ADD => Op::I64Add,
+        OP_I64_SUB => Op::I64Sub,
+        OP_I64_MUL => Op::I64Mul,
+        OP_I64_DIV_S => Op::I64DivS,
+        OP_I64_REM_S => Op::I64RemS,
+        OP_I64_NEG => Op::I64Neg,
+
+        // f32 Arithmetic
+        OP_F32_ADD => Op::F32Add,
+        OP_F32_SUB => Op::F32Sub,
+        OP_F32_MUL => Op::F32Mul,
+        OP_F32_DIV => Op::F32Div,
+        OP_F32_NEG => Op::F32Neg,
+
+        // f64 Arithmetic
+        OP_F64_ADD => Op::F64Add,
+        OP_F64_SUB => Op::F64Sub,
+        OP_F64_MUL => Op::F64Mul,
+        OP_F64_DIV => Op::F64Div,
+        OP_F64_NEG => Op::F64Neg,
+
+        // i32 Comparison
+        OP_I32_EQ => Op::I32Eq,
+        OP_I32_NE => Op::I32Ne,
+        OP_I32_LT_S => Op::I32LtS,
+        OP_I32_LE_S => Op::I32LeS,
+        OP_I32_GT_S => Op::I32GtS,
+        OP_I32_GE_S => Op::I32GeS,
+
+        // i64 Comparison
+        OP_I64_EQ => Op::I64Eq,
+        OP_I64_NE => Op::I64Ne,
+        OP_I64_LT_S => Op::I64LtS,
+        OP_I64_LE_S => Op::I64LeS,
+        OP_I64_GT_S => Op::I64GtS,
+        OP_I64_GE_S => Op::I64GeS,
+
+        // f32 Comparison
+        OP_F32_EQ => Op::F32Eq,
+        OP_F32_NE => Op::F32Ne,
+        OP_F32_LT => Op::F32Lt,
+        OP_F32_LE => Op::F32Le,
+        OP_F32_GT => Op::F32Gt,
+        OP_F32_GE => Op::F32Ge,
+
+        // f64 Comparison
+        OP_F64_EQ => Op::F64Eq,
+        OP_F64_NE => Op::F64Ne,
+        OP_F64_LT => Op::F64Lt,
+        OP_F64_LE => Op::F64Le,
+        OP_F64_GT => Op::F64Gt,
+        OP_F64_GE => Op::F64Ge,
+
+        // Ref Comparison
+        OP_REF_EQ => Op::RefEq,
+        OP_REF_IS_NULL => Op::RefIsNull,
+
+        // Type Conversion
+        OP_I32_WRAP_I64 => Op::I32WrapI64,
+        OP_I64_EXTEND_I32_S => Op::I64ExtendI32S,
+        OP_I64_EXTEND_I32_U => Op::I64ExtendI32U,
+        OP_F64_CONVERT_I64_S => Op::F64ConvertI64S,
+        OP_I64_TRUNC_F64_S => Op::I64TruncF64S,
+        OP_F64_CONVERT_I32_S => Op::F64ConvertI32S,
+        OP_F32_CONVERT_I32_S => Op::F32ConvertI32S,
+        OP_F32_CONVERT_I64_S => Op::F32ConvertI64S,
+        OP_I32_TRUNC_F32_S => Op::I32TruncF32S,
+        OP_I32_TRUNC_F64_S => Op::I32TruncF64S,
+        OP_I64_TRUNC_F32_S => Op::I64TruncF32S,
+        OP_F32_DEMOTE_F64 => Op::F32DemoteF64,
+        OP_F64_PROMOTE_F32 => Op::F64PromoteF32,
+
+        // Control Flow
         OP_JMP => Op::Jmp(read_u32(r)? as usize),
-        OP_JMP_IF_FALSE => Op::JmpIfFalse(read_u32(r)? as usize),
-        OP_JMP_IF_TRUE => Op::JmpIfTrue(read_u32(r)? as usize),
+        OP_BR_IF => Op::BrIf(read_u32(r)? as usize),
+        OP_BR_IF_FALSE => Op::BrIfFalse(read_u32(r)? as usize),
         OP_CALL => {
             let func_idx = read_u32(r)? as usize;
             let argc = read_u32(r)? as usize;
             Op::Call(func_idx, argc)
         }
         OP_RET => Op::Ret,
+
+        // Heap Operations
+        OP_HEAP_ALLOC => Op::HeapAlloc(read_u32(r)? as usize),
+        OP_HEAP_ALLOC_DYN => Op::HeapAllocDyn,
+        OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple,
+        OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
+        OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
+        OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
+        OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
         OP_ARRAY_LEN => Op::ArrayLen,
+
+        // System / Builtins
+        OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
+        OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
+        OP_PRINT_DEBUG => Op::PrintDebug,
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
         OP_PARSE_INT => Op::ParseInt,
         OP_STR_LEN => Op::StrLen,
+
+        // Exception Handling
         OP_THROW => Op::Throw,
         OP_TRY_BEGIN => Op::TryBegin(read_u32(r)? as usize),
         OP_TRY_END => Op::TryEnd,
-        OP_PRINT_DEBUG => Op::PrintDebug,
-        OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
+
+        // CLI Arguments
+        OP_ARGC => Op::Argc,
+        OP_ARGV => Op::Argv,
+        OP_ARGS => Op::Args,
+
+        // Threading
         OP_THREAD_SPAWN => Op::ThreadSpawn(read_u32(r)? as usize),
         OP_CHANNEL_CREATE => Op::ChannelCreate,
         OP_CHANNEL_SEND => Op::ChannelSend,
         OP_CHANNEL_RECV => Op::ChannelRecv,
         OP_THREAD_JOIN => Op::ThreadJoin,
-        OP_ALLOC_HEAP => Op::AllocHeap(read_u32(r)? as usize),
-        OP_ALLOC_HEAP_DYN => Op::AllocHeapDyn,
-        OP_ALLOC_HEAP_DYN_SIMPLE => Op::AllocHeapDynSimple,
-        OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
-        OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
-        OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
-        OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
-        OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
-        OP_ARGC => Op::Argc,
-        OP_ARGV => Op::Argv,
-        OP_ARGS => Op::Args,
+
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
 }
 
+// ============================================================
+// ValueType serialization
+// ============================================================
+
+const VT_I32: u8 = 0;
+const VT_I64: u8 = 1;
+const VT_F32: u8 = 2;
+const VT_F64: u8 = 3;
+const VT_REF: u8 = 4;
+
+fn write_value_type<W: Write>(w: &mut W, vt: ValueType) -> io::Result<()> {
+    let tag = match vt {
+        ValueType::I32 => VT_I32,
+        ValueType::I64 => VT_I64,
+        ValueType::F32 => VT_F32,
+        ValueType::F64 => VT_F64,
+        ValueType::Ref => VT_REF,
+    };
+    write_u8(w, tag)
+}
+
+fn read_value_type<R: Read>(r: &mut R) -> Result<ValueType, BytecodeError> {
+    let tag = read_u8(r)?;
+    match tag {
+        VT_I32 => Ok(ValueType::I32),
+        VT_I64 => Ok(ValueType::I64),
+        VT_F32 => Ok(ValueType::F32),
+        VT_F64 => Ok(ValueType::F64),
+        VT_REF => Ok(ValueType::Ref),
+        _ => Err(BytecodeError::InvalidValueType(tag)),
+    }
+}
+
+// ============================================================
 // Helper functions for reading/writing primitives
+// ============================================================
 
 fn write_u8<W: Write>(w: &mut W, v: u8) -> io::Result<()> {
     w.write_all(&[v])
@@ -517,6 +827,17 @@ fn read_u32<R: Read>(r: &mut R) -> Result<u32, BytecodeError> {
     Ok(u32::from_le_bytes(buf))
 }
 
+fn write_i32<W: Write>(w: &mut W, v: i32) -> io::Result<()> {
+    w.write_all(&v.to_le_bytes())
+}
+
+fn read_i32<R: Read>(r: &mut R) -> Result<i32, BytecodeError> {
+    let mut buf = [0u8; 4];
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
+    Ok(i32::from_le_bytes(buf))
+}
+
 fn write_u64<W: Write>(w: &mut W, v: u64) -> io::Result<()> {
     w.write_all(&v.to_le_bytes())
 }
@@ -537,6 +858,17 @@ fn read_i64<R: Read>(r: &mut R) -> Result<i64, BytecodeError> {
     r.read_exact(&mut buf)
         .map_err(|_| BytecodeError::UnexpectedEof)?;
     Ok(i64::from_le_bytes(buf))
+}
+
+fn write_f32<W: Write>(w: &mut W, v: f32) -> io::Result<()> {
+    w.write_all(&v.to_le_bytes())
+}
+
+fn read_f32<R: Read>(r: &mut R) -> Result<f32, BytecodeError> {
+    let mut buf = [0u8; 4];
+    r.read_exact(&mut buf)
+        .map_err(|_| BytecodeError::UnexpectedEof)?;
+    Ok(f32::from_le_bytes(buf))
 }
 
 fn write_f64<W: Write>(w: &mut W, v: f64) -> io::Result<()> {
@@ -576,12 +908,10 @@ mod tests {
                 arity: 0,
                 locals_count: 2,
                 code: vec![
-                    Op::PushInt(42),
-                    Op::PushFloat(3.14),
-                    Op::PushTrue,
-                    Op::PushFalse,
-                    Op::PushNull,
-                    Op::Add,
+                    Op::I32Const(42),
+                    Op::F64Const(3.14),
+                    Op::RefNull,
+                    Op::I64Add,
                     Op::Ret,
                 ],
                 stackmap: None,
@@ -608,17 +938,17 @@ mod tests {
                 name: "add".to_string(),
                 arity: 2,
                 locals_count: 2,
-                code: vec![Op::GetL(0), Op::GetL(1), Op::Add, Op::Ret],
+                code: vec![Op::LocalGet(0), Op::LocalGet(1), Op::I64Add, Op::Ret],
                 stackmap: None,
-                local_types: vec![],
+                local_types: vec![ValueType::I64, ValueType::I64],
             }],
             main: Function {
                 name: "main".to_string(),
                 arity: 0,
                 locals_count: 0,
                 code: vec![
-                    Op::PushInt(10),
-                    Op::PushInt(20),
+                    Op::I64Const(10),
+                    Op::I64Const(20),
                     Op::Call(0, 2),
                     Op::PrintDebug,
                     Op::Ret,
@@ -636,6 +966,10 @@ mod tests {
         assert_eq!(restored.functions.len(), 1);
         assert_eq!(restored.functions[0].name, "add");
         assert_eq!(restored.functions[0].arity, 2);
+        assert_eq!(
+            restored.functions[0].local_types,
+            vec![ValueType::I64, ValueType::I64]
+        );
     }
 
     #[test]
@@ -653,9 +987,14 @@ mod tests {
                 name: "main".to_string(),
                 arity: 0,
                 locals_count: 4,
-                code: vec![Op::AllocHeap(2), Op::Ret],
+                code: vec![Op::HeapAlloc(2), Op::Ret],
                 stackmap: Some(stackmap),
-                local_types: vec![],
+                local_types: vec![
+                    ValueType::I64,
+                    ValueType::Ref,
+                    ValueType::Ref,
+                    ValueType::I32,
+                ],
             },
             strings: vec![],
             debug: None,
@@ -673,11 +1012,20 @@ mod tests {
         assert!(restored_entry.is_stack_ref(0));
         assert!(!restored_entry.is_stack_ref(1));
         assert!(restored_entry.is_local_ref(2));
+        assert_eq!(
+            restored.main.local_types,
+            vec![
+                ValueType::I64,
+                ValueType::Ref,
+                ValueType::Ref,
+                ValueType::I32
+            ]
+        );
     }
 
     #[test]
     fn test_invalid_magic() {
-        let data = b"BADM\x01\x00\x00\x00";
+        let data = b"BADM\x02\x00\x00\x00";
         let result = deserialize(data);
         assert!(matches!(result, Err(BytecodeError::InvalidMagic)));
     }
@@ -696,65 +1044,247 @@ mod tests {
     fn test_all_opcodes() {
         // Test that all opcodes roundtrip correctly
         let ops = vec![
-            Op::PushInt(i64::MAX),
-            Op::PushInt(i64::MIN),
-            Op::PushFloat(std::f64::consts::PI),
-            Op::PushTrue,
-            Op::PushFalse,
-            Op::PushNull,
-            Op::PushString(42),
-            Op::Pop,
+            // Constants
+            Op::I32Const(i32::MAX),
+            Op::I32Const(i32::MIN),
+            Op::I32Const(0),
+            Op::I64Const(i64::MAX),
+            Op::I64Const(i64::MIN),
+            Op::F32Const(std::f32::consts::PI),
+            Op::F32Const(-0.0f32),
+            Op::F64Const(std::f64::consts::PI),
+            Op::F64Const(-0.0f64),
+            Op::RefNull,
+            Op::StringConst(42),
+            // Local Variables
+            Op::LocalGet(100),
+            Op::LocalSet(200),
+            // Stack Manipulation
+            Op::Drop,
             Op::Dup,
-            Op::Swap,
             Op::Pick(3),
             Op::PickDyn,
-            Op::GetL(100),
-            Op::SetL(200),
-            Op::Add,
-            Op::Sub,
-            Op::Mul,
-            Op::Div,
-            Op::Mod,
-            Op::Neg,
-            Op::Eq,
-            Op::Ne,
-            Op::Lt,
-            Op::Le,
-            Op::Gt,
-            Op::Ge,
-            Op::Not,
+            // i32 Arithmetic
+            Op::I32Add,
+            Op::I32Sub,
+            Op::I32Mul,
+            Op::I32DivS,
+            Op::I32RemS,
+            Op::I32Eqz,
+            // i64 Arithmetic
+            Op::I64Add,
+            Op::I64Sub,
+            Op::I64Mul,
+            Op::I64DivS,
+            Op::I64RemS,
+            Op::I64Neg,
+            // f32 Arithmetic
+            Op::F32Add,
+            Op::F32Sub,
+            Op::F32Mul,
+            Op::F32Div,
+            Op::F32Neg,
+            // f64 Arithmetic
+            Op::F64Add,
+            Op::F64Sub,
+            Op::F64Mul,
+            Op::F64Div,
+            Op::F64Neg,
+            // i32 Comparison
+            Op::I32Eq,
+            Op::I32Ne,
+            Op::I32LtS,
+            Op::I32LeS,
+            Op::I32GtS,
+            Op::I32GeS,
+            // i64 Comparison
+            Op::I64Eq,
+            Op::I64Ne,
+            Op::I64LtS,
+            Op::I64LeS,
+            Op::I64GtS,
+            Op::I64GeS,
+            // f32 Comparison
+            Op::F32Eq,
+            Op::F32Ne,
+            Op::F32Lt,
+            Op::F32Le,
+            Op::F32Gt,
+            Op::F32Ge,
+            // f64 Comparison
+            Op::F64Eq,
+            Op::F64Ne,
+            Op::F64Lt,
+            Op::F64Le,
+            Op::F64Gt,
+            Op::F64Ge,
+            // Ref Comparison
+            Op::RefEq,
+            Op::RefIsNull,
+            // Type Conversion
+            Op::I32WrapI64,
+            Op::I64ExtendI32S,
+            Op::I64ExtendI32U,
+            Op::F64ConvertI64S,
+            Op::I64TruncF64S,
+            Op::F64ConvertI32S,
+            Op::F32ConvertI32S,
+            Op::F32ConvertI64S,
+            Op::I32TruncF32S,
+            Op::I32TruncF64S,
+            Op::I64TruncF32S,
+            Op::F32DemoteF64,
+            Op::F64PromoteF32,
+            // Control Flow
             Op::Jmp(1000),
-            Op::JmpIfFalse(2000),
-            Op::JmpIfTrue(3000),
+            Op::BrIf(2000),
+            Op::BrIfFalse(3000),
             Op::Call(5, 3),
             Op::Ret,
+            // Heap Operations
+            Op::HeapAlloc(5),
+            Op::HeapAllocDyn,
+            Op::HeapAllocDynSimple,
+            Op::HeapLoad(1),
+            Op::HeapStore(2),
+            Op::HeapLoadDyn,
+            Op::HeapStoreDyn,
             Op::ArrayLen,
+            // System / Builtins
+            Op::Syscall(7, 2),
+            Op::GcHint(1024),
+            Op::PrintDebug,
             Op::TypeOf,
             Op::ToString,
             Op::ParseInt,
             Op::StrLen,
+            // Exception Handling
             Op::Throw,
             Op::TryBegin(100),
             Op::TryEnd,
-            Op::PrintDebug,
-            Op::GcHint(1024),
+            // CLI Arguments
+            Op::Argc,
+            Op::Argv,
+            Op::Args,
+            // Threading
             Op::ThreadSpawn(1),
             Op::ChannelCreate,
             Op::ChannelSend,
             Op::ChannelRecv,
             Op::ThreadJoin,
-            Op::AllocHeap(5),
-            Op::AllocHeapDyn,
-            Op::HeapLoad(1),
-            Op::HeapStore(2),
-            Op::HeapLoadDyn,
-            Op::HeapStoreDyn,
         ];
 
         let chunk = Chunk {
             functions: vec![],
             main: Function {
                 name: "test".to_string(),
+                arity: 0,
+                locals_count: 0,
+                code: ops.clone(),
+                stackmap: None,
+                local_types: vec![],
+            },
+            strings: vec![],
+            debug: None,
+        };
+
+        let bytes = serialize(&chunk);
+        let restored = deserialize(&bytes).unwrap();
+
+        assert_eq!(restored.main.code.len(), ops.len());
+        for (orig, rest) in ops.iter().zip(restored.main.code.iter()) {
+            assert_eq!(orig, rest);
+        }
+    }
+
+    #[test]
+    fn test_value_type_roundtrip() {
+        let chunk = Chunk {
+            functions: vec![Function {
+                name: "typed_fn".to_string(),
+                arity: 3,
+                locals_count: 5,
+                code: vec![Op::LocalGet(0), Op::Ret],
+                stackmap: None,
+                local_types: vec![
+                    ValueType::I32,
+                    ValueType::I64,
+                    ValueType::F32,
+                    ValueType::F64,
+                    ValueType::Ref,
+                ],
+            }],
+            main: Function {
+                name: "main".to_string(),
+                arity: 0,
+                locals_count: 0,
+                code: vec![Op::Ret],
+                stackmap: None,
+                local_types: vec![],
+            },
+            strings: vec![],
+            debug: None,
+        };
+
+        let bytes = serialize(&chunk);
+        let restored = deserialize(&bytes).unwrap();
+
+        assert_eq!(restored.functions[0].local_types.len(), 5);
+        assert_eq!(restored.functions[0].local_types[0], ValueType::I32);
+        assert_eq!(restored.functions[0].local_types[1], ValueType::I64);
+        assert_eq!(restored.functions[0].local_types[2], ValueType::F32);
+        assert_eq!(restored.functions[0].local_types[3], ValueType::F64);
+        assert_eq!(restored.functions[0].local_types[4], ValueType::Ref);
+    }
+
+    #[test]
+    fn test_f32_const_roundtrip() {
+        let ops = vec![
+            Op::F32Const(1.5f32),
+            Op::F32Const(-0.0f32),
+            Op::F32Const(f32::INFINITY),
+            Op::F32Const(f32::NEG_INFINITY),
+            Op::Ret,
+        ];
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "f32_test".to_string(),
+                arity: 0,
+                locals_count: 0,
+                code: ops.clone(),
+                stackmap: None,
+                local_types: vec![],
+            },
+            strings: vec![],
+            debug: None,
+        };
+
+        let bytes = serialize(&chunk);
+        let restored = deserialize(&bytes).unwrap();
+
+        assert_eq!(restored.main.code.len(), ops.len());
+        for (orig, rest) in ops.iter().zip(restored.main.code.iter()) {
+            assert_eq!(orig, rest);
+        }
+    }
+
+    #[test]
+    fn test_i32_const_roundtrip() {
+        let ops = vec![
+            Op::I32Const(0),
+            Op::I32Const(1),
+            Op::I32Const(-1),
+            Op::I32Const(i32::MAX),
+            Op::I32Const(i32::MIN),
+            Op::Ret,
+        ];
+
+        let chunk = Chunk {
+            functions: vec![],
+            main: Function {
+                name: "i32_test".to_string(),
                 arity: 0,
                 locals_count: 0,
                 code: ops.clone(),

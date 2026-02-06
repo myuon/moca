@@ -23,6 +23,7 @@ description: Moca プログラミング言語とバイトコード VM のドキ�
 |----------|-------------|
 | [vm.md](vm.md) | 仮想マシンアーキテクチャの仕様。バイトコード命令セット、64ビットタグ付き値表現、Mark-Sweep GC を定義。 |
 | [vm-core.md](vm-core.md) | VM コア機能の仕様。Value 表現、命令セット、Verifier ルール、StackMap フォーマット、GC 統合を定義。 |
+| [spec-typed-opcodes.md](spec-typed-opcodes.md) | WASM-like 型付きオペコードの仕様。型別算術・比較・制御フロー命令、レガシーオペコードからの移行表を定義。 |
 | [jit.md](jit.md) | JIT コンパイルと実行時最適化機能の仕様。Tier 0 インタプリタと Tier 1 ベースライン JIT の2段階実行モデル。 |
 | [c-api.md](c-api.md) | C 言語 API の仕様。VM ライフサイクル、スタック操作、関数呼び出し、バイトコードのシリアライズを定義。 |
 
@@ -72,13 +73,14 @@ Value = I64(i64) | F64(f64) | Bool(bool) | Ref(GcRef) | Null
 
 | Category | Instructions |
 |----------|-------------|
-| Constants | `CONST`, `GETL`, `SETL` |
-| Stack | `POP`, `DUP` |
-| Arithmetic | `ADD_I64`, `SUB_I64`, `MUL_I64`, `DIV_I64`, `ADD_F64`, `SUB_F64`, `MUL_F64`, `DIV_F64` |
-| Comparison | `EQ`, `LT_I64`, `LT_F64` |
-| Control | `JMP`, `JMP_IF_TRUE`, `JMP_IF_FALSE` |
-| Calls | `CALL`, `RET` |
-| Heap | `NEW`, `GETF`, `SETF` |
+| Constants | `I64Const`, `F64Const`, `I32Const`, `RefNull`, `StringConst` |
+| Locals | `LocalGet`, `LocalSet` |
+| Stack | `Drop`, `Dup`, `Pick` |
+| i64 Arithmetic | `I64Add`, `I64Sub`, `I64Mul`, `I64DivS`, `I64RemS`, `I64Neg` |
+| f64 Arithmetic | `F64Add`, `F64Sub`, `F64Mul`, `F64Div`, `F64Neg` |
+| Comparison | `I64Eq`, `I64LtS`, `F64Lt`, `RefEq`, `RefIsNull` |
+| Control | `Jmp`, `BrIf`, `BrIfFalse`, `Call`, `Ret` |
+| Heap | `HeapAlloc`, `HeapLoad`, `HeapStore`, `ArrayLen` |
 
 ### C API Example
 

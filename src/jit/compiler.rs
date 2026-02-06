@@ -174,7 +174,7 @@ impl JitCompiler {
             .code
             .iter()
             .filter_map(|op| match op {
-                Op::Jmp(t) | Op::JmpIfFalse(t) | Op::JmpIfTrue(t) => Some(*t),
+                Op::Jmp(t) | Op::BrIfFalse(t) | Op::BrIf(t) => Some(*t),
                 _ => None,
             })
             .collect();
@@ -195,14 +195,14 @@ impl JitCompiler {
             {
                 let next_op = &func.code[next_pc];
                 match next_op {
-                    Op::JmpIfFalse(target) => {
+                    Op::BrIfFalse(target) => {
                         self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
                         self.labels.insert(next_pc, self.buf.len());
                         pc += 2;
                         continue;
                     }
-                    Op::JmpIfTrue(target) => {
+                    Op::BrIf(target) => {
                         self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
                         self.labels.insert(next_pc, self.buf.len());
@@ -292,7 +292,7 @@ impl JitCompiler {
         // If an instruction is a jump target, we cannot fuse it with its predecessor.
         let jump_targets: HashSet<usize> = (loop_start_pc..=loop_end_pc)
             .filter_map(|check_pc| match func.code.get(check_pc) {
-                Some(Op::Jmp(t)) | Some(Op::JmpIfFalse(t)) | Some(Op::JmpIfTrue(t)) => Some(*t),
+                Some(Op::Jmp(t)) | Some(Op::BrIfFalse(t)) | Some(Op::BrIf(t)) => Some(*t),
                 _ => None,
             })
             .collect();
@@ -321,7 +321,7 @@ impl JitCompiler {
             {
                 let next_op = &func.code[next_pc];
                 match next_op {
-                    Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                    Op::BrIfFalse(target) if *target > loop_end_pc => {
                         // Fused comparison + loop exit
                         self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, func.code.len(), true)?;
@@ -329,7 +329,7 @@ impl JitCompiler {
                         pc += 2;
                         continue;
                     }
-                    Op::JmpIfFalse(target) => {
+                    Op::BrIfFalse(target) => {
                         // Fused comparison + internal branch
                         self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, true)?;
@@ -337,7 +337,7 @@ impl JitCompiler {
                         pc += 2;
                         continue;
                     }
-                    Op::JmpIfTrue(target) => {
+                    Op::BrIf(target) => {
                         // Fused comparison + conditional jump
                         self.pop2_types();
                         self.emit_fused_cmp_jmp(cmp_cond, *target, false)?;
@@ -351,7 +351,7 @@ impl JitCompiler {
 
             // Non-fused path
             match op {
-                Op::JmpIfFalse(target) if *target > loop_end_pc => {
+                Op::BrIfFalse(target) if *target > loop_end_pc => {
                     // This is a loop exit condition - jump to epilogue
                     self.type_stack.pop();
                     self.emit_loop_exit_check(func.code.len())?;
@@ -485,118 +485,118 @@ impl JitCompiler {
     /// Compile a single bytecode operation with type tracking.
     fn compile_op(&mut self, op: &Op, _pc: usize) -> Result<(), String> {
         match op {
-            Op::PushInt(n) => {
-                self.type_stack.push(ValueType::Int);
+            Op::I64Const(n) => {
+                self.type_stack.push(ValueType::I64);
                 self.emit_push_int(*n)
             }
-            Op::PushFloat(f) => {
-                self.type_stack.push(ValueType::Float);
+            Op::I32Const(n) => {
+                self.type_stack.push(ValueType::I32);
+                self.emit_push_int(*n as i64)
+            }
+            Op::F64Const(f) => {
+                self.type_stack.push(ValueType::F64);
                 self.emit_push_float(*f)
             }
-            Op::PushTrue => {
-                self.type_stack.push(ValueType::Bool);
-                self.emit_push_bool(true)
+            Op::F32Const(f) => {
+                self.type_stack.push(ValueType::F32);
+                self.emit_push_float(*f as f64)
             }
-            Op::PushFalse => {
-                self.type_stack.push(ValueType::Bool);
-                self.emit_push_bool(false)
-            }
-            Op::PushNull => {
-                self.type_stack.push(ValueType::Unknown);
+            Op::RefNull => {
+                self.type_stack.push(ValueType::Ref);
                 self.emit_push_nil()
             }
-            Op::Pop => {
+            Op::Drop => {
                 self.type_stack.pop();
                 self.emit_pop()
             }
 
-            Op::GetL(idx) => {
+            Op::LocalGet(idx) => {
                 self.type_stack.push(self.local_type(*idx));
                 self.emit_load_local(*idx)
             }
-            Op::SetL(idx) => {
+            Op::LocalSet(idx) => {
                 self.type_stack.pop();
                 self.emit_store_local(*idx)
             }
 
-            Op::Add => {
+            Op::I64Add => {
                 let (a, b) = self.pop2_types();
-                if a == ValueType::Int && b == ValueType::Int {
-                    self.type_stack.push(ValueType::Int);
+                if a == ValueType::I64 && b == ValueType::I64 {
+                    self.type_stack.push(ValueType::I64);
                     self.emit_add_int()
                 } else {
-                    self.type_stack.push(ValueType::Unknown);
+                    self.type_stack.push(ValueType::I64);
                     self.emit_add()
                 }
             }
-            Op::Sub => {
+            Op::I64Sub => {
                 let (a, b) = self.pop2_types();
-                if a == ValueType::Int && b == ValueType::Int {
-                    self.type_stack.push(ValueType::Int);
+                if a == ValueType::I64 && b == ValueType::I64 {
+                    self.type_stack.push(ValueType::I64);
                     self.emit_sub_int()
                 } else {
-                    self.type_stack.push(ValueType::Unknown);
+                    self.type_stack.push(ValueType::I64);
                     self.emit_sub()
                 }
             }
-            Op::Mul => {
+            Op::I64Mul => {
                 let (a, b) = self.pop2_types();
-                if a == ValueType::Int && b == ValueType::Int {
-                    self.type_stack.push(ValueType::Int);
+                if a == ValueType::I64 && b == ValueType::I64 {
+                    self.type_stack.push(ValueType::I64);
                     self.emit_mul_int()
                 } else {
-                    self.type_stack.push(ValueType::Unknown);
+                    self.type_stack.push(ValueType::I64);
                     self.emit_mul()
                 }
             }
-            Op::Div => {
+            Op::I64DivS => {
                 let (a, b) = self.pop2_types();
-                if a == ValueType::Int && b == ValueType::Int {
-                    self.type_stack.push(ValueType::Int);
+                if a == ValueType::I64 && b == ValueType::I64 {
+                    self.type_stack.push(ValueType::I64);
                     self.emit_div_int()
                 } else {
-                    self.type_stack.push(ValueType::Unknown);
+                    self.type_stack.push(ValueType::I64);
                     self.emit_div()
                 }
             }
 
-            Op::Lt => {
+            Op::I64LtS => {
                 self.pop2_types();
-                self.type_stack.push(ValueType::Bool);
+                self.type_stack.push(ValueType::I32);
                 self.emit_cmp(Cond::Lt)
             }
-            Op::Le => {
+            Op::I64LeS => {
                 self.pop2_types();
-                self.type_stack.push(ValueType::Bool);
+                self.type_stack.push(ValueType::I32);
                 self.emit_cmp(Cond::Le)
             }
-            Op::Gt => {
+            Op::I64GtS => {
                 self.pop2_types();
-                self.type_stack.push(ValueType::Bool);
+                self.type_stack.push(ValueType::I32);
                 self.emit_cmp(Cond::Gt)
             }
-            Op::Ge => {
+            Op::I64GeS => {
                 self.pop2_types();
-                self.type_stack.push(ValueType::Bool);
+                self.type_stack.push(ValueType::I32);
                 self.emit_cmp(Cond::Ge)
             }
-            Op::Eq => {
+            Op::I64Eq => {
                 self.pop2_types();
-                self.type_stack.push(ValueType::Bool);
+                self.type_stack.push(ValueType::I32);
                 self.emit_eq()
             }
-            Op::Ne => {
+            Op::I64Ne => {
                 self.pop2_types();
-                self.type_stack.push(ValueType::Bool);
+                self.type_stack.push(ValueType::I32);
                 self.emit_ne()
             }
 
             Op::Jmp(target) => self.emit_jmp(*target),
-            Op::JmpIfFalse(target) => {
+            Op::BrIfFalse(target) => {
                 self.type_stack.pop();
                 self.emit_jmp_if_false(*target)
             }
-            Op::JmpIfTrue(target) => {
+            Op::BrIf(target) => {
                 self.type_stack.pop();
                 self.emit_jmp_if_true(*target)
             }
@@ -610,7 +610,7 @@ impl JitCompiler {
                 for _ in 0..*argc {
                     self.type_stack.pop();
                 }
-                self.type_stack.push(ValueType::Unknown);
+                self.type_stack.push(ValueType::I64);
                 if *func_index == self.self_func_index {
                     self.emit_call_self(*argc)
                 } else {
@@ -618,25 +618,82 @@ impl JitCompiler {
                 }
             }
 
-            Op::PushString(idx) => {
-                self.type_stack.push(ValueType::String);
+            Op::StringConst(idx) => {
+                self.type_stack.push(ValueType::Ref);
                 self.emit_push_string(*idx)
             }
             Op::ArrayLen => {
                 self.type_stack.pop();
-                self.type_stack.push(ValueType::Int);
+                self.type_stack.push(ValueType::I64);
                 self.emit_array_len()
             }
             Op::Syscall(syscall_num, argc) => {
                 for _ in 0..*argc {
                     self.type_stack.pop();
                 }
-                self.type_stack.push(ValueType::Unknown);
+                self.type_stack.push(ValueType::I64);
                 self.emit_syscall(*syscall_num, *argc)
             }
-            Op::Neg => {
+            Op::I64Neg => {
                 // Neg preserves the type
                 self.emit_neg()
+            }
+
+            // F64 arithmetic operations
+            Op::F64Add => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::F64);
+                self.emit_add()
+            }
+            Op::F64Sub => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::F64);
+                self.emit_sub()
+            }
+            Op::F64Mul => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::F64);
+                self.emit_mul()
+            }
+            Op::F64Div => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::F64);
+                self.emit_div()
+            }
+            Op::F64Neg => {
+                // Neg preserves the type
+                self.emit_neg()
+            }
+            // F64 comparison operations
+            Op::F64Lt => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::I32);
+                self.emit_cmp(Cond::Lt)
+            }
+            Op::F64Le => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::I32);
+                self.emit_cmp(Cond::Le)
+            }
+            Op::F64Gt => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::I32);
+                self.emit_cmp(Cond::Gt)
+            }
+            Op::F64Ge => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::I32);
+                self.emit_cmp(Cond::Ge)
+            }
+            Op::F64Eq => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::I32);
+                self.emit_eq()
+            }
+            Op::F64Ne => {
+                self.pop2_types();
+                self.type_stack.push(ValueType::I32);
+                self.emit_ne()
             }
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
@@ -813,16 +870,13 @@ impl JitCompiler {
 
     /// Get the type of a local variable for specialization.
     fn local_type(&self, idx: usize) -> ValueType {
-        self.local_types
-            .get(idx)
-            .copied()
-            .unwrap_or(ValueType::Unknown)
+        self.local_types.get(idx).copied().unwrap_or(ValueType::I64)
     }
 
     /// Pop two types from the type stack and return them (a, b).
     fn pop2_types(&mut self) -> (ValueType, ValueType) {
-        let b = self.type_stack.pop().unwrap_or(ValueType::Unknown);
-        let a = self.type_stack.pop().unwrap_or(ValueType::Unknown);
+        let b = self.type_stack.pop().unwrap_or(ValueType::I64);
+        let a = self.type_stack.pop().unwrap_or(ValueType::I64);
         (a, b)
     }
 
@@ -1135,12 +1189,12 @@ impl JitCompiler {
     /// Map a bytecode comparison Op to its AArch64 condition code.
     fn get_cmp_cond(op: &Op) -> Option<Cond> {
         match op {
-            Op::Lt => Some(Cond::Lt),
-            Op::Le => Some(Cond::Le),
-            Op::Gt => Some(Cond::Gt),
-            Op::Ge => Some(Cond::Ge),
-            Op::Eq => Some(Cond::Eq),
-            Op::Ne => Some(Cond::Ne),
+            Op::I64LtS => Some(Cond::Lt),
+            Op::I64LeS => Some(Cond::Le),
+            Op::I64GtS => Some(Cond::Gt),
+            Op::I64GeS => Some(Cond::Ge),
+            Op::I64Eq => Some(Cond::Eq),
+            Op::I64Ne => Some(Cond::Ne),
             _ => None,
         }
     }
@@ -2381,7 +2435,7 @@ mod tests {
             name: "test".to_string(),
             arity: 0,
             locals_count: 1,
-            code: vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0), Op::Ret],
+            code: vec![Op::I64Const(42), Op::LocalSet(0), Op::LocalGet(0), Op::Ret],
             stackmap: None,
             local_types: vec![],
         };
@@ -2399,7 +2453,7 @@ mod tests {
             name: "add".to_string(),
             arity: 0,
             locals_count: 0,
-            code: vec![Op::PushInt(10), Op::PushInt(20), Op::Add, Op::Ret],
+            code: vec![Op::I64Const(10), Op::I64Const(20), Op::I64Add, Op::Ret],
             stackmap: None,
             local_types: vec![],
         };
@@ -2416,18 +2470,18 @@ mod tests {
             arity: 0,
             locals_count: 1,
             code: vec![
-                Op::PushInt(0),    // 0: push 0
-                Op::SetL(0),       // 1: i = 0
-                Op::GetL(0),       // 2: push i (loop start)
-                Op::PushInt(10),   // 3: push 10
-                Op::Lt,            // 4: i < 10
-                Op::JmpIfFalse(9), // 5: if false, exit
-                Op::GetL(0),       // 6: push i
-                Op::PushInt(1),    // 7: push 1
-                Op::Add,           // 8: i + 1
-                Op::SetL(0),       // 9: i = i + 1  (target of JmpIfFalse)
-                Op::Jmp(2),        // 10: goto loop start
-                Op::Ret,           // 11: return
+                Op::I64Const(0),  // 0: push 0
+                Op::LocalSet(0),  // 1: i = 0
+                Op::LocalGet(0),  // 2: push i (loop start)
+                Op::I64Const(10), // 3: push 10
+                Op::I64LtS,       // 4: i < 10
+                Op::BrIfFalse(9), // 5: if false, exit
+                Op::LocalGet(0),  // 6: push i
+                Op::I64Const(1),  // 7: push 1
+                Op::I64Add,       // 8: i + 1
+                Op::LocalSet(0),  // 9: i = i + 1  (target of BrIfFalse)
+                Op::Jmp(2),       // 10: goto loop start
+                Op::Ret,          // 11: return
             ],
             stackmap: None,
             local_types: vec![],
@@ -2447,19 +2501,19 @@ mod tests {
             arity: 0,
             locals_count: 1,
             code: vec![
-                Op::PushInt(0),     // 0: push 0
-                Op::SetL(0),        // 1: x = 0
-                Op::GetL(0),        // 2: push x (loop start)
-                Op::PushInt(10),    // 3: push 10
-                Op::Lt,             // 4: x < 10
-                Op::JmpIfFalse(11), // 5: if false, exit loop (target > loop_end)
-                Op::GetL(0),        // 6: push x
-                Op::PushInt(1),     // 7: push 1
-                Op::Add,            // 8: x + 1
-                Op::SetL(0),        // 9: x = x + 1
-                Op::Jmp(2),         // 10: goto loop start (backward jump)
-                Op::GetL(0),        // 11: after loop
-                Op::Ret,            // 12: return
+                Op::I64Const(0),   // 0: push 0
+                Op::LocalSet(0),   // 1: x = 0
+                Op::LocalGet(0),   // 2: push x (loop start)
+                Op::I64Const(10),  // 3: push 10
+                Op::I64LtS,        // 4: x < 10
+                Op::BrIfFalse(11), // 5: if false, exit loop (target > loop_end)
+                Op::LocalGet(0),   // 6: push x
+                Op::I64Const(1),   // 7: push 1
+                Op::I64Add,        // 8: x + 1
+                Op::LocalSet(0),   // 9: x = x + 1
+                Op::Jmp(2),        // 10: goto loop start (backward jump)
+                Op::LocalGet(0),   // 11: after loop
+                Op::Ret,           // 12: return
             ],
             stackmap: None,
             local_types: vec![],
@@ -2492,19 +2546,19 @@ mod tests {
             arity: 0,
             locals_count: 1,
             code: vec![
-                Op::PushInt(0),     // 0: push 0
-                Op::SetL(0),        // 1: x = 0
-                Op::GetL(0),        // 2: push x (loop start)
-                Op::PushInt(100),   // 3: push 100
-                Op::Lt,             // 4: x < 100
-                Op::JmpIfFalse(11), // 5: if false, exit
-                Op::GetL(0),        // 6: push x
-                Op::PushInt(1),     // 7: push 1
-                Op::Add,            // 8: x + 1
-                Op::SetL(0),        // 9: x = x + 1
-                Op::Jmp(2),         // 10: backward jump
-                Op::GetL(0),        // 11: after loop
-                Op::Ret,            // 12: return
+                Op::I64Const(0),   // 0: push 0
+                Op::LocalSet(0),   // 1: x = 0
+                Op::LocalGet(0),   // 2: push x (loop start)
+                Op::I64Const(100), // 3: push 100
+                Op::I64LtS,        // 4: x < 100
+                Op::BrIfFalse(11), // 5: if false, exit
+                Op::LocalGet(0),   // 6: push x
+                Op::I64Const(1),   // 7: push 1
+                Op::I64Add,        // 8: x + 1
+                Op::LocalSet(0),   // 9: x = x + 1
+                Op::Jmp(2),        // 10: backward jump
+                Op::LocalGet(0),   // 11: after loop
+                Op::Ret,           // 12: return
             ],
             stackmap: None,
             local_types: vec![],
