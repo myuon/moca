@@ -31,8 +31,12 @@ pub enum MicroOp {
     // Control Flow (always native — never Raw)
     // ========================================
     /// Unconditional jump. Target is MicroOp PC.
+    /// old_pc / old_target carry the original Op bytecode indices
+    /// so the loop-level JIT can use Op coordinates for compilation.
     Jmp {
         target: usize,
+        old_pc: usize,
+        old_target: usize,
     },
     /// Branch if cond vreg is truthy. Target is MicroOp PC.
     BrIf {
@@ -363,4 +367,7 @@ pub struct ConvertedFunction {
     pub micro_ops: Vec<MicroOp>,
     /// Number of temporary registers beyond locals_count.
     pub temps_count: usize,
+    /// old Op PC → new MicroOp PC mapping (length = original code.len() + 1).
+    /// Used to translate JIT loop exit PCs back to MicroOp space.
+    pub pc_map: Vec<usize>,
 }

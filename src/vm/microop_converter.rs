@@ -41,13 +41,14 @@ pub fn convert(func: &Function) -> ConvertedFunction {
 
     // Pass 2: Emit MicroOps with resolved targets
     let mut micro_ops = Vec::with_capacity(new_pc);
-    for op in code {
-        emit_micro_ops(op, &pc_map, temp_base, &mut micro_ops);
+    for (old_pc, op) in code.iter().enumerate() {
+        emit_micro_ops(op, old_pc, &pc_map, temp_base, &mut micro_ops);
     }
 
     ConvertedFunction {
         micro_ops,
         temps_count,
+        pc_map,
     }
 }
 
@@ -63,12 +64,21 @@ fn micro_op_size(op: &Op) -> usize {
 }
 
 /// Emit MicroOps for a single Op.
-fn emit_micro_ops(op: &Op, pc_map: &[usize], temp_base: usize, out: &mut Vec<MicroOp>) {
+fn emit_micro_ops(
+    op: &Op,
+    old_pc: usize,
+    pc_map: &[usize],
+    temp_base: usize,
+    out: &mut Vec<MicroOp>,
+) {
+    let _ = old_pc; // used only by Jmp
     match op {
         // ---- Native control flow ----
         Op::Jmp(target) => {
             out.push(MicroOp::Jmp {
                 target: pc_map[*target],
+                old_pc,
+                old_target: *target,
             });
         }
         Op::BrIf(target) => {
@@ -175,7 +185,14 @@ mod tests {
         let func = make_func(vec![Op::I64Const(0), Op::Jmp(0)]);
         let converted = convert(&func);
         assert_eq!(converted.micro_ops.len(), 2);
-        assert_eq!(converted.micro_ops[1], MicroOp::Jmp { target: 0 });
+        assert_eq!(
+            converted.micro_ops[1],
+            MicroOp::Jmp {
+                target: 0,
+                old_pc: 1,
+                old_target: 0
+            }
+        );
     }
 
     #[test]
@@ -301,6 +318,13 @@ mod tests {
             }
         );
         // Jmp targets Op[0] → MicroOp[0]
-        assert_eq!(converted.micro_ops[4], MicroOp::Jmp { target: 0 });
+        assert_eq!(
+            converted.micro_ops[4],
+            MicroOp::Jmp {
+                target: 0,
+                old_pc: 3,
+                old_target: 0
+            }
+        );
     }
 }

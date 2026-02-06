@@ -23,6 +23,9 @@ struct Frame {
     pc: usize,
     /// Base index into the stack for locals
     stack_base: usize,
+    /// For MicroOp interpreter: caller's vreg index for return value.
+    /// None for the old interpreter or when return value is not captured.
+    ret_vreg: Option<usize>,
 }
 
 /// Exception handler frame.
@@ -127,6 +130,8 @@ pub struct VM {
     /// JIT compiled loops (only on x86-64 with jit feature)
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     jit_loops: HashMap<(usize, usize), CompiledLoop>,
+    /// Whether to use the MicroOp interpreter instead of the stack-based interpreter
+    use_microop: bool,
 }
 
 impl VM {
@@ -199,6 +204,7 @@ impl VM {
             jit_loops: HashMap::new(),
             #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_loops: HashMap::new(),
+            use_microop: true,
         }
     }
 
@@ -804,7 +810,16 @@ impl VM {
         self.jit_compile_count
     }
 
+    /// Enable or disable the MicroOp interpreter.
+    pub fn set_use_microop(&mut self, enabled: bool) {
+        self.use_microop = enabled;
+    }
+
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), String> {
+        if self.use_microop {
+            return self.run_microop(chunk);
+        }
+
         // Initialize call counts for JIT
         self.init_call_counts(chunk);
         // Initialize string constant cache
@@ -815,6 +830,7 @@ impl VM {
             func_index: usize::MAX, // Marker for main
             pc: 0,
             stack_base: 0,
+            ret_vreg: None,
         });
 
         loop {
@@ -871,6 +887,7 @@ impl VM {
             func_index: usize::MAX, // Marker for main
             pc: 0,
             stack_base: 0,
+            ret_vreg: None,
         });
 
         let mut result = Value::Null;
@@ -926,6 +943,299 @@ impl VM {
         }
 
         Ok(result)
+    }
+
+    /// Run the VM using the MicroOp interpreter.
+    ///
+    /// Converts each function's Op bytecode to MicroOps lazily (on first call),
+    /// caches the result, and executes using register-based MicroOps with
+    /// Raw fallback for unconverted operations.
+    fn run_microop(&mut self, chunk: &Chunk) -> Result<(), String> {
+        use super::microop::{ConvertedFunction, MicroOp};
+        use super::microop_converter;
+
+        // Initialize (same as run())
+        self.init_call_counts(chunk);
+        self.init_string_cache(chunk);
+
+        // Lazy conversion cache: indexed by func_index
+        let mut func_cache: Vec<Option<ConvertedFunction>> = vec![None; chunk.functions.len()];
+        let main_converted = microop_converter::convert(&chunk.main);
+
+        // Push main frame with register file space
+        let main_regs = chunk.main.locals_count + main_converted.temps_count;
+        self.frames.push(Frame {
+            func_index: usize::MAX,
+            pc: 0,
+            stack_base: 0,
+            ret_vreg: None,
+        });
+        self.stack.resize(main_regs, Value::Null);
+
+        loop {
+            // GC check
+            if self.heap.should_gc() {
+                self.collect_garbage();
+            }
+
+            // Get current frame info
+            let func_index = self.frames.last().unwrap().func_index;
+            let pc = self.frames.last().unwrap().pc;
+
+            // Get converted function
+            let converted = if func_index == usize::MAX {
+                &main_converted
+            } else {
+                func_cache[func_index]
+                    .get_or_insert_with(|| microop_converter::convert(&chunk.functions[func_index]))
+            };
+
+            // Check for end of code
+            if pc >= converted.micro_ops.len() {
+                break;
+            }
+
+            // Fetch and advance PC
+            let mop = converted.micro_ops[pc].clone();
+            self.frames.last_mut().unwrap().pc = pc + 1;
+
+            // Dispatch
+            match mop {
+                MicroOp::Jmp {
+                    target,
+                    old_pc,
+                    old_target,
+                } => {
+                    // Detect backward branch (loop) for JIT
+                    if old_target < old_pc {
+                        let key = (func_index, old_pc);
+                        let count = self.loop_counts.entry(key).or_insert(0);
+                        *count += 1;
+
+                        let loop_start_pc = old_target;
+                        let loop_end_pc = old_pc;
+
+                        #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                        {
+                            if self.should_jit_compile_loop(func_index, old_pc) {
+                                let func = if func_index == usize::MAX {
+                                    &chunk.main
+                                } else {
+                                    &chunk.functions[func_index]
+                                };
+                                self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                            }
+                        }
+
+                        #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                        {
+                            if self.should_jit_compile_loop(func_index, old_pc) {
+                                let func = if func_index == usize::MAX {
+                                    &chunk.main
+                                } else {
+                                    &chunk.functions[func_index]
+                                };
+                                self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                            }
+                        }
+
+                        // Execute JIT compiled loop if available
+                        #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                        {
+                            if self.is_loop_jit_compiled(func_index, old_pc) {
+                                let func = if func_index == usize::MAX {
+                                    &chunk.main
+                                } else {
+                                    &chunk.functions[func_index]
+                                };
+                                let next_old_pc =
+                                    self.execute_jit_loop(func_index, old_pc, func, chunk)?;
+                                // Map returned Op PC back to MicroOp PC
+                                self.frames.last_mut().unwrap().pc = converted.pc_map[next_old_pc];
+                                continue;
+                            }
+                        }
+
+                        #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                        {
+                            if self.is_loop_jit_compiled(func_index, old_pc) {
+                                let func = if func_index == usize::MAX {
+                                    &chunk.main
+                                } else {
+                                    &chunk.functions[func_index]
+                                };
+                                let next_old_pc =
+                                    self.execute_jit_loop(func_index, old_pc, func, chunk)?;
+                                // Map returned Op PC back to MicroOp PC
+                                self.frames.last_mut().unwrap().pc = converted.pc_map[next_old_pc];
+                                continue;
+                            }
+                        }
+                    }
+
+                    self.frames.last_mut().unwrap().pc = target;
+                }
+                MicroOp::BrIf { cond, target } => {
+                    let frame = self.frames.last().unwrap();
+                    let val = self.stack[frame.stack_base + cond.0];
+                    if val.is_truthy() {
+                        self.frames.last_mut().unwrap().pc = target;
+                    }
+                }
+                MicroOp::BrIfFalse { cond, target } => {
+                    let frame = self.frames.last().unwrap();
+                    let val = self.stack[frame.stack_base + cond.0];
+                    if !val.is_truthy() {
+                        self.frames.last_mut().unwrap().pc = target;
+                    }
+                }
+                MicroOp::Call {
+                    func_id,
+                    ref args,
+                    ret,
+                } => {
+                    let callee_func = &chunk.functions[func_id];
+                    let caller_stack_base = self.frames.last().unwrap().stack_base;
+
+                    // JIT path: compile and execute hot functions via JIT
+                    #[cfg(all(target_arch = "x86_64", feature = "jit"))]
+                    {
+                        if self.should_jit_compile(func_id, &callee_func.name) {
+                            self.jit_compile_function(callee_func, func_id);
+                        }
+                        if self.is_jit_compiled(func_id) {
+                            // Push args onto operand stack for JIT (it pops them)
+                            for arg in args.iter() {
+                                self.stack.push(self.stack[caller_stack_base + arg.0]);
+                            }
+                            let result =
+                                self.execute_jit_function(func_id, args.len(), callee_func, chunk)?;
+                            // Store return value in caller's ret vreg
+                            if let Some(ret_v) = ret {
+                                let sb = self.frames.last().unwrap().stack_base;
+                                self.stack[sb + ret_v.0] = result;
+                            }
+                            continue;
+                        }
+                    }
+                    #[cfg(all(target_arch = "aarch64", feature = "jit"))]
+                    {
+                        if self.should_jit_compile(func_id, &callee_func.name) {
+                            self.jit_compile_function(callee_func, func_id);
+                        }
+                        if self.is_jit_compiled(func_id) {
+                            for arg in args.iter() {
+                                self.stack.push(self.stack[caller_stack_base + arg.0]);
+                            }
+                            let result =
+                                self.execute_jit_function(func_id, args.len(), callee_func, chunk)?;
+                            if let Some(ret_v) = ret {
+                                let sb = self.frames.last().unwrap().stack_base;
+                                self.stack[sb + ret_v.0] = result;
+                            }
+                            continue;
+                        }
+                    }
+
+                    // MicroOp interpreter path
+                    if func_cache[func_id].is_none() {
+                        func_cache[func_id] =
+                            Some(microop_converter::convert(&chunk.functions[func_id]));
+                    }
+                    let callee_temps = func_cache[func_id].as_ref().unwrap().temps_count;
+                    let callee_regs = callee_func.locals_count + callee_temps;
+
+                    let new_stack_base = self.stack.len();
+
+                    // Allocate register file for callee
+                    self.stack.resize(new_stack_base + callee_regs, Value::Null);
+
+                    // Copy args from caller vregs to callee locals
+                    for (i, arg) in args.iter().enumerate() {
+                        self.stack[new_stack_base + i] = self.stack[caller_stack_base + arg.0];
+                    }
+
+                    // Push callee frame
+                    self.frames.push(Frame {
+                        func_index: func_id,
+                        pc: 0,
+                        stack_base: new_stack_base,
+                        ret_vreg: ret.map(|v| v.0),
+                    });
+                }
+                MicroOp::Ret { src } => {
+                    // Get return value
+                    let return_value = match src {
+                        Some(vreg) => {
+                            let frame = self.frames.last().unwrap();
+                            self.stack
+                                .get(frame.stack_base + vreg.0)
+                                .copied()
+                                .unwrap_or(Value::Null)
+                        }
+                        None => Value::Null,
+                    };
+
+                    // Pop callee frame
+                    let callee_frame = self.frames.pop().unwrap();
+
+                    if self.frames.is_empty() {
+                        // Main returned
+                        self.stack.push(return_value);
+                        break;
+                    }
+
+                    // Truncate stack (remove callee's data)
+                    self.stack.truncate(callee_frame.stack_base);
+
+                    // Store return value in caller's ret vreg
+                    if let Some(ret_vreg_idx) = callee_frame.ret_vreg {
+                        let caller_stack_base = self.frames.last().unwrap().stack_base;
+                        self.stack[caller_stack_base + ret_vreg_idx] = return_value;
+                    }
+                }
+                MicroOp::StackPush { src } => {
+                    let frame = self.frames.last().unwrap();
+                    let val = self.stack[frame.stack_base + src.0];
+                    self.stack.push(val);
+                }
+                MicroOp::StackPop { dst } => {
+                    let val = self.stack.pop().unwrap_or(Value::Null);
+                    let frame = self.frames.last().unwrap();
+                    let idx = frame.stack_base + dst.0;
+                    // Ensure register file slot exists
+                    while self.stack.len() <= idx {
+                        self.stack.push(Value::Null);
+                    }
+                    self.stack[idx] = val;
+                }
+                MicroOp::Raw { op } => {
+                    // Profile if enabled
+                    if self.profile_opcodes {
+                        *self.opcode_profile.counts.entry(op.name()).or_insert(0) += 1;
+                    }
+
+                    match self.execute_op(op, chunk) {
+                        Ok(ControlFlow::Continue) => {}
+                        Ok(_) => {
+                            // Control flow ops should never be Raw
+                            // (converter ensures this)
+                        }
+                        Err(e) => {
+                            if !self.handle_exception(e.clone(), chunk)? {
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+                // Phase 2 register-based ops (not yet used)
+                _ => {
+                    return Err(format!("unimplemented MicroOp: {:?}", mop));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn execute_op(&mut self, op: Op, chunk: &Chunk) -> Result<ControlFlow, String> {
@@ -1514,6 +1824,7 @@ impl VM {
                     func_index,
                     pc: 0,
                     stack_base: new_stack_base,
+                    ret_vreg: None,
                 });
             }
             Op::Ret => {
@@ -2595,6 +2906,7 @@ unsafe extern "C" fn jit_call_helper(
             func_index,
             pc: 0,
             stack_base: new_stack_base,
+            ret_vreg: None,
         });
 
         // Run until the function returns (when frame depth returns to starting level)
@@ -2772,6 +3084,8 @@ mod tests {
         };
 
         let mut vm = VM::new();
+        // Use the stack-based interpreter for unit tests that check vm.stack directly
+        vm.set_use_microop(false);
         vm.run(&chunk)?;
         Ok(vm.stack)
     }
@@ -2792,6 +3106,8 @@ mod tests {
         };
 
         let mut vm = VM::new();
+        // Use the stack-based interpreter for unit tests that check vm.stack directly
+        vm.set_use_microop(false);
         vm.run(&chunk)?;
         Ok(vm.stack)
     }
