@@ -743,50 +743,48 @@ fn rust_mutual_recursion<W: Write>(iterations: i32, writer: &mut W) {
 }
 
 #[cfg(feature = "jit")]
-fn rust_classify(ch: u8) -> i64 {
-    if ch == 32 {
-        return 0;
+fn rust_to_letter_index(ch: u8) -> i64 {
+    if ch >= 65 && ch <= 90 {
+        return (ch - 65) as i64;
     }
     if ch >= 97 && ch <= 122 {
-        return 1;
+        return (ch - 97) as i64;
     }
-    if ch >= 65 && ch <= 90 {
-        return 2;
-    }
-    3
+    -1
 }
 
 #[cfg(feature = "jit")]
 fn rust_text_counting<W: Write>(writer: &mut W) {
     let text = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
 
-    let mut counts = vec![0i64; 128];
-    let mut spaces: i64 = 0;
-    let mut lowercase: i64 = 0;
-    let mut uppercase: i64 = 0;
-    let mut other: i64 = 0;
+    let labels = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+        "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ];
+    let mut counts = [0i64; 26];
 
     for _ in 0..1000 {
         for &ch in text.iter() {
-            counts[ch as usize] += 1;
-            match rust_classify(ch) {
-                0 => spaces += 1,
-                1 => lowercase += 1,
-                2 => uppercase += 1,
-                _ => other += 1,
+            let idx = rust_to_letter_index(ch);
+            if idx >= 0 {
+                counts[idx as usize] += 1;
             }
         }
     }
 
-    for c in 0..128 {
-        if counts[c] > 0 {
-            writeln!(writer, "{}: {}", c, counts[c]).unwrap();
+    // Find and print top 10 by frequency
+    for _ in 0..10 {
+        let mut max_idx = 0;
+        let mut max_val = counts[0];
+        for j in 1..26 {
+            if counts[j] > max_val {
+                max_val = counts[j];
+                max_idx = j;
+            }
         }
+        writeln!(writer, "{}: {}", labels[max_idx], max_val).unwrap();
+        counts[max_idx] = -1;
     }
-    writeln!(writer, "{}", spaces).unwrap();
-    writeln!(writer, "{}", lowercase).unwrap();
-    writeln!(writer, "{}", uppercase).unwrap();
-    writeln!(writer, "{}", other).unwrap();
 }
 
 /// Run a moca file with JIT enabled and measure execution time

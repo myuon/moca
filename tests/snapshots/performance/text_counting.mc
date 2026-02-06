@@ -1,64 +1,72 @@
 // Benchmark: lorem ipsum character counting
-// Counts each character occurrence and classifies characters by type.
+// Counts letter frequency (case-insensitive, skipping spaces/punctuation)
+// and prints top 10 most frequent letters.
 
-// JIT-compilable: classifies a character using only integer comparisons
-// Returns: 0=space, 1=lowercase, 2=uppercase, 3=other
-fun classify(ch: int) -> int {
-    if ch == 32 { return 0; }
-    if ch >= 97 {
-        if ch <= 122 { return 1; }
-    }
+// JIT-compilable: converts character to lowercase letter index (0-25)
+// Returns -1 if not a letter
+fun to_letter_index(ch: int) -> int {
     if ch >= 65 {
-        if ch <= 90 { return 2; }
+        if ch <= 90 { return ch - 65; }
     }
-    return 3;
+    if ch >= 97 {
+        if ch <= 122 { return ch - 97; }
+    }
+    return 0 - 1;
 }
 
 fun count_chars() {
     let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
 
-    // Initialize counts array for ASCII 0-127
+    // Labels for output
+    var labels: vec<any> = vec::`new`();
+    labels.push("A"); labels.push("B"); labels.push("C"); labels.push("D");
+    labels.push("E"); labels.push("F"); labels.push("G"); labels.push("H");
+    labels.push("I"); labels.push("J"); labels.push("K"); labels.push("L");
+    labels.push("M"); labels.push("N"); labels.push("O"); labels.push("P");
+    labels.push("Q"); labels.push("R"); labels.push("S"); labels.push("T");
+    labels.push("U"); labels.push("V"); labels.push("W"); labels.push("X");
+    labels.push("Y"); labels.push("Z");
+
+    // Initialize letter counts (26 letters)
     var counts: vec<any> = vec::`new`();
     var k = 0;
-    while k < 128 {
+    while k < 26 {
         counts.push(0);
         k = k + 1;
     }
 
-    var spaces = 0;
-    var lowercase = 0;
-    var uppercase = 0;
-    var other = 0;
-
-    // Count characters across 1000 iterations
+    // Count letters across 1000 iterations (case-insensitive, skip non-letters)
     var iter = 0;
     while iter < 1000 {
         var i = 0;
         while i < len(text) {
             let ch = text[i];
-            counts[ch] = counts[ch] + 1;
-            let cls = classify(ch);
-            if cls == 0 { spaces = spaces + 1; }
-            if cls == 1 { lowercase = lowercase + 1; }
-            if cls == 2 { uppercase = uppercase + 1; }
-            if cls == 3 { other = other + 1; }
+            let idx = to_letter_index(ch);
+            if idx >= 0 {
+                counts[idx] = counts[idx] + 1;
+            }
             i = i + 1;
         }
         iter = iter + 1;
     }
 
-    // Output per-character counts in format "ascii_code: count"
-    var c = 0;
-    while c < 128 {
-        if counts[c] > 0 {
-            print(to_string(c) + ": " + to_string(counts[c]));
+    // Find and print top 10 by frequency
+    var rank = 0;
+    while rank < 10 {
+        var max_idx = 0;
+        var max_val = counts[0];
+        var j = 1;
+        while j < 26 {
+            if counts[j] > max_val {
+                max_val = counts[j];
+                max_idx = j;
+            }
+            j = j + 1;
         }
-        c = c + 1;
+        print(labels[max_idx] + ": " + to_string(max_val));
+        counts[max_idx] = 0 - 1;
+        rank = rank + 1;
     }
-    print(spaces);
-    print(lowercase);
-    print(uppercase);
-    print(other);
 }
 
 count_chars();
