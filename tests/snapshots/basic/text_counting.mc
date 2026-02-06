@@ -18,22 +18,16 @@ fun count_chars() {
     let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
 
     // Labels for output
-    var labels: vec<any> = vec::`new`();
-    labels.push("A"); labels.push("B"); labels.push("C"); labels.push("D");
-    labels.push("E"); labels.push("F"); labels.push("G"); labels.push("H");
-    labels.push("I"); labels.push("J"); labels.push("K"); labels.push("L");
-    labels.push("M"); labels.push("N"); labels.push("O"); labels.push("P");
-    labels.push("Q"); labels.push("R"); labels.push("S"); labels.push("T");
-    labels.push("U"); labels.push("V"); labels.push("W"); labels.push("X");
-    labels.push("Y"); labels.push("Z");
+    let labels: Vec<string> = new Vec<string> {
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+        "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"
+    };
 
     // Initialize letter counts (26 letters)
-    var counts: vec<any> = vec::`new`();
-    var k = 0;
-    while k < 26 {
-        counts.push(0);
-        k = k + 1;
-    }
+    var counts: Vec<int> = new Vec<int> {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
 
     // Count letters (case-insensitive, skip non-letters)
     var i = 0;
