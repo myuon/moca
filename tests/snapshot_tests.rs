@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Cursor, Write};
 use std::path::Path;
 
-use moca::compiler::{dump_ast, dump_bytecode, run_file_capturing_output, run_tests};
+use moca::compiler::{dump_ast, dump_bytecode, lint_file, run_file_capturing_output, run_tests};
 use moca::config::{JitMode, RuntimeConfig};
 
 /// Run a .mc file in-process and return (stdout, stderr, exit_code, jit_compile_count)
@@ -364,6 +364,136 @@ fn run_gc_snapshot_test(test_path: &Path) {
             );
         }
     }
+}
+
+// ============================================================================
+// Lint Snapshot Tests
+// ============================================================================
+
+/// Run lint snapshot tests.
+///
+/// Each test has a `.mc` source file and a `.lint` expected file.
+/// The `.lint` file contains one line per expected diagnostic in the format:
+///   {rule}:{line}:{column}
+/// Empty `.lint` files mean no warnings are expected.
+fn run_lint_snapshot_dir(dir: &str) {
+    let dir_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join(dir);
+
+    if !dir_path.exists() {
+        return;
+    }
+
+    let entries: Vec<_> = fs::read_dir(&dir_path)
+        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", dir_path, e))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "mc"))
+        .collect();
+
+    for entry in entries {
+        let mc_path = entry.path();
+        let base_path = mc_path.with_extension("");
+        let lint_path = base_path.with_extension("lint");
+
+        // Run the linter
+        let (output, count) = match lint_file(&mc_path) {
+            Ok(result) => result,
+            Err(e) => panic!("lint_file failed for {:?}: {}", mc_path, e),
+        };
+
+        // Parse actual diagnostics into (rule, line, column) tuples
+        let actual: Vec<(String, usize, usize)> = if count == 0 {
+            Vec::new()
+        } else {
+            parse_lint_output(&output)
+        };
+
+        // Parse expected diagnostics from .lint file
+        let expected: Vec<(String, usize, usize)> = if lint_path.exists() {
+            let content = fs::read_to_string(&lint_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", lint_path, e));
+            parse_lint_expected(&content)
+        } else {
+            Vec::new()
+        };
+
+        assert_eq!(
+            actual, expected,
+            "lint mismatch for {:?}\n--- expected ---\n{:?}\n--- actual ---\n{:?}\n--- raw output ---\n{}",
+            mc_path, expected, actual, output
+        );
+    }
+}
+
+/// Parse lint output into (rule, line, column) tuples.
+///
+/// Input format:
+///   warning: {rule}: {message}
+///     --> {filename}:{line}:{column}
+fn parse_lint_output(output: &str) -> Vec<(String, usize, usize)> {
+    let mut results = Vec::new();
+    let lines: Vec<&str> = output.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if let Some(rest) = line.strip_prefix("warning: ") {
+            // Extract rule name (everything before the second colon)
+            if let Some(colon_pos) = rest.find(':') {
+                let rule = rest[..colon_pos].to_string();
+                // Next line should be the location
+                if i + 1 < lines.len() {
+                    let loc_line = lines[i + 1].trim();
+                    if let Some(arrow_rest) = loc_line.strip_prefix("--> ") {
+                        // Parse {filename}:{line}:{column}
+                        let parts: Vec<&str> = arrow_rest.rsplitn(3, ':').collect();
+                        if parts.len() == 3 {
+                            let col: usize = parts[0].parse().unwrap_or(0);
+                            let ln: usize = parts[1].parse().unwrap_or(0);
+                            results.push((rule, ln, col));
+                        }
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    results
+}
+
+/// Parse expected lint file into (rule, line, column) tuples.
+///
+/// Input format: one line per diagnostic: `{rule}:{line}:{column}`
+fn parse_lint_expected(content: &str) -> Vec<(String, usize, usize)> {
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.trim().splitn(3, ':').collect();
+            assert_eq!(
+                parts.len(),
+                3,
+                "invalid lint expected format: '{}' (expected 'rule:line:column')",
+                line
+            );
+            let rule = parts[0].to_string();
+            let ln: usize = parts[1]
+                .parse()
+                .unwrap_or_else(|_| panic!("invalid line number in: {}", line));
+            let col: usize = parts[2]
+                .parse()
+                .unwrap_or_else(|_| panic!("invalid column number in: {}", line));
+            (rule, ln, col)
+        })
+        .collect()
+}
+
+#[test]
+fn snapshot_lint() {
+    run_lint_snapshot_dir("lint");
 }
 
 // ============================================================================
