@@ -81,25 +81,30 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             }
 
             // ============================================================
-            // Locals → Mov / no-op
+            // Locals → direct VReg push / materialize-on-write
             // ============================================================
             Op::LocalGet(slot) => {
-                // Copy local to temp (needed for correctness: local may be
-                // overwritten by a subsequent LocalSet before this value is consumed)
-                let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::Mov {
-                    dst,
-                    src: VReg(*slot),
-                });
-                vstack.push(dst);
+                // Push the local's VReg directly (no Mov).
+                // If LocalSet overwrites this local while it's still on vstack,
+                // LocalSet will materialize the stale references first.
+                vstack.push(VReg(*slot));
             }
             Op::LocalSet(slot) => {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                if src.0 != *slot {
-                    micro_ops.push(MicroOp::Mov {
-                        dst: VReg(*slot),
-                        src,
-                    });
+                let dst = VReg(*slot);
+                if src != dst {
+                    // Materialize any vstack references to this local before overwriting
+                    for entry in vstack.iter_mut() {
+                        if *entry == dst {
+                            let temp = alloc_temp(&mut next_temp, &mut max_temp);
+                            micro_ops.push(MicroOp::Mov {
+                                dst: temp,
+                                src: dst,
+                            });
+                            *entry = temp;
+                        }
+                    }
+                    micro_ops.push(MicroOp::Mov { dst, src });
                 }
             }
 
@@ -877,10 +882,10 @@ mod tests {
 
     #[test]
     fn test_local_get_and_add() {
-        // LocalGet(0) → Mov { dst: t0, src: VReg(0) }
-        // LocalGet(1) → Mov { dst: t1, src: VReg(1) }
-        // I64Add      → AddI64 { dst: t2, a: t0, b: t1 }
-        // LocalSet(0) → Mov { dst: VReg(0), src: t2 }
+        // LocalGet(0) → push VReg(0) directly (no Mov)
+        // LocalGet(1) → push VReg(1) directly (no Mov)
+        // I64Add      → AddI64 { dst: t0, a: VReg(0), b: VReg(1) }
+        // LocalSet(0) → Mov { dst: VReg(0), src: t0 }
         let func = make_func(vec![
             Op::LocalGet(0),
             Op::LocalGet(1),
@@ -888,38 +893,22 @@ mod tests {
             Op::LocalSet(0),
         ]);
         let converted = convert(&func);
-        assert_eq!(converted.micro_ops.len(), 4);
+        assert_eq!(converted.micro_ops.len(), 2);
 
         let t0 = VReg(2);
-        let t1 = VReg(3);
-        let t2 = VReg(4);
         assert_eq!(
             converted.micro_ops[0],
-            MicroOp::Mov {
+            MicroOp::AddI64 {
                 dst: t0,
-                src: VReg(0)
+                a: VReg(0),
+                b: VReg(1)
             }
         );
         assert_eq!(
             converted.micro_ops[1],
             MicroOp::Mov {
-                dst: t1,
-                src: VReg(1)
-            }
-        );
-        assert_eq!(
-            converted.micro_ops[2],
-            MicroOp::AddI64 {
-                dst: t2,
-                a: t0,
-                b: t1
-            }
-        );
-        assert_eq!(
-            converted.micro_ops[3],
-            MicroOp::Mov {
                 dst: VReg(0),
-                src: t2
+                src: t0
             }
         );
     }
