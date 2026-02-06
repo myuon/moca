@@ -40,11 +40,24 @@ cargo clippy   # lintチェック
 
 ## Performance & Benchmarking
 
-ベンチマークやパフォーマンステストを実装する際は、以下を必ず確認すること:
+パフォーマンステストは以下の2箇所で構成されている:
+
+- **mocaテストファイル**: `tests/snapshots/performance/*.mc`
+- **Rustリファレンス実装・テストハーネス**: `tests/snapshot_tests.rs` 内の `snapshot_performance` 関数（`#[cfg(feature = "jit")]`）
+
+### 新しいパフォーマンステストの追加手順
+
+1. `tests/snapshots/performance/` に `.mc` ファイルを作成する
+2. `tests/snapshot_tests.rs` に対応するRustリファレンス実装関数を `#[cfg(feature = "jit")]` 付きで追加する
+3. `snapshot_performance` テスト関数内で `run_performance_test` を呼び出して登録する
+4. **JIT制約**: テスト内の少なくとも1つの関数がJITコンパイル可能である必要がある。JITが対応しているのは整数/浮動小数点の算術・比較、制御フロー（`Jmp`, `BrIfFalse`, `Ret`）、関数呼び出しのみ。文字列操作、ヒープ操作（vec/map）、ビルトイン関数（`to_string`等）はJIT非対応のため、これらを使う場合はJIT対応のヘルパー関数を別途用意する
+5. mocaとRustの出力が完全一致することを確認する
+
+### 実装時の注意事項
 
 1. **出力の一致**: 比較対象の実装間で出力が一致していること
 2. **最適化による除去の防止**: コンパイラ最適化で計測対象の処理が除去されないようにする（`black_box`を使用するか、結果を出力する）
-3. **ローカルでの事前実行**: コミット前に必ずローカルでベンチマークを実行して確認する
+3. **ローカルでの事前実行**: コミット前に必ずローカルでベンチマークを実行して確認する（`cargo test snapshot_performance`）
 
 ## Language-Specific Notes
 

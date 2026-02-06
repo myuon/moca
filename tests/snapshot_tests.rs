@@ -742,6 +742,51 @@ fn rust_mutual_recursion<W: Write>(iterations: i32, writer: &mut W) {
     writeln!(writer, "{}", sum).unwrap();
 }
 
+#[cfg(feature = "jit")]
+fn rust_to_letter_index(ch: u8) -> i64 {
+    if ch >= 65 && ch <= 90 {
+        return (ch - 65) as i64;
+    }
+    if ch >= 97 && ch <= 122 {
+        return (ch - 97) as i64;
+    }
+    -1
+}
+
+#[cfg(feature = "jit")]
+fn rust_text_counting<W: Write>(writer: &mut W) {
+    let text = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
+
+    let labels = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+        "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ];
+    let mut counts = [0i64; 26];
+
+    for _ in 0..1000 {
+        for &ch in text.iter() {
+            let idx = rust_to_letter_index(ch);
+            if idx >= 0 {
+                counts[idx as usize] += 1;
+            }
+        }
+    }
+
+    // Find and print top 10 by frequency
+    for _ in 0..10 {
+        let mut max_idx = 0;
+        let mut max_val = counts[0];
+        for j in 1..26 {
+            if counts[j] > max_val {
+                max_val = counts[j];
+                max_idx = j;
+            }
+        }
+        writeln!(writer, "{}: {}", labels[max_idx], max_val).unwrap();
+        counts[max_idx] = -1;
+    }
+}
+
 /// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
 fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
@@ -874,6 +919,10 @@ fn snapshot_performance() {
     run_performance_test(&mutual_recursion_path, |w| {
         rust_mutual_recursion(std::hint::black_box(20000), w)
     });
+
+    // Test text character counting with Rust reference
+    let text_counting_path = perf_dir.join("text_counting.mc");
+    run_performance_test(&text_counting_path, |w| rust_text_counting(w));
 }
 
 // ============================================================================
