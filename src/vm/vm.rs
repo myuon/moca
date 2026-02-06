@@ -1280,6 +1280,11 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = result;
                 }
+                MicroOp::AddI64Imm { dst, a, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va.wrapping_add(imm));
+                }
                 MicroOp::SubI64 { dst, a, b } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let va = self.stack[sb + a.0];

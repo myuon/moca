@@ -4,19 +4,18 @@ use super::Function;
 use super::microop::{CmpCond, ConvertedFunction, MicroOp, VReg};
 use super::ops::Op;
 
-/// Convert a function's Op bytecode to MicroOp sequence (Phase 2).
+/// Virtual stack entry: either a materialized VReg or a deferred i64 immediate.
+#[derive(Clone, Copy)]
+enum Vse {
+    Reg(VReg),
+    ImmI64(i64),
+}
+
+/// Convert a function's Op bytecode to MicroOp sequence.
 ///
 /// Uses virtual-stack simulation to convert stack-based Ops to register-based
-/// MicroOps. Control flow and arithmetic/comparison/constants/locals are
-/// converted to native MicroOps. All other ops use Raw fallback with
-/// StackPush/StackPop bridge.
-///
-/// Algorithm:
-/// 1. Identify branch targets (join points)
-/// 2. Walk ops linearly, maintaining a virtual stack of VReg indices
-/// 3. At join points, flush virtual stack (ensure it's empty for consistency)
-/// 4. Allocate temp VRegs for intermediate results
-/// 5. Store old Op PC as branch target, fix up in final pass
+/// MicroOps. I64 constants are deferred on the vstack and absorbed into
+/// AddI64Imm / CmpI64Imm when possible.
 pub fn convert(func: &Function) -> ConvertedFunction {
     let code = &func.code;
     let locals_count = func.locals_count;
@@ -34,7 +33,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
 
     let mut micro_ops: Vec<MicroOp> = Vec::new();
     let mut pc_map: Vec<usize> = Vec::with_capacity(code.len() + 1);
-    let mut vstack: Vec<VReg> = Vec::new();
+    let mut vstack: Vec<Vse> = Vec::new();
     let mut next_temp = locals_count;
     let mut max_temp = locals_count;
 
@@ -43,7 +42,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
         // This way branches skip the flush (which is only for the fall-through
         // path). Values from the branch path are already on the real stack.
         if branch_targets.contains(&old_pc) {
-            flush_vstack(&mut vstack, &mut micro_ops);
+            flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
             // Reset temp allocator at basic block boundary
             next_temp = locals_count;
         }
@@ -52,42 +51,38 @@ pub fn convert(func: &Function) -> ConvertedFunction {
 
         match op {
             // ============================================================
-            // Constants → register-based
+            // Constants
             // ============================================================
             Op::I64Const(n) => {
-                let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::ConstI64 { dst, imm: *n });
-                vstack.push(dst);
+                // Defer: push immediate onto vstack, materialize only if needed
+                vstack.push(Vse::ImmI64(*n));
             }
             Op::I32Const(n) => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::ConstI32 { dst, imm: *n });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
             Op::F64Const(f) => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::ConstF64 { dst, imm: *f });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
             Op::F32Const(f) => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::ConstF32 { dst, imm: *f });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
             Op::RefNull => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::RefNull { dst });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
 
             // ============================================================
             // Locals → direct VReg push / materialize-on-write
             // ============================================================
             Op::LocalGet(slot) => {
-                // Push the local's VReg directly (no Mov).
-                // If LocalSet overwrites this local while it's still on vstack,
-                // LocalSet will materialize the stale references first.
-                vstack.push(VReg(*slot));
+                vstack.push(Vse::Reg(VReg(*slot)));
             }
             Op::LocalSet(slot) => {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
@@ -95,13 +90,15 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 if src != dst {
                     // Materialize any vstack references to this local before overwriting
                     for entry in vstack.iter_mut() {
-                        if *entry == dst {
+                        if let Vse::Reg(v) = entry
+                            && *v == dst
+                        {
                             let temp = alloc_temp(&mut next_temp, &mut max_temp);
                             micro_ops.push(MicroOp::Mov {
                                 dst: temp,
                                 src: dst,
                             });
-                            *entry = temp;
+                            *entry = Vse::Reg(temp);
                         }
                     }
                     micro_ops.push(MicroOp::Mov { dst, src });
@@ -112,58 +109,91 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // Stack manipulation
             // ============================================================
             Op::Drop => {
-                // Pop and discard
-                let _ = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let _ = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
             }
             Op::Dup => {
-                let top = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                // pop_entry + push twice: works for both Reg and ImmI64 (Copy)
+                let top = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 vstack.push(top);
                 vstack.push(top);
             }
 
             // ============================================================
-            // i64 Arithmetic → register-based
+            // i64 Arithmetic → register-based (with Imm variants)
             // ============================================================
             Op::I64Add => {
-                let b = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let a = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::AddI64 { dst, a, b });
-                vstack.push(dst);
+                match (a, b) {
+                    (_, Vse::ImmI64(imm)) => {
+                        let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        micro_ops.push(MicroOp::AddI64Imm { dst, a, imm });
+                    }
+                    (Vse::ImmI64(imm), _) => {
+                        // commutative: a + b = b + a
+                        let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        micro_ops.push(MicroOp::AddI64Imm { dst, a: b, imm });
+                    }
+                    _ => {
+                        let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        micro_ops.push(MicroOp::AddI64 { dst, a, b });
+                    }
+                }
+                vstack.push(Vse::Reg(dst));
             }
             Op::I64Sub => {
-                let b = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let a = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::SubI64 { dst, a, b });
-                vstack.push(dst);
+                // a - imm = a + (-imm)
+                if let Vse::ImmI64(imm) = b {
+                    let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                    micro_ops.push(MicroOp::AddI64Imm {
+                        dst,
+                        a,
+                        imm: imm.wrapping_neg(),
+                    });
+                } else {
+                    let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                    let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                    micro_ops.push(MicroOp::SubI64 { dst, a, b });
+                }
+                vstack.push(Vse::Reg(dst));
             }
             Op::I64Mul => {
-                let b = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let a = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::MulI64 { dst, a, b });
-                vstack.push(dst);
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    |dst, a, b| MicroOp::MulI64 { dst, a, b },
+                );
             }
             Op::I64DivS => {
-                let b = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let a = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::DivI64 { dst, a, b });
-                vstack.push(dst);
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    |dst, a, b| MicroOp::DivI64 { dst, a, b },
+                );
             }
             Op::I64RemS => {
-                let b = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let a = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::RemI64 { dst, a, b });
-                vstack.push(dst);
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    |dst, a, b| MicroOp::RemI64 { dst, a, b },
+                );
             }
             Op::I64Neg => {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::NegI64 { dst, src });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
 
             // ============================================================
@@ -218,7 +248,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::EqzI32 { dst, src });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
 
             // ============================================================
@@ -264,7 +294,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::NegF64 { dst, src });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
 
             // ============================================================
@@ -310,18 +340,20 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::NegF32 { dst, src });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
 
             // ============================================================
-            // i64 Comparisons → CmpI64
+            // i64 Comparisons → CmpI64 / CmpI64Imm
             // ============================================================
+            // Eq/Ne are polymorphic (values_equal handles Ref/string), so no Imm opt
             Op::I64Eq => emit_cmp_i64(
                 &mut vstack,
                 &mut micro_ops,
                 &mut next_temp,
                 &mut max_temp,
                 CmpCond::Eq,
+                false,
             ),
             Op::I64Ne => emit_cmp_i64(
                 &mut vstack,
@@ -329,13 +361,16 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 &mut next_temp,
                 &mut max_temp,
                 CmpCond::Ne,
+                false,
             ),
+            // LtS/LeS/GtS/GeS are integer-only, safe for Imm opt
             Op::I64LtS => emit_cmp_i64(
                 &mut vstack,
                 &mut micro_ops,
                 &mut next_temp,
                 &mut max_temp,
                 CmpCond::LtS,
+                true,
             ),
             Op::I64LeS => emit_cmp_i64(
                 &mut vstack,
@@ -343,6 +378,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 &mut next_temp,
                 &mut max_temp,
                 CmpCond::LeS,
+                true,
             ),
             Op::I64GtS => emit_cmp_i64(
                 &mut vstack,
@@ -350,6 +386,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 &mut next_temp,
                 &mut max_temp,
                 CmpCond::GtS,
+                true,
             ),
             Op::I64GeS => emit_cmp_i64(
                 &mut vstack,
@@ -357,6 +394,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 &mut next_temp,
                 &mut max_temp,
                 CmpCond::GeS,
+                true,
             ),
 
             // ============================================================
@@ -513,7 +551,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::RefIsNull { dst, src });
-                vstack.push(dst);
+                vstack.push(Vse::Reg(dst));
             }
 
             // ============================================================
@@ -615,29 +653,28 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // Control Flow → native MicroOps
             // ============================================================
             Op::Jmp(target) => {
-                flush_vstack(&mut vstack, &mut micro_ops);
+                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::Jmp {
-                    target: *target, // old Op PC, fixed up later
+                    target: *target,
                     old_pc,
                     old_target: *target,
                 });
-                // After unconditional jump, reset temps (dead code until next target)
                 next_temp = locals_count;
             }
             Op::BrIf(target) => {
                 let cond = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                flush_vstack(&mut vstack, &mut micro_ops);
+                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::BrIf {
                     cond,
-                    target: *target, // old Op PC, fixed up later
+                    target: *target,
                 });
             }
             Op::BrIfFalse(target) => {
                 let cond = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                flush_vstack(&mut vstack, &mut micro_ops);
+                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::BrIfFalse {
                     cond,
-                    target: *target, // old Op PC, fixed up later
+                    target: *target,
                 });
             }
             Op::Call(func_id, argc) => {
@@ -651,14 +688,14 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     ));
                 }
                 args.reverse();
-                flush_vstack(&mut vstack, &mut micro_ops);
+                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let ret = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::Call {
                     func_id: *func_id,
                     args,
                     ret: Some(ret),
                 });
-                vstack.push(ret);
+                vstack.push(Vse::Reg(ret));
             }
             Op::Ret => {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
@@ -670,9 +707,9 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // Raw with PC target remapping
             // ============================================================
             Op::TryBegin(handler_pc) => {
-                flush_vstack(&mut vstack, &mut micro_ops);
+                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::Raw {
-                    op: Op::TryBegin(*handler_pc), // old Op PC, fixed up later
+                    op: Op::TryBegin(*handler_pc),
                 });
             }
 
@@ -680,11 +717,8 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // Raw fallback (everything else)
             // ============================================================
             _ => {
-                flush_vstack(&mut vstack, &mut micro_ops);
+                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::Raw { op: op.clone() });
-                // vstack stays empty; any values the Raw op pushes remain
-                // on the real operand stack and will be StackPop-ed by
-                // subsequent register-based ops.
             }
         }
     }
@@ -707,14 +741,12 @@ pub fn convert(func: &Function) -> ConvertedFunction {
 
     ConvertedFunction {
         micro_ops,
-        temps_count: temps_count.max(1), // at least 1 for safety
+        temps_count: temps_count.max(1),
         pc_map,
     }
 }
 
-// ============================================================
-// Helpers
-// ============================================================
+// ─── Helper functions ───────────────────────────────────────────────
 
 fn alloc_temp(next_temp: &mut usize, max_temp: &mut usize) -> VReg {
     let v = VReg(*next_temp);
@@ -725,32 +757,66 @@ fn alloc_temp(next_temp: &mut usize, max_temp: &mut usize) -> VReg {
     v
 }
 
-/// Pop a VReg from the virtual stack, or emit StackPop from the real stack.
-fn pop_vreg(
-    vstack: &mut Vec<VReg>,
+/// Pop a raw entry from the virtual stack, or emit StackPop.
+fn pop_entry(
+    vstack: &mut Vec<Vse>,
+    micro_ops: &mut Vec<MicroOp>,
+    next_temp: &mut usize,
+    max_temp: &mut usize,
+) -> Vse {
+    if let Some(e) = vstack.pop() {
+        e
+    } else {
+        let t = alloc_temp(next_temp, max_temp);
+        micro_ops.push(MicroOp::StackPop { dst: t });
+        Vse::Reg(t)
+    }
+}
+
+/// Materialize a Vse into a VReg, emitting ConstI64 if needed.
+fn mat(
+    entry: Vse,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
 ) -> VReg {
-    if let Some(v) = vstack.pop() {
-        v
-    } else {
-        let t = alloc_temp(next_temp, max_temp);
-        micro_ops.push(MicroOp::StackPop { dst: t });
-        t
+    match entry {
+        Vse::Reg(v) => v,
+        Vse::ImmI64(n) => {
+            let t = alloc_temp(next_temp, max_temp);
+            micro_ops.push(MicroOp::ConstI64 { dst: t, imm: n });
+            t
+        }
     }
 }
 
+/// Pop from vstack and materialize to VReg.
+fn pop_vreg(
+    vstack: &mut Vec<Vse>,
+    micro_ops: &mut Vec<MicroOp>,
+    next_temp: &mut usize,
+    max_temp: &mut usize,
+) -> VReg {
+    let e = pop_entry(vstack, micro_ops, next_temp, max_temp);
+    mat(e, micro_ops, next_temp, max_temp)
+}
+
 /// Flush all virtual stack entries to the real operand stack.
-fn flush_vstack(vstack: &mut Vec<VReg>, micro_ops: &mut Vec<MicroOp>) {
-    for v in vstack.drain(..) {
+fn flush_vstack(
+    vstack: &mut Vec<Vse>,
+    micro_ops: &mut Vec<MicroOp>,
+    next_temp: &mut usize,
+    max_temp: &mut usize,
+) {
+    for entry in vstack.drain(..) {
+        let v = mat(entry, micro_ops, next_temp, max_temp);
         micro_ops.push(MicroOp::StackPush { src: v });
     }
 }
 
-/// Emit a binary op: pop 2, push 1 result.
+/// Emit a binary op: pop 2, push 1 result. Always materializes both operands.
 fn emit_binop(
-    vstack: &mut Vec<VReg>,
+    vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
@@ -760,26 +826,59 @@ fn emit_binop(
     let a = pop_vreg(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
     micro_ops.push(make_op(dst, a, b));
-    vstack.push(dst);
+    vstack.push(Vse::Reg(dst));
 }
 
-/// Emit a comparison: pop 2, push 1 boolean result.
+/// Reverse a comparison condition (swap operands).
+fn reverse_cond(cond: CmpCond) -> CmpCond {
+    match cond {
+        CmpCond::Eq => CmpCond::Eq,
+        CmpCond::Ne => CmpCond::Ne,
+        CmpCond::LtS => CmpCond::GtS,
+        CmpCond::LeS => CmpCond::GeS,
+        CmpCond::GtS => CmpCond::LtS,
+        CmpCond::GeS => CmpCond::LeS,
+    }
+}
+
+/// Emit i64 comparison, using CmpI64Imm when one operand is immediate.
 fn emit_cmp_i64(
-    vstack: &mut Vec<VReg>,
+    vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
     cond: CmpCond,
+    allow_imm: bool,
 ) {
-    let b = pop_vreg(vstack, micro_ops, next_temp, max_temp);
-    let a = pop_vreg(vstack, micro_ops, next_temp, max_temp);
+    let b = pop_entry(vstack, micro_ops, next_temp, max_temp);
+    let a = pop_entry(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
-    micro_ops.push(MicroOp::CmpI64 { dst, a, b, cond });
-    vstack.push(dst);
+    match (a, b) {
+        (_, Vse::ImmI64(imm)) if allow_imm => {
+            let a = mat(a, micro_ops, next_temp, max_temp);
+            micro_ops.push(MicroOp::CmpI64Imm { dst, a, imm, cond });
+        }
+        (Vse::ImmI64(imm), _) if allow_imm => {
+            // imm <cond> b → b <reverse_cond> imm
+            let b = mat(b, micro_ops, next_temp, max_temp);
+            micro_ops.push(MicroOp::CmpI64Imm {
+                dst,
+                a: b,
+                imm,
+                cond: reverse_cond(cond),
+            });
+        }
+        _ => {
+            let a = mat(a, micro_ops, next_temp, max_temp);
+            let b = mat(b, micro_ops, next_temp, max_temp);
+            micro_ops.push(MicroOp::CmpI64 { dst, a, b, cond });
+        }
+    }
+    vstack.push(Vse::Reg(dst));
 }
 
 fn emit_cmp_i32(
-    vstack: &mut Vec<VReg>,
+    vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
@@ -789,11 +888,11 @@ fn emit_cmp_i32(
     let a = pop_vreg(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
     micro_ops.push(MicroOp::CmpI32 { dst, a, b, cond });
-    vstack.push(dst);
+    vstack.push(Vse::Reg(dst));
 }
 
 fn emit_cmp_f64(
-    vstack: &mut Vec<VReg>,
+    vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
@@ -803,11 +902,11 @@ fn emit_cmp_f64(
     let a = pop_vreg(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
     micro_ops.push(MicroOp::CmpF64 { dst, a, b, cond });
-    vstack.push(dst);
+    vstack.push(Vse::Reg(dst));
 }
 
 fn emit_cmp_f32(
-    vstack: &mut Vec<VReg>,
+    vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
@@ -817,12 +916,12 @@ fn emit_cmp_f32(
     let a = pop_vreg(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
     micro_ops.push(MicroOp::CmpF32 { dst, a, b, cond });
-    vstack.push(dst);
+    vstack.push(Vse::Reg(dst));
 }
 
 /// Emit a unary type conversion: pop 1, push 1.
 fn emit_unary_conv(
-    vstack: &mut Vec<VReg>,
+    vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
     next_temp: &mut usize,
     max_temp: &mut usize,
@@ -831,7 +930,7 @@ fn emit_unary_conv(
     let src = pop_vreg(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
     micro_ops.push(make_op(dst, src));
-    vstack.push(dst);
+    vstack.push(Vse::Reg(dst));
 }
 
 #[cfg(test)]
@@ -859,10 +958,10 @@ mod tests {
 
     #[test]
     fn test_const_and_local_set() {
-        // I64Const(42) → ConstI64 { dst: t0, imm: 42 }
-        // LocalSet(0)  → Mov { dst: VReg(0), src: t0 }
+        // I64Const(42) is deferred, then materialized by LocalSet
         let func = make_func(vec![Op::I64Const(42), Op::LocalSet(0)]);
         let converted = convert(&func);
+        // ConstI64 + Mov = 2 MicroOps
         assert_eq!(converted.micro_ops.len(), 2);
         assert_eq!(
             converted.micro_ops[0],
@@ -882,10 +981,8 @@ mod tests {
 
     #[test]
     fn test_local_get_and_add() {
-        // LocalGet(0) → push VReg(0) directly (no Mov)
-        // LocalGet(1) → push VReg(1) directly (no Mov)
-        // I64Add      → AddI64 { dst: t0, a: VReg(0), b: VReg(1) }
-        // LocalSet(0) → Mov { dst: VReg(0), src: t0 }
+        // LocalGet(0) + LocalGet(1) + I64Add → AddI64 directly
+        // LocalSet(0) → Mov
         let func = make_func(vec![
             Op::LocalGet(0),
             Op::LocalGet(1),
@@ -894,12 +991,10 @@ mod tests {
         ]);
         let converted = convert(&func);
         assert_eq!(converted.micro_ops.len(), 2);
-
-        let t0 = VReg(2);
         assert_eq!(
             converted.micro_ops[0],
             MicroOp::AddI64 {
-                dst: t0,
+                dst: VReg(2),
                 a: VReg(0),
                 b: VReg(1)
             }
@@ -908,16 +1003,46 @@ mod tests {
             converted.micro_ops[1],
             MicroOp::Mov {
                 dst: VReg(0),
-                src: t0
+                src: VReg(2)
+            }
+        );
+    }
+
+    #[test]
+    fn test_add_imm() {
+        // LocalGet(0) + I64Const(1) + I64Add → AddI64Imm
+        let func = make_func(vec![Op::LocalGet(0), Op::I64Const(1), Op::I64Add]);
+        let converted = convert(&func);
+        assert_eq!(converted.micro_ops.len(), 1);
+        assert_eq!(
+            converted.micro_ops[0],
+            MicroOp::AddI64Imm {
+                dst: VReg(2),
+                a: VReg(0),
+                imm: 1
+            }
+        );
+    }
+
+    #[test]
+    fn test_cmp_imm() {
+        // LocalGet(1) + I64Const(100) + I64LeS → CmpI64Imm
+        let func = make_func(vec![Op::LocalGet(1), Op::I64Const(100), Op::I64LeS]);
+        let converted = convert(&func);
+        assert_eq!(converted.micro_ops.len(), 1);
+        assert_eq!(
+            converted.micro_ops[0],
+            MicroOp::CmpI64Imm {
+                dst: VReg(2),
+                a: VReg(1),
+                imm: 100,
+                cond: CmpCond::LeS
             }
         );
     }
 
     #[test]
     fn test_jmp_target_remapping() {
-        // Op[0]: I64Const(0)     → ConstI64
-        // Op[1]: LocalSet(0)     → Mov
-        // Op[2]: Jmp(0)          → Jmp (target = MicroOp PC of Op[0])
         let func = make_func(vec![Op::I64Const(0), Op::LocalSet(0), Op::Jmp(0)]);
         let converted = convert(&func);
         // ConstI64 + Mov + Jmp = 3 MicroOps
@@ -934,12 +1059,6 @@ mod tests {
 
     #[test]
     fn test_br_if_false_with_comparison() {
-        // Op[0]: LocalGet(0)    → Mov t0 <- VReg(0)
-        // Op[1]: I64Const(100)  → ConstI64 t1, 100
-        // Op[2]: I64LeS         → CmpI64 t2, t0, t1, LeS
-        // Op[3]: BrIfFalse(5)   → BrIfFalse { cond: t2, target }
-        // Op[4]: I64Const(1)    → ConstI64 t0, 1  (temps reset after branch target flush)
-        // Op[5]: Ret            → Ret { src: t0 }  (target of branch)
         let func = make_func(vec![
             Op::LocalGet(0),
             Op::I64Const(100),
@@ -949,16 +1068,14 @@ mod tests {
             Op::Ret,
         ]);
         let converted = convert(&func);
-
-        // Check that CmpI64 was emitted
+        // Should have CmpI64Imm (absorbed const) and BrIfFalse
         assert!(converted.micro_ops.iter().any(|m| matches!(
             m,
-            MicroOp::CmpI64 {
+            MicroOp::CmpI64Imm {
                 cond: CmpCond::LeS,
                 ..
             }
         )));
-        // Check BrIfFalse exists
         assert!(
             converted
                 .micro_ops
@@ -969,11 +1086,6 @@ mod tests {
 
     #[test]
     fn test_call_with_vstack() {
-        // Op[0]: I64Const(10) → ConstI64 t0, 10
-        // Op[1]: I64Const(20) → ConstI64 t1, 20
-        // Op[2]: Call(0, 2)   → Call { args: [t0, t1], ret: t2 }
-        //                       (vstack flushed before Call, but args come from vstack)
-        // Op[3]: Ret          → Ret
         let func = make_func(vec![
             Op::I64Const(10),
             Op::I64Const(20),
@@ -981,8 +1093,6 @@ mod tests {
             Op::Ret,
         ]);
         let converted = convert(&func);
-
-        // Find the Call instruction
         let call = converted
             .micro_ops
             .iter()
@@ -995,31 +1105,23 @@ mod tests {
 
     #[test]
     fn test_raw_fallback_with_flush() {
-        // Op[0]: I64Const(1) → ConstI64 t0, 1
-        // Op[1]: I64Const(2) → ConstI64 t1, 2
-        // Op[2]: HeapAlloc(2) → StackPush(t0), StackPush(t1), Raw(HeapAlloc(2))
+        // I64Const values are deferred, then materialized+flushed before Raw
         let func = make_func(vec![Op::I64Const(1), Op::I64Const(2), Op::HeapAlloc(2)]);
         let converted = convert(&func);
-
-        // Should have: ConstI64, ConstI64, StackPush, StackPush, Raw(HeapAlloc)
+        // ConstI64, StackPush, ConstI64, StackPush, Raw(HeapAlloc)
         assert_eq!(converted.micro_ops.len(), 5);
-        assert!(matches!(converted.micro_ops[2], MicroOp::StackPush { .. }));
-        assert!(matches!(converted.micro_ops[3], MicroOp::StackPush { .. }));
-        assert_eq!(
+        assert!(matches!(
             converted.micro_ops[4],
             MicroOp::Raw {
                 op: Op::HeapAlloc(2)
             }
-        );
+        ));
     }
 
     #[test]
     fn test_raw_result_pop() {
-        // Op[0]: HeapAlloc(0)  → Raw (pushes ref to real stack)
-        // Op[1]: LocalSet(0)   → StackPop into temp, Mov to local
         let func = make_func(vec![Op::HeapAlloc(0), Op::LocalSet(0)]);
         let converted = convert(&func);
-
         // Raw, StackPop, Mov
         assert_eq!(converted.micro_ops.len(), 3);
         assert!(matches!(
@@ -1036,12 +1138,10 @@ mod tests {
     fn test_try_begin_target_remapping() {
         let func = make_func(vec![Op::TryBegin(2), Op::I64Const(0), Op::TryEnd]);
         let converted = convert(&func);
-        // TryBegin target should be remapped
         if let MicroOp::Raw {
             op: Op::TryBegin(target),
         } = &converted.micro_ops[0]
         {
-            // Op[2] maps to some MicroOp PC
             assert_eq!(*target, converted.pc_map[2]);
         } else {
             panic!("expected Raw TryBegin");
@@ -1050,10 +1150,6 @@ mod tests {
 
     #[test]
     fn test_drop_consumes_vstack() {
-        // I64Const(1) → ConstI64 t0
-        // I64Const(2) → ConstI64 t1
-        // Drop         → (consumes t1 from vstack, no instruction)
-        // LocalSet(0) → Mov VReg(0) <- t0
         let func = make_func(vec![
             Op::I64Const(1),
             Op::I64Const(2),
@@ -1061,7 +1157,8 @@ mod tests {
             Op::LocalSet(0),
         ]);
         let converted = convert(&func);
-        // ConstI64 + ConstI64 + Mov (no Drop instruction needed)
-        assert_eq!(converted.micro_ops.len(), 3);
+        // I64Const(1) deferred, I64Const(2) deferred, Drop consumes 2,
+        // LocalSet materializes 1 → ConstI64 + Mov = 2
+        assert_eq!(converted.micro_ops.len(), 2);
     }
 }

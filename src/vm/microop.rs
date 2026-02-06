@@ -96,6 +96,12 @@ pub enum MicroOp {
         a: VReg,
         b: VReg,
     },
+    /// dst = a + imm (i64 immediate add)
+    AddI64Imm {
+        dst: VReg,
+        a: VReg,
+        imm: i64,
+    },
     SubI64 {
         dst: VReg,
         a: VReg,
