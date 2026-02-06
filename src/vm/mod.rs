@@ -5,6 +5,8 @@ pub mod bytecode;
 pub mod concurrent_gc;
 pub mod debug;
 mod heap;
+pub mod microop;
+pub mod microop_converter;
 mod ops;
 pub mod stackmap;
 pub mod threads;
