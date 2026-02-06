@@ -930,39 +930,45 @@ impl VM {
 
     fn execute_op(&mut self, op: Op, chunk: &Chunk) -> Result<ControlFlow, String> {
         match op {
-            Op::PushInt(n) => {
+            // ========================================
+            // Constants
+            // ========================================
+            Op::I32Const(n) => {
+                // For booleans: 0 = false, 1 = true
+                // For other values: treat as i64
+                match n {
+                    0 => self.stack.push(Value::Bool(false)),
+                    1 => self.stack.push(Value::Bool(true)),
+                    _ => self.stack.push(Value::I64(n as i64)),
+                }
+            }
+            Op::I64Const(n) => {
                 self.stack.push(Value::I64(n));
             }
-            Op::PushFloat(f) => {
+            Op::F32Const(f) => {
+                self.stack.push(Value::F64(f as f64));
+            }
+            Op::F64Const(f) => {
                 self.stack.push(Value::F64(f));
             }
-            Op::PushTrue => {
-                self.stack.push(Value::Bool(true));
-            }
-            Op::PushFalse => {
-                self.stack.push(Value::Bool(false));
-            }
-            Op::PushNull => {
+            Op::RefNull => {
                 self.stack.push(Value::Null);
             }
-            Op::PushString(idx) => {
+            Op::StringConst(idx) => {
                 let r = self.get_or_alloc_string(idx, chunk)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::Pop => {
-                self.stack.pop();
-            }
-            Op::Dup => {
-                let value = self.stack.last().copied().ok_or("stack underflow")?;
-                self.stack.push(value);
-            }
-            Op::GetL(slot) => {
+
+            // ========================================
+            // Local Variables
+            // ========================================
+            Op::LocalGet(slot) => {
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;
                 let value = self.stack.get(index).copied().unwrap_or(Value::Null);
                 self.stack.push(value);
             }
-            Op::SetL(slot) => {
+            Op::LocalSet(slot) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let frame = self.frames.last().unwrap();
                 let index = frame.stack_base + slot;
@@ -978,31 +984,106 @@ impl VM {
 
                 self.stack[index] = value;
             }
-            Op::Add => {
+
+            // ========================================
+            // Stack Manipulation
+            // ========================================
+            Op::Drop => {
+                self.stack.pop();
+            }
+            Op::Dup => {
+                let value = self.stack.last().copied().ok_or("stack underflow")?;
+                self.stack.push(value);
+            }
+            Op::Pick(n) => {
+                let len = self.stack.len();
+                if n >= len {
+                    return Err("stack underflow".to_string());
+                }
+                let value = self.stack[len - 1 - n];
+                self.stack.push(value);
+            }
+            Op::PickDyn => {
+                let depth_val = self.stack.pop().ok_or("stack underflow")?;
+                let depth = depth_val
+                    .as_i64()
+                    .ok_or("runtime error: PickDyn requires integer depth")?
+                    as usize;
+                let len = self.stack.len();
+                if depth >= len {
+                    return Err("stack underflow".to_string());
+                }
+                let value = self.stack[len - 1 - depth];
+                self.stack.push(value);
+            }
+
+            // ========================================
+            // i32 Arithmetic
+            // ========================================
+            Op::I32Add => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::I64((a.wrapping_add(b)) as i64));
+            }
+            Op::I32Sub => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::I64((a.wrapping_sub(b)) as i64));
+            }
+            Op::I32Mul => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::I64((a.wrapping_mul(b)) as i64));
+            }
+            Op::I32DivS => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                if b == 0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                self.stack.push(Value::I64((a / b) as i64));
+            }
+            Op::I32RemS => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                if b == 0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                self.stack.push(Value::I64((a % b) as i64));
+            }
+            Op::I32Eqz => {
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                self.stack.push(Value::Bool(!a.is_truthy()));
+            }
+
+            // ========================================
+            // i64 Arithmetic
+            // ========================================
+            Op::I64Add => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.add(a, b)?;
                 self.stack.push(result);
             }
-            Op::Sub => {
+            Op::I64Sub => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.sub(a, b)?;
                 self.stack.push(result);
             }
-            Op::Mul => {
+            Op::I64Mul => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.mul(a, b)?;
                 self.stack.push(result);
             }
-            Op::Div => {
+            Op::I64DivS => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.div(a, b)?;
                 self.stack.push(result);
             }
-            Op::Mod => {
+            Op::I64RemS => {
                 let b = self.pop_int()?;
                 let a = self.pop_int()?;
                 if b == 0 {
@@ -1010,7 +1091,7 @@ impl VM {
                 }
                 self.stack.push(Value::I64(a % b));
             }
-            Op::Neg => {
+            Op::I64Neg => {
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = match a {
                     Value::I64(n) => Value::I64(-n),
@@ -1019,45 +1100,279 @@ impl VM {
                 };
                 self.stack.push(result);
             }
-            Op::Eq => {
+
+            // ========================================
+            // f32 Arithmetic
+            // ========================================
+            Op::F32Add => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::F64((a + b) as f64));
+            }
+            Op::F32Sub => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::F64((a - b) as f64));
+            }
+            Op::F32Mul => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::F64((a * b) as f64));
+            }
+            Op::F32Div => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                if b == 0.0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                self.stack.push(Value::F64((a / b) as f64));
+            }
+            Op::F32Neg => {
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::F64((-a) as f64));
+            }
+
+            // ========================================
+            // f64 Arithmetic
+            // ========================================
+            Op::F64Add => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::F64(a + b));
+            }
+            Op::F64Sub => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::F64(a - b));
+            }
+            Op::F64Mul => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::F64(a * b));
+            }
+            Op::F64Div => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                if b == 0.0 {
+                    return Err("runtime error: division by zero".to_string());
+                }
+                self.stack.push(Value::F64(a / b));
+            }
+            Op::F64Neg => {
+                let a = self.pop_float()?;
+                self.stack.push(Value::F64(-a));
+            }
+
+            // ========================================
+            // i32 Comparison
+            // ========================================
+            Op::I32Eq => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::Bool(a == b));
+            }
+            Op::I32Ne => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::Bool(a != b));
+            }
+            Op::I32LtS => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::Bool(a < b));
+            }
+            Op::I32LeS => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::Bool(a <= b));
+            }
+            Op::I32GtS => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::Bool(a > b));
+            }
+            Op::I32GeS => {
+                let b = self.pop_int()? as i32;
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::Bool(a >= b));
+            }
+
+            // ========================================
+            // i64 Comparison
+            // ========================================
+            Op::I64Eq => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.values_equal(&a, &b);
                 self.stack.push(Value::Bool(result));
             }
-            Op::Ne => {
+            Op::I64Ne => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = !self.values_equal(&a, &b);
                 self.stack.push(Value::Bool(result));
             }
-            Op::Lt => {
+            Op::I64LtS => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.compare(&a, &b)? < 0;
                 self.stack.push(Value::Bool(result));
             }
-            Op::Le => {
+            Op::I64LeS => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.compare(&a, &b)? <= 0;
                 self.stack.push(Value::Bool(result));
             }
-            Op::Gt => {
+            Op::I64GtS => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.compare(&a, &b)? > 0;
                 self.stack.push(Value::Bool(result));
             }
-            Op::Ge => {
+            Op::I64GeS => {
                 let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 let result = self.compare(&a, &b)? >= 0;
                 self.stack.push(Value::Bool(result));
             }
-            Op::Not => {
+
+            // ========================================
+            // f32 Comparison
+            // ========================================
+            Op::F32Eq => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::Bool(a == b));
+            }
+            Op::F32Ne => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::Bool(a != b));
+            }
+            Op::F32Lt => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::Bool(a < b));
+            }
+            Op::F32Le => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::Bool(a <= b));
+            }
+            Op::F32Gt => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::Bool(a > b));
+            }
+            Op::F32Ge => {
+                let b = self.pop_float()? as f32;
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::Bool(a >= b));
+            }
+
+            // ========================================
+            // f64 Comparison
+            // ========================================
+            Op::F64Eq => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::Bool(a == b));
+            }
+            Op::F64Ne => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::Bool(a != b));
+            }
+            Op::F64Lt => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::Bool(a < b));
+            }
+            Op::F64Le => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::Bool(a <= b));
+            }
+            Op::F64Gt => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::Bool(a > b));
+            }
+            Op::F64Ge => {
+                let b = self.pop_float()?;
+                let a = self.pop_float()?;
+                self.stack.push(Value::Bool(a >= b));
+            }
+
+            // ========================================
+            // Ref Comparison
+            // ========================================
+            Op::RefEq => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
                 let a = self.stack.pop().ok_or("stack underflow")?;
-                self.stack.push(Value::Bool(!a.is_truthy()));
+                let result = self.values_equal(&a, &b);
+                self.stack.push(Value::Bool(result));
+            }
+            Op::RefIsNull => {
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                self.stack.push(Value::Bool(a == Value::Null));
+            }
+
+            // ========================================
+            // Type Conversion
+            // ========================================
+            Op::I32WrapI64 => {
+                let a = self.pop_int()?;
+                self.stack.push(Value::I64((a as i32) as i64));
+            }
+            Op::I64ExtendI32S => {
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::I64(a as i64));
+            }
+            Op::I64ExtendI32U => {
+                let a = self.pop_int()? as u32;
+                self.stack.push(Value::I64(a as i64));
+            }
+            Op::F64ConvertI64S => {
+                let a = self.pop_int()?;
+                self.stack.push(Value::F64(a as f64));
+            }
+            Op::I64TruncF64S => {
+                let a = self.pop_float()?;
+                self.stack.push(Value::I64(a as i64));
+            }
+            Op::F64ConvertI32S => {
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::F64(a as f64));
+            }
+            Op::F32ConvertI32S => {
+                let a = self.pop_int()? as i32;
+                self.stack.push(Value::F64((a as f32) as f64));
+            }
+            Op::F32ConvertI64S => {
+                let a = self.pop_int()?;
+                self.stack.push(Value::F64((a as f32) as f64));
+            }
+            Op::I32TruncF32S => {
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::I64((a as i32) as i64));
+            }
+            Op::I32TruncF64S => {
+                let a = self.pop_float()?;
+                self.stack.push(Value::I64((a as i32) as i64));
+            }
+            Op::I64TruncF32S => {
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::I64(a as i64));
+            }
+            Op::F32DemoteF64 => {
+                let a = self.pop_float()?;
+                self.stack.push(Value::F64((a as f32) as f64));
+            }
+            Op::F64PromoteF32 => {
+                let a = self.pop_float()? as f32;
+                self.stack.push(Value::F64(a as f64));
             }
             Op::Jmp(target) => {
                 // Get frame info without holding mutable borrow
@@ -1139,14 +1454,14 @@ impl VM {
                 let frame = self.frames.last_mut().unwrap();
                 frame.pc = target;
             }
-            Op::JmpIfFalse(target) => {
+            Op::BrIfFalse(target) => {
                 let cond = self.stack.pop().ok_or("stack underflow")?;
                 if !cond.is_truthy() {
                     let frame = self.frames.last_mut().unwrap();
                     frame.pc = target;
                 }
             }
-            Op::JmpIfTrue(target) => {
+            Op::BrIf(target) => {
                 let cond = self.stack.pop().ok_or("stack underflow")?;
                 if cond.is_truthy() {
                     let frame = self.frames.last_mut().unwrap();
@@ -1399,7 +1714,7 @@ impl VM {
             }
 
             // Heap slot operations
-            Op::AllocHeap(n) => {
+            Op::HeapAlloc(n) => {
                 let mut slots = Vec::with_capacity(n);
                 for _ in 0..n {
                     slots.push(self.stack.pop().ok_or("stack underflow")?);
@@ -1451,40 +1766,12 @@ impl VM {
                     .write_slot(r, index as usize, value)
                     .map_err(|e| format!("runtime error: {}", e))?;
             }
-            Op::Swap => {
-                let len = self.stack.len();
-                if len < 2 {
-                    return Err("stack underflow".to_string());
-                }
-                self.stack.swap(len - 1, len - 2);
-            }
-            Op::Pick(n) => {
-                let len = self.stack.len();
-                if n >= len {
-                    return Err("stack underflow".to_string());
-                }
-                let value = self.stack[len - 1 - n];
-                self.stack.push(value);
-            }
-            Op::PickDyn => {
-                let depth_val = self.stack.pop().ok_or("stack underflow")?;
-                let depth = depth_val
-                    .as_i64()
-                    .ok_or("runtime error: PickDyn requires integer depth")?
-                    as usize;
-                let len = self.stack.len();
-                if depth >= len {
-                    return Err("stack underflow".to_string());
-                }
-                let value = self.stack[len - 1 - depth];
-                self.stack.push(value);
-            }
-            Op::AllocHeapDyn => {
+            Op::HeapAllocDyn => {
                 // Pop size from stack, then pop that many elements as initial values
                 let size_val = self.stack.pop().ok_or("stack underflow")?;
                 let size = size_val
                     .as_i64()
-                    .ok_or("runtime error: AllocHeapDyn requires integer size")?
+                    .ok_or("runtime error: HeapAllocDyn requires integer size")?
                     as usize;
                 // Pop 'size' elements from stack (they were pushed in order, so reverse)
                 let mut slots = Vec::with_capacity(size);
@@ -1495,12 +1782,12 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::AllocHeapDynSimple => {
+            Op::HeapAllocDynSimple => {
                 // Pop size from stack, allocate that many null-initialized slots
                 let size_val = self.stack.pop().ok_or("stack underflow")?;
                 let size = size_val
                     .as_i64()
-                    .ok_or("runtime error: AllocHeapDynSimple requires integer size")?
+                    .ok_or("runtime error: HeapAllocDynSimple requires integer size")?
                     as usize;
                 let slots = vec![Value::Null; size];
                 let r = self.heap.alloc_slots(slots)?;
@@ -1714,6 +2001,15 @@ impl VM {
     fn pop_int(&mut self) -> Result<i64, String> {
         let value = self.stack.pop().ok_or("stack underflow")?;
         value.as_i64().ok_or_else(|| "expected integer".to_string())
+    }
+
+    fn pop_float(&mut self) -> Result<f64, String> {
+        let value = self.stack.pop().ok_or("stack underflow")?;
+        match value {
+            Value::F64(f) => Ok(f),
+            Value::I64(i) => Ok(i as f64),
+            _ => Err("expected float".to_string()),
+        }
     }
 
     fn handle_exception(&mut self, error: String, _chunk: &Chunk) -> Result<bool, String> {
@@ -2502,50 +2798,50 @@ mod tests {
 
     #[test]
     fn test_push_int() {
-        let stack = run_code(vec![Op::PushInt(42)]).unwrap();
+        let stack = run_code(vec![Op::I64Const(42)]).unwrap();
         assert_eq!(stack, vec![Value::I64(42)]);
     }
 
     #[test]
     fn test_push_float() {
-        let stack = run_code(vec![Op::PushFloat(3.14)]).unwrap();
+        let stack = run_code(vec![Op::F64Const(3.14)]).unwrap();
         assert_eq!(stack, vec![Value::F64(3.14)]);
     }
 
     #[test]
     fn test_push_nil() {
-        let stack = run_code(vec![Op::PushNull]).unwrap();
+        let stack = run_code(vec![Op::RefNull]).unwrap();
         assert_eq!(stack, vec![Value::Null]);
     }
 
     #[test]
     fn test_add() {
-        let stack = run_code(vec![Op::PushInt(1), Op::PushInt(2), Op::Add]).unwrap();
+        let stack = run_code(vec![Op::I64Const(1), Op::I64Const(2), Op::I64Add]).unwrap();
         assert_eq!(stack, vec![Value::I64(3)]);
     }
 
     #[test]
     fn test_add_float() {
-        let stack = run_code(vec![Op::PushFloat(1.5), Op::PushFloat(2.5), Op::Add]).unwrap();
+        let stack = run_code(vec![Op::F64Const(1.5), Op::F64Const(2.5), Op::F64Add]).unwrap();
         assert_eq!(stack, vec![Value::F64(4.0)]);
     }
 
     #[test]
     fn test_comparison() {
-        let stack = run_code(vec![Op::PushInt(1), Op::PushInt(2), Op::Lt]).unwrap();
+        let stack = run_code(vec![Op::I64Const(1), Op::I64Const(2), Op::I64LtS]).unwrap();
         assert_eq!(stack, vec![Value::Bool(true)]);
     }
 
     #[test]
     fn test_division_by_zero() {
-        let result = run_code(vec![Op::PushInt(1), Op::PushInt(0), Op::Div]);
+        let result = run_code(vec![Op::I64Const(1), Op::I64Const(0), Op::I64DivS]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("division by zero"));
     }
 
     #[test]
     fn test_locals() {
-        let stack = run_code(vec![Op::PushInt(42), Op::SetL(0), Op::GetL(0)]).unwrap();
+        let stack = run_code(vec![Op::I64Const(42), Op::LocalSet(0), Op::LocalGet(0)]).unwrap();
         assert_eq!(stack, vec![Value::I64(42), Value::I64(42)]);
     }
 
@@ -2553,11 +2849,11 @@ mod tests {
     fn test_conditional_jump() {
         // if false, skip push 1, else push 2
         let stack = run_code(vec![
-            Op::PushFalse,
-            Op::JmpIfFalse(4),
-            Op::PushInt(1),
+            Op::I32Const(0), // false
+            Op::BrIfFalse(4),
+            Op::I64Const(1),
             Op::Jmp(5),
-            Op::PushInt(2),
+            Op::I64Const(2),
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(2)]);
@@ -2565,13 +2861,13 @@ mod tests {
 
     #[test]
     fn test_array_operations() {
-        // AllocHeap takes slots from stack: [e0, e1, e2] -> creates Slots object
+        // HeapAlloc takes slots from stack: [e0, e1, e2] -> creates Slots object
         // Length is now slots.len(), no length prefix
         let stack = run_code(vec![
-            Op::PushInt(1),   // element 0
-            Op::PushInt(2),   // element 1
-            Op::PushInt(3),   // element 2
-            Op::AllocHeap(3), // 3 elements
+            Op::I64Const(1),  // element 0
+            Op::I64Const(2),  // element 1
+            Op::I64Const(3),  // element 2
+            Op::HeapAlloc(3), // 3 elements
             Op::ArrayLen,
         ])
         .unwrap();
@@ -2581,9 +2877,9 @@ mod tests {
 
     #[test]
     fn test_string_operations() {
-        // Test string concatenation using Op::Add
+        // Test string concatenation using Op::I64Add
         let stack = run_code_with_strings(
-            vec![Op::PushString(0), Op::PushString(1), Op::Add],
+            vec![Op::StringConst(0), Op::StringConst(1), Op::I64Add],
             vec!["Hello, ".to_string(), "World!".to_string()],
         )
         .unwrap();
@@ -2594,7 +2890,7 @@ mod tests {
 
     #[test]
     fn test_write_barrier_setl() {
-        // Test that SetL correctly calls write barrier when overwriting references.
+        // Test that LocalSet correctly calls write barrier when overwriting references.
         // In stop-the-world GC the barrier is a no-op, but this verifies the code path.
         //
         // This test:
@@ -2603,22 +2899,22 @@ mod tests {
         // 3. Verifies execution completes successfully
         let result = run_code(vec![
             // Allocate array [elem] and store in local 0
-            Op::PushInt(1), // element
-            Op::AllocHeap(1),
-            Op::SetL(0),
+            Op::I64Const(1), // element
+            Op::HeapAlloc(1),
+            Op::LocalSet(0),
             // Allocate another array [elem]
-            Op::PushInt(2), // element
-            Op::AllocHeap(1),
+            Op::I64Const(2), // element
+            Op::HeapAlloc(1),
             // Overwrite local 0 (triggers write barrier, old value was array ref)
-            Op::SetL(0),
+            Op::LocalSet(0),
             // Get local 0 to verify it's still a valid reference
-            Op::GetL(0),
+            Op::LocalGet(0),
             Op::ArrayLen, // If we can get length, it's a valid array
         ]);
 
         assert!(
             result.is_ok(),
-            "SetL write barrier test failed: {:?}",
+            "LocalSet write barrier test failed: {:?}",
             result
         );
         // The last value should be the array length (1 element)
@@ -2631,10 +2927,10 @@ mod tests {
         // Test writing to invalid fd returns EBADF (-1)
         let stack = run_code_with_strings(
             vec![
-                Op::PushInt(99),   // invalid fd
-                Op::PushString(0), // buffer
-                Op::PushInt(5),    // count
-                Op::Syscall(1, 3), // syscall_write
+                Op::I64Const(99),   // invalid fd
+                Op::StringConst(0), // buffer
+                Op::I64Const(5),    // count
+                Op::Syscall(1, 3),  // syscall_write
             ],
             vec!["hello".to_string()],
         )
@@ -2646,7 +2942,7 @@ mod tests {
     fn test_syscall_close_invalid_fd() {
         // Test closing invalid fd returns EBADF (-1)
         let stack = run_code(vec![
-            Op::PushInt(99),   // invalid fd
+            Op::I64Const(99),  // invalid fd
             Op::Syscall(3, 1), // syscall_close
         ])
         .unwrap();
@@ -2657,7 +2953,7 @@ mod tests {
     fn test_syscall_close_reserved_fd() {
         // Test closing reserved fd (stdin/stdout/stderr) returns EBADF
         let stack = run_code(vec![
-            Op::PushInt(1),    // stdout
+            Op::I64Const(1),   // stdout
             Op::Syscall(3, 1), // syscall_close
         ])
         .unwrap();
@@ -2687,18 +2983,18 @@ mod tests {
                 locals_count: 1,
                 code: vec![
                     // fd = open(path, flags)
-                    Op::PushString(0),  // path
-                    Op::PushInt(flags), // flags
-                    Op::Syscall(2, 2),  // syscall_open
-                    Op::SetL(0),        // store fd in local 0
+                    Op::StringConst(0),  // path
+                    Op::I64Const(flags), // flags
+                    Op::Syscall(2, 2),   // syscall_open
+                    Op::LocalSet(0),     // store fd in local 0
                     // write(fd, "hello", 5)
-                    Op::GetL(0),       // fd
-                    Op::PushString(1), // buffer
-                    Op::PushInt(5),    // count
-                    Op::Syscall(1, 3), // syscall_write
-                    Op::Pop,           // discard write result
+                    Op::LocalGet(0),    // fd
+                    Op::StringConst(1), // buffer
+                    Op::I64Const(5),    // count
+                    Op::Syscall(1, 3),  // syscall_write
+                    Op::Drop,           // discard write result
                     // close(fd)
-                    Op::GetL(0),       // fd
+                    Op::LocalGet(0),   // fd
                     Op::Syscall(3, 1), // syscall_close
                 ],
                 stackmap: None,
@@ -2726,8 +3022,8 @@ mod tests {
     fn test_syscall_read_invalid_fd() {
         // Test reading from invalid fd returns EBADF (-1)
         let stack = run_code(vec![
-            Op::PushInt(99),   // invalid fd
-            Op::PushInt(10),   // count
+            Op::I64Const(99),  // invalid fd
+            Op::I64Const(10),  // count
             Op::Syscall(4, 2), // syscall_read
         ])
         .unwrap();
@@ -2738,8 +3034,8 @@ mod tests {
     fn test_syscall_read_reserved_fd() {
         // Test reading from reserved fd (stdout) returns EBADF
         let stack = run_code(vec![
-            Op::PushInt(1),    // stdout
-            Op::PushInt(10),   // count
+            Op::I64Const(1),   // stdout
+            Op::I64Const(10),  // count
             Op::Syscall(4, 2), // syscall_read
         ])
         .unwrap();
@@ -2772,21 +3068,21 @@ mod tests {
                 locals_count: 2,
                 code: vec![
                     // fd = open(path, O_RDONLY)
-                    Op::PushString(0),  // path
-                    Op::PushInt(flags), // flags
-                    Op::Syscall(2, 2),  // syscall_open
-                    Op::SetL(0),        // store fd at stack[0]
+                    Op::StringConst(0),  // path
+                    Op::I64Const(flags), // flags
+                    Op::Syscall(2, 2),   // syscall_open
+                    Op::LocalSet(0),     // store fd at stack[0]
                     // content = read(fd, 100)
-                    Op::GetL(0),       // push fd from stack[0]
-                    Op::PushInt(100),  // count
+                    Op::LocalGet(0),   // push fd from stack[0]
+                    Op::I64Const(100), // count
                     Op::Syscall(4, 2), // syscall_read -> returns string ref
-                    Op::SetL(1),       // store content at stack[1]
+                    Op::LocalSet(1),   // store content at stack[1]
                     // close(fd)
-                    Op::GetL(0),       // push fd
+                    Op::LocalGet(0),   // push fd
                     Op::Syscall(3, 1), // syscall_close
-                    Op::Pop,           // discard close result
+                    Op::Drop,          // discard close result
                     // return content
-                    Op::GetL(1), // push content ref
+                    Op::LocalGet(1), // push content ref
                 ],
                 stackmap: None,
                 local_types: vec![],
@@ -2845,21 +3141,21 @@ mod tests {
                 locals_count: 2,
                 code: vec![
                     // fd = open(path, O_RDONLY)
-                    Op::PushString(0),  // path
-                    Op::PushInt(flags), // flags
-                    Op::Syscall(2, 2),  // syscall_open
-                    Op::SetL(0),        // store fd at stack[0]
+                    Op::StringConst(0),  // path
+                    Op::I64Const(flags), // flags
+                    Op::Syscall(2, 2),   // syscall_open
+                    Op::LocalSet(0),     // store fd at stack[0]
                     // content = read(fd, 5) - only read first 5 bytes
-                    Op::GetL(0),       // push fd
-                    Op::PushInt(5),    // count
+                    Op::LocalGet(0),   // push fd
+                    Op::I64Const(5),   // count
                     Op::Syscall(4, 2), // syscall_read -> returns string ref
-                    Op::SetL(1),       // store content at stack[1]
+                    Op::LocalSet(1),   // store content at stack[1]
                     // close(fd)
-                    Op::GetL(0),       // push fd
+                    Op::LocalGet(0),   // push fd
                     Op::Syscall(3, 1), // syscall_close
-                    Op::Pop,           // discard close result
+                    Op::Drop,          // discard close result
                     // return content
-                    Op::GetL(1), // push content ref
+                    Op::LocalGet(1), // push content ref
                 ],
                 stackmap: None,
                 local_types: vec![],
@@ -2900,8 +3196,8 @@ mod tests {
     fn test_syscall_socket_valid() {
         // socket(AF_INET=2, SOCK_STREAM=1) should return fd >= 3
         let stack = run_code(vec![
-            Op::PushInt(2),    // AF_INET
-            Op::PushInt(1),    // SOCK_STREAM
+            Op::I64Const(2),   // AF_INET
+            Op::I64Const(1),   // SOCK_STREAM
             Op::Syscall(5, 2), // syscall_socket
         ])
         .unwrap();
@@ -2914,8 +3210,8 @@ mod tests {
     fn test_syscall_socket_invalid_domain() {
         // socket(999, SOCK_STREAM=1) should return EAFNOSUPPORT (-6)
         let stack = run_code(vec![
-            Op::PushInt(999),  // Invalid domain
-            Op::PushInt(1),    // SOCK_STREAM
+            Op::I64Const(999), // Invalid domain
+            Op::I64Const(1),   // SOCK_STREAM
             Op::Syscall(5, 2), // syscall_socket
         ])
         .unwrap();
@@ -2926,8 +3222,8 @@ mod tests {
     fn test_syscall_socket_invalid_type() {
         // socket(AF_INET=2, 999) should return ESOCKTNOSUPPORT (-7)
         let stack = run_code(vec![
-            Op::PushInt(2),    // AF_INET
-            Op::PushInt(999),  // Invalid socket type
+            Op::I64Const(2),   // AF_INET
+            Op::I64Const(999), // Invalid socket type
             Op::Syscall(5, 2), // syscall_socket
         ])
         .unwrap();
@@ -2939,10 +3235,10 @@ mod tests {
         // connect(999, "example.com", 80) should return EBADF (-1)
         let stack = run_code_with_strings(
             vec![
-                Op::PushInt(999),  // Invalid fd
-                Op::PushString(0), // host
-                Op::PushInt(80),   // port
-                Op::Syscall(6, 3), // syscall_connect
+                Op::I64Const(999),  // Invalid fd
+                Op::StringConst(0), // host
+                Op::I64Const(80),   // port
+                Op::Syscall(6, 3),  // syscall_connect
             ],
             vec!["example.com".to_string()],
         )
@@ -2954,11 +3250,11 @@ mod tests {
     fn test_syscall_close_pending_socket() {
         // socket() then close() should work
         let stack = run_code(vec![
-            Op::PushInt(2),    // AF_INET
-            Op::PushInt(1),    // SOCK_STREAM
+            Op::I64Const(2),   // AF_INET
+            Op::I64Const(1),   // SOCK_STREAM
             Op::Syscall(5, 2), // syscall_socket -> fd
-            Op::SetL(0),       // store fd
-            Op::GetL(0),       // push fd
+            Op::LocalSet(0),   // store fd
+            Op::LocalGet(0),   // push fd
             Op::Syscall(3, 1), // syscall_close
         ])
         .unwrap();
@@ -3004,33 +3300,33 @@ mod tests {
                 locals_count: 2,
                 code: vec![
                     // fd = socket(AF_INET=2, SOCK_STREAM=1)
-                    Op::PushInt(2),    // AF_INET
-                    Op::PushInt(1),    // SOCK_STREAM
+                    Op::I64Const(2),   // AF_INET
+                    Op::I64Const(1),   // SOCK_STREAM
                     Op::Syscall(5, 2), // syscall_socket
-                    Op::SetL(0),       // store fd at local 0
+                    Op::LocalSet(0),   // store fd at local 0
                     // connect(fd, "127.0.0.1", port)
-                    Op::GetL(0),              // push fd
-                    Op::PushString(0),        // host = "127.0.0.1"
-                    Op::PushInt(port as i64), // port
-                    Op::Syscall(6, 3),        // syscall_connect
-                    Op::Pop,                  // discard connect result
+                    Op::LocalGet(0),           // push fd
+                    Op::StringConst(0),        // host = "127.0.0.1"
+                    Op::I64Const(port as i64), // port
+                    Op::Syscall(6, 3),         // syscall_connect
+                    Op::Drop,                  // discard connect result
                     // write(fd, request, len)
-                    Op::GetL(0),              // push fd
-                    Op::PushString(1),        // request string
-                    Op::PushInt(request_len), // count
-                    Op::Syscall(1, 3),        // syscall_write
-                    Op::Pop,                  // discard write result
+                    Op::LocalGet(0),           // push fd
+                    Op::StringConst(1),        // request string
+                    Op::I64Const(request_len), // count
+                    Op::Syscall(1, 3),         // syscall_write
+                    Op::Drop,                  // discard write result
                     // response = read(fd, 4096)
-                    Op::GetL(0),       // push fd
-                    Op::PushInt(4096), // count
-                    Op::Syscall(4, 2), // syscall_read
-                    Op::SetL(1),       // store response at local 1
+                    Op::LocalGet(0),    // push fd
+                    Op::I64Const(4096), // count
+                    Op::Syscall(4, 2),  // syscall_read
+                    Op::LocalSet(1),    // store response at local 1
                     // close(fd)
-                    Op::GetL(0),       // push fd
+                    Op::LocalGet(0),   // push fd
                     Op::Syscall(3, 1), // syscall_close
-                    Op::Pop,           // discard close result
+                    Op::Drop,          // discard close result
                     // return response
-                    Op::GetL(1), // push response ref
+                    Op::LocalGet(1), // push response ref
                 ],
                 stackmap: None,
                 local_types: vec![],

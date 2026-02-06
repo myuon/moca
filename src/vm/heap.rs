@@ -483,6 +483,25 @@ impl Heap {
         Some(decode_slot_count(header) as usize)
     }
 
+    /// Check if an offset could be a valid allocated object start.
+    /// Used for conservative GC stack scanning in the typed opcode architecture
+    /// where stack values are raw u64 and type information is in opcodes.
+    pub fn is_possible_object_ref(&self, offset: usize) -> bool {
+        if offset == 0 || offset >= self.next_alloc {
+            return false;
+        }
+        if let Some(&header) = self.memory.get(offset) {
+            if decode_free(header) {
+                return false;
+            }
+            let slot_count = decode_slot_count(header);
+            let obj_size = object_size_words(slot_count);
+            offset + obj_size <= self.next_alloc
+        } else {
+            false
+        }
+    }
+
     /// Check if GC should be triggered.
     pub fn should_gc(&self) -> bool {
         self.gc_enabled && self.bytes_allocated >= self.gc_threshold

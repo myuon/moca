@@ -28,19 +28,22 @@ pub use verifier::{Verifier, VerifyError};
 pub use vm::OpcodeProfile;
 pub use vm::VM;
 
-/// Simplified type tag for JIT optimization.
+/// VM-level value type for the typed bytecode architecture.
 ///
-/// Represents the runtime type of a local variable, derived from the
-/// typechecker's full `Type` during codegen. The JIT compiler uses this
-/// to emit specialized code (e.g., skipping tag checks for Int arithmetic).
+/// All values are stored as u64 slots on the operand stack and in locals.
+/// The type information is encoded in the opcodes, not in the values themselves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueType {
-    Int,
-    Float,
-    Bool,
-    String,
-    Ptr,
-    Unknown,
+    /// 32-bit integer (zero-extended in u64 slot, upper 32 bits are 0)
+    I32,
+    /// 64-bit integer
+    I64,
+    /// 32-bit float (stored as f32 bits in lower 32 bits of u64 slot)
+    F32,
+    /// 64-bit float (stored as f64 bits in u64 slot)
+    F64,
+    /// GC-managed heap reference (heap index as u64, 0 = null)
+    Ref,
 }
 
 /// A compiled function.

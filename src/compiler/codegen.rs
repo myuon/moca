@@ -22,6 +22,10 @@ pub struct Codegen {
     index_object_types: HashMap<Span, Type>,
     /// Map function name -> function index (for calling stdlib functions)
     function_indices: HashMap<String, usize>,
+    /// ValueType for each local variable in the currently-being-compiled function
+    current_local_types: Vec<ValueType>,
+    /// Return ValueType for each function (indexed by function index)
+    function_return_types: Vec<ValueType>,
 }
 
 impl Default for Codegen {
@@ -41,6 +45,8 @@ impl Codegen {
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
             function_indices: HashMap::new(),
+            current_local_types: Vec::new(),
+            function_return_types: Vec::new(),
         }
     }
 
@@ -55,6 +61,8 @@ impl Codegen {
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
             function_indices: HashMap::new(),
+            current_local_types: Vec::new(),
+            function_return_types: Vec::new(),
         }
     }
 
@@ -63,20 +71,138 @@ impl Codegen {
         self.index_object_types = types;
     }
 
-    /// Convert the typechecker's full Type to a simplified ValueType for JIT.
+    /// Convert the typechecker's full Type to a simplified ValueType for the VM.
     fn type_to_value_type(ty: &Type) -> ValueType {
         match ty {
-            Type::Int => ValueType::Int,
-            Type::Float => ValueType::Float,
-            Type::Bool => ValueType::Bool,
-            Type::String => ValueType::String,
+            Type::Int => ValueType::I64,
+            Type::Float => ValueType::F64,
+            Type::Bool => ValueType::I32,
+            Type::String => ValueType::Ref,
             Type::Array(_)
             | Type::Vector(_)
             | Type::Map(_, _)
             | Type::Struct { .. }
             | Type::GenericStruct { .. }
-            | Type::Object(_) => ValueType::Ptr,
-            _ => ValueType::Unknown,
+            | Type::Object(_)
+            | Type::Nullable(_) => ValueType::Ref,
+            Type::Nil => ValueType::Ref,
+            _ => ValueType::I64, // Default to I64 for unknown types
+        }
+    }
+
+    /// Infer the ValueType of a resolved expression.
+    fn infer_expr_type(&self, expr: &ResolvedExpr) -> ValueType {
+        match expr {
+            ResolvedExpr::Int(_) => ValueType::I64,
+            ResolvedExpr::Float(_) => ValueType::F64,
+            ResolvedExpr::Bool(_) => ValueType::I32,
+            ResolvedExpr::Str(_) => ValueType::Ref,
+            ResolvedExpr::Nil => ValueType::Ref,
+            ResolvedExpr::Local(slot) => self
+                .current_local_types
+                .get(*slot)
+                .copied()
+                .unwrap_or(ValueType::I64),
+            ResolvedExpr::Array { .. } => ValueType::Ref,
+            ResolvedExpr::Index { .. } => ValueType::I64, // Most common; TODO: improve
+            ResolvedExpr::Field { .. } => ValueType::I64, // Most common; TODO: improve
+            ResolvedExpr::Unary { op, operand } => match op {
+                UnaryOp::Neg => self.infer_expr_type(operand),
+                UnaryOp::Not => ValueType::I32, // bool result
+            },
+            ResolvedExpr::Binary { op, left, .. } => match op {
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                | BinaryOp::And
+                | BinaryOp::Or => ValueType::I32,
+                _ => self.infer_expr_type(left), // arithmetic: same type as operands
+            },
+            ResolvedExpr::Call { func_index, .. } => self
+                .function_return_types
+                .get(*func_index)
+                .copied()
+                .unwrap_or(ValueType::I64),
+            ResolvedExpr::StructLiteral { .. } => ValueType::Ref,
+            ResolvedExpr::MethodCall { .. } => ValueType::I64, // Default
+            ResolvedExpr::AssociatedFunctionCall { .. } => ValueType::Ref,
+            ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
+            ResolvedExpr::Builtin { name, .. } => match name.as_str() {
+                "len" | "argc" | "parse_int" => ValueType::I64,
+                "type_of" | "to_string" | "channel" | "recv" | "argv" | "args" | "__alloc_heap"
+                | "__heap_load" => ValueType::Ref,
+                "send" | "join" | "print" | "print_debug" | "__heap_store" => ValueType::Ref, // returns null
+                _ => ValueType::I64,
+            },
+            ResolvedExpr::AsmBlock { .. } => ValueType::I64,
+            ResolvedExpr::NewLiteral { .. } => ValueType::Ref,
+            ResolvedExpr::Block { expr, .. } => self.infer_expr_type(expr),
+        }
+    }
+
+    /// Infer the return ValueType of a function by scanning for return statements.
+    fn infer_function_return_type(&self, func: &ResolvedFunction) -> ValueType {
+        for stmt in &func.body {
+            if let Some(vt) = self.scan_return_type(stmt) {
+                return vt;
+            }
+        }
+        ValueType::Ref // implicit nil return
+    }
+
+    /// Recursively scan a statement for return expressions and infer their type.
+    fn scan_return_type(&self, stmt: &ResolvedStatement) -> Option<ValueType> {
+        match stmt {
+            ResolvedStatement::Return { value: Some(expr) } => Some(self.infer_expr_type(expr)),
+            ResolvedStatement::Return { value: None } => Some(ValueType::Ref),
+            ResolvedStatement::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                for s in then_block {
+                    if let Some(vt) = self.scan_return_type(s) {
+                        return Some(vt);
+                    }
+                }
+                if let Some(else_stmts) = else_block {
+                    for s in else_stmts {
+                        if let Some(vt) = self.scan_return_type(s) {
+                            return Some(vt);
+                        }
+                    }
+                }
+                None
+            }
+            ResolvedStatement::While { body, .. } | ResolvedStatement::ForIn { body, .. } => {
+                for s in body {
+                    if let Some(vt) = self.scan_return_type(s) {
+                        return Some(vt);
+                    }
+                }
+                None
+            }
+            ResolvedStatement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                for s in try_block {
+                    if let Some(vt) = self.scan_return_type(s) {
+                        return Some(vt);
+                    }
+                }
+                for s in catch_block {
+                    if let Some(vt) = self.scan_return_type(s) {
+                        return Some(vt);
+                    }
+                }
+                None
+            }
+            _ => None,
         }
     }
 
@@ -124,8 +250,25 @@ impl Codegen {
             self.function_indices.insert(func.name.clone(), idx);
         }
 
-        // Compile all user-defined functions first
+        // Pre-compute function return types (first pass)
+        self.function_return_types = vec![ValueType::I64; program.functions.len()];
+        for (i, func) in program.functions.iter().enumerate() {
+            self.current_local_types = func
+                .local_types
+                .iter()
+                .map(Self::type_to_value_type)
+                .collect();
+            self.function_return_types[i] = self.infer_function_return_type(func);
+        }
+
+        // Compile all user-defined functions
         for func in &program.functions {
+            // Set local types for this function before compiling
+            self.current_local_types = func
+                .local_types
+                .iter()
+                .map(Self::type_to_value_type)
+                .collect();
             let compiled = self.compile_function(func)?;
             self.functions.push(compiled);
             // Add debug info placeholder for each function
@@ -134,6 +277,13 @@ impl Codegen {
             }
         }
 
+        // Set local types for main body
+        self.current_local_types = program
+            .main_local_types
+            .iter()
+            .map(Self::type_to_value_type)
+            .collect();
+
         // Compile main body
         let main_locals_count = program.main_locals_count;
         let mut main_ops = Vec::new();
@@ -141,14 +291,10 @@ impl Codegen {
             self.compile_statement(&stmt, &mut main_ops)?;
         }
         // End of main
-        main_ops.push(Op::PushNull); // Return value for main
+        main_ops.push(Op::RefNull); // Return value for main
         main_ops.push(Op::Ret);
 
-        let main_local_types = program
-            .main_local_types
-            .iter()
-            .map(Self::type_to_value_type)
-            .collect();
+        let main_local_types = self.current_local_types.clone();
 
         let main_func = Function {
             name: "__main__".to_string(),
@@ -182,7 +328,7 @@ impl Codegen {
 
         // Implicit return nil
         if !matches!(ops.last(), Some(Op::Ret)) {
-            ops.push(Op::PushNull);
+            ops.push(Op::RefNull);
             ops.push(Op::Ret);
         }
 
@@ -210,11 +356,11 @@ impl Codegen {
         match stmt {
             ResolvedStatement::Let { slot, init } => {
                 self.compile_expr(init, ops)?;
-                ops.push(Op::SetL(*slot));
+                ops.push(Op::LocalSet(*slot));
             }
             ResolvedStatement::Assign { slot, value } => {
                 self.compile_expr(value, ops)?;
-                ops.push(Op::SetL(*slot));
+                ops.push(Op::LocalSet(*slot));
             }
             ResolvedStatement::IndexAssign {
                 object,
@@ -257,7 +403,7 @@ impl Codegen {
                 if let Some(idx) = self.get_field_index(field) {
                     // Known struct field - use heap slot assignment
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::PushInt(idx as i64));
+                    ops.push(Op::I64Const(idx as i64));
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStoreDyn);
                 } else {
@@ -276,7 +422,7 @@ impl Codegen {
 
                 // Jump to else if false
                 let jump_to_else = ops.len();
-                ops.push(Op::JmpIfFalse(0)); // Placeholder
+                ops.push(Op::BrIfFalse(0)); // Placeholder
 
                 // Then block
                 for stmt in then_block {
@@ -290,7 +436,7 @@ impl Codegen {
 
                     // Patch jump to else
                     let else_start = ops.len();
-                    ops[jump_to_else] = Op::JmpIfFalse(else_start);
+                    ops[jump_to_else] = Op::BrIfFalse(else_start);
 
                     // Else block
                     for stmt in else_stmts {
@@ -303,7 +449,7 @@ impl Codegen {
                 } else {
                     // Patch jump to after then
                     let after_then = ops.len();
-                    ops[jump_to_else] = Op::JmpIfFalse(after_then);
+                    ops[jump_to_else] = Op::BrIfFalse(after_then);
                 }
             }
             ResolvedStatement::While { condition, body } => {
@@ -312,7 +458,7 @@ impl Codegen {
                 self.compile_expr(condition, ops)?;
 
                 let jump_to_end = ops.len();
-                ops.push(Op::JmpIfFalse(0)); // Placeholder
+                ops.push(Op::BrIfFalse(0)); // Placeholder
 
                 for stmt in body {
                     self.compile_statement(stmt, ops)?;
@@ -321,7 +467,7 @@ impl Codegen {
                 ops.push(Op::Jmp(loop_start));
 
                 let loop_end = ops.len();
-                ops[jump_to_end] = Op::JmpIfFalse(loop_end);
+                ops[jump_to_end] = Op::BrIfFalse(loop_end);
             }
             ResolvedStatement::ForIn {
                 slot,
@@ -346,28 +492,28 @@ impl Codegen {
 
                 // Store array
                 self.compile_expr(iterable, ops)?;
-                ops.push(Op::SetL(arr_slot));
+                ops.push(Op::LocalSet(arr_slot));
 
                 // Initialize index to 0
-                ops.push(Op::PushInt(0));
-                ops.push(Op::SetL(idx_slot));
+                ops.push(Op::I64Const(0));
+                ops.push(Op::LocalSet(idx_slot));
 
                 let loop_start = ops.len();
 
                 // Check: idx < arr.len()
-                ops.push(Op::GetL(idx_slot));
-                ops.push(Op::GetL(arr_slot));
+                ops.push(Op::LocalGet(idx_slot));
+                ops.push(Op::LocalGet(arr_slot));
                 ops.push(Op::ArrayLen);
-                ops.push(Op::Lt);
+                ops.push(Op::I64LtS);
 
                 let jump_to_end = ops.len();
-                ops.push(Op::JmpIfFalse(0)); // Placeholder
+                ops.push(Op::BrIfFalse(0)); // Placeholder
 
                 // x = arr[idx]
-                ops.push(Op::GetL(arr_slot));
-                ops.push(Op::GetL(idx_slot));
+                ops.push(Op::LocalGet(arr_slot));
+                ops.push(Op::LocalGet(idx_slot));
                 ops.push(Op::HeapLoadDyn);
-                ops.push(Op::SetL(var_slot));
+                ops.push(Op::LocalSet(var_slot));
 
                 // Body
                 for stmt in body {
@@ -375,23 +521,23 @@ impl Codegen {
                 }
 
                 // idx = idx + 1
-                ops.push(Op::GetL(idx_slot));
-                ops.push(Op::PushInt(1));
-                ops.push(Op::Add);
-                ops.push(Op::SetL(idx_slot));
+                ops.push(Op::LocalGet(idx_slot));
+                ops.push(Op::I64Const(1));
+                ops.push(Op::I64Add);
+                ops.push(Op::LocalSet(idx_slot));
 
                 // Jump back to loop start
                 ops.push(Op::Jmp(loop_start));
 
                 // End of loop
                 let loop_end = ops.len();
-                ops[jump_to_end] = Op::JmpIfFalse(loop_end);
+                ops[jump_to_end] = Op::BrIfFalse(loop_end);
             }
             ResolvedStatement::Return { value } => {
                 if let Some(value) = value {
                     self.compile_expr(value, ops)?;
                 } else {
-                    ops.push(Op::PushNull); // Return nil for void
+                    ops.push(Op::RefNull); // Return nil for void
                 }
                 ops.push(Op::Ret);
             }
@@ -423,7 +569,7 @@ impl Codegen {
                 ops[try_begin_idx] = Op::TryBegin(catch_start);
 
                 // Exception value is on stack, store to catch variable slot
-                ops.push(Op::SetL(*catch_slot));
+                ops.push(Op::LocalSet(*catch_slot));
 
                 // Compile catch block
                 for stmt in catch_block {
@@ -436,7 +582,7 @@ impl Codegen {
             }
             ResolvedStatement::Expr { expr } => {
                 self.compile_expr(expr, ops)?;
-                ops.push(Op::Pop); // Discard result
+                ops.push(Op::Drop); // Discard result
             }
         }
 
@@ -446,34 +592,34 @@ impl Codegen {
     fn compile_expr(&mut self, expr: &ResolvedExpr, ops: &mut Vec<Op>) -> Result<(), String> {
         match expr {
             ResolvedExpr::Int(value) => {
-                ops.push(Op::PushInt(*value));
+                ops.push(Op::I64Const(*value));
             }
             ResolvedExpr::Float(value) => {
-                ops.push(Op::PushFloat(*value));
+                ops.push(Op::F64Const(*value));
             }
             ResolvedExpr::Bool(value) => {
                 if *value {
-                    ops.push(Op::PushTrue);
+                    ops.push(Op::I32Const(1));
                 } else {
-                    ops.push(Op::PushFalse);
+                    ops.push(Op::I32Const(0));
                 }
             }
             ResolvedExpr::Str(value) => {
                 let idx = self.add_string(value.clone());
-                ops.push(Op::PushString(idx));
+                ops.push(Op::StringConst(idx));
             }
             ResolvedExpr::Nil => {
-                ops.push(Op::PushNull);
+                ops.push(Op::RefNull);
             }
             ResolvedExpr::Local(slot) => {
-                ops.push(Op::GetL(*slot));
+                ops.push(Op::LocalGet(*slot));
             }
             ResolvedExpr::Array { elements } => {
                 // Array layout: [elem0, elem1, ...] (length is slots.len())
                 for elem in elements {
                     self.compile_expr(elem, ops)?;
                 }
-                ops.push(Op::AllocHeap(elements.len()));
+                ops.push(Op::HeapAlloc(elements.len()));
             }
             ResolvedExpr::Index {
                 object,
@@ -509,7 +655,7 @@ impl Codegen {
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field) {
                     // Known struct field - use heap slot access
-                    ops.push(Op::PushInt(idx as i64));
+                    ops.push(Op::I64Const(idx as i64));
                     ops.push(Op::HeapLoadDyn);
                 } else {
                     return Err(format!(
@@ -521,13 +667,18 @@ impl Codegen {
             ResolvedExpr::Unary { op, operand } => {
                 self.compile_expr(operand, ops)?;
                 match op {
-                    UnaryOp::Neg => ops.push(Op::Neg),
-                    UnaryOp::Not => ops.push(Op::Not),
+                    UnaryOp::Neg => match self.infer_expr_type(operand) {
+                        ValueType::I64 => ops.push(Op::I64Neg),
+                        ValueType::F64 => ops.push(Op::F64Neg),
+                        ValueType::F32 => ops.push(Op::F32Neg),
+                        _ => ops.push(Op::I64Neg),
+                    },
+                    UnaryOp::Not => ops.push(Op::I32Eqz),
                 }
             }
             ResolvedExpr::Binary { op, left, right } => {
                 // Handle short-circuit evaluation for && and ||
-                // JmpIfFalse/JmpIfTrue pop the condition value, so we need to Dup first
+                // BrIfFalse/BrIf pop the condition value, so we need to Dup first
                 // to keep the result on stack when short-circuiting
                 match op {
                     BinaryOp::And => {
@@ -535,11 +686,11 @@ impl Codegen {
                         self.compile_expr(left, ops)?;
                         ops.push(Op::Dup); // Duplicate for the jump check
                         let jump_if_false = ops.len();
-                        ops.push(Op::JmpIfFalse(0)); // Placeholder, consumes the dup'd value
-                        ops.push(Op::Pop); // Pop the original true value
+                        ops.push(Op::BrIfFalse(0)); // Placeholder, consumes the dup'd value
+                        ops.push(Op::Drop); // Pop the original true value
                         self.compile_expr(right, ops)?;
                         let end = ops.len();
-                        ops[jump_if_false] = Op::JmpIfFalse(end);
+                        ops[jump_if_false] = Op::BrIfFalse(end);
                         // If left was false: jump taken, original false still on stack
                         // If left was true: pop it, right's value is on stack
                         return Ok(());
@@ -549,11 +700,11 @@ impl Codegen {
                         self.compile_expr(left, ops)?;
                         ops.push(Op::Dup); // Duplicate for the jump check
                         let jump_if_true = ops.len();
-                        ops.push(Op::JmpIfTrue(0)); // Placeholder, consumes the dup'd value
-                        ops.push(Op::Pop); // Pop the original false value
+                        ops.push(Op::BrIf(0)); // Placeholder, consumes the dup'd value
+                        ops.push(Op::Drop); // Pop the original false value
                         self.compile_expr(right, ops)?;
                         let end = ops.len();
-                        ops[jump_if_true] = Op::JmpIfTrue(end);
+                        ops[jump_if_true] = Op::BrIf(end);
                         // If left was true: jump taken, original true still on stack
                         // If left was false: pop it, right's value is on stack
                         return Ok(());
@@ -565,17 +716,84 @@ impl Codegen {
                 self.compile_expr(right, ops)?;
 
                 match op {
-                    BinaryOp::Add => ops.push(Op::Add),
-                    BinaryOp::Sub => ops.push(Op::Sub),
-                    BinaryOp::Mul => ops.push(Op::Mul),
-                    BinaryOp::Div => ops.push(Op::Div),
-                    BinaryOp::Mod => ops.push(Op::Mod),
-                    BinaryOp::Eq => ops.push(Op::Eq),
-                    BinaryOp::Ne => ops.push(Op::Ne),
-                    BinaryOp::Lt => ops.push(Op::Lt),
-                    BinaryOp::Le => ops.push(Op::Le),
-                    BinaryOp::Gt => ops.push(Op::Gt),
-                    BinaryOp::Ge => ops.push(Op::Ge),
+                    BinaryOp::Add => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Add),
+                        ValueType::F64 => ops.push(Op::F64Add),
+                        ValueType::I32 => ops.push(Op::I32Add),
+                        ValueType::F32 => ops.push(Op::F32Add),
+                        _ => ops.push(Op::I64Add), // fallback
+                    },
+                    BinaryOp::Sub => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Sub),
+                        ValueType::F64 => ops.push(Op::F64Sub),
+                        ValueType::I32 => ops.push(Op::I32Sub),
+                        ValueType::F32 => ops.push(Op::F32Sub),
+                        _ => ops.push(Op::I64Sub),
+                    },
+                    BinaryOp::Mul => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Mul),
+                        ValueType::F64 => ops.push(Op::F64Mul),
+                        ValueType::I32 => ops.push(Op::I32Mul),
+                        ValueType::F32 => ops.push(Op::F32Mul),
+                        _ => ops.push(Op::I64Mul),
+                    },
+                    BinaryOp::Div => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64DivS),
+                        ValueType::F64 => ops.push(Op::F64Div),
+                        ValueType::I32 => ops.push(Op::I32DivS),
+                        ValueType::F32 => ops.push(Op::F32Div),
+                        _ => ops.push(Op::I64DivS),
+                    },
+                    BinaryOp::Mod => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64RemS),
+                        ValueType::I32 => ops.push(Op::I32RemS),
+                        _ => ops.push(Op::I64RemS),
+                    },
+                    BinaryOp::Eq => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Eq),
+                        ValueType::F64 => ops.push(Op::F64Eq),
+                        ValueType::I32 => ops.push(Op::I32Eq),
+                        ValueType::F32 => ops.push(Op::F32Eq),
+                        ValueType::Ref => ops.push(Op::RefEq),
+                    },
+                    BinaryOp::Ne => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Ne),
+                        ValueType::F64 => ops.push(Op::F64Ne),
+                        ValueType::I32 => ops.push(Op::I32Ne),
+                        ValueType::F32 => ops.push(Op::F32Ne),
+                        ValueType::Ref => {
+                            ops.push(Op::RefEq);
+                            ops.push(Op::I32Eqz);
+                        }
+                    },
+                    BinaryOp::Lt => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64LtS),
+                        ValueType::F64 => ops.push(Op::F64Lt),
+                        ValueType::I32 => ops.push(Op::I32LtS),
+                        ValueType::F32 => ops.push(Op::F32Lt),
+                        _ => ops.push(Op::I64LtS),
+                    },
+                    BinaryOp::Le => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64LeS),
+                        ValueType::F64 => ops.push(Op::F64Le),
+                        ValueType::I32 => ops.push(Op::I32LeS),
+                        ValueType::F32 => ops.push(Op::F32Le),
+                        _ => ops.push(Op::I64LeS),
+                    },
+                    BinaryOp::Gt => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64GtS),
+                        ValueType::F64 => ops.push(Op::F64Gt),
+                        ValueType::I32 => ops.push(Op::I32GtS),
+                        ValueType::F32 => ops.push(Op::F32Gt),
+                        _ => ops.push(Op::I64GtS),
+                    },
+                    BinaryOp::Ge => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64GeS),
+                        ValueType::F64 => ops.push(Op::F64Ge),
+                        ValueType::I32 => ops.push(Op::I32GeS),
+                        ValueType::F32 => ops.push(Op::F32Ge),
+                        _ => ops.push(Op::I64GeS),
+                    },
                     BinaryOp::And | BinaryOp::Or => unreachable!(),
                 }
             }
@@ -598,10 +816,10 @@ impl Codegen {
                                 // Call print_str(s)
                                 self.compile_expr(&args[0], ops)?;
                                 ops.push(Op::Call(func_idx, 1));
-                                ops.push(Op::Pop); // discard return value
+                                ops.push(Op::Drop); // discard return value
                                 // Call print_str("\n")
                                 let newline_idx = self.add_string("\n".to_string());
-                                ops.push(Op::PushString(newline_idx));
+                                ops.push(Op::StringConst(newline_idx));
                                 ops.push(Op::Call(func_idx, 1));
                                 // print_str returns nil, which is what print should return
                             } else {
@@ -688,7 +906,7 @@ impl Codegen {
                         self.compile_expr(&args[1], ops)?;
                         ops.push(Op::ChannelSend);
                         // send returns nil
-                        ops.push(Op::PushNull);
+                        ops.push(Op::RefNull);
                     }
                     "recv" => {
                         if args.len() != 1 {
@@ -728,7 +946,7 @@ impl Codegen {
                         self.compile_expr(&args[1], ops)?;
                         self.compile_expr(&args[2], ops)?;
                         ops.push(Op::HeapStoreDyn);
-                        ops.push(Op::PushNull); // returns nil
+                        ops.push(Op::RefNull); // returns nil
                     }
                     "__alloc_heap" => {
                         // __alloc_heap(size) -> ref to newly allocated heap object with size slots
@@ -736,7 +954,7 @@ impl Codegen {
                             return Err("__alloc_heap takes exactly 1 argument (size)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::AllocHeapDynSimple);
+                        ops.push(Op::HeapAllocDynSimple);
                     }
                     // CLI argument builtins
                     "argc" => {
@@ -772,7 +990,7 @@ impl Codegen {
                 for value in fields {
                     self.compile_expr(value, ops)?;
                 }
-                ops.push(Op::AllocHeap(fields.len()));
+                ops.push(Op::HeapAlloc(fields.len()));
             }
             ResolvedExpr::MethodCall {
                 object,
@@ -810,7 +1028,7 @@ impl Codegen {
             } => {
                 // Push input variables onto the stack (left to right)
                 for slot in input_slots {
-                    ops.push(Op::GetL(*slot));
+                    ops.push(Op::LocalGet(*slot));
                 }
 
                 // Compile each asm instruction
@@ -865,85 +1083,183 @@ impl Codegen {
     /// Parse an asm op name and arguments into a VM Op.
     fn parse_asm_op(&mut self, op_name: &str, args: &[AsmArg]) -> Result<Op, String> {
         match op_name {
-            // Constants & Stack
-            "PushInt" => {
-                let value = self.expect_int_arg(args, 0, "PushInt")?;
-                Ok(Op::PushInt(value))
+            // ========================
+            // Constants & Stack (new names)
+            // ========================
+            "I32Const" => {
+                let value = self.expect_int_arg(args, 0, "I32Const")? as i32;
+                Ok(Op::I32Const(value))
             }
-            "PushFloat" => {
-                let value = self.expect_float_arg(args, 0, "PushFloat")?;
-                Ok(Op::PushFloat(value))
+            "I64Const" | "PushInt" => {
+                let value = self.expect_int_arg(args, 0, op_name)?;
+                Ok(Op::I64Const(value))
             }
-            "PushTrue" => Ok(Op::PushTrue),
-            "PushFalse" => Ok(Op::PushFalse),
-            "PushNull" => Ok(Op::PushNull),
-            "PushString" => {
-                let value = self.expect_string_arg(args, 0, "PushString")?;
+            "F32Const" => {
+                let value = self.expect_float_arg(args, 0, "F32Const")? as f32;
+                Ok(Op::F32Const(value))
+            }
+            "F64Const" | "PushFloat" => {
+                let value = self.expect_float_arg(args, 0, op_name)?;
+                Ok(Op::F64Const(value))
+            }
+            "PushTrue" => Ok(Op::I32Const(1)),
+            "PushFalse" => Ok(Op::I32Const(0)),
+            "RefNull" | "PushNull" => Ok(Op::RefNull),
+            "StringConst" | "PushString" => {
+                let value = self.expect_string_arg(args, 0, op_name)?;
                 let idx = self.add_string(value);
-                Ok(Op::PushString(idx))
+                Ok(Op::StringConst(idx))
             }
-            "Pop" => Ok(Op::Pop),
+            "Drop" | "Pop" => Ok(Op::Drop),
             "Dup" => Ok(Op::Dup),
-            "Swap" => Ok(Op::Swap),
             "Pick" => {
                 let n = self.expect_int_arg(args, 0, "Pick")? as usize;
                 Ok(Op::Pick(n))
             }
             "PickDyn" => Ok(Op::PickDyn),
 
-            // Local Variables
-            "GetL" => {
-                let slot = self.expect_int_arg(args, 0, "GetL")? as usize;
-                Ok(Op::GetL(slot))
+            // ========================
+            // Local Variables (new names + aliases)
+            // ========================
+            "LocalGet" | "GetL" => {
+                let slot = self.expect_int_arg(args, 0, op_name)? as usize;
+                Ok(Op::LocalGet(slot))
             }
-            "SetL" => {
-                let slot = self.expect_int_arg(args, 0, "SetL")? as usize;
-                Ok(Op::SetL(slot))
+            "LocalSet" | "SetL" => {
+                let slot = self.expect_int_arg(args, 0, op_name)? as usize;
+                Ok(Op::LocalSet(slot))
             }
 
-            // Arithmetic
-            "Add" => Ok(Op::Add),
-            "Sub" => Ok(Op::Sub),
-            "Mul" => Ok(Op::Mul),
-            "Div" => Ok(Op::Div),
-            "Mod" => Ok(Op::Mod),
-            "Neg" => Ok(Op::Neg),
+            // ========================
+            // i32 Arithmetic
+            // ========================
+            "I32Add" => Ok(Op::I32Add),
+            "I32Sub" => Ok(Op::I32Sub),
+            "I32Mul" => Ok(Op::I32Mul),
+            "I32DivS" => Ok(Op::I32DivS),
+            "I32RemS" => Ok(Op::I32RemS),
+            "I32Eqz" | "Not" => Ok(Op::I32Eqz),
 
-            // Comparison
-            "Eq" => Ok(Op::Eq),
-            "Ne" => Ok(Op::Ne),
-            "Lt" => Ok(Op::Lt),
-            "Le" => Ok(Op::Le),
-            "Gt" => Ok(Op::Gt),
-            "Ge" => Ok(Op::Ge),
+            // ========================
+            // i64 Arithmetic (+ old untyped aliases)
+            // ========================
+            "I64Add" | "Add" => Ok(Op::I64Add),
+            "I64Sub" | "Sub" => Ok(Op::I64Sub),
+            "I64Mul" | "Mul" => Ok(Op::I64Mul),
+            "I64DivS" | "Div" => Ok(Op::I64DivS),
+            "I64RemS" | "Mod" => Ok(Op::I64RemS),
+            "I64Neg" | "Neg" => Ok(Op::I64Neg),
 
-            // Logical
-            "Not" => Ok(Op::Not),
+            // ========================
+            // f32 Arithmetic
+            // ========================
+            "F32Add" => Ok(Op::F32Add),
+            "F32Sub" => Ok(Op::F32Sub),
+            "F32Mul" => Ok(Op::F32Mul),
+            "F32Div" => Ok(Op::F32Div),
+            "F32Neg" => Ok(Op::F32Neg),
 
-            // Control Flow - Jmp instructions (allowed within asm block)
+            // ========================
+            // f64 Arithmetic
+            // ========================
+            "F64Add" => Ok(Op::F64Add),
+            "F64Sub" => Ok(Op::F64Sub),
+            "F64Mul" => Ok(Op::F64Mul),
+            "F64Div" => Ok(Op::F64Div),
+            "F64Neg" => Ok(Op::F64Neg),
+
+            // ========================
+            // i32 Comparison
+            // ========================
+            "I32Eq" => Ok(Op::I32Eq),
+            "I32Ne" => Ok(Op::I32Ne),
+            "I32LtS" => Ok(Op::I32LtS),
+            "I32LeS" => Ok(Op::I32LeS),
+            "I32GtS" => Ok(Op::I32GtS),
+            "I32GeS" => Ok(Op::I32GeS),
+
+            // ========================
+            // i64 Comparison (+ old untyped aliases)
+            // ========================
+            "I64Eq" | "Eq" => Ok(Op::I64Eq),
+            "I64Ne" | "Ne" => Ok(Op::I64Ne),
+            "I64LtS" | "Lt" => Ok(Op::I64LtS),
+            "I64LeS" | "Le" => Ok(Op::I64LeS),
+            "I64GtS" | "Gt" => Ok(Op::I64GtS),
+            "I64GeS" | "Ge" => Ok(Op::I64GeS),
+
+            // ========================
+            // f32 Comparison
+            // ========================
+            "F32Eq" => Ok(Op::F32Eq),
+            "F32Ne" => Ok(Op::F32Ne),
+            "F32Lt" => Ok(Op::F32Lt),
+            "F32Le" => Ok(Op::F32Le),
+            "F32Gt" => Ok(Op::F32Gt),
+            "F32Ge" => Ok(Op::F32Ge),
+
+            // ========================
+            // f64 Comparison
+            // ========================
+            "F64Eq" => Ok(Op::F64Eq),
+            "F64Ne" => Ok(Op::F64Ne),
+            "F64Lt" => Ok(Op::F64Lt),
+            "F64Le" => Ok(Op::F64Le),
+            "F64Gt" => Ok(Op::F64Gt),
+            "F64Ge" => Ok(Op::F64Ge),
+
+            // ========================
+            // Ref Comparison
+            // ========================
+            "RefEq" => Ok(Op::RefEq),
+            "RefIsNull" => Ok(Op::RefIsNull),
+
+            // ========================
+            // Type Conversion
+            // ========================
+            "I32WrapI64" => Ok(Op::I32WrapI64),
+            "I64ExtendI32S" => Ok(Op::I64ExtendI32S),
+            "I64ExtendI32U" => Ok(Op::I64ExtendI32U),
+            "F64ConvertI64S" => Ok(Op::F64ConvertI64S),
+            "I64TruncF64S" => Ok(Op::I64TruncF64S),
+            "F64ConvertI32S" => Ok(Op::F64ConvertI32S),
+            "F32ConvertI32S" => Ok(Op::F32ConvertI32S),
+            "F32ConvertI64S" => Ok(Op::F32ConvertI64S),
+            "I32TruncF32S" => Ok(Op::I32TruncF32S),
+            "I32TruncF64S" => Ok(Op::I32TruncF64S),
+            "I64TruncF32S" => Ok(Op::I64TruncF32S),
+            "F32DemoteF64" => Ok(Op::F32DemoteF64),
+            "F64PromoteF32" => Ok(Op::F64PromoteF32),
+
+            // ========================
+            // Control Flow
+            // ========================
             "Jmp" => {
                 let target = self.expect_int_arg(args, 0, "Jmp")? as usize;
                 Ok(Op::Jmp(target))
             }
-            "JmpIfFalse" => {
-                let target = self.expect_int_arg(args, 0, "JmpIfFalse")? as usize;
-                Ok(Op::JmpIfFalse(target))
+            "BrIfFalse" | "JmpIfFalse" => {
+                let target = self.expect_int_arg(args, 0, op_name)? as usize;
+                Ok(Op::BrIfFalse(target))
             }
-            "JmpIfTrue" => {
-                let target = self.expect_int_arg(args, 0, "JmpIfTrue")? as usize;
-                Ok(Op::JmpIfTrue(target))
+            "BrIf" | "JmpIfTrue" => {
+                let target = self.expect_int_arg(args, 0, op_name)? as usize;
+                Ok(Op::BrIf(target))
             }
 
             // Functions - FORBIDDEN
             "Call" => Err("Call instruction is forbidden in asm block".to_string()),
             "Ret" => Err("Ret instruction is forbidden in asm block".to_string()),
 
-            // Heap slot operations
-            "AllocHeap" => {
-                let n = self.expect_int_arg(args, 0, "AllocHeap")? as usize;
-                Ok(Op::AllocHeap(n))
+            // ========================
+            // Heap Operations (new names + aliases)
+            // ========================
+            "HeapAlloc" | "AllocHeap" => {
+                let n = self.expect_int_arg(args, 0, op_name)? as usize;
+                Ok(Op::HeapAlloc(n))
             }
-            "AllocHeapDyn" => Ok(Op::AllocHeapDyn),
+            "HeapAllocDyn" | "AllocHeapDyn" => Ok(Op::HeapAllocDyn),
+            "HeapAllocDynSimple" => Ok(Op::HeapAllocDynSimple),
             "HeapLoad" => {
                 let n = self.expect_int_arg(args, 0, "HeapLoad")? as usize;
                 Ok(Op::HeapLoad(n))
@@ -962,6 +1278,7 @@ impl Codegen {
             "TypeOf" => Ok(Op::TypeOf),
             "ToString" => Ok(Op::ToString),
             "ParseInt" => Ok(Op::ParseInt),
+            "StrLen" => Ok(Op::StrLen),
 
             // Exception handling
             "Throw" => Ok(Op::Throw),
@@ -980,6 +1297,11 @@ impl Codegen {
                 Ok(Op::GcHint(size))
             }
 
+            // CLI arguments
+            "Argc" => Ok(Op::Argc),
+            "Argv" => Ok(Op::Argv),
+            "Args" => Ok(Op::Args),
+
             // Thread operations
             "ThreadSpawn" => {
                 let func_index = self.expect_int_arg(args, 0, "ThreadSpawn")? as usize;
@@ -989,6 +1311,13 @@ impl Codegen {
             "ChannelSend" => Ok(Op::ChannelSend),
             "ChannelRecv" => Ok(Op::ChannelRecv),
             "ThreadJoin" => Ok(Op::ThreadJoin),
+
+            // Syscall
+            "Syscall" => {
+                let num = self.expect_int_arg(args, 0, "Syscall")? as usize;
+                let argc = self.expect_int_arg(args, 1, "Syscall")? as usize;
+                Ok(Op::Syscall(num, argc))
+            }
 
             _ => Err(format!("unknown asm instruction '{}'", op_name)),
         }
@@ -1072,14 +1401,14 @@ mod tests {
     #[test]
     fn test_simple_print() {
         let chunk = compile("print_debug(42);").unwrap();
-        assert!(chunk.main.code.contains(&Op::PushInt(42)));
+        assert!(chunk.main.code.contains(&Op::I64Const(42)));
         assert!(chunk.main.code.contains(&Op::PrintDebug));
     }
 
     #[test]
     fn test_arithmetic() {
         let chunk = compile("print_debug(1 + 2);").unwrap();
-        assert!(chunk.main.code.contains(&Op::Add));
+        assert!(chunk.main.code.contains(&Op::I64Add));
     }
 
     #[test]

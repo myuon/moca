@@ -95,7 +95,7 @@
 /**
  * Current bytecode format version
  */
-#define VERSION 1
+#define VERSION 2
 
 /**
  * Result codes for FFI operations.

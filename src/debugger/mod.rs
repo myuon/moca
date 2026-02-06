@@ -136,28 +136,28 @@ impl Debugger {
 
         // Execute the operation (simplified VM)
         match &op {
-            Op::PushInt(v) => self.stack.push(Value::I64(*v)),
-            Op::PushFloat(v) => self.stack.push(Value::F64(*v)),
-            Op::PushTrue => self.stack.push(Value::Bool(true)),
-            Op::PushFalse => self.stack.push(Value::Bool(false)),
-            Op::PushNull => self.stack.push(Value::Null),
-            Op::Pop => {
+            Op::I32Const(v) => self.stack.push(Value::I64(*v as i64)),
+            Op::I64Const(v) => self.stack.push(Value::I64(*v)),
+            Op::F32Const(v) => self.stack.push(Value::F64(*v as f64)),
+            Op::F64Const(v) => self.stack.push(Value::F64(*v)),
+            Op::RefNull => self.stack.push(Value::Null),
+            Op::Drop => {
                 self.stack.pop();
             }
-            Op::GetL(slot) => {
+            Op::LocalGet(slot) => {
                 let val = self.locals[*slot];
                 self.stack.push(val);
             }
-            Op::SetL(slot) => {
+            Op::LocalSet(slot) => {
                 if let Some(val) = self.stack.pop() {
                     self.locals[*slot] = val;
                 }
             }
-            Op::Add => self.binary_op(|a, b| a + b),
-            Op::Sub => self.binary_op(|a, b| a - b),
-            Op::Mul => self.binary_op(|a, b| a * b),
-            Op::Div => self.binary_op(|a, b| if b != 0 { a / b } else { 0 }),
-            Op::Neg => {
+            Op::I64Add => self.binary_op(|a, b| a + b),
+            Op::I64Sub => self.binary_op(|a, b| a - b),
+            Op::I64Mul => self.binary_op(|a, b| a * b),
+            Op::I64DivS => self.binary_op(|a, b| if b != 0 { a / b } else { 0 }),
+            Op::I64Neg => {
                 if let Some(Value::I64(v)) = self.stack.pop() {
                     self.stack.push(Value::I64(-v));
                 }
@@ -177,7 +177,7 @@ impl Debugger {
                 self.pc = *target;
                 return; // Don't increment PC
             }
-            Op::JmpIfFalse(target) => {
+            Op::BrIfFalse(target) => {
                 if let Some(val) = self.stack.pop()
                     && !self.is_truthy(&val)
                 {
