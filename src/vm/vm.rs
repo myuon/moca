@@ -26,6 +26,9 @@ struct Frame {
     /// For MicroOp interpreter: caller's vreg index for return value.
     /// None for the old interpreter or when return value is not captured.
     ret_vreg: Option<usize>,
+    /// Minimum valid stack length for this frame (= stack_base + locals + temps).
+    /// Pops below this are "stack underflow".
+    stack_floor: usize,
 }
 
 /// Exception handler frame.
@@ -831,6 +834,7 @@ impl VM {
             pc: 0,
             stack_base: 0,
             ret_vreg: None,
+            stack_floor: 0,
         });
 
         loop {
@@ -888,6 +892,7 @@ impl VM {
             pc: 0,
             stack_base: 0,
             ret_vreg: None,
+            stack_floor: 0,
         });
 
         let mut result = Value::Null;
@@ -951,7 +956,7 @@ impl VM {
     /// caches the result, and executes using register-based MicroOps with
     /// Raw fallback for unconverted operations.
     fn run_microop(&mut self, chunk: &Chunk) -> Result<(), String> {
-        use super::microop::{ConvertedFunction, MicroOp};
+        use super::microop::{CmpCond, ConvertedFunction, MicroOp};
         use super::microop_converter;
 
         // Initialize (same as run())
@@ -969,6 +974,7 @@ impl VM {
             pc: 0,
             stack_base: 0,
             ret_vreg: None,
+            stack_floor: main_regs,
         });
         self.stack.resize(main_regs, Value::Null);
 
@@ -1161,6 +1167,7 @@ impl VM {
                         pc: 0,
                         stack_base: new_stack_base,
                         ret_vreg: ret.map(|v| v.0),
+                        stack_floor: new_stack_base + callee_regs,
                     });
                 }
                 MicroOp::Ret { src } => {
@@ -1200,7 +1207,7 @@ impl VM {
                     self.stack.push(val);
                 }
                 MicroOp::StackPop { dst } => {
-                    let val = self.stack.pop().unwrap_or(Value::Null);
+                    let val = self.pop_operand()?;
                     let frame = self.frames.last().unwrap();
                     let idx = frame.stack_base + dst.0;
                     // Ensure register file slot exists
@@ -1228,9 +1235,360 @@ impl VM {
                         }
                     }
                 }
-                // Phase 2 register-based ops (not yet used)
-                _ => {
-                    return Err(format!("unimplemented MicroOp: {:?}", mop));
+
+                // ========================================
+                // Move / Constants
+                // ========================================
+                MicroOp::Mov { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = self.stack[sb + src.0];
+                }
+                MicroOp::ConstI64 { dst, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::I64(imm);
+                }
+                MicroOp::ConstI32 { dst, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let val = match imm {
+                        0 => Value::Bool(false),
+                        1 => Value::Bool(true),
+                        _ => Value::I64(imm as i64),
+                    };
+                    self.stack[sb + dst.0] = val;
+                }
+                MicroOp::ConstF64 { dst, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::F64(imm);
+                }
+                MicroOp::ConstF32 { dst, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::F64(imm as f64);
+                }
+                MicroOp::RefNull { dst } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Null;
+                }
+
+                // ========================================
+                // i64 ALU
+                // ========================================
+                MicroOp::AddI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    let result = self.add(va, vb)?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = result;
+                }
+                MicroOp::SubI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    let result = self.sub(va, vb)?;
+                    self.stack[sb + dst.0] = result;
+                }
+                MicroOp::MulI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    let result = self.mul(va, vb)?;
+                    self.stack[sb + dst.0] = result;
+                }
+                MicroOp::DivI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    let result = self.div(va, vb)?;
+                    self.stack[sb + dst.0] = result;
+                }
+                MicroOp::RemI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    if vb == 0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack[sb + dst.0] = Value::I64(va % vb);
+                }
+                MicroOp::NegI64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(-v);
+                }
+
+                // ========================================
+                // i32 ALU
+                // ========================================
+                MicroOp::AddI32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")? as i32;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::I64((va + vb) as i64);
+                }
+                MicroOp::SubI32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")? as i32;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::I64((va - vb) as i64);
+                }
+                MicroOp::MulI32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")? as i32;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::I64((va * vb) as i64);
+                }
+                MicroOp::DivI32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")? as i32;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")? as i32;
+                    if vb == 0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack[sb + dst.0] = Value::I64((va / vb) as i64);
+                }
+                MicroOp::RemI32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")? as i32;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")? as i32;
+                    if vb == 0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack[sb + dst.0] = Value::I64((va % vb) as i64);
+                }
+                MicroOp::EqzI32 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0];
+                    self.stack[sb + dst.0] = Value::Bool(!v.is_truthy());
+                }
+
+                // ========================================
+                // f64 ALU
+                // ========================================
+                MicroOp::AddF64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")?;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::F64(va + vb);
+                }
+                MicroOp::SubF64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")?;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::F64(va - vb);
+                }
+                MicroOp::MulF64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")?;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::F64(va * vb);
+                }
+                MicroOp::DivF64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")?;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")?;
+                    if vb == 0.0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack[sb + dst.0] = Value::F64(va / vb);
+                }
+                MicroOp::NegF64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::F64(-v);
+                }
+
+                // ========================================
+                // f32 ALU
+                // ========================================
+                MicroOp::AddF32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")? as f32;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::F64((va + vb) as f64);
+                }
+                MicroOp::SubF32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")? as f32;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::F64((va - vb) as f64);
+                }
+                MicroOp::MulF32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")? as f32;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::F64((va * vb) as f64);
+                }
+                MicroOp::DivF32 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")? as f32;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")? as f32;
+                    if vb == 0.0 {
+                        return Err("runtime error: division by zero".to_string());
+                    }
+                    self.stack[sb + dst.0] = Value::F64((va / vb) as f64);
+                }
+                MicroOp::NegF32 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::F64((-v) as f64);
+                }
+
+                // ========================================
+                // Comparisons
+                // ========================================
+                MicroOp::CmpI64 { dst, a, b, cond } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    let result = match cond {
+                        CmpCond::Eq => self.values_equal(&va, &vb),
+                        CmpCond::Ne => !self.values_equal(&va, &vb),
+                        CmpCond::LtS => self.compare(&va, &vb)? < 0,
+                        CmpCond::LeS => self.compare(&va, &vb)? <= 0,
+                        CmpCond::GtS => self.compare(&va, &vb)? > 0,
+                        CmpCond::GeS => self.compare(&va, &vb)? >= 0,
+                    };
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
+                MicroOp::CmpI64Imm { dst, a, imm, cond } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let result = match cond {
+                        CmpCond::Eq => va == imm,
+                        CmpCond::Ne => va != imm,
+                        CmpCond::LtS => va < imm,
+                        CmpCond::LeS => va <= imm,
+                        CmpCond::GtS => va > imm,
+                        CmpCond::GeS => va >= imm,
+                    };
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
+                MicroOp::CmpI32 { dst, a, b, cond } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")? as i32;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")? as i32;
+                    let result = match cond {
+                        CmpCond::Eq => va == vb,
+                        CmpCond::Ne => va != vb,
+                        CmpCond::LtS => va < vb,
+                        CmpCond::LeS => va <= vb,
+                        CmpCond::GtS => va > vb,
+                        CmpCond::GeS => va >= vb,
+                    };
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
+                MicroOp::CmpF64 { dst, a, b, cond } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")?;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")?;
+                    let result = match cond {
+                        CmpCond::Eq => va == vb,
+                        CmpCond::Ne => va != vb,
+                        CmpCond::LtS => va < vb,
+                        CmpCond::LeS => va <= vb,
+                        CmpCond::GtS => va > vb,
+                        CmpCond::GeS => va >= vb,
+                    };
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
+                MicroOp::CmpF32 { dst, a, b, cond } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_f64().ok_or("expected float")? as f32;
+                    let vb = self.stack[sb + b.0].as_f64().ok_or("expected float")? as f32;
+                    let result = match cond {
+                        CmpCond::Eq => va == vb,
+                        CmpCond::Ne => va != vb,
+                        CmpCond::LtS => va < vb,
+                        CmpCond::LeS => va <= vb,
+                        CmpCond::GtS => va > vb,
+                        CmpCond::GeS => va >= vb,
+                    };
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
+
+                // ========================================
+                // Type Conversions
+                // ========================================
+                MicroOp::I32WrapI64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64((v as i32) as i64);
+                }
+                MicroOp::I64ExtendI32S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::I64(v as i64);
+                }
+                MicroOp::I64ExtendI32U { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::I64((v as u32) as i64);
+                }
+                MicroOp::F64ConvertI64S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::F64(v as f64);
+                }
+                MicroOp::I64TruncF64S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::I64(v as i64);
+                }
+                MicroOp::F64ConvertI32S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::F64(v as f64);
+                }
+                MicroOp::F32ConvertI32S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")? as i32;
+                    self.stack[sb + dst.0] = Value::F64((v as f32) as f64);
+                }
+                MicroOp::F32ConvertI64S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::F64((v as f32) as f64);
+                }
+                MicroOp::I32TruncF32S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::I64((v as i32) as i64);
+                }
+                MicroOp::I32TruncF64S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::I64((v as i32) as i64);
+                }
+                MicroOp::I64TruncF32S { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::I64(v as i64);
+                }
+                MicroOp::F32DemoteF64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::F64((v as f32) as f64);
+                }
+                MicroOp::F64PromoteF32 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0].as_f64().ok_or("expected float")? as f32;
+                    self.stack[sb + dst.0] = Value::F64(v as f64);
+                }
+
+                // ========================================
+                // Ref operations
+                // ========================================
+                MicroOp::RefEq { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    self.stack[sb + dst.0] = Value::Bool(va == vb);
+                }
+                MicroOp::RefIsNull { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let v = self.stack[sb + src.0];
+                    self.stack[sb + dst.0] = Value::Bool(v.is_null());
                 }
             }
         }
@@ -1825,6 +2183,7 @@ impl VM {
                     pc: 0,
                     stack_base: new_stack_base,
                     ret_vreg: None,
+                    stack_floor: 0,
                 });
             }
             Op::Ret => {
@@ -2307,6 +2666,15 @@ impl VM {
                 }
             }
         }
+    }
+
+    /// Pop a value from the operand stack, respecting the register file boundary.
+    fn pop_operand(&mut self) -> Result<Value, String> {
+        let floor = self.frames.last().map_or(0, |f| f.stack_floor);
+        if self.stack.len() <= floor {
+            return Err("stack underflow".to_string());
+        }
+        Ok(self.stack.pop().unwrap())
     }
 
     fn pop_int(&mut self) -> Result<i64, String> {
@@ -2907,6 +3275,7 @@ unsafe extern "C" fn jit_call_helper(
             pc: 0,
             stack_base: new_stack_base,
             ret_vreg: None,
+            stack_floor: 0,
         });
 
         // Run until the function returns (when frame depth returns to starting level)
