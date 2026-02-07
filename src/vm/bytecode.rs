@@ -369,7 +369,6 @@ const OP_HEAP_LOAD: u8 = 81;
 const OP_HEAP_STORE: u8 = 82;
 const OP_HEAP_LOAD_DYN: u8 = 83;
 const OP_HEAP_STORE_DYN: u8 = 84;
-const OP_ARRAY_LEN: u8 = 85;
 
 // System / Builtins
 const OP_SYSCALL: u8 = 86;
@@ -396,6 +395,7 @@ const OP_CHANNEL_CREATE: u8 = 100;
 const OP_CHANNEL_SEND: u8 = 101;
 const OP_CHANNEL_RECV: u8 = 102;
 const OP_THREAD_JOIN: u8 = 103;
+const OP_HEAP_ALLOC_ARRAY: u8 = 104;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -547,6 +547,10 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_HEAP_ALLOC])?;
             write_u32(w, *size as u32)?;
         }
+        Op::HeapAllocArray(size) => {
+            w.write_all(&[OP_HEAP_ALLOC_ARRAY])?;
+            write_u32(w, *size as u32)?;
+        }
         Op::HeapAllocDyn => w.write_all(&[OP_HEAP_ALLOC_DYN])?,
         Op::HeapAllocDynSimple => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
         Op::HeapLoad(offset) => {
@@ -559,8 +563,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
-        Op::ArrayLen => w.write_all(&[OP_ARRAY_LEN])?,
-
         // System / Builtins
         Op::Syscall(num, argc) => {
             w.write_all(&[OP_SYSCALL])?;
@@ -718,14 +720,13 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
 
         // Heap Operations
         OP_HEAP_ALLOC => Op::HeapAlloc(read_u32(r)? as usize),
+        OP_HEAP_ALLOC_ARRAY => Op::HeapAllocArray(read_u32(r)? as usize),
         OP_HEAP_ALLOC_DYN => Op::HeapAllocDyn,
         OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple,
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
-        OP_ARRAY_LEN => Op::ArrayLen,
-
         // System / Builtins
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
@@ -1149,7 +1150,6 @@ mod tests {
             Op::HeapStore(2),
             Op::HeapLoadDyn,
             Op::HeapStoreDyn,
-            Op::ArrayLen,
             // System / Builtins
             Op::Syscall(7, 2),
             Op::GcHint(1024),

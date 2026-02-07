@@ -2210,17 +2210,6 @@ impl VM {
 
                 return Ok(ControlFlow::Return);
             }
-            Op::ArrayLen => {
-                let val = self.stack.pop().ok_or("stack underflow")?;
-                let r = val
-                    .as_ref()
-                    .ok_or("runtime error: expected array or string")?;
-                let len = self
-                    .heap
-                    .slot_count(r)
-                    .ok_or("runtime error: invalid reference")? as i64;
-                self.stack.push(Value::I64(len));
-            }
             Op::TypeOf => {
                 use crate::vm::heap::ObjectKind;
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2398,6 +2387,17 @@ impl VM {
                 }
                 slots.reverse();
                 let r = self.heap.alloc_slots(slots)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::HeapAllocArray(n) => {
+                let mut slots = Vec::with_capacity(n);
+                for _ in 0..n {
+                    slots.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                slots.reverse();
+                let r = self
+                    .heap
+                    .alloc_slots_with_kind(slots, crate::vm::heap::ObjectKind::Array)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::HeapLoad(offset) => {
@@ -2638,6 +2638,22 @@ impl VM {
                     .heap
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
+
+                // Array<T> struct: follow ptr to data array, use len for display
+                if obj.kind == crate::vm::heap::ObjectKind::Array
+                    && obj.slots.len() == 2
+                    && let (Some(data_ref), Some(len)) =
+                        (obj.slots[0].as_ref(), obj.slots[1].as_i64())
+                {
+                    let mut parts = Vec::new();
+                    for i in 0..(len as usize) {
+                        if let Some(elem) = self.heap.read_slot(data_ref, i) {
+                            parts.push(self.value_to_string(&elem)?);
+                        }
+                    }
+                    return Ok(format!("[{}]", parts.join(", ")));
+                }
+
                 // Try to interpret as string first
                 // Only treat as string if all slots are printable Unicode characters
                 // (not control characters 0-31, except tab/newline/carriage return)
@@ -3553,14 +3569,16 @@ mod tests {
 
     #[test]
     fn test_array_operations() {
-        // HeapAlloc takes slots from stack: [e0, e1, e2] -> creates Slots object
-        // Length is now slots.len(), no length prefix
+        // Array<T> struct layout: [ptr, len]
+        // ptr points to data array, len is the element count
         let stack = run_code(vec![
-            Op::I64Const(1),  // element 0
-            Op::I64Const(2),  // element 1
-            Op::I64Const(3),  // element 2
-            Op::HeapAlloc(3), // 3 elements
-            Op::ArrayLen,
+            Op::I64Const(1),       // element 0
+            Op::I64Const(2),       // element 1
+            Op::I64Const(3),       // element 2
+            Op::HeapAlloc(3),      // data array with 3 elements
+            Op::I64Const(3),       // length value
+            Op::HeapAllocArray(2), // Array<T> struct [ptr, len]
+            Op::HeapLoad(1),       // read len field
         ])
         .unwrap();
         assert_eq!(stack.len(), 1);
@@ -3601,7 +3619,7 @@ mod tests {
             Op::LocalSet(0),
             // Get local 0 to verify it's still a valid reference
             Op::LocalGet(0),
-            Op::ArrayLen, // If we can get length, it's a valid array
+            Op::HeapLoad(0), // If we can read slot 0, it's a valid reference
         ]);
 
         assert!(
@@ -3609,9 +3627,9 @@ mod tests {
             "LocalSet write barrier test failed: {:?}",
             result
         );
-        // The last value should be the array length (1 element)
+        // The last value should be the element we stored (2)
         let stack = result.unwrap();
-        assert!(stack.iter().any(|v| *v == Value::I64(1)));
+        assert!(stack.iter().any(|v| *v == Value::I64(2)));
     }
 
     #[test]

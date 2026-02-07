@@ -622,11 +622,6 @@ impl JitCompiler {
                 self.type_stack.push(ValueType::Ref);
                 self.emit_push_string(*idx)
             }
-            Op::ArrayLen => {
-                self.type_stack.pop();
-                self.type_stack.push(ValueType::I64);
-                self.emit_array_len()
-            }
             Op::Syscall(syscall_num, argc) => {
                 for _ in 0..*argc {
                     self.type_stack.pop();
@@ -2121,76 +2116,6 @@ impl JitCompiler {
         }
 
         self.stack_depth += 1;
-
-        Ok(())
-    }
-
-    /// Emit ArrayLen operation.
-    /// Pops a Ref from stack, reads slot_count from heap header, pushes i64.
-    ///
-    /// Heap header layout (64 bits):
-    /// - bits 30-61: slot_count (32 bits)
-    ///
-    /// JitCallContext layout:
-    /// - offset 48: heap_base (*const u64)
-    fn emit_array_len(&mut self) -> Result<(), String> {
-        // Pop the Ref from JIT stack and load ref_index
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-            // Load payload (ref index) - tag at offset 0, payload at offset 8
-            asm.ldr(regs::TMP0, regs::VSTACK, 8); // TMP0 = ref_index
-        }
-
-        // Load heap_base from JitCallContext (offset 48)
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldr(regs::TMP1, regs::VM_CTX, 48); // TMP1 = heap_base
-        }
-
-        // Calculate header address: heap_base + ref_index * 8
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            // TMP0 = ref_index << 3 (multiply by 8)
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-            // TMP1 = heap_base + offset
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        }
-
-        // Load header from memory
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldr(regs::TMP0, regs::TMP1, 0); // TMP0 = header
-        }
-
-        // Extract slot_count: (header >> 30) & 0xFFFFFFFF
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            // Shift right by 30 bits
-            asm.lsr_imm(regs::TMP0, regs::TMP0, 30);
-            // Mask to 32 bits (AND with 0xFFFFFFFF)
-            // On AArch64, we can use UBFX or just use the lower 32 bits
-            // Since we shifted by 30, we have at most 34 bits, but slot_count is 32 bits
-            // We need to mask: AND with 0xFFFFFFFF
-            self.emit_load_imm64_to_reg(0xFFFFFFFF, regs::TMP1);
-        }
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.and(regs::TMP0, regs::TMP0, regs::TMP1);
-        }
-
-        // Push result as i64 onto the JIT stack
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            // Store tag (0 = int)
-            asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
-            asm.str(regs::TMP1, regs::VSTACK, 0);
-            // Store slot_count as payload
-            asm.str(regs::TMP0, regs::VSTACK, 8);
-            asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
-        }
-
-        // Stack depth unchanged: -1 (pop ref) + 1 (push len) = 0
 
         Ok(())
     }

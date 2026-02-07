@@ -19,13 +19,16 @@ struct Desugar {
     counter: usize,
     /// Type information for index expressions, keyed by span.
     index_object_types: HashMap<Span, Type>,
+    /// Type information for len() builtin arguments, keyed by call span.
+    len_arg_types: HashMap<Span, Type>,
 }
 
 impl Desugar {
-    fn new(index_object_types: HashMap<Span, Type>) -> Self {
+    fn new(index_object_types: HashMap<Span, Type>, len_arg_types: HashMap<Span, Type>) -> Self {
         Self {
             counter: 0,
             index_object_types,
+            len_arg_types,
         }
     }
 
@@ -38,9 +41,10 @@ impl Desugar {
 
     /// Check if the type should have its index operations desugared to method calls.
     /// Returns true for Vec<T> and Map<K,V>, false for Array<T> and other types.
+    /// Array<T> is handled directly in codegen (not desugared) to support chained access.
     fn should_desugar_index(&self, obj_type: &Type) -> bool {
         match obj_type {
-            // Vec<T> generic struct should be desugared
+            // Vec<T> and Map<K,V> generic structs should be desugared
             Type::GenericStruct { name, .. } if name == "Vec" || name == "Map" => true,
             // Legacy Vector type - also desugar for consistency
             Type::Vector(_) => true,
@@ -666,7 +670,11 @@ impl Desugar {
 }
 
 /// Desugar a program, expanding syntax sugar into core constructs.
-pub fn desugar_program(program: Program, index_object_types: HashMap<Span, Type>) -> Program {
-    let mut desugar = Desugar::new(index_object_types);
+pub fn desugar_program(
+    program: Program,
+    index_object_types: HashMap<Span, Type>,
+    len_arg_types: HashMap<Span, Type>,
+) -> Program {
+    let mut desugar = Desugar::new(index_object_types, len_arg_types);
     desugar.desugar_program(program)
 }

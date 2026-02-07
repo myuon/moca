@@ -147,13 +147,14 @@ pub enum Op {
     // Heap Operations
     // ========================================
     HeapAlloc(usize),
+    /// Like HeapAlloc but marks the object with ObjectKind::Array for display.
+    HeapAllocArray(usize),
     HeapAllocDyn,
     HeapAllocDynSimple,
     HeapLoad(usize),
     HeapStore(usize),
     HeapLoadDyn,
     HeapStoreDyn,
-    ArrayLen,
 
     // ========================================
     // System / Builtins
@@ -273,13 +274,13 @@ impl Op {
             Op::Call(_, _) => "Call",
             Op::Ret => "Ret",
             Op::HeapAlloc(_) => "HeapAlloc",
+            Op::HeapAllocArray(_) => "HeapAllocArray",
             Op::HeapAllocDyn => "HeapAllocDyn",
             Op::HeapAllocDynSimple => "HeapAllocDynSimple",
             Op::HeapLoad(_) => "HeapLoad",
             Op::HeapStore(_) => "HeapStore",
             Op::HeapLoadDyn => "HeapLoadDyn",
             Op::HeapStoreDyn => "HeapStoreDyn",
-            Op::ArrayLen => "ArrayLen",
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::PrintDebug => "PrintDebug",

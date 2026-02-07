@@ -1088,7 +1088,7 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedExpr::Builtin { name, args } => {
+            ResolvedExpr::Builtin { name, args, .. } => {
                 self.write(&format!("{}Builtin({}) args:{}", prefix, name, args.len()));
                 self.newline();
                 for (i, arg) in args.iter().enumerate() {
@@ -1490,14 +1490,13 @@ impl<'a> Disassembler<'a> {
 
             // Heap operations
             Op::HeapAlloc(n) => self.output.push_str(&format!("HeapAlloc {}", n)),
+            Op::HeapAllocArray(n) => self.output.push_str(&format!("HeapAllocArray {}", n)),
             Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
             Op::HeapAllocDynSimple => self.output.push_str("HeapAllocDynSimple"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
             Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
-            Op::ArrayLen => self.output.push_str("ArrayLen"),
-
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),

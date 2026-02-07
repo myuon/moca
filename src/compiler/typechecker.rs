@@ -228,6 +228,9 @@ pub struct TypeChecker {
     /// Maps function name -> [(variable name, type)].
     /// Used to propagate type info to JIT compiler via codegen.
     local_variable_types: HashMap<String, Vec<(String, Type)>>,
+    /// Type of arguments in len() builtin calls (Span -> Type)
+    /// Used by desugar to convert len(array) to array.len() method call
+    len_arg_types: HashMap<Span, Type>,
 }
 
 impl TypeChecker {
@@ -244,12 +247,18 @@ impl TypeChecker {
             current_type_params: Vec::new(),
             current_function_name: None,
             local_variable_types: HashMap::new(),
+            len_arg_types: HashMap::new(),
         }
     }
 
     /// Get the index object types map (for codegen)
     pub fn index_object_types(&self) -> &HashMap<Span, Type> {
         &self.index_object_types
+    }
+
+    /// Get the len argument types map (for desugar)
+    pub fn len_arg_types(&self) -> &HashMap<Span, Type> {
+        &self.len_arg_types
     }
 
     /// Get the local variable types map with substitution applied.
@@ -2303,8 +2312,9 @@ impl TypeChecker {
                     return Some(Type::Int);
                 }
                 let arg_type = self.infer_expr(&args[0], env);
+                let resolved = self.substitution.apply(&arg_type);
                 // len works on array or string
-                match self.substitution.apply(&arg_type) {
+                match &resolved {
                     Type::Array(_) | Type::String => {}
                     Type::Var(_) => {}
                     _ => {
@@ -2314,6 +2324,8 @@ impl TypeChecker {
                         ));
                     }
                 }
+                // Store resolved arg type for desugar phase
+                self.len_arg_types.insert(span, resolved);
                 Some(Type::Int)
             }
             "push" => {

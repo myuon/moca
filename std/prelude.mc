@@ -248,6 +248,34 @@ fun str_index_of(haystack: string, needle: string) -> int {
 }
 
 // ============================================================================
+// Array Functions (fixed-length array using heap intrinsics)
+// ============================================================================
+
+// Array<T> - Fixed-length array implementation.
+// Layout: [ptr, len]
+struct Array<T> {
+    ptr: int,
+    len: int
+}
+
+impl<T> Array<T> {
+    // Get a value at the specified index
+    fun get(self, index: int) -> T {
+        return __heap_load(self.ptr, index);
+    }
+
+    // Set a value at the specified index
+    fun set(self, index: int, value: T) {
+        __heap_store(self.ptr, index, value);
+    }
+
+    // Get the length of the array
+    fun len(self) -> int {
+        return self.len;
+    }
+}
+
+// ============================================================================
 // Vector Functions (low-level implementation using heap intrinsics)
 // ============================================================================
 

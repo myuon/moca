@@ -1,294 +1,199 @@
-# Spec.md — MicroOp変換機構の導入
+# Spec.md — Array<T> 構造体化
 
 ## 1. Goal
-- 既存のスタックベースVM（Op bytecode）からレジスタベースのMicroOpへの変換層を導入し、インタプリタの実行性能を改善する
-- MicroOp PCを唯一の真実とし、将来のJIT移行の橋渡しとなる基盤を作る
+- 固定長配列（Array）をVecと同じ構造体ベースのメモリレイアウト `[ptr, len]` に統一し、ヒープアクセスパターンを共通化する
 
 ## 2. Non-Goals
-- JITコンパイラの変更（既存のOp→native変換はそのまま維持）
-- SSA形式への変換や本格的な最適化パス
-- 新しい言語機能の追加
-- GC/StackMapの完全な再設計（Safepointは入れるが、正確なRef追跡は後回しでOK）
+- Arrayに動的リサイズ（push/pop）機能を追加すること
+- Vec<T>の実装を変更すること
+- 文字列（String）のレイアウトを変更すること
+- パフォーマンス最適化（間接参照の除去など）は本タスクでは行わない
 
 ## 3. Target Users
-- moca VMの内部改善。エンドユーザーから見た動作変更はない
-- 将来JITをMicroOpベースに移行する際の基盤となる
+- mocaプログラマ（配列リテラル `[1, 2, 3]` やfor-inループの利用者）
 
 ## 4. Core User Flow
-（内部アーキテクチャ変更のため、ユーザーフローの変更なし）
-
-1. moca ソースをコンパイル → 既存の Op bytecode が生成される（変更なし）
-2. VM が関数を初めて実行する際に、Op[] → MicroOp[] への変換を lazy に実行
-3. 変換結果をキャッシュし、以降は MicroOp インタプリタで実行
-4. 変換に失敗した場合は既存のスタックベースインタプリタにフォールバック
+- 変更前と同じmocaコードがそのまま動作する（破壊的変更なし）
+- `let arr = [1, 2, 3];` → Array<int>構造体が生成される
+- `arr[0]` → ptr経由で要素にアクセス（内部的に2段間接参照）
+- `arr[i] = x` → ptr経由で要素を書き換え
+- `len(arr)` → lenフィールドを読み出し
+- `for x in arr { ... }` → 従来通り動作
 
 ## 5. Inputs & Outputs
-- **入力**: 既存の `Vec<Op>` bytecode（Function 単位）
-- **出力**: `Vec<MicroOp>` + メタデータ（temps数、PC マッピング）
-- **副作用**: 実行結果は既存と完全に同一
+- **入力**: 既存のmocaソースコード（配列を使うもの）
+- **出力**: 同じ実行結果（メモリレイアウトのみ変更、観測可能な動作は同一）
 
 ## 6. Tech Stack
-- 言語: Rust (edition 2024)
-- 既存クレート内に新モジュールとして追加（外部依存なし）
-- テスト: cargo test（既存 snapshot tests + performance tests）
+- Rust（コンパイラ・VM実装）
+- moca言語（`std/prelude.mc` でのArray<T>定義）
 
 ## 7. Rules & Constraints
 
-### 7.1 MicroOp PC が唯一の真実
-- 変換時に `old_pc (Op index) → new_pc (MicroOp index)` のマッピング表を作成
-- 全ての branch target は MicroOp index に解決してから格納
-- Raw fallback に含まれる Op が branch を持つ場合でも、target は MicroOp index
+### 7.1 Array<T> 構造体定義（`std/prelude.mc`）
 
-### 7.2 制御フロー命令は必ず MicroOp 側
-- `Jmp`, `BrIf`, `BrIfFalse`, `Call`, `Ret` は必ずネイティブ MicroOp として変換
-- Raw fallback に制御フロー系を残さない
+```mc
+// Array<T> - Fixed-length array implementation.
+// Layout: [ptr, len]
+struct Array<T> {
+    ptr: int,
+    len: int
+}
 
-### 7.3 未対応 Op は Raw でラップ
-- MicroOp に変換できない Op は `Raw { op }` でラップ
-- Raw op はスタックベースのセマンティクスをそのまま維持
-- レジスタ⇔スタック間の橋渡しには `StackPush` / `StackPop` を使用
+impl<T> Array<T> {
+    fun get(self, index: int) -> T {
+        return __heap_load(self.ptr, index);
+    }
 
-### 7.4 Lazy 変換
-- 関数の MicroOp 変換は初回呼び出し時に実行
-- 変換結果は VM インスタンス内にキャッシュ
+    fun set(self, index: int, value: T) {
+        __heap_store(self.ptr, index, value);
+    }
 
-### 7.5 パフォーマンス
-- 各 performance_test で既存比 ±5% 以内（速度低下なし）
-- 可能であれば改善を目指す
-
-## 8. Architecture Design
-
-### 8.1 VReg（仮想レジスタ）
-```
-VReg(usize)  // フレームのレジスタファイルへのインデックス
-```
-
-レジスタファイルのレイアウト（1フレームあたり）:
-```
-[0 .. locals_count)            → 宣言済みlocals（引数を含む）
-[locals_count .. locals_count + temps_count) → 一時レジスタ
-```
-
-実行時は既存の `self.stack` を流用:
-- `VReg(n)` = `stack[frame.stack_base + n]`
-- フレーム開始時に `locals_count + temps_count` 分のスロットを確保
-- Raw op 用のオペランドスタックはその上に積む
-
-### 8.2 MicroOp 命令セット
-
-#### 制御フロー（常にネイティブ）
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `Jmp` | `{ target }` | 無条件ジャンプ（target は MicroOp PC） |
-| `BrIf` | `{ cond: VReg, target }` | cond が truthy なら分岐 |
-| `BrIfFalse` | `{ cond: VReg, target }` | cond が falsy なら分岐 |
-| `Call` | `{ func_id, args: Vec<VReg>, ret: Option<VReg> }` | 関数呼び出し |
-| `Ret` | `{ src: Option<VReg> }` | 値を返す（None = unit） |
-
-#### Move / 定数
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `Mov` | `{ dst, src }` | vreg 間コピー |
-| `ConstI64` | `{ dst, imm: i64 }` | 即値ロード |
-| `ConstI32` | `{ dst, imm: i32 }` | 即値ロード（I64 に拡張して格納） |
-| `ConstF64` | `{ dst, imm: f64 }` | 即値ロード |
-
-#### 整数 ALU（i64）
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `AddI64` | `{ dst, a, b }` | dst = a + b |
-| `SubI64` | `{ dst, a, b }` | dst = a - b |
-| `MulI64` | `{ dst, a, b }` | dst = a * b |
-| `DivI64` | `{ dst, a, b }` | dst = a / b |
-| `RemI64` | `{ dst, a, b }` | dst = a % b |
-| `NegI64` | `{ dst, src }` | dst = -src |
-
-#### 浮動小数点 ALU（f64）
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `AddF64` | `{ dst, a, b }` | dst = a + b |
-| `SubF64` | `{ dst, a, b }` | dst = a - b |
-| `MulF64` | `{ dst, a, b }` | dst = a * b |
-| `DivF64` | `{ dst, a, b }` | dst = a / b |
-| `NegF64` | `{ dst, src }` | dst = -src |
-
-#### 比較（分離型）
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `CmpI64` | `{ dst, a, b, cond: CmpCond }` | dst = (a cond b) ? 1 : 0 |
-| `CmpI64Imm` | `{ dst, a, imm: i64, cond: CmpCond }` | dst = (a cond imm) ? 1 : 0 |
-| `CmpF64` | `{ dst, a, b, cond: CmpCond }` | dst = (a cond b) ? 1 : 0 |
-
-```
-enum CmpCond { Eq, Ne, LtS, LeS, GtS, GeS }
-```
-
-#### スタック橋渡し（Raw op 用）
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `StackPush` | `{ src: VReg }` | vreg の値をオペランドスタックに push |
-| `StackPop` | `{ dst: VReg }` | オペランドスタックから pop して vreg に格納 |
-
-#### フォールバック
-| 命令 | フィールド | 説明 |
-|------|-----------|------|
-| `Raw` | `{ op: Op }` | 既存のスタックベース実行にフォールバック |
-
-### 8.3 変換パイプライン
-
-```
-Op[] bytecode
-  │
-  ▼
-Phase 1: PC マッピング構築
-  - Op[] を走査し、各 Op の MicroOp 先頭位置を記録
-  - 1 Op → 1+ MicroOps（Raw なら 1:1、レジスタ変換すると bridge 含め N）
-  │
-  ▼
-Phase 2: スタックシミュレーション + VReg 割り当て
-  - 仮想スタック（Vec<VReg>）を維持
-  - push 操作 → 新しい temp VReg を割り当て、仮想スタックに積む
-  - pop 操作 → 仮想スタックから VReg を取得
-  - LocalGet(n) → VReg(n) を仮想スタックに積む
-  - LocalSet(n) → 仮想スタックから pop、Mov { dst: VReg(n), src } を生成
-  │
-  ▼
-Phase 3: MicroOp 生成
-  - 対応済み Op → レジスタベース MicroOp を emit
-  - 未対応 Op → StackPush（消費する VReg）+ Raw { op } + StackPop（生成する VReg）
-  - 制御フロー → ネイティブ MicroOp（target は Phase 1 のマッピングで解決）
-  │
-  ▼
-ConvertedFunction { micro_ops: Vec<MicroOp>, temps_count: usize }
-```
-
-### 8.4 MicroOp インタプリタの実行モデル
-
-```
-loop {
-    let frame = frames.last_mut();
-    let converted = get_converted(frame.func_index);
-    if frame.pc >= converted.micro_ops.len() { break; }
-
-    let mop = &converted.micro_ops[frame.pc];
-    frame.pc += 1;
-
-    match mop {
-        MicroOp::AddI64 { dst, a, b } => {
-            let va = stack[frame.stack_base + a.0].as_i64();
-            let vb = stack[frame.stack_base + b.0].as_i64();
-            stack[frame.stack_base + dst.0] = Value::I64(va + vb);
-        }
-        MicroOp::Raw { op } => {
-            // 既存の execute_op を呼び出す
-            self.execute_op(op.clone(), chunk)?;
-        }
-        MicroOp::Call { func_id, args, ret } => {
-            // 引数を新フレームの先頭にコピー
-            let callee = &chunk.functions[*func_id];
-            let callee_converted = get_or_convert(*func_id);
-            let new_stack_base = stack.len();
-            // locals + temps 分のスロットを確保
-            stack.resize(new_stack_base + callee.locals_count + callee_converted.temps_count, Value::Null);
-            // 引数をコピー
-            for (i, arg) in args.iter().enumerate() {
-                stack[new_stack_base + i] = stack[frame.stack_base + arg.0];
-            }
-            frames.push(MicroOpFrame { func_index: *func_id, pc: 0, stack_base: new_stack_base, ret_vreg: *ret });
-        }
-        // ... 他の命令
+    fun len(self) -> int {
+        return self.len;
     }
 }
 ```
 
-### 8.5 Call / Ret の詳細
+### 7.2 配列リテラルのコンパイル変更（`codegen.rs`）
 
-**Call 実行時**:
-1. callee の MicroOp を取得（lazy 変換）
-2. `stack` に callee のレジスタファイル分（`locals_count + temps_count`）を確保
-3. 引数を caller の VReg → callee の locals[0..argc] にコピー
-4. 新しいフレームを push（ret_vreg を記録）
+**変更前**: `[1, 2, 3]` →
+```
+I64Const(1), I64Const(2), I64Const(3), HeapAlloc(3)
+```
+（フラットなヒープオブジェクト1つ）
 
-**Ret 実行時**:
-1. 戻り値を callee の VReg から取得
-2. フレームを pop、stack を truncate
-3. caller の ret_vreg に戻り値を格納
+**変更後**: `[1, 2, 3]` →
+```
+// 1. データ配列を確保
+I64Const(3)
+HeapAllocDynSimple    // → data_ptr (3スロットのヒープオブジェクト)
 
-### 8.6 performance_test が必要とする Op
+// 2. 要素を書き込み
+// data_ptr, index=0, value=1 → HeapStoreDyn
+// data_ptr, index=1, value=2 → HeapStoreDyn
+// data_ptr, index=2, value=3 → HeapStoreDyn
 
-| テスト | 必要な Op | 備考 |
-|--------|----------|------|
-| fibonacci | I64Const, LocalGet/Set, I64LeS, BrIfFalse, Ret, I64Sub, I64Add, Call | 再帰。全てレジスタ変換可能 |
-| sum_loop | I64Const, LocalGet/Set, I64LeS, BrIfFalse, Jmp, I64Add | 単純ループ |
-| nested_loop | 上記 + I64Mul, I64LtS | 二重ループ |
-| mutual_recursion | 上記 + I64Eq, I64RemS, Call | 相互再帰 |
-| mandelbrot | 上記 + F64Const, F64Add/Sub/Mul/Div, F64Gt, I64LtS | 浮動小数点 |
+// 3. Array<T>構造体を生成
+// stack: [data_ptr, len(3)]
+HeapAlloc(2)          // → Array<T> { ptr: data_ptr, len: 3 }
+```
 
-→ 設計した MicroOp セットで全 performance_test をカバー可能。
-→ print (Syscall) 等はホットパス外なので Raw で十分。
+### 7.3 配列アクセスのコンパイル変更（`codegen.rs`）
 
-## 9. Acceptance Criteria（最大10個）
+`arr[i]`（Index式）で、型が `Array<T>` の場合:
+- Vecと同じパス: `HeapLoad(0)` でptrを取得 → `HeapLoadDyn` で要素アクセス
+- **方法**: codegen の `is_vector` 判定に `Type::Array(_)` を追加する
 
-1. `cargo test` が全て通る（既存の snapshot tests 含む）
-2. 各 performance_test で既存比 ±5% 以内の性能を維持する
-3. MicroOp 変換は lazy（関数の初回実行時に変換、結果をキャッシュ）
-4. 制御フロー命令（Jmp, BrIf, BrIfFalse, Call, Ret）は常にネイティブ MicroOp
-5. Branch target は全て MicroOp PC に解決されている
-6. 未対応 Op は Raw { op } でラップされ、実行セマンティクスが変わらない
-7. レジスタベース MicroOp が i64/f64 の算術・比較・定数をカバーする
-8. 変換に失敗した関数は既存のスタックインタプリタにフォールバック可能
-9. performance_test の全出力が既存と完全一致する
+`arr[i] = x`（IndexAssign文）でも同様に `HeapLoad(0)` + `HeapStoreDyn` パスを使う。
+
+### 7.4 len() ビルトインの変更（`codegen.rs`）
+
+`len()` の引数型に応じたコード生成:
+- **Array<T>の場合**: `HeapLoad(1)` を生成（lenフィールド = slot 1）
+- **文字列の場合**: `Op::StrLen` を生成（既存のStrLen opを使用）
+- **その他（レガシー）**: 既存の `ArrayLen` は削除
+
+`len()` のコード生成を型認識にするため、typecheckerから `len()` 呼び出しのspan → 引数型のマッピングをcodegenに渡す。
+
+### 7.5 for-inループの変更（`codegen.rs`）
+
+現在:
+```
+LocalGet(arr_slot)
+ArrayLen            // ← 削除対象
+I64LtS
+```
+
+変更後（Array<T>の場合）:
+```
+LocalGet(arr_slot)
+HeapLoad(1)         // lenフィールド読み出し
+I64LtS
+```
+
+要素アクセスも変更:
+```
+// 変更前
+LocalGet(arr_slot)
+LocalGet(idx_slot)
+HeapLoadDyn
+
+// 変更後
+LocalGet(arr_slot)
+HeapLoad(0)         // ptrフィールド読み出し
+LocalGet(idx_slot)
+HeapLoadDyn
+```
+
+### 7.6 ArrayLen opの削除
+
+以下のファイルから `ArrayLen` を削除:
+- `src/vm/ops.rs` - enum variant
+- `src/vm/vm.rs` - 実行ハンドラ、JITヘルパー関数、JitCallContext登録
+- `src/vm/verifier.rs` - スタック効果定義
+- `src/vm/bytecode.rs` - シリアライズ/デシリアライズ（バイトコード番号85は欠番にする）
+- `src/compiler/dump.rs` - ダンプ出力
+- `src/compiler/codegen.rs` - from_str パース
+- `src/vm/stackmap.rs` - セーフポイント判定
+- `src/vm/microop_converter.rs` - MicroOp変換
+- `src/jit/compiler_x86_64.rs` - x86_64 JITコンパイラ
+- `src/jit/compiler.rs` (AArch64) - AArch64 JITコンパイラ
+- `src/vm/marshal.rs` - JitCallContext の array_len_helper フィールド
+
+### 7.7 ObjectKind::Array の扱い
+
+- `ObjectKind::Array` は当面残す（将来活用の余地あり）
+- 今回のスコープでは積極的に使用しない（データ配列は `ObjectKind::Slots` のまま）
+
+### 7.8 型アノテーション
+
+- `array<T>` 型アノテーションは引き続き `Array<T>` のエイリアスとして動作する
+- 内部的に `Type::Array(T)` を残し、codegen側で `Array<T>` 構造体として認識する
+
+### 7.9 desugar.rsの変更
+
+`should_desugar_index` に `Type::Array(_)` を追加し:
+- `arr[i]` → `Array::get(arr, i)` にデシュガー
+- `arr[i] = x` → `Array::set(arr, i, x)` にデシュガー
+
+**注意**: desugarでメソッド呼び出しに変換する場合、codegenの `is_vector` 判定にArray追加は不要になる。desugar側に統一すること。
+
+## 8. Open Questions
+- なし（全て確定済み）
+
+## 9. Acceptance Criteria
+
+1. `struct Array<T> { ptr: int, len: int }` が `std/prelude.mc` に定義されている
+2. `[1, 2, 3]` で `Array<int>` 構造体が生成される（ptr→データ配列、len=3）
+3. `arr[i]` がptr経由の間接アクセスで正しく値を返す
+4. `arr[i] = x` がptr経由で要素を書き換えられる
+5. `len(arr)` がlenフィールドの値を返す（ヒープヘッダのslot_countではない）
+6. `for x in arr { ... }` が正しく動作する
+7. `Op::ArrayLen` がコードベースから完全に削除されている
+8. `len("hello")` が引き続き正しく5を返す（文字列は影響なし）
+9. `cargo test` が全て通る（既存テストの互換性維持）
+10. `cargo clippy` が警告なしで通る
 
 ## 10. Verification Strategy
 
-- **進捗検証**: 各実装フェーズ完了時に `cargo test` を実行。Phase 1 完了時点で全テスト通過を確認
-- **達成検証**: 全 Acceptance Criteria をチェックリストで確認。performance_test の実行時間を baseline と比較
-- **漏れ検出**: 既存 snapshot tests（basic, errors, jit, modules, ffi, performance）が全てパスすることで出力の正しさを担保。`cargo clippy` でコード品質を確認
-
-### ベースライン性能（release build）
-
-| ベンチマーク | 時間 |
-|---|---|
-| fibonacci(35) | 0.197s |
-| sum_loop | 0.061s |
-| nested_loop | 0.060s |
-| mutual_recursion | 0.306s |
-| mandelbrot | 0.072s |
+- **進捗検証**: 各タスク完了後に `cargo check && cargo test` を実行し、コンパイル・テストが通ることを確認
+- **達成検証**: 全Acceptance Criteriaをチェックリストで確認。特に既存の配列関連スナップショットテストが全て通ること
+- **漏れ検出**: `grep -r "ArrayLen"` でコードベースに残存がないことを確認
 
 ## 11. Test Plan
 
-### Scenario 1: 基本的な MicroOp 変換と実行
-- **Given**: fibonacci.mc がコンパイルされている
-- **When**: MicroOp インタプリタで fib(35) を実行する
-- **Then**: 出力が `9227465` で、既存インタプリタと一致する
+### Test 1: 配列リテラルの生成とアクセス
+- **Given**: `let arr = [10, 20, 30];`
+- **When**: `print(arr[0]); print(arr[1]); print(arr[2]); print(len(arr));`
+- **Then**: 出力が `10`, `20`, `30`, `3`
 
-### Scenario 2: 全 performance_test の正しさと性能
-- **Given**: 5 つの performance_test が全てコンパイルされている
-- **When**: MicroOp インタプリタで各テストを実行する
-- **Then**: 全出力が既存と一致し、実行時間が baseline の ±5% 以内
+### Test 2: 配列要素の書き換え
+- **Given**: `let arr = [1, 2, 3];`
+- **When**: `arr[1] = 99; print(arr[1]);`
+- **Then**: 出力が `99`
 
-### Scenario 3: Raw fallback の正しさ
-- **Given**: ヒープ操作や Syscall を含むプログラムがある
-- **When**: MicroOp 変換で Raw ラップされた Op を含む関数を実行する
-- **Then**: 既存インタプリタと同じ出力が得られる
-
-## 12. Implementation Phases
-
-### Phase 1: インフラ + Raw フォールバック
-- MicroOp enum、VReg 型、ConvertedFunction 構造体の定義
-- Op[] → MicroOp[] 変換（制御フローのみネイティブ、残りは Raw）
-- PC マッピング構築とブランチターゲット解決
-- MicroOp インタプリタループの実装
-- VM への lazy 変換の統合とキャッシュ
-- **期待**: 全テスト通過、性能変化なし〜微減
-
-### Phase 2: レジスタベース変換
-- スタックシミュレーションによる VReg 割り当てアルゴリズム
-- 算術（I64/F64）、定数、比較、Mov のレジスタベース変換
-- StackPush/StackPop による Raw op との橋渡し
-- **期待**: performance_test で性能改善（特に再帰系）
-
-### Phase 3: 検証とチューニング
-- 全テスト通過の確認
-- performance_test のベースライン比較
-- 必要に応じてチューニング
+### Test 3: for-inループ
+- **Given**: `let arr = [1, 2, 3];`
+- **When**: `var sum = 0; for x in arr { sum = sum + x; } print(sum);`
+- **Then**: 出力が `6`
