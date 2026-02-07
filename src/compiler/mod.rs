@@ -92,12 +92,17 @@ pub struct DumpOptions {
     pub dump_resolved: Option<Option<PathBuf>>,
     /// Dump bytecode to stderr (Some(None)) or to a file (Some(Some(path)))
     pub dump_bytecode: Option<Option<PathBuf>>,
+    /// Dump MicroOps (register-based IR) to stderr (Some(None)) or to a file (Some(Some(path)))
+    pub dump_microops: Option<Option<PathBuf>>,
 }
 
 impl DumpOptions {
     /// Check if any dump option is enabled.
     pub fn any_enabled(&self) -> bool {
-        self.dump_ast.is_some() || self.dump_resolved.is_some() || self.dump_bytecode.is_some()
+        self.dump_ast.is_some()
+            || self.dump_resolved.is_some()
+            || self.dump_bytecode.is_some()
+            || self.dump_microops.is_some()
     }
 }
 
@@ -406,6 +411,12 @@ pub fn run_file_with_dump(
         write_dump(&bytecode_str, output_path.as_ref(), "Bytecode")?;
     }
 
+    // Dump MicroOps if requested
+    if let Some(ref output_path) = dump_opts.dump_microops {
+        let microops_str = dump::format_microops(&chunk);
+        write_dump(&microops_str, output_path.as_ref(), "MicroOps")?;
+    }
+
     // Log JIT settings if tracing is enabled
     if config.trace_jit {
         eprintln!(
@@ -544,6 +555,12 @@ pub fn run_source(
     if let Some(ref output_path) = dump_opts.dump_bytecode {
         let bytecode_str = dump::format_bytecode(&chunk);
         write_dump(&bytecode_str, output_path.as_ref(), "Bytecode")?;
+    }
+
+    // Dump MicroOps if requested
+    if let Some(ref output_path) = dump_opts.dump_microops {
+        let microops_str = dump::format_microops(&chunk);
+        write_dump(&microops_str, output_path.as_ref(), "MicroOps")?;
     }
 
     // Log JIT settings if tracing is enabled

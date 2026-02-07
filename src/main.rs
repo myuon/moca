@@ -129,6 +129,10 @@ enum Commands {
         #[arg(long, value_name = "FILE", num_args = 0..=1)]
         dump_bytecode: Option<Option<PathBuf>>,
 
+        /// Dump MicroOps (register-based IR) to stderr, or to a file with --dump-microops=path
+        #[arg(long, value_name = "FILE", num_args = 0..=1)]
+        dump_microops: Option<Option<PathBuf>>,
+
         /// Profile opcode execution counts
         #[arg(long)]
         profile_opcodes: bool,
@@ -185,6 +189,7 @@ fn main() -> ExitCode {
             dump_ast,
             dump_resolved,
             dump_bytecode,
+            dump_microops,
             profile_opcodes,
             timings,
         } => {
@@ -202,6 +207,7 @@ fn main() -> ExitCode {
                 dump_ast,
                 dump_resolved,
                 dump_bytecode,
+                dump_microops,
             };
 
             let timings_format: Option<TimingsFormat> = timings.map(|t| t.into());
