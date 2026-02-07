@@ -165,7 +165,6 @@ pub enum Op {
     TypeOf,
     ToString,
     ParseInt,
-    StrLen,
 
     // ========================================
     // Exception Handling
@@ -287,7 +286,6 @@ impl Op {
             Op::TypeOf => "TypeOf",
             Op::ToString => "ToString",
             Op::ParseInt => "ParseInt",
-            Op::StrLen => "StrLen",
             Op::Throw => "Throw",
             Op::TryBegin(_) => "TryBegin",
             Op::TryEnd => "TryEnd",

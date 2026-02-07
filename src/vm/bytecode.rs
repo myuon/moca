@@ -377,8 +377,6 @@ const OP_PRINT_DEBUG: u8 = 88;
 const OP_TYPE_OF: u8 = 89;
 const OP_TO_STRING: u8 = 90;
 const OP_PARSE_INT: u8 = 91;
-const OP_STR_LEN: u8 = 92;
-
 // Exception Handling
 const OP_THROW: u8 = 93;
 const OP_TRY_BEGIN: u8 = 94;
@@ -577,8 +575,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::ToString => w.write_all(&[OP_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
-        Op::StrLen => w.write_all(&[OP_STR_LEN])?,
-
         // Exception Handling
         Op::Throw => w.write_all(&[OP_THROW])?,
         Op::TryBegin(target) => {
@@ -734,8 +730,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_TYPE_OF => Op::TypeOf,
         OP_TO_STRING => Op::ToString,
         OP_PARSE_INT => Op::ParseInt,
-        OP_STR_LEN => Op::StrLen,
-
         // Exception Handling
         OP_THROW => Op::Throw,
         OP_TRY_BEGIN => Op::TryBegin(read_u32(r)? as usize),
@@ -1157,7 +1151,6 @@ mod tests {
             Op::TypeOf,
             Op::ToString,
             Op::ParseInt,
-            Op::StrLen,
             // Exception Handling
             Op::Throw,
             Op::TryBegin(100),

@@ -457,8 +457,6 @@ impl Verifier {
             Op::TypeOf => (1, 1),     // pops value, pushes type string
             Op::ToString => (1, 1),   // pops value, pushes string
             Op::ParseInt => (1, 1),   // pops string, pushes int
-            Op::StrLen => (1, 1),     // pops string, pushes length
-
             // Exception handling
             Op::Throw => (1, 0),
             Op::TryBegin(_) => (0, 0),

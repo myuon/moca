@@ -382,7 +382,7 @@ impl Codegen {
                     .index_object_types
                     .get(span)
                     .map(|t| {
-                        matches!(t, Type::Vector(_) | Type::Array(_))
+                        matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
                             || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
                     })
                     .unwrap_or(false);
@@ -648,7 +648,7 @@ impl Codegen {
                     .index_object_types
                     .get(span)
                     .map(|t| {
-                        matches!(t, Type::Vector(_) | Type::Array(_))
+                        matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
                             || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
                     })
                     .unwrap_or(false);
@@ -821,9 +821,7 @@ impl Codegen {
                 }
                 ops.push(Op::Call(*func_index, args.len()));
             }
-            ResolvedExpr::Builtin {
-                name, args, span, ..
-            } => {
+            ResolvedExpr::Builtin { name, args, .. } => {
                 match name.as_str() {
                     "print" | "print_debug" => {
                         if args.len() != 1 {
@@ -879,19 +877,8 @@ impl Codegen {
                             return Err("len takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        // Check argument type to emit correct op
-                        let is_array = self
-                            .len_arg_types
-                            .get(span)
-                            .map(|t| matches!(t, Type::Array(_)))
-                            .unwrap_or(false);
-                        if is_array {
-                            // Array<T> struct: len is in slot 1
-                            ops.push(Op::HeapLoad(1));
-                        } else {
-                            // String: use StrLen (reads slot_count from header)
-                            ops.push(Op::StrLen);
-                        }
+                        // Both Array<T> and String have [ptr, len] layout
+                        ops.push(Op::HeapLoad(1));
                     }
                     "type_of" => {
                         if args.len() != 1 {
@@ -1308,8 +1295,6 @@ impl Codegen {
             "TypeOf" => Ok(Op::TypeOf),
             "ToString" => Ok(Op::ToString),
             "ParseInt" => Ok(Op::ParseInt),
-            "StrLen" => Ok(Op::StrLen),
-
             // Exception handling
             "Throw" => Ok(Op::Throw),
             "TryBegin" => {

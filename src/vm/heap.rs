@@ -311,10 +311,14 @@ impl Heap {
     }
 
     /// Allocate a new string on the heap.
-    /// String is stored with each character as Value::I64 (Unicode code point).
+    /// String is stored as a struct [ptr, len] where ptr points to a data array
+    /// containing each character as Value::I64 (Unicode code point).
     pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
         let slots: Vec<Value> = value.chars().map(|c| Value::I64(c as i64)).collect();
-        self.alloc_slots_with_kind(slots, ObjectKind::String)
+        let len = slots.len();
+        let data_ref = self.alloc_slots(slots)?; // ObjectKind::Slots
+        let struct_slots = vec![Value::Ref(data_ref), Value::I64(len as i64)];
+        self.alloc_slots_with_kind(struct_slots, ObjectKind::String)
     }
 
     /// Allocate a new slot-based heap object.
@@ -680,7 +684,14 @@ mod tests {
         let mut heap = Heap::new();
         let r = heap.alloc_string("hello".to_string()).unwrap();
         let obj = heap.get(r).unwrap();
-        let str_value = obj.slots_to_string();
+        // String struct: [ptr, len]
+        assert_eq!(obj.kind, ObjectKind::String);
+        assert_eq!(obj.slots.len(), 2);
+        assert_eq!(obj.slots[1], Value::I64(5)); // len = 5
+        // Follow ptr to data array
+        let data_ref = obj.slots[0].as_ref().unwrap();
+        let data = heap.get(data_ref).unwrap();
+        let str_value = data.slots_to_string();
         assert_eq!(str_value, "hello");
     }
 

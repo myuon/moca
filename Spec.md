@@ -1,199 +1,141 @@
-# Spec.md — Array<T> 構造体化
+# Spec.md — 文字列の構造体化（String [ptr, len]）
 
 ## 1. Goal
-- 固定長配列（Array）をVecと同じ構造体ベースのメモリレイアウト `[ptr, len]` に統一し、ヒープアクセスパターンを共通化する
+- 文字列の内部表現を `[ptr, len]` の2スロット構造体に変更し、`StrLen` オペコードを削除する。Array<T>・Vec<T>と統一的なメモリレイアウトにする。
 
 ## 2. Non-Goals
-- Arrayに動的リサイズ（push/pop）機能を追加すること
-- Vec<T>の実装を変更すること
-- 文字列（String）のレイアウトを変更すること
-- パフォーマンス最適化（間接参照の除去など）は本タスクでは行わない
+- 文字列のエンコーディング変更（UTF-8化など）
+- 文字列の不変性保証
+- JIT側のStringConst inline最適化（VM側に戻してよい）
+- for-inの文字列対応追加（現状維持）
 
 ## 3. Target Users
-- mocaプログラマ（配列リテラル `[1, 2, 3]` やfor-inループの利用者）
+- moca言語の開発者（内部最適化）
 
 ## 4. Core User Flow
-- 変更前と同じmocaコードがそのまま動作する（破壊的変更なし）
-- `let arr = [1, 2, 3];` → Array<int>構造体が生成される
-- `arr[0]` → ptr経由で要素にアクセス（内部的に2段間接参照）
-- `arr[i] = x` → ptr経由で要素を書き換え
-- `len(arr)` → lenフィールドを読み出し
-- `for x in arr { ... }` → 従来通り動作
+- ユーザーから見た挙動変更なし。内部表現のみ変更。
 
 ## 5. Inputs & Outputs
-- **入力**: 既存のmocaソースコード（配列を使うもの）
-- **出力**: 同じ実行結果（メモリレイアウトのみ変更、観測可能な動作は同一）
+- 入力: moca ソースコード（文字列を使用するプログラム）
+- 出力: 実行結果は変更前と完全一致
 
 ## 6. Tech Stack
-- Rust（コンパイラ・VM実装）
-- moca言語（`std/prelude.mc` でのArray<T>定義）
+- Rust（既存プロジェクト）
+- テスト: `cargo test`（既存スナップショットテスト）
 
 ## 7. Rules & Constraints
 
-### 7.1 Array<T> 構造体定義（`std/prelude.mc`）
+### 7.1 文字列メモリレイアウト変更
 
-```mc
-// Array<T> - Fixed-length array implementation.
-// Layout: [ptr, len]
-struct Array<T> {
-    ptr: int,
-    len: int
+**変更前（現状）:**
+```
+StringConst → ObjectKind::String, slots = [char0, char1, ..., charN]
+len(s)  → StrLen（ヘッダのslot_countを読む）
+s[i]    → HeapLoadDyn（直接アクセス）
+```
+
+**変更後:**
+```
+StringConst → String構造体 [ptr, len] (ObjectKind::String)
+  ptr → データ配列 [char0, char1, ..., charN] (ObjectKind::Slots)
+len(s)  → HeapLoad(1)
+s[i]    → HeapLoad(0) + HeapLoadDyn
+```
+
+### 7.2 各オペコード・関数への影響
+
+| 対象 | 変更内容 |
+|------|---------|
+| `alloc_string` (heap.rs) | データ配列(ObjectKind::Slots)を割当後、`[ptr, len]`構造体(ObjectKind::String)を割当 |
+| `StringConst` (vm.rs) | `alloc_string`の変更により自動対応 |
+| `StrLen` | **削除**。codegen側で `HeapLoad(1)` を emit |
+| `len()` builtin (codegen.rs) | 文字列も `HeapLoad(1)` を emit（StrLen emit → HeapLoad(1)に変更） |
+| 文字列結合 `+` (vm.rs add) | `(Ref, Ref)` パスでString構造体のptr経由でデータを読み、新String構造体を生成 |
+| `value_to_string` (vm.rs) | ObjectKind::String の場合、`ptr` 経由でデータ配列を読んで文字列化 |
+| `print` | `value_to_string` の変更により自動対応 |
+| `type_of` | 変更なし（`ObjectKind::String` のまま → `"string"` を返す） |
+| `for c in str` (codegen.rs) | 現在の実装はArray<T>前提の `HeapLoad(1)` / `HeapLoad(0)+HeapLoadDyn` 。String構造体も同じレイアウトなのでそのまま動く |
+| `s[i]` / `s[i]=x` (codegen.rs) | `has_ptr_layout` チェックに文字列型を追加（必要な場合のみ） |
+| `RefEq` (文字列比較, vm.rs) | ptr経由でデータ配列を比較するよう変更 |
+| JIT StringConst | push_string_helper経由でVM側のalloc_stringを呼ぶので自動対応 |
+
+### 7.3 `alloc_string` 変更
+
+```rust
+pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
+    let slots: Vec<Value> = value.chars().map(|c| Value::I64(c as i64)).collect();
+    let len = slots.len();
+    let data_ref = self.alloc_slots(slots)?;  // ObjectKind::Slots
+    let struct_slots = vec![Value::Ref(data_ref), Value::I64(len as i64)];
+    self.alloc_slots_with_kind(struct_slots, ObjectKind::String)
 }
-
-impl<T> Array<T> {
-    fun get(self, index: int) -> T {
-        return __heap_load(self.ptr, index);
-    }
-
-    fun set(self, index: int, value: T) {
-        __heap_store(self.ptr, index, value);
-    }
-
-    fun len(self) -> int {
-        return self.len;
-    }
-}
 ```
 
-### 7.2 配列リテラルのコンパイル変更（`codegen.rs`）
+### 7.4 Op::StrLen 削除対象ファイル
 
-**変更前**: `[1, 2, 3]` →
-```
-I64Const(1), I64Const(2), I64Const(3), HeapAlloc(3)
-```
-（フラットなヒープオブジェクト1つ）
+ArrayLen削除と同じパターン:
+- `src/vm/ops.rs` - enum variant + describe
+- `src/vm/vm.rs` - execution arm
+- `src/vm/bytecode.rs` - serialization/deserialization + constant
+- `src/vm/verifier.rs` - stack effect
+- `src/compiler/codegen.rs` - from_str parser + len() emit変更
+- `src/compiler/dump.rs` - format
+- JIT (compiler.rs, compiler_x86_64.rs) - match arm（存在する場合）
 
-**変更後**: `[1, 2, 3]` →
-```
-// 1. データ配列を確保
-I64Const(3)
-HeapAllocDynSimple    // → data_ptr (3スロットのヒープオブジェクト)
+### 7.5 codegen len() の変更
 
-// 2. 要素を書き込み
-// data_ptr, index=0, value=1 → HeapStoreDyn
-// data_ptr, index=1, value=2 → HeapStoreDyn
-// data_ptr, index=2, value=3 → HeapStoreDyn
-
-// 3. Array<T>構造体を生成
-// stack: [data_ptr, len(3)]
-HeapAlloc(2)          // → Array<T> { ptr: data_ptr, len: 3 }
-```
-
-### 7.3 配列アクセスのコンパイル変更（`codegen.rs`）
-
-`arr[i]`（Index式）で、型が `Array<T>` の場合:
-- Vecと同じパス: `HeapLoad(0)` でptrを取得 → `HeapLoadDyn` で要素アクセス
-- **方法**: codegen の `is_vector` 判定に `Type::Array(_)` を追加する
-
-`arr[i] = x`（IndexAssign文）でも同様に `HeapLoad(0)` + `HeapStoreDyn` パスを使う。
-
-### 7.4 len() ビルトインの変更（`codegen.rs`）
-
-`len()` の引数型に応じたコード生成:
-- **Array<T>の場合**: `HeapLoad(1)` を生成（lenフィールド = slot 1）
-- **文字列の場合**: `Op::StrLen` を生成（既存のStrLen opを使用）
-- **その他（レガシー）**: 既存の `ArrayLen` は削除
-
-`len()` のコード生成を型認識にするため、typecheckerから `len()` 呼び出しのspan → 引数型のマッピングをcodegenに渡す。
-
-### 7.5 for-inループの変更（`codegen.rs`）
-
-現在:
-```
-LocalGet(arr_slot)
-ArrayLen            // ← 削除対象
-I64LtS
-```
-
-変更後（Array<T>の場合）:
-```
-LocalGet(arr_slot)
-HeapLoad(1)         // lenフィールド読み出し
-I64LtS
-```
-
-要素アクセスも変更:
 ```
 // 変更前
-LocalGet(arr_slot)
-LocalGet(idx_slot)
-HeapLoadDyn
+len(s)  where s: string → StrLen
+len(a)  where a: Array<T> → HeapLoad(1)
 
 // 変更後
-LocalGet(arr_slot)
-HeapLoad(0)         // ptrフィールド読み出し
-LocalGet(idx_slot)
-HeapLoadDyn
+len(s)  where s: string → HeapLoad(1)
+len(a)  where a: Array<T> → HeapLoad(1)
+// → 型判定不要になる。常にHeapLoad(1)をemit
 ```
 
-### 7.6 ArrayLen opの削除
-
-以下のファイルから `ArrayLen` を削除:
-- `src/vm/ops.rs` - enum variant
-- `src/vm/vm.rs` - 実行ハンドラ、JITヘルパー関数、JitCallContext登録
-- `src/vm/verifier.rs` - スタック効果定義
-- `src/vm/bytecode.rs` - シリアライズ/デシリアライズ（バイトコード番号85は欠番にする）
-- `src/compiler/dump.rs` - ダンプ出力
-- `src/compiler/codegen.rs` - from_str パース
-- `src/vm/stackmap.rs` - セーフポイント判定
-- `src/vm/microop_converter.rs` - MicroOp変換
-- `src/jit/compiler_x86_64.rs` - x86_64 JITコンパイラ
-- `src/jit/compiler.rs` (AArch64) - AArch64 JITコンパイラ
-- `src/vm/marshal.rs` - JitCallContext の array_len_helper フィールド
-
-### 7.7 ObjectKind::Array の扱い
-
-- `ObjectKind::Array` は当面残す（将来活用の余地あり）
-- 今回のスコープでは積極的に使用しない（データ配列は `ObjectKind::Slots` のまま）
-
-### 7.8 型アノテーション
-
-- `array<T>` 型アノテーションは引き続き `Array<T>` のエイリアスとして動作する
-- 内部的に `Type::Array(T)` を残し、codegen側で `Array<T>` 構造体として認識する
-
-### 7.9 desugar.rsの変更
-
-`should_desugar_index` に `Type::Array(_)` を追加し:
-- `arr[i]` → `Array::get(arr, i)` にデシュガー
-- `arr[i] = x` → `Array::set(arr, i, x)` にデシュガー
-
-**注意**: desugarでメソッド呼び出しに変換する場合、codegenの `is_vector` 判定にArray追加は不要になる。desugar側に統一すること。
-
 ## 8. Open Questions
-- なし（全て確定済み）
+- なし
 
 ## 9. Acceptance Criteria
 
-1. `struct Array<T> { ptr: int, len: int }` が `std/prelude.mc` に定義されている
-2. `[1, 2, 3]` で `Array<int>` 構造体が生成される（ptr→データ配列、len=3）
-3. `arr[i]` がptr経由の間接アクセスで正しく値を返す
-4. `arr[i] = x` がptr経由で要素を書き換えられる
-5. `len(arr)` がlenフィールドの値を返す（ヒープヘッダのslot_countではない）
-6. `for x in arr { ... }` が正しく動作する
-7. `Op::ArrayLen` がコードベースから完全に削除されている
-8. `len("hello")` が引き続き正しく5を返す（文字列は影響なし）
-9. `cargo test` が全て通る（既存テストの互換性維持）
-10. `cargo clippy` が警告なしで通る
+1. `len("hello")` が `5` を返す（HeapLoad(1)経由）
+2. `"hello"[0]` が `104` (= 'h') を返す（HeapLoad(0) + HeapLoadDyn経由）
+3. `"hello" + " world"` が `"hello world"` を返す
+4. `print("hello")` が `hello` を表示する
+5. `type_of("hello")` が `"string"` を返す
+6. `Op::StrLen` がコードベースから完全に削除されている
+7. `cargo test` が全パスする
+8. `cargo clippy` が警告なしでパスする
+9. `--dump-microops` でhot pathに `StrLen` が出現しない（`HeapLoad(1)` に置換されている）
 
 ## 10. Verification Strategy
-
-- **進捗検証**: 各タスク完了後に `cargo check && cargo test` を実行し、コンパイル・テストが通ることを確認
-- **達成検証**: 全Acceptance Criteriaをチェックリストで確認。特に既存の配列関連スナップショットテストが全て通ること
-- **漏れ検出**: `grep -r "ArrayLen"` でコードベースに残存がないことを確認
+- **進捗検証**: 各タスク完了後に `cargo check && cargo test` を実行
+- **達成検証**: 全Acceptance Criteriaを `cargo test` + 手動確認でチェック
+- **漏れ検出**: `grep -r "StrLen" src/` で残存がないことを確認
 
 ## 11. Test Plan
 
-### Test 1: 配列リテラルの生成とアクセス
-- **Given**: `let arr = [10, 20, 30];`
-- **When**: `print(arr[0]); print(arr[1]); print(arr[2]); print(len(arr));`
-- **Then**: 出力が `10`, `20`, `30`, `3`
+### Scenario 1: 文字列基本操作
+- **Given**: 文字列リテラルを使用するプログラム
+- **When**: `len("hello")`, `"hello"[2]`, `print("hello")` を実行
+- **Then**: それぞれ `5`, `108`, `hello` が得られる
 
-### Test 2: 配列要素の書き換え
-- **Given**: `let arr = [1, 2, 3];`
-- **When**: `arr[1] = 99; print(arr[1]);`
-- **Then**: 出力が `99`
+### Scenario 2: 文字列結合
+- **Given**: 2つの文字列を `+` で結合するプログラム
+- **When**: `"hello" + " " + "world"` を実行
+- **Then**: `"hello world"` が得られる
 
-### Test 3: for-inループ
-- **Given**: `let arr = [1, 2, 3];`
-- **When**: `var sum = 0; for x in arr { sum = sum + x; } print(sum);`
-- **Then**: 出力が `6`
+### Scenario 3: 既存スナップショットテスト全パス
+- **Given**: 既存のテストスイート
+- **When**: `cargo test` を実行
+- **Then**: 全テスト（322 unit + 4 mandelbrot + 16 snapshot）がパスする
+
+## TODO
+
+- [ ] 1. `alloc_string` を `[ptr, len]` 構造体に変更 + `value_to_string` / `RefEq` をString構造体対応に変更
+- [ ] 2. `I64Add` の文字列結合パスをString構造体対応に変更
+- [ ] 3. codegen: `len()` を常に `HeapLoad(1)` にemit + 文字列index対応（`has_ptr_layout`）
+- [ ] 4. `Op::StrLen` をコードベース全体から削除
+- [ ] 5. `cargo fmt && cargo check && cargo test && cargo clippy` を実行して全パスを確認
