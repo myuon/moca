@@ -4,6 +4,7 @@
 
 // JIT-compilable: converts character to lowercase letter index (0-25)
 // Returns -1 if not a letter
+@inline
 fun to_letter_index(ch: int) -> int {
     if ch >= 65 {
         if ch <= 90 { return ch - 65; }

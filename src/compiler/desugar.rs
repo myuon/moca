@@ -91,6 +91,7 @@ impl Desugar {
                 .collect(),
             return_type: fn_def.return_type,
             body: self.desugar_block(fn_def.body),
+            attributes: fn_def.attributes,
             span: fn_def.span,
         }
     }

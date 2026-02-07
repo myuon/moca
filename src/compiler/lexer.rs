@@ -49,6 +49,7 @@ pub enum TokenKind {
     Dot,
     Arrow,    // ->
     Question, // ?
+    At,       // @
 
     // Delimiters
     LParen,
@@ -251,6 +252,10 @@ impl<'a> Lexer<'a> {
                 '"' => self.scan_string()?,
                 '0'..='9' => self.scan_number()?,
                 'a'..='z' | 'A'..='Z' | '_' => self.scan_identifier(),
+                '@' => {
+                    self.advance();
+                    TokenKind::At
+                }
                 '`' => self.scan_escaped_identifier()?,
                 _ => return Err(self.error(&format!("unexpected character '{}'", ch))),
             };

@@ -1,2 +1,2 @@
 // Test unexpected character
-let x = 1 @ 2;
+let x = 1 ~ 2;

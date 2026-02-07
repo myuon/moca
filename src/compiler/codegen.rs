@@ -28,6 +28,17 @@ pub struct Codegen {
     current_local_types: Vec<ValueType>,
     /// Return ValueType for each function (indexed by function index)
     function_return_types: Vec<ValueType>,
+    /// All resolved functions for inline expansion
+    inline_functions: Vec<ResolvedFunction>,
+    /// Offset applied to local variable slots during inline expansion
+    local_offset: usize,
+    /// When inside an inline expansion, collects positions of Jmp placeholders
+    /// that need to be patched to jump to the end of the inlined block.
+    /// None when not inlining.
+    inline_return_patches: Option<Vec<usize>>,
+    /// Tracks total locals count for the current function being compiled
+    /// (grows as inline expansions add locals)
+    current_locals_count: usize,
 }
 
 impl Default for Codegen {
@@ -50,6 +61,10 @@ impl Codegen {
             function_indices: HashMap::new(),
             current_local_types: Vec::new(),
             function_return_types: Vec::new(),
+            inline_functions: Vec::new(),
+            local_offset: 0,
+            inline_return_patches: None,
+            current_locals_count: 0,
         }
     }
 
@@ -67,6 +82,10 @@ impl Codegen {
             function_indices: HashMap::new(),
             current_local_types: Vec::new(),
             function_return_types: Vec::new(),
+            inline_functions: Vec::new(),
+            local_offset: 0,
+            inline_return_patches: None,
+            current_locals_count: 0,
         }
     }
 
@@ -259,6 +278,9 @@ impl Codegen {
             self.function_indices.insert(func.name.clone(), idx);
         }
 
+        // Store resolved functions for inline expansion
+        self.inline_functions = program.functions.clone();
+
         // Pre-compute function return types (first pass)
         self.function_return_types = vec![ValueType::I64; program.functions.len()];
         for (i, func) in program.functions.iter().enumerate() {
@@ -278,6 +300,7 @@ impl Codegen {
                 .iter()
                 .map(Self::type_to_value_type)
                 .collect();
+            self.current_locals_count = func.locals_count;
             let compiled = self.compile_function(func)?;
             self.functions.push(compiled);
             // Add debug info placeholder for each function
@@ -294,7 +317,7 @@ impl Codegen {
             .collect();
 
         // Compile main body
-        let main_locals_count = program.main_locals_count;
+        self.current_locals_count = program.main_locals_count;
         let mut main_ops = Vec::new();
         for stmt in program.main_body {
             self.compile_statement(&stmt, &mut main_ops)?;
@@ -308,7 +331,7 @@ impl Codegen {
         let main_func = Function {
             name: "__main__".to_string(),
             arity: 0,
-            locals_count: main_locals_count,
+            locals_count: self.current_locals_count,
             code: main_ops,
             stackmap: None, // TODO: generate StackMap
             local_types: main_local_types,
@@ -350,11 +373,65 @@ impl Codegen {
         Ok(Function {
             name: func.name.clone(),
             arity: func.params.len(),
-            locals_count: func.locals_count,
+            locals_count: self.current_locals_count,
             code: ops,
             stackmap: None, // TODO: generate StackMap
             local_types,
         })
+    }
+
+    /// Inline-expand a function call. Arguments must already be on the stack.
+    fn compile_inline_call(
+        &mut self,
+        func_index: usize,
+        argc: usize,
+        ops: &mut Vec<Op>,
+    ) -> Result<(), String> {
+        let func = self.inline_functions[func_index].clone();
+
+        // Save codegen state
+        let saved_offset = self.local_offset;
+        let saved_patches = self.inline_return_patches.take();
+        let saved_local_types = self.current_local_types.clone();
+
+        // Allocate local slots for the inlined function at the end of caller's locals
+        let inline_offset = self.current_locals_count;
+        self.current_locals_count += func.locals_count;
+        self.local_offset = inline_offset;
+        self.inline_return_patches = Some(Vec::new());
+
+        // Extend current_local_types with the inlined function's local types
+        for ty in &func.local_types {
+            self.current_local_types.push(Self::type_to_value_type(ty));
+        }
+
+        // Store arguments from stack into local slots (reverse order since last arg is on top)
+        for i in (0..argc).rev() {
+            ops.push(Op::LocalSet(i + inline_offset));
+        }
+
+        // Compile the inlined function body
+        for stmt in &func.body {
+            self.compile_statement(stmt, ops)?;
+        }
+
+        // Implicit return nil (for paths that don't hit an explicit return)
+        ops.push(Op::RefNull);
+
+        // Patch all return jumps to point to the end of the inline block
+        let end_pos = ops.len();
+        if let Some(patches) = &self.inline_return_patches {
+            for &patch_pos in patches {
+                ops[patch_pos] = Op::Jmp(end_pos);
+            }
+        }
+
+        // Restore codegen state
+        self.local_offset = saved_offset;
+        self.inline_return_patches = saved_patches;
+        self.current_local_types = saved_local_types;
+
+        Ok(())
     }
 
     fn compile_statement(
@@ -365,11 +442,11 @@ impl Codegen {
         match stmt {
             ResolvedStatement::Let { slot, init } => {
                 self.compile_expr(init, ops)?;
-                ops.push(Op::LocalSet(*slot));
+                ops.push(Op::LocalSet(*slot + self.local_offset));
             }
             ResolvedStatement::Assign { slot, value } => {
                 self.compile_expr(value, ops)?;
-                ops.push(Op::LocalSet(*slot));
+                ops.push(Op::LocalSet(*slot + self.local_offset));
             }
             ResolvedStatement::IndexAssign {
                 object,
@@ -495,9 +572,9 @@ impl Codegen {
                 //
                 // We use slot for x, slot+1 for __idx, slot+2 for __arr
 
-                let var_slot = *slot;
-                let idx_slot = slot + 1;
-                let arr_slot = slot + 2;
+                let var_slot = *slot + self.local_offset;
+                let idx_slot = slot + 1 + self.local_offset;
+                let arr_slot = slot + 2 + self.local_offset;
 
                 // Store array
                 self.compile_expr(iterable, ops)?;
@@ -549,7 +626,13 @@ impl Codegen {
                 } else {
                     ops.push(Op::RefNull); // Return nil for void
                 }
-                ops.push(Op::Ret);
+                if let Some(ref mut patches) = self.inline_return_patches {
+                    // Inside inline expansion: jump to end of inline block
+                    patches.push(ops.len());
+                    ops.push(Op::Jmp(0)); // Placeholder, patched later
+                } else {
+                    ops.push(Op::Ret);
+                }
             }
             ResolvedStatement::Throw { value } => {
                 self.compile_expr(value, ops)?;
@@ -579,7 +662,7 @@ impl Codegen {
                 ops[try_begin_idx] = Op::TryBegin(catch_start);
 
                 // Exception value is on stack, store to catch variable slot
-                ops.push(Op::LocalSet(*catch_slot));
+                ops.push(Op::LocalSet(*catch_slot + self.local_offset));
 
                 // Compile catch block
                 for stmt in catch_block {
@@ -622,7 +705,7 @@ impl Codegen {
                 ops.push(Op::RefNull);
             }
             ResolvedExpr::Local(slot) => {
-                ops.push(Op::LocalGet(*slot));
+                ops.push(Op::LocalGet(*slot + self.local_offset));
             }
             ResolvedExpr::Array { elements } => {
                 // Array<T> struct layout: [ptr, len]
@@ -815,11 +898,25 @@ impl Codegen {
                 }
             }
             ResolvedExpr::Call { func_index, args } => {
-                // Push arguments
-                for arg in args {
-                    self.compile_expr(arg, ops)?;
+                // Check if the target function is @inline (only 1 level, no nested inlining)
+                if self.inline_return_patches.is_none()
+                    && self
+                        .inline_functions
+                        .get(*func_index)
+                        .is_some_and(|f| f.is_inline)
+                {
+                    // Push arguments
+                    for arg in args {
+                        self.compile_expr(arg, ops)?;
+                    }
+                    self.compile_inline_call(*func_index, args.len(), ops)?;
+                } else {
+                    // Normal call
+                    for arg in args {
+                        self.compile_expr(arg, ops)?;
+                    }
+                    ops.push(Op::Call(*func_index, args.len()));
                 }
-                ops.push(Op::Call(*func_index, args.len()));
             }
             ResolvedExpr::Builtin { name, args, .. } => {
                 match name.as_str() {
@@ -1021,8 +1118,19 @@ impl Codegen {
                     self.compile_expr(arg, ops)?;
                 }
 
-                // Call the resolved method function (self + args)
-                ops.push(Op::Call(*func_index, args.len() + 1));
+                let total_args = args.len() + 1; // self + args
+
+                // Check if the target method is @inline (only 1 level)
+                if self.inline_return_patches.is_none()
+                    && self
+                        .inline_functions
+                        .get(*func_index)
+                        .is_some_and(|f| f.is_inline)
+                {
+                    self.compile_inline_call(*func_index, total_args, ops)?;
+                } else {
+                    ops.push(Op::Call(*func_index, total_args));
+                }
             }
             ResolvedExpr::AssociatedFunctionCall {
                 func_index,
@@ -1034,8 +1142,17 @@ impl Codegen {
                     self.compile_expr(arg, ops)?;
                 }
 
-                // Call the resolved function
-                ops.push(Op::Call(*func_index, args.len()));
+                // Check if the target function is @inline (only 1 level)
+                if self.inline_return_patches.is_none()
+                    && self
+                        .inline_functions
+                        .get(*func_index)
+                        .is_some_and(|f| f.is_inline)
+                {
+                    self.compile_inline_call(*func_index, args.len(), ops)?;
+                } else {
+                    ops.push(Op::Call(*func_index, args.len()));
+                }
             }
             ResolvedExpr::AsmBlock {
                 input_slots,

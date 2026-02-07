@@ -1,117 +1,135 @@
-# Spec.md — HeapLoad/HeapStore系のネイティブMicroOp化
+# Spec.md — JIT: HeapLoad/HeapStore/HeapLoadDyn/HeapStoreDyn ネイティブ対応
 
 ## 1. Goal
-- `HeapLoad(n)` / `HeapLoadDyn` / `HeapStore(n)` / `HeapStoreDyn` をRaw fallbackからネイティブMicroOpに変換し、StackPush/StackPop のオーバーヘッドを排除する
+- JITコンパイラが `HeapLoad(n)` / `HeapStore(n)` / `HeapLoadDyn` / `HeapStoreDyn` をネイティブコードに変換できるようにする
+- これにより、`@inline` で `Vec::get`/`Vec::set` を展開したループがJITコンパイル可能になる
 
 ## 2. Non-Goals
-- `HeapAlloc*` 系のMicroOp化
-- HeapLoad/HeapStoreDynをJITコンパイル対応にする（JITはOp級で動いておりMicroOpは関与しない）
-- 複合命令の特殊化（例: HeapLoad(0) + HeapLoadDyn を1命令にまとめるなど）
+- `HeapAlloc` / `HeapAllocDyn`（ヒープアロケーション）のJIT対応
+- GCセーフポイントの追加（Heap読み書きはアロケーションを発生させないため不要）
+- 境界チェックの追加（インタプリタと同じくチェックなし）
+- JIT内からのVM呼び出しヘルパー方式（アプローチBはフォールバック時のみ）
 
 ## 3. Target Users
-- moca言語の開発者（内部最適化）
+- moca言語のユーザーが、配列・ベクター操作を含むホットループの高速化の恩恵を受ける
 
 ## 4. Core User Flow
-- ユーザーから見た挙動変更なし。MicroOp内部表現のみ変更。
+1. ユーザーが `Vec::get` / `Vec::set` に `@inline` を付与（stdlibで設定済みにする）
+2. ホットループ内で `counts[idx]` 等のベクターアクセスがインライン展開され、`Call` が `HeapLoad`/`HeapLoadDyn`/`HeapStoreDyn` に置き換わる
+3. ループJITコンパイラがこれらのOpをネイティブコードに変換
+4. ループ全体がネイティブ実行される
 
 ## 5. Inputs & Outputs
-- 入力: moca ソースコード
-- 出力: 実行結果は変更前と完全一致。`--dump-microops` でネイティブMicroOp表現に変わる。
+- **入力**: HeapLoad/HeapStore/HeapLoadDyn/HeapStoreDyn を含むバイトコード
+- **出力**: ヒープメモリを直接読み書きするネイティブ機械語（x86_64 / aarch64）
 
 ## 6. Tech Stack
-- Rust（既存プロジェクト）
-- テスト: `cargo test`（既存スナップショットテスト）
+- 言語: Rust（既存プロジェクト）
+- 対象: `src/jit/compiler.rs` (aarch64), `src/jit/compiler_x86_64.rs` (x86_64)
+- テスト: `cargo test`（既存パフォーマンステスト + スナップショットテスト）
 
 ## 7. Rules & Constraints
 
-### 7.1 新しいMicroOpバリアント
+### 7.1 ヒープメモリレイアウト
+- ヒープは `Vec<u64>` の線形メモリ
+- オブジェクトレイアウト: `[Header(1word) | Tag0 | Val0 | Tag1 | Val1 | ...]`
+- 各スロットは2ワード（tag: u64 + payload: u64）= 16バイト
+- スロットNのアドレス: `heap_base + (ref_index + 1 + 2*N) * 8`
 
-```rust
-// dst = heap[src][offset] (静的オフセット)
-MicroOp::HeapLoad { dst: VReg, src: VReg, offset: usize }
+### 7.2 JitCallContext の heap_base
+- `JitCallContext.heap_base` (offset 48) にヒープメモリのベースポインタが格納済み
+- ループ内に `Call` がない場合、GC/アロケーションは発生しないので `heap_base` は安定
 
-// dst = heap[obj][idx] (動的インデックス)
-MicroOp::HeapLoadDyn { dst: VReg, obj: VReg, idx: VReg }
+### 7.3 各Opのセマンティクス
 
-// heap[dst_obj][offset] = src
-MicroOp::HeapStore { dst_obj: VReg, offset: usize, src: VReg }
+**HeapLoad(n)** — 静的フィールド読み込み
+- スタック: `[ref] → [value]`
+- ref の payload がヒープインデックス
+- `heap_base[ref + 1 + 2*n]` から tag、`heap_base[ref + 1 + 2*n + 1]` から payload を読む
+- tag + payload をスタックにプッシュ
 
-// heap[obj][idx] = src
-MicroOp::HeapStoreDyn { obj: VReg, idx: VReg, src: VReg }
+**HeapStore(n)** — 静的フィールド書き込み
+- スタック: `[ref, value] → []`
+- value の tag/payload を `heap_base[ref + 1 + 2*n]` / `heap_base[ref + 1 + 2*n + 1]` に書く
+
+**HeapLoadDyn** — 動的インデックス読み込み
+- スタック: `[ref, index] → [value]`
+- index の payload を整数としてスロット番号に使用
+- `heap_base[ref + 1 + 2*index]` から tag、`+1` から payload
+
+**HeapStoreDyn** — 動的インデックス書き込み
+- スタック: `[ref, index, value] → []`
+- `heap_base[ref + 1 + 2*index]` に tag、`+1` に payload を書く
+
+### 7.4 ネイティブコード生成パターン（x86_64 の例）
+
+```
+; HeapLoad(n): [ref] → [value]
+; ref を VSTACK からポップ
+sub VSTACK, 16
+mov TMP0, [VSTACK + 8]           ; ref payload (heap index)
+mov TMP1, [VM_CTX + 48]          ; heap_base
+; アドレス計算: heap_base + (ref + 1 + 2*n) * 8
+add TMP0, (1 + 2*n)
+shl TMP0, 3                       ; * sizeof(u64)
+add TMP1, TMP0
+; tag + payload を読み込み
+mov TMP2, [TMP1]                  ; tag
+mov TMP3, [TMP1 + 8]             ; payload
+; VSTACK にプッシュ
+mov [VSTACK], TMP2
+mov [VSTACK + 8], TMP3
+add VSTACK, 16
 ```
 
-### 7.2 スタックセマンティクス（Op → MicroOp変換）
+### 7.5 フォールバック戦略
+- 基本はネイティブ実装（アプローチA）で進める
+- 実装上の障壁が発生した場合のみ、VMヘルパー方式（アプローチB）にフォールバックする
 
-| Op | スタック効果 | MicroOp変換 |
-|----|------------|-------------|
-| `HeapLoad(n)` | pop ref, push ref[n] | vstack pop 1 → HeapLoad { dst, src, n } → vstack push dst |
-| `HeapLoadDyn` | pop index, pop ref, push ref[index] | vstack pop 2 → HeapLoadDyn { dst, obj, idx } → vstack push dst |
-| `HeapStore(n)` | pop value, pop ref → ref[n]=value | vstack pop 2 → HeapStore { dst_obj, n, src } |
-| `HeapStoreDyn` | pop value, pop index, pop ref → ref[index]=value | vstack pop 3 → HeapStoreDyn { obj, idx, src } |
+### 7.6 stdlib の @inline 化
+- `Vec<T>::get` と `Vec<T>::set` に `@inline` を付与する（`std/prelude.mc`）
+- これにより、ベクターアクセスがループ内でインライン展開され、HeapLoad系Opに変わる
 
-### 7.3 変換前後のhot path比較（text_countのlen(text)の例）
+### 7.7 text_counting.mc の更新
+- `to_letter_index` に `@inline` を付与
+- パフォーマンステスト（`snapshot_performance`）が to_letter_index の関数JITではなくループJITで動作することを確認
 
-**変更前:**
+## 8. Acceptance Criteria
+
+1. `HeapLoad(n)` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
+2. `HeapStore(n)` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
+3. `HeapLoadDyn` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
+4. `HeapStoreDyn` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
+5. `Vec<T>::get` / `Vec<T>::set` に `@inline` が付与され、ループ内で展開される
+6. text_counting.mc のホットループがJITコンパイルされる（`--trace-jit` でコンパイル成功を確認）
+7. text_counting.mc の実行結果が変わらない（出力一致）
+8. `snapshot_performance` テストがパスする（JITコンパイル発生 + 出力一致）
+9. `cargo fmt && cargo check && cargo test && cargo clippy` が全てパスする
+
+## 9. Verification Strategy
+- **進捗検証**: 各Op実装後に `cargo check && cargo test` でリグレッションなしを確認
+- **達成検証**: `cargo run -- run tests/snapshots/performance/text_counting.mc --trace-jit` でループJITコンパイル成功を確認
+- **漏れ検出**: 全4 Opのネイティブ実装 + 全テストパスで確認
+
+## 10. Test Plan
+
+### Test 1: text_counting ループJITコンパイル成功
 ```
-StackPush v6        ← vstackフラッシュ（不要な退避）
-StackPush v0        ← vstackフラッシュ（不要な退避）
-Raw { HeapLoad(1) } ← スタック経由
-StackPop v13        ← 結果取得
-StackPop v14        ← フラッシュされたv6回収
+Given: to_letter_index に @inline、Vec::get/Vec::set に @inline を付与した text_counting.mc
+When: --trace-jit で実行する
+Then: "[JIT] Compiled loop in 'count_chars'" が出力され、実行結果が元と同一
 ```
 
-**変更後:**
+### Test 2: snapshot_performance テスト通過
 ```
-HeapLoad v13, v0, 1  ← 1命令で完了、vstackフラッシュ不要
+Given: 全パフォーマンステスト
+When: cargo test snapshot_performance を実行
+Then: text_counting を含む全テストが通過（JITコンパイルが1回以上発生）
 ```
 
-### 7.4 変更対象ファイル
-
-| ファイル | 変更内容 |
-|---------|---------|
-| `src/vm/microop.rs` | 4バリアント追加 |
-| `src/vm/microop_converter.rs` | `Op::HeapLoad(n)` / `HeapLoadDyn` / `HeapStore(n)` / `HeapStoreDyn` をネイティブ変換 |
-| `src/vm/vm.rs` | `run_microop()` に4バリアントの実行ハンドラ追加 |
-| `src/compiler/dump.rs` | `format_single_microop` に4バリアントの表示追加 |
-
-## 8. Open Questions
-- なし
-
-## 9. Acceptance Criteria
-
-1. `cargo test` が全パスする
-2. `cargo clippy` が警告なしでパスする
-3. `--dump-microops` でHeapLoad/HeapLoadDynがネイティブMicroOpとして表示される（`Raw { HeapLoad(...) }` ではない）
-4. `--dump-microops` でHeapStore/HeapStoreDynがネイティブMicroOpとして表示される
-5. hot pathでStackPush/StackPopの数が減少している
-6. 既存のスナップショットテスト出力に変化なし
-
-## 10. Verification Strategy
-- **進捗検証**: 各タスク完了後に `cargo check && cargo test` を実行
-- **達成検証**: text_countの `--dump-microops` 出力で `Raw { HeapLoad` が消えていることを目視確認
-- **漏れ検出**: `--dump-microops` 出力を変更前後で比較し、StackPush/StackPopの減少を確認
-
-## 11. Test Plan
-
-### Scenario 1: HeapLoad/HeapLoadDynのネイティブ化
-- **Given**: HeapLoad(n) を含む関数
-- **When**: microop_converterで変換
-- **Then**: `MicroOp::HeapLoad { dst, src, offset }` が生成される（Rawではない）
-
-### Scenario 2: HeapStore/HeapStoreDynのネイティブ化
-- **Given**: HeapStoreDyn を含む関数
-- **When**: microop_converterで変換
-- **Then**: `MicroOp::HeapStoreDyn { obj, idx, src }` が生成される（Rawではない）
-
-### Scenario 3: 既存テスト全パス
-- **Given**: 既存のテストスイート
-- **When**: `cargo test` を実行
-- **Then**: 全テストがパスする
-
-## TODO
-
-- [ ] 1. `MicroOp` enumに4バリアント追加 + dump表示対応
-- [ ] 2. `microop_converter` で HeapLoad(n) / HeapLoadDyn をネイティブ変換
-- [ ] 3. `microop_converter` で HeapStore(n) / HeapStoreDyn をネイティブ変換
-- [ ] 4. `vm.rs` の `run_microop()` に4バリアントの実行ハンドラ追加
-- [ ] 5. `cargo fmt && cargo check && cargo test && cargo clippy` を実行して全パスを確認
+### Test 3: 全テスト通過
+```
+Given: Vec::get/Vec::set に @inline を追加した状態
+When: cargo test を実行
+Then: 全テストが通過（@inline 化によるリグレッションなし）
+```

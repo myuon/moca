@@ -33,8 +33,26 @@ impl<'a> Parser<'a> {
         Ok(Program { items })
     }
 
+    fn parse_attributes(&mut self) -> Result<Vec<Attribute>, String> {
+        let mut attributes = Vec::new();
+        while self.check(&TokenKind::At) {
+            let span = self.current_span();
+            self.advance(); // consume @
+            let name = self.expect_ident()?;
+            attributes.push(Attribute { name, span });
+        }
+        Ok(attributes)
+    }
+
     fn item(&mut self) -> Result<Item, String> {
-        if self.check(&TokenKind::Import) {
+        if self.check(&TokenKind::At) {
+            let attributes = self.parse_attributes()?;
+            if self.check(&TokenKind::Fun) {
+                Ok(Item::FnDef(self.fn_def_with_attributes(attributes)?))
+            } else {
+                Err(self.error("attributes can only be applied to function definitions"))
+            }
+        } else if self.check(&TokenKind::Import) {
             Ok(Item::Import(self.import_stmt()?))
         } else if self.check(&TokenKind::Fun) {
             Ok(Item::FnDef(self.fn_def()?))
@@ -92,7 +110,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn fn_def(&mut self) -> Result<FnDef, String> {
+    fn fn_def_with_attributes(&mut self, attributes: Vec<Attribute>) -> Result<FnDef, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Fun)?;
 
@@ -124,8 +142,13 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             body,
+            attributes,
             span,
         })
+    }
+
+    fn fn_def(&mut self) -> Result<FnDef, String> {
+        self.fn_def_with_attributes(Vec::new())
     }
 
     /// Parse a struct definition: `struct Point { x: int, y: int }` or `struct Container<T> { value: T }`
@@ -220,7 +243,8 @@ impl<'a> Parser<'a> {
 
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
-            methods.push(self.fn_def()?);
+            let attributes = self.parse_attributes()?;
+            methods.push(self.fn_def_with_attributes(attributes)?);
         }
         self.expect(&TokenKind::RBrace)?;
 

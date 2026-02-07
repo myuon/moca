@@ -354,11 +354,13 @@ impl<T> Vec<T> {
     }
 
     // Get a value at the specified index
+    @inline
     fun get(self, index: int) -> T {
         return __heap_load(self.ptr, index);
     }
 
     // Set a value at the specified index
+    @inline
     fun set(self, index: int, value: T) {
         __heap_store(self.ptr, index, value);
     }
