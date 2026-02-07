@@ -2215,9 +2215,10 @@ impl VM {
                 let r = val
                     .as_ref()
                     .ok_or("runtime error: expected array or string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-
-                let len = obj.slots.len() as i64;
+                let len = self
+                    .heap
+                    .slot_count(r)
+                    .ok_or("runtime error: invalid reference")? as i64;
                 self.stack.push(Value::I64(len));
             }
             Op::TypeOf => {
@@ -2267,9 +2268,10 @@ impl VM {
                 let r = value
                     .as_ref()
                     .ok_or("runtime error: str_len expects string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                // Length is the number of slots
-                let len = obj.slots.len() as i64;
+                let len = self
+                    .heap
+                    .slot_count(r)
+                    .ok_or("runtime error: invalid reference")? as i64;
                 self.stack.push(Value::I64(len));
             }
             Op::Throw => {
@@ -2401,14 +2403,11 @@ impl VM {
             Op::HeapLoad(offset) => {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                if offset >= obj.slots.len() {
-                    return Err(format!(
-                        "runtime error: slot index {} out of bounds",
-                        offset
-                    ));
-                }
-                self.stack.push(obj.slots[offset]);
+                let value = self
+                    .heap
+                    .read_slot(r, offset)
+                    .ok_or_else(|| format!("runtime error: slot index {} out of bounds", offset))?;
+                self.stack.push(value);
             }
             Op::HeapStore(offset) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2422,12 +2421,15 @@ impl VM {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                if index < 0 || index as usize >= obj.slots.len() {
+                if index < 0 {
                     return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
-                self.stack.push(obj.slots[index as usize]);
+                let value = self
+                    .heap
+                    .read_slot(r, index as usize)
+                    .ok_or_else(|| format!("runtime error: slot index {} out of bounds", index))?;
+                self.stack.push(value);
             }
             Op::HeapStoreDyn => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
