@@ -1201,6 +1201,70 @@ impl VM {
                         self.stack[caller_stack_base + ret_vreg_idx] = return_value;
                     }
                 }
+                // ========================================
+                // Heap operations (register-based)
+                // ========================================
+                MicroOp::HeapLoad { dst, src, offset } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let r = self.stack[sb + src.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    let value = self.heap.read_slot(r, offset).ok_or_else(|| {
+                        format!("runtime error: slot index {} out of bounds", offset)
+                    })?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::HeapLoadDyn { dst, obj, idx } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let index = self.stack[sb + idx.0]
+                        .as_i64()
+                        .ok_or("runtime error: expected integer index")?;
+                    let r = self.stack[sb + obj.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    if index < 0 {
+                        return Err(format!("runtime error: slot index {} out of bounds", index));
+                    }
+                    let value = self.heap.read_slot(r, index as usize).ok_or_else(|| {
+                        format!("runtime error: slot index {} out of bounds", index)
+                    })?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::HeapStore {
+                    dst_obj,
+                    offset,
+                    src,
+                } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let r = self.stack[sb + dst_obj.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    self.heap.write_slot(r, offset, value).map_err(|e| {
+                        format!("runtime error: slot index {} out of bounds ({})", offset, e)
+                    })?;
+                }
+                MicroOp::HeapStoreDyn { obj, idx, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let index = self.stack[sb + idx.0]
+                        .as_i64()
+                        .ok_or("runtime error: expected integer index")?;
+                    let r = self.stack[sb + obj.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    if index < 0 {
+                        return Err(format!("runtime error: slot index {} out of bounds", index));
+                    }
+                    self.heap
+                        .write_slot(r, index as usize, value)
+                        .map_err(|e| {
+                            format!("runtime error: slot index {} out of bounds ({})", index, e)
+                        })?;
+                }
+
                 MicroOp::StackPush { src } => {
                     let frame = self.frames.last().unwrap();
                     let val = self.stack[frame.stack_base + src.0];

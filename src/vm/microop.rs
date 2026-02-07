@@ -345,6 +345,34 @@ pub enum MicroOp {
     },
 
     // ========================================
+    // Heap operations (register-based)
+    // ========================================
+    /// dst = heap[src][offset] (static offset field access)
+    HeapLoad {
+        dst: VReg,
+        src: VReg,
+        offset: usize,
+    },
+    /// dst = heap[obj][idx] (dynamic index access)
+    HeapLoadDyn {
+        dst: VReg,
+        obj: VReg,
+        idx: VReg,
+    },
+    /// heap[dst_obj][offset] = src (static offset field store)
+    HeapStore {
+        dst_obj: VReg,
+        offset: usize,
+        src: VReg,
+    },
+    /// heap[obj][idx] = src (dynamic index store)
+    HeapStoreDyn {
+        obj: VReg,
+        idx: VReg,
+        src: VReg,
+    },
+
+    // ========================================
     // Stack Bridge (for Raw op interop)
     // ========================================
     /// Push vreg value onto the operand stack (for Raw ops to consume).

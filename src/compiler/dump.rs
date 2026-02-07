@@ -1876,6 +1876,36 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         )),
         MicroOp::RefNull { dst } => output.push_str(&format!("RefNull {}", format_vreg(dst))),
 
+        // Heap operations
+        MicroOp::HeapLoad { dst, src, offset } => output.push_str(&format!(
+            "HeapLoad {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(src),
+            offset
+        )),
+        MicroOp::HeapLoadDyn { dst, obj, idx } => output.push_str(&format!(
+            "HeapLoadDyn {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(obj),
+            format_vreg(idx)
+        )),
+        MicroOp::HeapStore {
+            dst_obj,
+            offset,
+            src,
+        } => output.push_str(&format!(
+            "HeapStore {}, {}, {}",
+            format_vreg(dst_obj),
+            offset,
+            format_vreg(src)
+        )),
+        MicroOp::HeapStoreDyn { obj, idx, src } => output.push_str(&format!(
+            "HeapStoreDyn {}, {}, {}",
+            format_vreg(obj),
+            format_vreg(idx),
+            format_vreg(src)
+        )),
+
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),
