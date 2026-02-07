@@ -20,6 +20,8 @@ pub struct Codegen {
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
     /// Index expression object types (from typechecker)
     index_object_types: HashMap<Span, Type>,
+    /// len() builtin argument types (from typechecker)
+    len_arg_types: HashMap<Span, Type>,
     /// Map function name -> function index (for calling stdlib functions)
     function_indices: HashMap<String, usize>,
     /// ValueType for each local variable in the currently-being-compiled function
@@ -44,6 +46,7 @@ impl Codegen {
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
+            len_arg_types: HashMap::new(),
             function_indices: HashMap::new(),
             current_local_types: Vec::new(),
             function_return_types: Vec::new(),
@@ -60,6 +63,7 @@ impl Codegen {
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
             index_object_types: HashMap::new(),
+            len_arg_types: HashMap::new(),
             function_indices: HashMap::new(),
             current_local_types: Vec::new(),
             function_return_types: Vec::new(),
@@ -69,6 +73,11 @@ impl Codegen {
     /// Set index object types from typechecker.
     pub fn set_index_object_types(&mut self, types: HashMap<Span, Type>) {
         self.index_object_types = types;
+    }
+
+    /// Set len() argument types from typechecker.
+    pub fn set_len_arg_types(&mut self, types: HashMap<Span, Type>) {
+        self.len_arg_types = types;
     }
 
     /// Convert the typechecker's full Type to a simplified ValueType for the VM.
@@ -368,26 +377,26 @@ impl Codegen {
                 value,
                 span,
             } => {
-                // Check if the object is a Vector or Vec<T> generic struct (from type info)
-                let is_vector = self
+                // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
+                let has_ptr_layout = self
                     .index_object_types
                     .get(span)
                     .map(|t| {
-                        matches!(t, Type::Vector(_))
+                        matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
                             || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
                     })
                     .unwrap_or(false);
 
-                if is_vector {
-                    // Vector assign: load ptr field (slot 0) then store element
-                    // Vec<T> layout: [ptr, len, cap]
+                if has_ptr_layout {
+                    // Ptr-based layout: load ptr field (slot 0) then store element
+                    // Array<T> layout: [ptr, len], Vec<T> layout: [ptr, len, cap]
                     self.compile_expr(object, ops)?;
                     ops.push(Op::HeapLoad(0)); // Load ptr field
                     self.compile_expr(index, ops)?;
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStoreDyn);
                 } else {
-                    // Array/struct assign: direct HeapStoreDyn
+                    // Struct/string assign: direct HeapStoreDyn
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
                     self.compile_expr(value, ops)?;
@@ -500,17 +509,18 @@ impl Codegen {
 
                 let loop_start = ops.len();
 
-                // Check: idx < arr.len()
+                // Check: idx < arr.len (Array<T> struct: slot 1 = len)
                 ops.push(Op::LocalGet(idx_slot));
                 ops.push(Op::LocalGet(arr_slot));
-                ops.push(Op::ArrayLen);
+                ops.push(Op::HeapLoad(1)); // len field of Array<T>
                 ops.push(Op::I64LtS);
 
                 let jump_to_end = ops.len();
                 ops.push(Op::BrIfFalse(0)); // Placeholder
 
-                // x = arr[idx]
+                // x = arr[idx] (Array<T> struct: slot 0 = ptr)
                 ops.push(Op::LocalGet(arr_slot));
+                ops.push(Op::HeapLoad(0)); // ptr field of Array<T>
                 ops.push(Op::LocalGet(idx_slot));
                 ops.push(Op::HeapLoadDyn);
                 ops.push(Op::LocalSet(var_slot));
@@ -615,36 +625,43 @@ impl Codegen {
                 ops.push(Op::LocalGet(*slot));
             }
             ResolvedExpr::Array { elements } => {
-                // Array layout: [elem0, elem1, ...] (length is slots.len())
+                // Array<T> struct layout: [ptr, len]
+                // 1. Push all elements and allocate data array
+                let n = elements.len();
                 for elem in elements {
                     self.compile_expr(elem, ops)?;
                 }
-                ops.push(Op::HeapAlloc(elements.len()));
+                ops.push(Op::HeapAlloc(n)); // data array with n elements
+                // Stack: [data_ptr]
+
+                // 2. Create Array<T> struct: { ptr: data_ptr, len: n }
+                ops.push(Op::I64Const(n as i64));
+                ops.push(Op::HeapAllocArray(2)); // Array struct with [ptr, len]
             }
             ResolvedExpr::Index {
                 object,
                 index,
                 span,
             } => {
-                // Check if the object is a Vector or Vec<T> generic struct (from type info)
-                let is_vector = self
+                // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
+                let has_ptr_layout = self
                     .index_object_types
                     .get(span)
                     .map(|t| {
-                        matches!(t, Type::Vector(_))
+                        matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
                             || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
                     })
                     .unwrap_or(false);
 
-                if is_vector {
-                    // Vector access: load ptr field (slot 0) then access element
-                    // Vec<T> layout: [ptr, len, cap]
+                if has_ptr_layout {
+                    // Ptr-based layout: load ptr field (slot 0) then access element
+                    // Array<T> layout: [ptr, len], Vec<T> layout: [ptr, len, cap]
                     self.compile_expr(object, ops)?;
                     ops.push(Op::HeapLoad(0)); // Load ptr field
                     self.compile_expr(index, ops)?;
                     ops.push(Op::HeapLoadDyn);
                 } else {
-                    // Array/struct access: direct HeapLoadDyn
+                    // Struct/string access: direct HeapLoadDyn
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
                     ops.push(Op::HeapLoadDyn);
@@ -804,7 +821,7 @@ impl Codegen {
                 }
                 ops.push(Op::Call(*func_index, args.len()));
             }
-            ResolvedExpr::Builtin { name, args } => {
+            ResolvedExpr::Builtin { name, args, .. } => {
                 match name.as_str() {
                     "print" | "print_debug" => {
                         if args.len() != 1 {
@@ -860,9 +877,8 @@ impl Codegen {
                             return Err("len takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        // len works on both arrays and strings
-                        // VM will handle type dispatch
-                        ops.push(Op::ArrayLen); // This also works for strings via VM dispatch
+                        // Both Array<T> and String have [ptr, len] layout
+                        ops.push(Op::HeapLoad(1));
                     }
                     "type_of" => {
                         if args.len() != 1 {
@@ -1258,6 +1274,10 @@ impl Codegen {
                 let n = self.expect_int_arg(args, 0, op_name)? as usize;
                 Ok(Op::HeapAlloc(n))
             }
+            "HeapAllocArray" => {
+                let n = self.expect_int_arg(args, 0, op_name)? as usize;
+                Ok(Op::HeapAllocArray(n))
+            }
             "HeapAllocDyn" | "AllocHeapDyn" => Ok(Op::HeapAllocDyn),
             "HeapAllocDynSimple" => Ok(Op::HeapAllocDynSimple),
             "HeapLoad" => {
@@ -1271,15 +1291,10 @@ impl Codegen {
             "HeapLoadDyn" => Ok(Op::HeapLoadDyn),
             "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
 
-            // Array operations
-            "ArrayLen" => Ok(Op::ArrayLen),
-
             // Type operations
             "TypeOf" => Ok(Op::TypeOf),
             "ToString" => Ok(Op::ToString),
             "ParseInt" => Ok(Op::ParseInt),
-            "StrLen" => Ok(Op::StrLen),
-
             // Exception handling
             "Throw" => Ok(Op::Throw),
             "TryBegin" => {

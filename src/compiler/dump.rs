@@ -10,6 +10,8 @@ use crate::compiler::resolver::{
     ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement, ResolvedStruct,
 };
 use crate::compiler::types::Type;
+use crate::vm::microop::{CmpCond, MicroOp, VReg};
+use crate::vm::microop_converter;
 use crate::vm::{Chunk, Function, Op};
 use std::collections::HashMap;
 
@@ -1086,7 +1088,7 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedExpr::Builtin { name, args } => {
+            ResolvedExpr::Builtin { name, args, .. } => {
                 self.write(&format!("{}Builtin({}) args:{}", prefix, name, args.len()));
                 self.newline();
                 for (i, arg) in args.iter().enumerate() {
@@ -1488,14 +1490,13 @@ impl<'a> Disassembler<'a> {
 
             // Heap operations
             Op::HeapAlloc(n) => self.output.push_str(&format!("HeapAlloc {}", n)),
+            Op::HeapAllocArray(n) => self.output.push_str(&format!("HeapAllocArray {}", n)),
             Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
             Op::HeapAllocDynSimple => self.output.push_str("HeapAllocDynSimple"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
             Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
-            Op::ArrayLen => self.output.push_str("ArrayLen"),
-
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
@@ -1503,8 +1504,6 @@ impl<'a> Disassembler<'a> {
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::ToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
-            Op::StrLen => self.output.push_str("StrLen"),
-
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),
             Op::TryBegin(target) => self.output.push_str(&format!("TryBegin {}", target)),
@@ -1538,6 +1537,412 @@ impl<'a> Disassembler<'a> {
 pub fn format_bytecode(chunk: &Chunk) -> String {
     let mut disassembler = Disassembler::new(chunk);
     disassembler.disassemble().to_string()
+}
+
+/// Format a chunk as disassembled MicroOp (register-based IR) string.
+pub fn format_microops(chunk: &Chunk) -> String {
+    let mut output = String::new();
+
+    for (i, func) in chunk.functions.iter().enumerate() {
+        let converted = microop_converter::convert(func);
+        output.push_str(&format!(
+            "== Function[{}]: {} (arity: {}, locals: {}, temps: {}) ==\n",
+            i, func.name, func.arity, func.locals_count, converted.temps_count
+        ));
+        format_microop_code(&mut output, &converted.micro_ops, chunk);
+        output.push('\n');
+    }
+
+    // Main
+    let converted = microop_converter::convert(&chunk.main);
+    output.push_str(&format!(
+        "== Main (locals: {}, temps: {}) ==\n",
+        chunk.main.locals_count, converted.temps_count
+    ));
+    format_microop_code(&mut output, &converted.micro_ops, chunk);
+
+    output
+}
+
+fn format_microop_code(output: &mut String, ops: &[MicroOp], chunk: &Chunk) {
+    for (pc, mop) in ops.iter().enumerate() {
+        output.push_str(&format!("{:04}: ", pc));
+        format_single_microop(output, mop, chunk);
+        output.push('\n');
+    }
+}
+
+fn format_vreg(v: &VReg) -> String {
+    format!("v{}", v.0)
+}
+
+fn format_cond(cond: &CmpCond) -> &'static str {
+    match cond {
+        CmpCond::Eq => "eq",
+        CmpCond::Ne => "ne",
+        CmpCond::LtS => "lt",
+        CmpCond::LeS => "le",
+        CmpCond::GtS => "gt",
+        CmpCond::GeS => "ge",
+    }
+}
+
+fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
+    match mop {
+        // Control flow
+        MicroOp::Jmp {
+            target,
+            old_pc,
+            old_target,
+        } => output.push_str(&format!("Jmp {} (op {}→{})", target, old_pc, old_target)),
+        MicroOp::BrIf { cond, target } => {
+            output.push_str(&format!("BrIf {}, target={}", format_vreg(cond), target))
+        }
+        MicroOp::BrIfFalse { cond, target } => output.push_str(&format!(
+            "BrIfFalse {}, target={}",
+            format_vreg(cond),
+            target
+        )),
+        MicroOp::Call { func_id, args, ret } => {
+            let func_name = chunk
+                .functions
+                .get(*func_id)
+                .map(|f| f.name.as_str())
+                .unwrap_or("<?>");
+            let args_str: Vec<String> = args.iter().map(format_vreg).collect();
+            let ret_str = match ret {
+                Some(r) => format!(" → {}", format_vreg(r)),
+                None => String::new(),
+            };
+            output.push_str(&format!(
+                "Call {}({}){}  ; {}",
+                func_id,
+                args_str.join(", "),
+                ret_str,
+                func_name
+            ))
+        }
+        MicroOp::Ret { src } => match src {
+            Some(s) => output.push_str(&format!("Ret {}", format_vreg(s))),
+            None => output.push_str("Ret"),
+        },
+
+        // Move / Constants
+        MicroOp::Mov { dst, src } => {
+            output.push_str(&format!("Mov {}, {}", format_vreg(dst), format_vreg(src)))
+        }
+        MicroOp::ConstI64 { dst, imm } => {
+            output.push_str(&format!("ConstI64 {}, {}", format_vreg(dst), imm))
+        }
+        MicroOp::ConstI32 { dst, imm } => {
+            output.push_str(&format!("ConstI32 {}, {}", format_vreg(dst), imm))
+        }
+        MicroOp::ConstF64 { dst, imm } => {
+            output.push_str(&format!("ConstF64 {}, {}", format_vreg(dst), imm))
+        }
+        MicroOp::ConstF32 { dst, imm } => {
+            output.push_str(&format!("ConstF32 {}, {}", format_vreg(dst), imm))
+        }
+
+        // i64 ALU
+        MicroOp::AddI64 { dst, a, b } => output.push_str(&format!(
+            "AddI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::AddI64Imm { dst, a, imm } => output.push_str(&format!(
+            "AddI64Imm {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            imm
+        )),
+        MicroOp::SubI64 { dst, a, b } => output.push_str(&format!(
+            "SubI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::MulI64 { dst, a, b } => output.push_str(&format!(
+            "MulI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::DivI64 { dst, a, b } => output.push_str(&format!(
+            "DivI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::RemI64 { dst, a, b } => output.push_str(&format!(
+            "RemI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::NegI64 { dst, src } => output.push_str(&format!(
+            "NegI64 {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+
+        // i32 ALU
+        MicroOp::AddI32 { dst, a, b } => output.push_str(&format!(
+            "AddI32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::SubI32 { dst, a, b } => output.push_str(&format!(
+            "SubI32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::MulI32 { dst, a, b } => output.push_str(&format!(
+            "MulI32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::DivI32 { dst, a, b } => output.push_str(&format!(
+            "DivI32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::RemI32 { dst, a, b } => output.push_str(&format!(
+            "RemI32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::EqzI32 { dst, src } => output.push_str(&format!(
+            "EqzI32 {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+
+        // f64 ALU
+        MicroOp::AddF64 { dst, a, b } => output.push_str(&format!(
+            "AddF64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::SubF64 { dst, a, b } => output.push_str(&format!(
+            "SubF64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::MulF64 { dst, a, b } => output.push_str(&format!(
+            "MulF64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::DivF64 { dst, a, b } => output.push_str(&format!(
+            "DivF64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::NegF64 { dst, src } => output.push_str(&format!(
+            "NegF64 {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+
+        // f32 ALU
+        MicroOp::AddF32 { dst, a, b } => output.push_str(&format!(
+            "AddF32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::SubF32 { dst, a, b } => output.push_str(&format!(
+            "SubF32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::MulF32 { dst, a, b } => output.push_str(&format!(
+            "MulF32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::DivF32 { dst, a, b } => output.push_str(&format!(
+            "DivF32 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::NegF32 { dst, src } => output.push_str(&format!(
+            "NegF32 {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+
+        // Comparisons
+        MicroOp::CmpI64 { dst, a, b, cond } => output.push_str(&format!(
+            "CmpI64.{} {}, {}, {}",
+            format_cond(cond),
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::CmpI64Imm { dst, a, imm, cond } => output.push_str(&format!(
+            "CmpI64Imm.{} {}, {}, {}",
+            format_cond(cond),
+            format_vreg(dst),
+            format_vreg(a),
+            imm
+        )),
+        MicroOp::CmpI32 { dst, a, b, cond } => output.push_str(&format!(
+            "CmpI32.{} {}, {}, {}",
+            format_cond(cond),
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::CmpF64 { dst, a, b, cond } => output.push_str(&format!(
+            "CmpF64.{} {}, {}, {}",
+            format_cond(cond),
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::CmpF32 { dst, a, b, cond } => output.push_str(&format!(
+            "CmpF32.{} {}, {}, {}",
+            format_cond(cond),
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+
+        // Type conversions
+        MicroOp::I32WrapI64 { dst, src }
+        | MicroOp::I64ExtendI32S { dst, src }
+        | MicroOp::I64ExtendI32U { dst, src }
+        | MicroOp::F64ConvertI64S { dst, src }
+        | MicroOp::I64TruncF64S { dst, src }
+        | MicroOp::F64ConvertI32S { dst, src }
+        | MicroOp::F32ConvertI32S { dst, src }
+        | MicroOp::F32ConvertI64S { dst, src }
+        | MicroOp::I32TruncF32S { dst, src }
+        | MicroOp::I32TruncF64S { dst, src }
+        | MicroOp::I64TruncF32S { dst, src }
+        | MicroOp::F32DemoteF64 { dst, src }
+        | MicroOp::F64PromoteF32 { dst, src } => {
+            // Use Debug name of the variant
+            let name = match mop {
+                MicroOp::I32WrapI64 { .. } => "I32WrapI64",
+                MicroOp::I64ExtendI32S { .. } => "I64ExtendI32S",
+                MicroOp::I64ExtendI32U { .. } => "I64ExtendI32U",
+                MicroOp::F64ConvertI64S { .. } => "F64ConvertI64S",
+                MicroOp::I64TruncF64S { .. } => "I64TruncF64S",
+                MicroOp::F64ConvertI32S { .. } => "F64ConvertI32S",
+                MicroOp::F32ConvertI32S { .. } => "F32ConvertI32S",
+                MicroOp::F32ConvertI64S { .. } => "F32ConvertI64S",
+                MicroOp::I32TruncF32S { .. } => "I32TruncF32S",
+                MicroOp::I32TruncF64S { .. } => "I32TruncF64S",
+                MicroOp::I64TruncF32S { .. } => "I64TruncF32S",
+                MicroOp::F32DemoteF64 { .. } => "F32DemoteF64",
+                MicroOp::F64PromoteF32 { .. } => "F64PromoteF32",
+                _ => unreachable!(),
+            };
+            output.push_str(&format!(
+                "{} {}, {}",
+                name,
+                format_vreg(dst),
+                format_vreg(src)
+            ))
+        }
+
+        // Ref operations
+        MicroOp::RefEq { dst, a, b } => output.push_str(&format!(
+            "RefEq {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::RefIsNull { dst, src } => output.push_str(&format!(
+            "RefIsNull {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::RefNull { dst } => output.push_str(&format!("RefNull {}", format_vreg(dst))),
+
+        // Heap operations
+        MicroOp::HeapLoad { dst, src, offset } => output.push_str(&format!(
+            "HeapLoad {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(src),
+            offset
+        )),
+        MicroOp::HeapLoadDyn { dst, obj, idx } => output.push_str(&format!(
+            "HeapLoadDyn {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(obj),
+            format_vreg(idx)
+        )),
+        MicroOp::HeapStore {
+            dst_obj,
+            offset,
+            src,
+        } => output.push_str(&format!(
+            "HeapStore {}, {}, {}",
+            format_vreg(dst_obj),
+            offset,
+            format_vreg(src)
+        )),
+        MicroOp::HeapStoreDyn { obj, idx, src } => output.push_str(&format!(
+            "HeapStoreDyn {}, {}, {}",
+            format_vreg(obj),
+            format_vreg(idx),
+            format_vreg(src)
+        )),
+
+        // Stack bridge
+        MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
+        MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),
+
+        // Raw fallback
+        MicroOp::Raw { op } => {
+            output.push_str("Raw { ");
+            // Reuse the Op disassembler for the inner op
+            match op {
+                Op::Call(func_idx, argc) => {
+                    let func_name = chunk
+                        .functions
+                        .get(*func_idx)
+                        .map(|f| f.name.as_str())
+                        .unwrap_or("<?>");
+                    output.push_str(&format!("Call {}, {} ; {}", func_idx, argc, func_name));
+                }
+                Op::StringConst(idx) => {
+                    let s = chunk
+                        .strings
+                        .get(*idx)
+                        .map(|s| {
+                            let escaped = s.replace('\n', "\\n").replace('\t', "\\t");
+                            if escaped.len() > 40 {
+                                format!("{}...", &escaped[..40])
+                            } else {
+                                escaped
+                            }
+                        })
+                        .unwrap_or_else(|| "<?>".to_string());
+                    output.push_str(&format!("StringConst {} ; \"{}\"", idx, s));
+                }
+                _ => output.push_str(&format!("{:?}", op)),
+            }
+            output.push_str(" }");
+        }
+    }
 }
 
 #[cfg(test)]

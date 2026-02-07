@@ -602,11 +602,6 @@ impl JitCompiler {
                 self.type_stack.push(ValueType::Ref);
                 self.emit_push_string(*idx)
             }
-            Op::ArrayLen => {
-                self.type_stack.pop();
-                self.type_stack.push(ValueType::I64);
-                self.emit_array_len()
-            }
             Op::Syscall(syscall_num, argc) => {
                 for _ in 0..*argc {
                     self.type_stack.pop();
@@ -1958,53 +1953,6 @@ impl JitCompiler {
         }
 
         self.stack_depth += 1;
-
-        Ok(())
-    }
-
-    /// Emit ArrayLen operation.
-    /// Pops a Ref from stack, reads slot_count from heap header, pushes i64.
-    ///
-    /// Heap header layout (64 bits):
-    /// - bits 30-61: slot_count (32 bits)
-    ///
-    /// JitCallContext layout:
-    /// - offset 48: heap_base (*const u64)
-    fn emit_array_len(&mut self) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
-
-        // Pop the Ref from JIT stack
-        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
-        // Load payload (ref index) - tag at offset 0, payload at offset 8
-        asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // TMP0 = ref_index
-
-        // Load heap_base from JitCallContext (offset 48)
-        asm.mov_rm(regs::TMP1, regs::VM_CTX, 48); // TMP1 = heap_base
-
-        // Calculate header address: heap_base + ref_index * 8
-        // TMP0 = ref_index << 3 (multiply by 8)
-        asm.shl_ri(regs::TMP0, 3);
-        // TMP1 = heap_base + offset
-        asm.add_rr(regs::TMP1, regs::TMP0);
-
-        // Load header from memory: TMP0 = *TMP1
-        asm.mov_rm(regs::TMP0, regs::TMP1, 0);
-
-        // Extract slot_count: (header >> 30) & 0xFFFFFFFF
-        asm.shr_ri(regs::TMP0, 30);
-        // Mask to 32 bits: AND with 0xFFFFFFFF
-        asm.mov_ri64(regs::TMP1, 0xFFFFFFFF);
-        asm.and_rr(regs::TMP0, regs::TMP1);
-
-        // Push result as i64 onto the JIT stack
-        // Store tag (0 = int)
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::VSTACK, 0, regs::TMP1);
-        // Store slot_count as payload
-        asm.mov_mr(regs::VSTACK, 8, regs::TMP0);
-        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
-
-        // Stack depth unchanged: -1 (pop ref) + 1 (push len) = 0
 
         Ok(())
     }

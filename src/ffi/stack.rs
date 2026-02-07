@@ -238,7 +238,16 @@ pub unsafe extern "C" fn moca_to_string(
         if let Some(idx) = resolve_index(wrapper.ffi_stack.len(), index) {
             if let Value::Ref(r) = wrapper.ffi_stack[idx] {
                 if let Some(obj) = wrapper.vm.heap().get(r) {
-                    let str_value = obj.slots_to_string();
+                    // String struct: [ptr, len], follow ptr to data array
+                    let str_value = if let Some(data_ref) = obj.slots[0].as_ref() {
+                        if let Some(data) = wrapper.vm.heap().get(data_ref) {
+                            data.slots_to_string()
+                        } else {
+                            obj.slots_to_string()
+                        }
+                    } else {
+                        obj.slots_to_string()
+                    };
                     return FFI_STRING_BUFFER.with(|buf| {
                         let mut b = buf.borrow_mut();
                         *b = str_value;

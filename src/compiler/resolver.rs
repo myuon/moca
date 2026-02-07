@@ -128,6 +128,7 @@ pub enum ResolvedExpr {
     Builtin {
         name: String,
         args: Vec<ResolvedExpr>,
+        span: Span,
     },
     /// Spawn a thread with a specific function
     SpawnFunc {
@@ -518,6 +519,8 @@ impl<'a> Resolver<'a> {
             ResolvedExpr::MethodCall {
                 return_struct_name, ..
             } => return_struct_name.clone(),
+            // Array literals map to Array<T> struct
+            ResolvedExpr::Array { .. } => Some("Array".to_string()),
             _ => None,
         }
     }
@@ -558,6 +561,10 @@ impl<'a> Resolver<'a> {
                         } else {
                             self.get_struct_name(&init)
                         }
+                    }
+                    // array<T> maps to Array<T> generic struct
+                    Some(crate::compiler::types::TypeAnnotation::Array(_)) => {
+                        Some("Array".to_string())
                     }
                     // vec<T> maps to Vec<T> generic struct
                     Some(crate::compiler::types::TypeAnnotation::Vec(_)) => Some("Vec".to_string()),
@@ -827,6 +834,7 @@ impl<'a> Resolver<'a> {
                     return Ok(ResolvedExpr::Builtin {
                         name: callee,
                         args: resolved_args,
+                        span,
                     });
                 }
 
@@ -901,6 +909,10 @@ impl<'a> Resolver<'a> {
                     .into_iter()
                     .map(|a| self.resolve_expr(a, scope))
                     .collect::<Result<_, _>>()?;
+
+                // If struct_name wasn't found from the unresolved AST,
+                // try to get it from the resolved object (e.g., chained method calls)
+                let struct_name = struct_name.or_else(|| self.get_struct_name(&resolved_object));
 
                 // Resolve method to function index (static dispatch)
                 let (func_index, return_struct_name) = if let Some(sn) = &struct_name {

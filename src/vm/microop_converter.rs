@@ -704,6 +704,46 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             }
 
             // ============================================================
+            // Heap operations → register-based
+            // ============================================================
+            Op::HeapLoad(offset) => {
+                // pop ref, push ref[offset]
+                let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapLoad {
+                    dst,
+                    src,
+                    offset: *offset,
+                });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::HeapLoadDyn => {
+                // pop index, pop ref, push ref[index]
+                let idx = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let obj = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapLoadDyn { dst, obj, idx });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::HeapStore(offset) => {
+                // pop value, pop ref → ref[offset] = value
+                let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let dst_obj = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapStore {
+                    dst_obj,
+                    offset: *offset,
+                    src,
+                });
+            }
+            Op::HeapStoreDyn => {
+                // pop value, pop index, pop ref → ref[index] = value
+                let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let idx = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let obj = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapStoreDyn { obj, idx, src });
+            }
+
+            // ============================================================
             // Raw with PC target remapping
             // ============================================================
             Op::TryBegin(handler_pc) => {

@@ -3,7 +3,7 @@ float
 bool
 nil
 string
-slots
+array
 42
 3.14
 true

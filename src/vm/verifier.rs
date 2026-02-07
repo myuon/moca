@@ -443,14 +443,13 @@ impl Verifier {
 
             // Heap operations
             Op::HeapAlloc(n) => (*n, 1),      // pops n slots, pushes ref
+            Op::HeapAllocArray(n) => (*n, 1), // pops n slots, pushes ref (Array kind)
             Op::HeapAllocDyn => (1, 1),       // pops size + size values, pushes ref (simplified)
             Op::HeapAllocDynSimple => (1, 1), // pops size, pushes ref (null-initialized)
             Op::HeapLoad(_) => (1, 1),        // pops ref, pushes value
             Op::HeapStore(_) => (2, 0),       // pops ref and value
             Op::HeapLoadDyn => (2, 1),        // pops ref and index, pushes value
             Op::HeapStoreDyn => (3, 0),       // pops ref, index, and value
-            Op::ArrayLen => (1, 1),           // pops ref, pushes length
-
             // System / Builtins
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::GcHint(_) => (0, 0),
@@ -458,8 +457,6 @@ impl Verifier {
             Op::TypeOf => (1, 1),     // pops value, pushes type string
             Op::ToString => (1, 1),   // pops value, pushes string
             Op::ParseInt => (1, 1),   // pops string, pushes int
-            Op::StrLen => (1, 1),     // pops string, pushes length
-
             // Exception handling
             Op::Throw => (1, 0),
             Op::TryBegin(_) => (0, 0),

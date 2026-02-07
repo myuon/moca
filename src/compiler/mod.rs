@@ -92,12 +92,17 @@ pub struct DumpOptions {
     pub dump_resolved: Option<Option<PathBuf>>,
     /// Dump bytecode to stderr (Some(None)) or to a file (Some(Some(path)))
     pub dump_bytecode: Option<Option<PathBuf>>,
+    /// Dump MicroOps (register-based IR) to stderr (Some(None)) or to a file (Some(Some(path)))
+    pub dump_microops: Option<Option<PathBuf>>,
 }
 
 impl DumpOptions {
     /// Check if any dump option is enabled.
     pub fn any_enabled(&self) -> bool {
-        self.dump_ast.is_some() || self.dump_resolved.is_some() || self.dump_bytecode.is_some()
+        self.dump_ast.is_some()
+            || self.dump_resolved.is_some()
+            || self.dump_bytecode.is_some()
+            || self.dump_microops.is_some()
     }
 }
 
@@ -117,10 +122,12 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
         .check_program(&program)
         .map_err(|errors| format_type_errors(filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    let len_arg_types = typechecker.len_arg_types().clone();
     let local_variable_types = typechecker.local_variable_types();
 
     // Desugar (expand syntax sugar like new literals, index operations)
-    let program = desugar::desugar_program(program, index_object_types.clone());
+    let program =
+        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
@@ -133,6 +140,7 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
     // Code generation
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
+    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
 
     // Execution
@@ -190,10 +198,12 @@ pub fn run_file_capturing_output(
             .check_program(&program)
             .map_err(|errors| format_type_errors(&filename, &errors))?;
         let index_object_types = typechecker.index_object_types().clone();
+        let len_arg_types = typechecker.len_arg_types().clone();
 
         let local_variable_types = typechecker.local_variable_types();
         // Desugar (expand syntax sugar like new literals, index operations)
-        let program = desugar::desugar_program(program, index_object_types.clone());
+        let program =
+            desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
 
         // Monomorphisation (specialize generic functions/structs)
         let program = monomorphise::monomorphise_program(program);
@@ -206,6 +216,7 @@ pub fn run_file_capturing_output(
         // Code generation
         let mut codegen = Codegen::new();
         codegen.set_index_object_types(index_object_types);
+        codegen.set_len_arg_types(len_arg_types);
         let chunk = codegen.compile(resolved)?;
 
         // Execution with output capture using wrappers that write to shared buffers
@@ -277,10 +288,12 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    let len_arg_types = typechecker.len_arg_types().clone();
 
     let local_variable_types = typechecker.local_variable_types();
     // Desugar (expand syntax sugar like new literals, index operations)
-    let program = desugar::desugar_program(program, index_object_types.clone());
+    let program =
+        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
@@ -293,6 +306,7 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     // Code generation
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
+    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
 
     // Log JIT settings if tracing is enabled
@@ -367,12 +381,14 @@ pub fn run_file_with_dump(
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    let len_arg_types = typechecker.len_arg_types().clone();
     timings.typecheck = start.elapsed();
     let local_variable_types = typechecker.local_variable_types();
 
     // Desugar (expand syntax sugar like new literals, index operations)
     let start = Instant::now();
-    let program = desugar::desugar_program(program, index_object_types.clone());
+    let program =
+        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
     timings.desugar = start.elapsed();
 
     // Monomorphisation (specialize generic functions/structs)
@@ -397,6 +413,7 @@ pub fn run_file_with_dump(
     let start = Instant::now();
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
+    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
     timings.codegen = start.elapsed();
 
@@ -404,6 +421,12 @@ pub fn run_file_with_dump(
     if let Some(ref output_path) = dump_opts.dump_bytecode {
         let bytecode_str = dump::format_bytecode(&chunk);
         write_dump(&bytecode_str, output_path.as_ref(), "Bytecode")?;
+    }
+
+    // Dump MicroOps if requested
+    if let Some(ref output_path) = dump_opts.dump_microops {
+        let microops_str = dump::format_microops(&chunk);
+        write_dump(&microops_str, output_path.as_ref(), "MicroOps")?;
     }
 
     // Log JIT settings if tracing is enabled
@@ -507,12 +530,14 @@ pub fn run_source(
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    let len_arg_types = typechecker.len_arg_types().clone();
     timings.typecheck = start.elapsed();
     let local_variable_types = typechecker.local_variable_types();
 
     // Desugar
     let start = Instant::now();
-    let program = desugar::desugar_program(program, index_object_types.clone());
+    let program =
+        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
     timings.desugar = start.elapsed();
 
     // Monomorphisation
@@ -537,6 +562,7 @@ pub fn run_source(
     let start = Instant::now();
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
+    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
     timings.codegen = start.elapsed();
 
@@ -544,6 +570,12 @@ pub fn run_source(
     if let Some(ref output_path) = dump_opts.dump_bytecode {
         let bytecode_str = dump::format_bytecode(&chunk);
         write_dump(&bytecode_str, output_path.as_ref(), "Bytecode")?;
+    }
+
+    // Dump MicroOps if requested
+    if let Some(ref output_path) = dump_opts.dump_microops {
+        let microops_str = dump::format_microops(&chunk);
+        write_dump(&microops_str, output_path.as_ref(), "MicroOps")?;
     }
 
     // Log JIT settings if tracing is enabled
@@ -698,10 +730,12 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
     let index_object_types = typechecker.index_object_types().clone();
+    let len_arg_types = typechecker.len_arg_types().clone();
 
     let local_variable_types = typechecker.local_variable_types();
     // Desugar (expand syntax sugar like new literals, index operations)
-    let program = desugar::desugar_program(program, index_object_types.clone());
+    let program =
+        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
@@ -714,6 +748,7 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
     // Code generation
     let mut codegen = Codegen::new();
     codegen.set_index_object_types(index_object_types);
+    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
 
     Ok(dump::format_bytecode(&chunk))

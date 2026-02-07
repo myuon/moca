@@ -1201,6 +1201,70 @@ impl VM {
                         self.stack[caller_stack_base + ret_vreg_idx] = return_value;
                     }
                 }
+                // ========================================
+                // Heap operations (register-based)
+                // ========================================
+                MicroOp::HeapLoad { dst, src, offset } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let r = self.stack[sb + src.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    let value = self.heap.read_slot(r, offset).ok_or_else(|| {
+                        format!("runtime error: slot index {} out of bounds", offset)
+                    })?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::HeapLoadDyn { dst, obj, idx } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let index = self.stack[sb + idx.0]
+                        .as_i64()
+                        .ok_or("runtime error: expected integer index")?;
+                    let r = self.stack[sb + obj.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    if index < 0 {
+                        return Err(format!("runtime error: slot index {} out of bounds", index));
+                    }
+                    let value = self.heap.read_slot(r, index as usize).ok_or_else(|| {
+                        format!("runtime error: slot index {} out of bounds", index)
+                    })?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::HeapStore {
+                    dst_obj,
+                    offset,
+                    src,
+                } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let r = self.stack[sb + dst_obj.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    self.heap.write_slot(r, offset, value).map_err(|e| {
+                        format!("runtime error: slot index {} out of bounds ({})", offset, e)
+                    })?;
+                }
+                MicroOp::HeapStoreDyn { obj, idx, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let index = self.stack[sb + idx.0]
+                        .as_i64()
+                        .ok_or("runtime error: expected integer index")?;
+                    let r = self.stack[sb + obj.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    if index < 0 {
+                        return Err(format!("runtime error: slot index {} out of bounds", index));
+                    }
+                    self.heap
+                        .write_slot(r, index as usize, value)
+                        .map_err(|e| {
+                            format!("runtime error: slot index {} out of bounds ({})", index, e)
+                        })?;
+                }
+
                 MicroOp::StackPush { src } => {
                     let frame = self.frames.last().unwrap();
                     let val = self.stack[frame.stack_base + src.0];
@@ -2210,16 +2274,6 @@ impl VM {
 
                 return Ok(ControlFlow::Return);
             }
-            Op::ArrayLen => {
-                let val = self.stack.pop().ok_or("stack underflow")?;
-                let r = val
-                    .as_ref()
-                    .ok_or("runtime error: expected array or string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-
-                let len = obj.slots.len() as i64;
-                self.stack.push(Value::I64(len));
-            }
             Op::TypeOf => {
                 use crate::vm::heap::ObjectKind;
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2254,23 +2308,12 @@ impl VM {
                 let r = value
                     .as_ref()
                     .ok_or("runtime error: parse_int expects string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                let s = obj.slots_to_string();
+                let s = self.ref_to_rust_string(r)?;
                 let n: i64 = s
                     .trim()
                     .parse()
                     .map_err(|_| format!("runtime error: cannot parse '{}' as int", s))?;
                 self.stack.push(Value::I64(n));
-            }
-            Op::StrLen => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let r = value
-                    .as_ref()
-                    .ok_or("runtime error: str_len expects string")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                // Length is the number of slots
-                let len = obj.slots.len() as i64;
-                self.stack.push(Value::I64(len));
             }
             Op::Throw => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2398,17 +2441,25 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
+            Op::HeapAllocArray(n) => {
+                let mut slots = Vec::with_capacity(n);
+                for _ in 0..n {
+                    slots.push(self.stack.pop().ok_or("stack underflow")?);
+                }
+                slots.reverse();
+                let r = self
+                    .heap
+                    .alloc_slots_with_kind(slots, crate::vm::heap::ObjectKind::Array)?;
+                self.stack.push(Value::Ref(r));
+            }
             Op::HeapLoad(offset) => {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
-                if offset >= obj.slots.len() {
-                    return Err(format!(
-                        "runtime error: slot index {} out of bounds",
-                        offset
-                    ));
-                }
-                self.stack.push(obj.slots[offset]);
+                let value = self
+                    .heap
+                    .read_slot(r, offset)
+                    .ok_or_else(|| format!("runtime error: slot index {} out of bounds", offset))?;
+                self.stack.push(value);
             }
             Op::HeapStore(offset) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2422,12 +2473,15 @@ impl VM {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
-                let obj = self.heap.get(r).ok_or("runtime error: invalid reference")?;
 
-                if index < 0 || index as usize >= obj.slots.len() {
+                if index < 0 {
                     return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
-                self.stack.push(obj.slots[index as usize]);
+                let value = self
+                    .heap
+                    .read_slot(r, index as usize)
+                    .ok_or_else(|| format!("runtime error: slot index {} out of bounds", index))?;
+                self.stack.push(value);
             }
             Op::HeapStoreDyn => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2514,12 +2568,28 @@ impl VM {
             (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 + b)),
             (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a + b as f64)),
             (Value::Ref(a), Value::Ref(b)) => {
-                // String concatenation
+                // String concatenation (String struct: [ptr, len])
                 let a_obj = self.heap.get(a).ok_or("runtime error: invalid reference")?;
                 let b_obj = self.heap.get(b).ok_or("runtime error: invalid reference")?;
 
-                let a_str = a_obj.slots_to_string();
-                let b_str = b_obj.slots_to_string();
+                // Read data arrays via ptr (slot 0) of each String struct
+                let a_data_ref = a_obj.slots[0]
+                    .as_ref()
+                    .ok_or("runtime error: invalid string ptr")?;
+                let b_data_ref = b_obj.slots[0]
+                    .as_ref()
+                    .ok_or("runtime error: invalid string ptr")?;
+                let a_data = self
+                    .heap
+                    .get(a_data_ref)
+                    .ok_or("runtime error: invalid string data")?;
+                let b_data = self
+                    .heap
+                    .get(b_data_ref)
+                    .ok_or("runtime error: invalid string data")?;
+
+                let a_str = a_data.slots_to_string();
+                let b_str = b_data.slots_to_string();
                 let result = format!("{}{}", a_str, b_str);
                 let r = self.heap.alloc_string(result)?;
                 Ok(Value::Ref(r))
@@ -2603,15 +2673,24 @@ impl VM {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Ref(a_ref), Value::Ref(b_ref)) => {
-                // Compare by content for strings
+                // Compare by content for strings (String struct: [ptr, len])
                 let a_obj = self.heap.get(*a_ref);
                 let b_obj = self.heap.get(*b_ref);
 
                 match (a_obj, b_obj) {
-                    (Some(a), Some(b)) => {
-                        // Compare strings by content
-                        a.slots_to_string() == b.slots_to_string()
+                    (Some(a), Some(b))
+                        if a.kind == crate::vm::heap::ObjectKind::String
+                            && b.kind == crate::vm::heap::ObjectKind::String =>
+                    {
+                        // Compare via data arrays pointed to by ptr (slot 0)
+                        let a_data = a.slots[0].as_ref().and_then(|r| self.heap.get(r));
+                        let b_data = b.slots[0].as_ref().and_then(|r| self.heap.get(r));
+                        match (a_data, b_data) {
+                            (Some(ad), Some(bd)) => ad.slots == bd.slots,
+                            _ => false,
+                        }
                     }
+                    (Some(a), Some(b)) => a.slots == b.slots,
                     _ => false,
                 }
             }
@@ -2636,41 +2715,64 @@ impl VM {
                     .heap
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
-                // Try to interpret as string first
-                // Only treat as string if all slots are printable Unicode characters
-                // (not control characters 0-31, except tab/newline/carriage return)
-                let is_printable_string = !obj.slots.is_empty()
-                    && obj.slots.iter().all(|v| {
-                        if let Some(c) = v.as_i64() {
-                            if let Some(ch) = char::from_u32(c as u32) {
-                                // Allow printable chars, tab, newline, carriage return
-                                ch >= ' ' || ch == '\t' || ch == '\n' || ch == '\r'
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
+
+                // String struct [ptr, len]: follow ptr to data array, read chars
+                if obj.kind == crate::vm::heap::ObjectKind::String
+                    && obj.slots.len() == 2
+                    && let (Some(data_ref), Some(len)) =
+                        (obj.slots[0].as_ref(), obj.slots[1].as_i64())
+                {
+                    let mut chars = String::new();
+                    for i in 0..(len as usize) {
+                        if let Some(Value::I64(c)) = self.heap.read_slot(data_ref, i)
+                            && let Some(ch) = char::from_u32(c as u32)
+                        {
+                            chars.push(ch);
                         }
-                    });
-                if is_printable_string {
-                    // Interpret as string
-                    let chars: String = obj
-                        .slots
-                        .iter()
-                        .filter_map(|v| v.as_i64())
-                        .filter_map(|c| char::from_u32(c as u32))
-                        .collect();
-                    Ok(chars)
-                } else {
-                    // Interpret as array/struct - show all elements
-                    let mut parts = Vec::new();
-                    for elem in obj.slots.iter() {
-                        parts.push(self.value_to_string(elem)?);
                     }
-                    Ok(format!("[{}]", parts.join(", ")))
+                    return Ok(chars);
                 }
+
+                // Array<T> struct: follow ptr to data array, use len for display
+                if obj.kind == crate::vm::heap::ObjectKind::Array
+                    && obj.slots.len() == 2
+                    && let (Some(data_ref), Some(len)) =
+                        (obj.slots[0].as_ref(), obj.slots[1].as_i64())
+                {
+                    let mut parts = Vec::new();
+                    for i in 0..(len as usize) {
+                        if let Some(elem) = self.heap.read_slot(data_ref, i) {
+                            parts.push(self.value_to_string(&elem)?);
+                        }
+                    }
+                    return Ok(format!("[{}]", parts.join(", ")));
+                }
+
+                // Fallback: show all elements as array/struct
+                let mut parts = Vec::new();
+                for elem in obj.slots.iter() {
+                    parts.push(self.value_to_string(elem)?);
+                }
+                Ok(format!("[{}]", parts.join(", ")))
             }
         }
+    }
+
+    /// Convert a heap GcRef (String struct [ptr, len]) to a Rust String.
+    /// Follows the ptr to the data array and reads character slots.
+    fn ref_to_rust_string(&self, r: GcRef) -> Result<String, String> {
+        let obj = self
+            .heap
+            .get(r)
+            .ok_or("runtime error: invalid string reference")?;
+        let data_ref = obj.slots[0]
+            .as_ref()
+            .ok_or("runtime error: invalid string ptr")?;
+        let data = self
+            .heap
+            .get(data_ref)
+            .ok_or("runtime error: invalid string data")?;
+        Ok(data.slots_to_string())
     }
 
     /// Pop a value from the operand stack, respecting the register file boundary.
@@ -2804,11 +2906,7 @@ impl VM {
                     Value::Ref(r) => *r,
                     _ => return Err("open: path must be a string".to_string()),
                 };
-                let heap_obj = self
-                    .heap
-                    .get(path_ref)
-                    .ok_or_else(|| "open: invalid reference".to_string())?;
-                let path = heap_obj.slots_to_string();
+                let path = self.ref_to_rust_string(path_ref)?;
 
                 // Get flags
                 let flags = args[1]
@@ -2900,12 +2998,8 @@ impl VM {
                     .as_i64()
                     .ok_or_else(|| "write: count must be an integer".to_string())?;
 
-                // Get the string from heap
-                let heap_obj = self
-                    .heap
-                    .get(buf_ref)
-                    .ok_or_else(|| "write: invalid reference".to_string())?;
-                let buf_str = heap_obj.slots_to_string();
+                // Get the string from heap (String struct: [ptr, len])
+                let buf_str = self.ref_to_rust_string(buf_ref)?;
 
                 // Calculate actual bytes to write
                 let buf_bytes = buf_str.as_bytes();
@@ -3044,11 +3138,7 @@ impl VM {
                     Value::Ref(r) => *r,
                     _ => return Err("connect: host must be a string".to_string()),
                 };
-                let heap_obj = self
-                    .heap
-                    .get(host_ref)
-                    .ok_or_else(|| "connect: invalid reference".to_string())?;
-                let host = heap_obj.slots_to_string();
+                let host = self.ref_to_rust_string(host_ref)?;
 
                 let port = args[2]
                     .as_i64()
@@ -3096,11 +3186,7 @@ impl VM {
                     Value::Ref(r) => *r,
                     _ => return Err("bind: host must be a string".to_string()),
                 };
-                let heap_obj = self
-                    .heap
-                    .get(host_ref)
-                    .ok_or_else(|| "bind: invalid reference".to_string())?;
-                let host = heap_obj.slots_to_string();
+                let host = self.ref_to_rust_string(host_ref)?;
 
                 let port = args[2]
                     .as_i64()
@@ -3551,14 +3637,16 @@ mod tests {
 
     #[test]
     fn test_array_operations() {
-        // HeapAlloc takes slots from stack: [e0, e1, e2] -> creates Slots object
-        // Length is now slots.len(), no length prefix
+        // Array<T> struct layout: [ptr, len]
+        // ptr points to data array, len is the element count
         let stack = run_code(vec![
-            Op::I64Const(1),  // element 0
-            Op::I64Const(2),  // element 1
-            Op::I64Const(3),  // element 2
-            Op::HeapAlloc(3), // 3 elements
-            Op::ArrayLen,
+            Op::I64Const(1),       // element 0
+            Op::I64Const(2),       // element 1
+            Op::I64Const(3),       // element 2
+            Op::HeapAlloc(3),      // data array with 3 elements
+            Op::I64Const(3),       // length value
+            Op::HeapAllocArray(2), // Array<T> struct [ptr, len]
+            Op::HeapLoad(1),       // read len field
         ])
         .unwrap();
         assert_eq!(stack.len(), 1);
@@ -3599,7 +3687,7 @@ mod tests {
             Op::LocalSet(0),
             // Get local 0 to verify it's still a valid reference
             Op::LocalGet(0),
-            Op::ArrayLen, // If we can get length, it's a valid array
+            Op::HeapLoad(0), // If we can read slot 0, it's a valid reference
         ]);
 
         assert!(
@@ -3607,9 +3695,9 @@ mod tests {
             "LocalSet write barrier test failed: {:?}",
             result
         );
-        // The last value should be the array length (1 element)
+        // The last value should be the element we stored (2)
         let stack = result.unwrap();
-        assert!(stack.iter().any(|v| *v == Value::I64(1)));
+        assert!(stack.iter().any(|v| *v == Value::I64(2)));
     }
 
     #[test]
@@ -3798,7 +3886,7 @@ mod tests {
                 }
             })
             .expect("Expected to find a Ref value in stack");
-        let content = vm.heap.get(content_ref).unwrap().slots_to_string();
+        let content = vm.ref_to_rust_string(content_ref).unwrap();
         assert_eq!(content, "hello world");
 
         // Clean up
@@ -3875,7 +3963,7 @@ mod tests {
                 }
             })
             .expect("Expected to find a Ref value in stack");
-        let content = vm.heap.get(content_ref).unwrap().slots_to_string();
+        let content = vm.ref_to_rust_string(content_ref).unwrap();
         assert_eq!(content, "hello");
 
         // Clean up
@@ -4043,7 +4131,7 @@ mod tests {
             })
             .expect("Expected to find a Ref value in stack");
 
-        let response = vm.heap.get(response_ref).unwrap().slots_to_string();
+        let response = vm.ref_to_rust_string(response_ref).unwrap();
 
         // Response should contain HTTP status and our test message
         assert!(
