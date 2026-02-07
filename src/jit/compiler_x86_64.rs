@@ -671,6 +671,30 @@ impl JitCompiler {
                 self.emit_ne()
             }
 
+            // Heap operations
+            Op::HeapLoad(slot) => {
+                self.type_stack.pop();
+                self.type_stack.push(ValueType::I64);
+                self.emit_heap_load(*slot)
+            }
+            Op::HeapStore(slot) => {
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.emit_heap_store(*slot)
+            }
+            Op::HeapLoadDyn => {
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.type_stack.push(ValueType::I64);
+                self.emit_heap_load_dyn()
+            }
+            Op::HeapStoreDyn => {
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.emit_heap_store_dyn()
+            }
+
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
         }
@@ -1646,6 +1670,146 @@ impl JitCompiler {
         asm.pop(Reg::Rbp);
         asm.ret();
 
+        Ok(())
+    }
+
+    /// Emit HeapLoad(n): pop ref, load slot n from heap object, push value.
+    /// Heap layout: [Header(1w) | Tag0 | Val0 | Tag1 | Val1 | ...]
+    /// Address: heap_base + (ref_payload + 1 + 2*n) * 8
+    fn emit_heap_load(&mut self, slot: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Pop ref from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        // TMP0 = ref payload (heap word offset)
+        asm.mov_rm(regs::TMP0, regs::VSTACK, 8);
+
+        // TMP1 = heap_base (from JitCallContext offset 48)
+        asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
+
+        // Calculate address: TMP0 = ref_payload + 1 + 2*slot
+        let slot_offset = (1 + 2 * slot) as i32;
+        asm.add_ri32(regs::TMP0, slot_offset);
+        // TMP0 = TMP0 * 8 (convert word offset to byte offset)
+        asm.shl_ri(regs::TMP0, 3);
+        // TMP1 = heap_base + byte_offset
+        asm.add_rr(regs::TMP1, regs::TMP0);
+
+        // Load tag and payload from heap
+        asm.mov_rm(regs::TMP2, regs::TMP1, 0); // tag
+        asm.mov_rm(regs::TMP3, regs::TMP1, 8); // payload
+
+        // Push value to VSTACK
+        asm.mov_mr(regs::VSTACK, 0, regs::TMP2); // tag
+        asm.mov_mr(regs::VSTACK, 8, regs::TMP3); // payload
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        self.stack_depth += 0; // net: pop 1, push 1
+        Ok(())
+    }
+
+    /// Emit HeapStore(n): pop value and ref, store value into slot n.
+    fn emit_heap_store(&mut self, slot: usize) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Pop value from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP2, regs::VSTACK, 0); // value tag
+        asm.mov_rm(regs::TMP3, regs::VSTACK, 8); // value payload
+
+        // Pop ref from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // ref payload (heap word offset)
+
+        // TMP1 = heap_base
+        asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
+
+        // Calculate address: heap_base + (ref + 1 + 2*slot) * 8
+        let slot_offset = (1 + 2 * slot) as i32;
+        asm.add_ri32(regs::TMP0, slot_offset);
+        asm.shl_ri(regs::TMP0, 3);
+        asm.add_rr(regs::TMP1, regs::TMP0);
+
+        // Store tag and payload to heap
+        asm.mov_mr(regs::TMP1, 0, regs::TMP2); // tag
+        asm.mov_mr(regs::TMP1, 8, regs::TMP3); // payload
+
+        self.stack_depth = self.stack_depth.saturating_sub(2);
+        Ok(())
+    }
+
+    /// Emit HeapLoadDyn: pop index and ref, load slot at dynamic index, push value.
+    fn emit_heap_load_dyn(&mut self) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Pop index from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP2, regs::VSTACK, 8); // index payload
+
+        // Pop ref from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // ref payload (heap word offset)
+
+        // TMP1 = heap_base
+        asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
+
+        // Calculate slot address: ref + 1 + 2*index
+        // TMP2 = index * 2
+        asm.shl_ri(regs::TMP2, 1);
+        // TMP0 = ref + 1
+        asm.add_ri32(regs::TMP0, 1);
+        // TMP0 = ref + 1 + 2*index
+        asm.add_rr(regs::TMP0, regs::TMP2);
+        // Convert to byte offset
+        asm.shl_ri(regs::TMP0, 3);
+        // TMP1 = heap_base + byte_offset
+        asm.add_rr(regs::TMP1, regs::TMP0);
+
+        // Load tag and payload
+        asm.mov_rm(regs::TMP2, regs::TMP1, 0); // tag
+        asm.mov_rm(regs::TMP3, regs::TMP1, 8); // payload
+
+        // Push value to VSTACK
+        asm.mov_mr(regs::VSTACK, 0, regs::TMP2);
+        asm.mov_mr(regs::VSTACK, 8, regs::TMP3);
+        asm.add_ri32(regs::VSTACK, VALUE_SIZE);
+
+        self.stack_depth -= 1; // net: pop 2, push 1
+        Ok(())
+    }
+
+    /// Emit HeapStoreDyn: pop value, index, and ref, store value at dynamic index.
+    fn emit_heap_store_dyn(&mut self) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+
+        // Pop value from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP4, regs::VSTACK, 0); // value tag
+        asm.mov_rm(regs::TMP5, regs::VSTACK, 8); // value payload
+
+        // Pop index from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP2, regs::VSTACK, 8); // index payload
+
+        // Pop ref from VSTACK
+        asm.sub_ri32(regs::VSTACK, VALUE_SIZE);
+        asm.mov_rm(regs::TMP0, regs::VSTACK, 8); // ref payload
+
+        // TMP1 = heap_base
+        asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
+
+        // Calculate slot address: ref + 1 + 2*index
+        asm.shl_ri(regs::TMP2, 1);
+        asm.add_ri32(regs::TMP0, 1);
+        asm.add_rr(regs::TMP0, regs::TMP2);
+        asm.shl_ri(regs::TMP0, 3);
+        asm.add_rr(regs::TMP1, regs::TMP0);
+
+        // Store tag and payload to heap
+        asm.mov_mr(regs::TMP1, 0, regs::TMP4); // tag
+        asm.mov_mr(regs::TMP1, 8, regs::TMP5); // payload
+
+        self.stack_depth = self.stack_depth.saturating_sub(3);
         Ok(())
     }
 
