@@ -39,6 +39,8 @@ pub struct ResolvedFunction {
     pub body: Vec<ResolvedStatement>,
     /// Type information for local variables (indexed by slot number)
     pub local_types: Vec<Type>,
+    /// Whether this function is marked with @inline
+    pub is_inline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +453,7 @@ impl<'a> Resolver<'a> {
         let mut scope = Scope::new();
         let has_self = method.params.iter().any(|p| p.name == "self");
         let is_builtin_type = struct_name == "vec" || struct_name == "map";
+        let is_inline = method.attributes.iter().any(|a| a.name == "inline");
 
         let mut param_names: Vec<String> = Vec::new();
 
@@ -477,6 +480,17 @@ impl<'a> Resolver<'a> {
             format!("{}::{}", struct_name, method.name)
         };
 
+        // Check for direct recursion in @inline methods
+        if is_inline
+            && let Some(&func_index) = self.functions.get(&func_name)
+            && self.body_calls_function(&body, func_index)
+        {
+            return Err(self.error(
+                &format!("@inline method '{}' cannot be recursive", func_name),
+                method.span,
+            ));
+        }
+
         let local_types = self.build_local_types(&func_name, &scope);
 
         Ok(ResolvedFunction {
@@ -485,11 +499,13 @@ impl<'a> Resolver<'a> {
             locals_count: scope.locals_count,
             body,
             local_types,
+            is_inline,
         })
     }
 
     fn resolve_function(&self, fn_def: FnDef) -> Result<ResolvedFunction, String> {
         let mut scope = Scope::new();
+        let is_inline = fn_def.attributes.iter().any(|a| a.name == "inline");
 
         // Add parameters to scope
         let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
@@ -500,12 +516,24 @@ impl<'a> Resolver<'a> {
         let body = self.resolve_statements(fn_def.body.statements, &mut scope)?;
         let local_types = self.build_local_types(&fn_def.name, &scope);
 
+        // Check for direct recursion in @inline functions
+        if is_inline
+            && let Some(&func_index) = self.functions.get(&fn_def.name)
+            && self.body_calls_function(&body, func_index)
+        {
+            return Err(self.error(
+                &format!("@inline function '{}' cannot be recursive", fn_def.name),
+                fn_def.span,
+            ));
+        }
+
         Ok(ResolvedFunction {
             name: fn_def.name,
             params: param_names,
             locals_count: scope.locals_count,
             body,
             local_types,
+            is_inline,
         })
     }
 
@@ -1084,6 +1112,128 @@ impl<'a> Resolver<'a> {
                     expr: Box::new(resolved_expr),
                 })
             }
+        }
+    }
+
+    /// Check if a resolved function body contains a direct call to a specific function index.
+    fn body_calls_function(&self, body: &[ResolvedStatement], target_index: usize) -> bool {
+        for stmt in body {
+            if self.stmt_calls_function(stmt, target_index) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn stmt_calls_function(&self, stmt: &ResolvedStatement, target_index: usize) -> bool {
+        match stmt {
+            ResolvedStatement::Let { init, .. } => self.expr_calls_function(init, target_index),
+            ResolvedStatement::Assign { value, .. } => {
+                self.expr_calls_function(value, target_index)
+            }
+            ResolvedStatement::IndexAssign {
+                object,
+                index,
+                value,
+                ..
+            } => {
+                self.expr_calls_function(object, target_index)
+                    || self.expr_calls_function(index, target_index)
+                    || self.expr_calls_function(value, target_index)
+            }
+            ResolvedStatement::FieldAssign { object, value, .. } => {
+                self.expr_calls_function(object, target_index)
+                    || self.expr_calls_function(value, target_index)
+            }
+            ResolvedStatement::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expr_calls_function(condition, target_index)
+                    || self.body_calls_function(then_block, target_index)
+                    || else_block
+                        .as_ref()
+                        .is_some_and(|eb| self.body_calls_function(eb, target_index))
+            }
+            ResolvedStatement::While { condition, body } => {
+                self.expr_calls_function(condition, target_index)
+                    || self.body_calls_function(body, target_index)
+            }
+            ResolvedStatement::ForIn { iterable, body, .. } => {
+                self.expr_calls_function(iterable, target_index)
+                    || self.body_calls_function(body, target_index)
+            }
+            ResolvedStatement::Return { value } => value
+                .as_ref()
+                .is_some_and(|v| self.expr_calls_function(v, target_index)),
+            ResolvedStatement::Throw { value } => self.expr_calls_function(value, target_index),
+            ResolvedStatement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                self.body_calls_function(try_block, target_index)
+                    || self.body_calls_function(catch_block, target_index)
+            }
+            ResolvedStatement::Expr { expr } => self.expr_calls_function(expr, target_index),
+        }
+    }
+
+    fn expr_calls_function(&self, expr: &ResolvedExpr, target_index: usize) -> bool {
+        match expr {
+            ResolvedExpr::Call { func_index, args } => {
+                *func_index == target_index
+                    || args
+                        .iter()
+                        .any(|a| self.expr_calls_function(a, target_index))
+            }
+            ResolvedExpr::MethodCall {
+                object,
+                func_index,
+                args,
+                ..
+            } => {
+                *func_index == target_index
+                    || self.expr_calls_function(object, target_index)
+                    || args
+                        .iter()
+                        .any(|a| self.expr_calls_function(a, target_index))
+            }
+            ResolvedExpr::AssociatedFunctionCall {
+                func_index, args, ..
+            } => {
+                *func_index == target_index
+                    || args
+                        .iter()
+                        .any(|a| self.expr_calls_function(a, target_index))
+            }
+            ResolvedExpr::Array { elements } => elements
+                .iter()
+                .any(|e| self.expr_calls_function(e, target_index)),
+            ResolvedExpr::Index { object, index, .. } => {
+                self.expr_calls_function(object, target_index)
+                    || self.expr_calls_function(index, target_index)
+            }
+            ResolvedExpr::Field { object, .. } => self.expr_calls_function(object, target_index),
+            ResolvedExpr::Unary { operand, .. } => self.expr_calls_function(operand, target_index),
+            ResolvedExpr::Binary { left, right, .. } => {
+                self.expr_calls_function(left, target_index)
+                    || self.expr_calls_function(right, target_index)
+            }
+            ResolvedExpr::Builtin { args, .. } => args
+                .iter()
+                .any(|a| self.expr_calls_function(a, target_index)),
+            ResolvedExpr::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|f| self.expr_calls_function(f, target_index)),
+            ResolvedExpr::Block {
+                statements, expr, ..
+            } => {
+                self.body_calls_function(statements, target_index)
+                    || self.expr_calls_function(expr, target_index)
+            }
+            _ => false,
         }
     }
 

@@ -58,6 +58,13 @@ pub struct ImplBlock {
     pub span: Span,
 }
 
+/// An attribute annotation (e.g., `@inline`).
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: String,
+    pub span: Span,
+}
+
 /// A function parameter with optional type annotation.
 #[derive(Debug, Clone)]
 pub struct Param {
@@ -75,6 +82,7 @@ pub struct FnDef {
     pub params: Vec<Param>,
     pub return_type: Option<TypeAnnotation>,
     pub body: Block,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 

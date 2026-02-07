@@ -506,6 +506,7 @@ impl Monomorphiser {
                 .as_ref()
                 .map(|ta| substitute_type_annotation(ta, &type_map)),
             body: substitute_block(&generic_fn.body, &type_map),
+            attributes: generic_fn.attributes.clone(),
             span: generic_fn.span,
         };
 
@@ -593,6 +594,7 @@ impl Monomorphiser {
                         .as_ref()
                         .map(|ann| substitute_type_annotation(ann, &type_map)),
                     body: substitute_block(&m.body, &type_map),
+                    attributes: m.attributes.clone(),
                     span: m.span,
                 })
                 .collect(),
@@ -1056,6 +1058,7 @@ fn rewrite_item(item: Item, instantiations: &HashSet<Instantiation>) -> Item {
             params: fn_def.params,
             return_type: fn_def.return_type,
             body: rewrite_block(&fn_def.body, instantiations),
+            attributes: fn_def.attributes,
             span: fn_def.span,
         }),
         Item::ImplBlock(impl_block) => Item::ImplBlock(ImplBlock {
@@ -1071,6 +1074,7 @@ fn rewrite_item(item: Item, instantiations: &HashSet<Instantiation>) -> Item {
                     params: m.params,
                     return_type: m.return_type,
                     body: rewrite_block(&m.body, instantiations),
+                    attributes: m.attributes,
                     span: m.span,
                 })
                 .collect(),
