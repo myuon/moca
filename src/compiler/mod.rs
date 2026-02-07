@@ -6,6 +6,7 @@ mod codegen;
 pub mod desugar;
 pub mod dump;
 pub mod lexer;
+pub mod linter;
 mod module;
 pub mod monomorphise;
 mod parser;
@@ -620,6 +621,35 @@ fn write_dump(content: &str, output_path: Option<&PathBuf>, label: &str) -> Resu
         }
     }
     Ok(())
+}
+
+/// Lint a file after type checking.
+/// Returns the formatted lint output and the number of diagnostics found.
+pub fn lint_file(path: &Path) -> Result<(String, usize), String> {
+    let root_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut loader = ModuleLoader::new(root_dir);
+
+    // Load main file with all imports
+    let user_program = loader.load_with_imports(path)?;
+
+    // Prepend standard library
+    let program = prepend_stdlib(user_program)?;
+
+    let filename = path.to_string_lossy().to_string();
+
+    // Type checking (must pass before linting)
+    let mut typechecker = TypeChecker::new(&filename);
+    typechecker
+        .check_program(&program)
+        .map_err(|errors| format_type_errors(&filename, &errors))?;
+
+    // Linting
+    let rules = linter::default_rules();
+    let diagnostics = linter::lint_program(&program, &filename, &rules);
+    let count = diagnostics.len();
+    let output = linter::format_diagnostics(&filename, &diagnostics);
+
+    Ok((output, count))
 }
 
 /// Type check a file without running it.

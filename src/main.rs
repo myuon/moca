@@ -149,6 +149,11 @@ enum Commands {
         /// The source file to check (defaults to pkg.toml entry if in a project)
         file: Option<PathBuf>,
     },
+    /// Lint a moca source file
+    Lint {
+        /// The source file to lint (defaults to pkg.toml entry if in a project)
+        file: Option<PathBuf>,
+    },
     /// Run tests in the project
     Test {
         /// Directory to search for tests (defaults to src/ or pkg.toml entry directory)
@@ -331,6 +336,37 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             println!("Type check passed.");
+        }
+        Commands::Lint { file } => {
+            let path = match file {
+                Some(p) => p,
+                None => {
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    match package::PackageManifest::load(&cwd) {
+                        Ok(manifest) => cwd.join(&manifest.package.entry),
+                        Err(_) => {
+                            eprintln!("error: no file specified and no pkg.toml found");
+                            eprintln!(
+                                "usage: moca lint <file> or run from a moca project directory"
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            };
+
+            match compiler::lint_file(&path) {
+                Ok((output, count)) => {
+                    if count > 0 {
+                        print!("{}", output);
+                        return ExitCode::FAILURE;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    return ExitCode::FAILURE;
+                }
+            }
         }
         Commands::Test { dir } => {
             let test_dir = match dir {

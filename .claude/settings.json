@@ -19,6 +19,7 @@
       "Bash(cat:*)",
       "Bash(mkdir:*)",
       "Bash(cargo fmt:*)",
+      "Bash(./target/debug/moca lint:*)",
       "Skill(commit)",
       "Skill(impl)",
       "Skill(spec)"
@@ -32,6 +33,18 @@
           {
             "type": "command",
             "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q '\"command\":.*git commit'; then cargo fmt && cargo check --all-targets && cargo clippy -- -D warnings; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -o '\"file_path\":\"[^\"]*\\.mc\"' | head -1 | sed 's/\"file_path\":\"//;s/\"//'); if [ -n \"$FILE\" ] && [ -f \"$FILE\" ]; then ./target/debug/moca lint \"$FILE\" 2>&1 || true; fi",
+            "timeout": 30
           }
         ]
       }

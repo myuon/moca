@@ -14,6 +14,7 @@ This document defines the command-line interface for the Moca toolchain.
 ```bash
 moca init [name]        # Create new project
 moca check              # Type check and static analysis only
+moca lint [file]        # Lint source file (after type check)
 moca build              # Generate bytecode
 moca run [file] [args]  # Execute (uses entry if file omitted)
 moca test               # Run tests
@@ -92,10 +93,40 @@ var all = args();   // ["script.mc", "hello", "world", "123"]
 - `argv(n)` returns empty string for out-of-bounds index
 - Arguments are always strings; use `parse_int()` to convert to numbers
 
+## Linter
+
+`moca lint` はtypecheck成功後のASTを解析し、コード改善の提案を行う。
+
+```bash
+moca lint app.mc        # ファイルを指定してlint
+moca lint               # pkg.toml の entry をlint
+```
+
+- typecheckエラーがある場合はlintを実行しない
+- lint警告は stdout に出力される
+- 警告がある場合は終了コード `1`、ない場合は `0`
+
+### 出力フォーマット
+
+```
+warning: {RULE_NAME}: {MESSAGE}
+  --> {FILENAME}:{LINE}:{COLUMN}
+```
+
+### Lint Rules
+
+| ルール名 | 検出内容 | サジェスト |
+|----------|---------|-----------|
+| `prefer-new-literal` | `vec::\`new\`()` の呼び出し | `new Vec<T> {}` 構文の使用 |
+
+### ルールの追加
+
+新しいルールは `src/compiler/linter.rs` で `LintRule` トレイトを実装し、`default_rules()` に追加する。
+
 ## Exit Codes
 
 - `0`: Success
-- `1`: Error (compile error, runtime error, etc.)
+- `1`: Error (compile error, runtime error, lint warning, etc.)
 
 ## Standard I/O
 
@@ -179,6 +210,14 @@ Test output format:
 ```
 
 Exit code is `0` if all tests pass, `1` if any test fails.
+
+### Lint Code
+
+```bash
+$ moca lint app.mc
+warning: prefer-new-literal: use `new Vec<T> {}` instead of `vec::`new`()`
+  --> app.mc:3:9
+```
 
 ### Dump Compiler IR
 
