@@ -1,5 +1,6 @@
 use crate::compiler::ast::{Block, Expr, FnDef, Item, Program, Statement};
 use crate::compiler::lexer::Span;
+use crate::compiler::types::TypeAnnotation;
 
 /// A single lint diagnostic.
 #[derive(Debug, Clone)]
@@ -254,7 +255,10 @@ pub fn format_diagnostics(filename: &str, diagnostics: &[Diagnostic]) -> String 
 
 /// Return the default set of lint rules.
 pub fn default_rules() -> Vec<Box<dyn LintRule>> {
-    vec![Box::new(PreferNewLiteral)]
+    vec![
+        Box::new(PreferNewLiteral),
+        Box::new(RedundantTypeAnnotation),
+    ]
 }
 
 // ============================================================================
@@ -284,6 +288,76 @@ impl LintRule for PreferNewLiteral {
             diagnostics.push(Diagnostic {
                 rule: self.name().to_string(),
                 message: "use `new Vec<T> {}` instead of `vec::\\`new\\`()`".to_string(),
+                span: *span,
+            });
+        }
+    }
+}
+
+/// Warns against redundant type annotations on let/var when the type is
+/// already specified by a `new` literal (e.g., `let v: Vec<int> = new Vec<int> {}`).
+pub struct RedundantTypeAnnotation;
+
+/// Check if a TypeAnnotation matches the type specified by a NewLiteral's
+/// type_name and type_args.
+fn type_annotation_matches_new_literal(
+    annotation: &TypeAnnotation,
+    type_name: &str,
+    type_args: &[TypeAnnotation],
+) -> bool {
+    match annotation {
+        TypeAnnotation::Named(name) => name == type_name && type_args.is_empty(),
+        TypeAnnotation::Vec(inner) => {
+            type_name == "Vec" && type_args.len() == 1 && type_args[0] == **inner
+        }
+        TypeAnnotation::Map(key, val) => {
+            type_name == "Map"
+                && type_args.len() == 2
+                && type_args[0] == **key
+                && type_args[1] == **val
+        }
+        TypeAnnotation::Generic {
+            name,
+            type_args: ann_args,
+        } => name == type_name && ann_args == type_args,
+        _ => false,
+    }
+}
+
+fn format_new_type(type_name: &str, type_args: &[TypeAnnotation]) -> String {
+    if type_args.is_empty() {
+        type_name.to_string()
+    } else {
+        let args: Vec<String> = type_args.iter().map(|a| a.to_string()).collect();
+        format!("{}<{}>", type_name, args.join(", "))
+    }
+}
+
+impl LintRule for RedundantTypeAnnotation {
+    fn name(&self) -> &str {
+        "redundant-type-annotation"
+    }
+
+    fn check_statement(&self, stmt: &Statement, diagnostics: &mut Vec<Diagnostic>) {
+        if let Statement::Let {
+            type_annotation: Some(annotation),
+            init:
+                Expr::NewLiteral {
+                    type_name,
+                    type_args,
+                    ..
+                },
+            span,
+            ..
+        } = stmt
+            && type_annotation_matches_new_literal(annotation, type_name, type_args)
+        {
+            diagnostics.push(Diagnostic {
+                rule: self.name().to_string(),
+                message: format!(
+                    "remove redundant type annotation; type is already specified by `new {}`",
+                    format_new_type(type_name, type_args)
+                ),
                 span: *span,
             });
         }
