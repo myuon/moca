@@ -344,6 +344,31 @@ fun main() {
 }
 ```
 
+### Random Number Generation
+
+Pseudo-random number generation using the `Rand` struct (LCG algorithm).
+
+| Method | Description |
+|--------|-------------|
+| `Rand::\`new\`(seed)` | Create a new RNG with the given seed |
+| `rng.set_seed(n)` | Reset the seed |
+| `rng.next()` | Generate next raw random integer in [0, 2^31) |
+| `rng.int(min, max)` | Generate random integer in [min, max] |
+| `rng.float()` | Generate random float in [0.0, 1.0) |
+
+**Example:**
+
+```
+var rng: Rand = Rand::`new`(42);
+print(rng.int(1, 100));   // Random int between 1 and 100
+print(rng.float());        // Random float between 0.0 and 1.0
+```
+
+**Notes:**
+- Same seed always produces the same sequence (deterministic)
+- `rng.int(min, max)` throws an error if `min > max`
+- Uses LCG (Linear Congruential Generator) with parameters: a=1103515245, c=12345, m=2^31
+
 ## Error Format
 
 ```

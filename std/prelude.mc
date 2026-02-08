@@ -859,6 +859,67 @@ impl map {
 }
 
 // ============================================================================
+// Random Number Generation (LCG - Linear Congruential Generator)
+// ============================================================================
+
+// Internal: Convert int to float using inline assembly
+fun _int_to_float(n: int) -> float {
+    return asm(n) -> f64 {
+        __emit("F64ConvertI64S");
+    };
+}
+
+// Rand - Pseudo-random number generator using LCG algorithm.
+// LCG parameters: a = 1103515245, c = 12345, m = 2147483648 (2^31)
+//
+// Usage:
+//   var rng = Rand::new(42);
+//   print(rng.int(1, 100));
+//   print(rng.float());
+struct Rand {
+    _seed: int
+}
+
+impl Rand {
+    // Create a new random number generator with the given seed.
+    fun `new`(seed: int) -> Rand {
+        return Rand { _seed: seed };
+    }
+
+    // Set the seed for the random number generator.
+    fun set_seed(self, n: int) {
+        self._seed = n;
+    }
+
+    // Generate the next raw random integer in [0, 2^31).
+    fun next(self) -> int {
+        self._seed = (self._seed * 1103515245 + 12345) % 2147483648;
+        if self._seed < 0 {
+            self._seed = -self._seed;
+        }
+        return self._seed;
+    }
+
+    // Generate a random integer in [min_val, max_val].
+    // Throws an error if min_val > max_val.
+    // Uses scaling (upper bits) instead of modulo to avoid LCG lower-bit bias.
+    fun int(self, min_val: int, max_val: int) -> int {
+        if min_val > max_val {
+            throw "rand_int: min must be <= max";
+        }
+        let r = self.next();
+        let range = max_val - min_val + 1;
+        return min_val + r * range / 2147483648;
+    }
+
+    // Generate a random float in [0.0, 1.0).
+    fun float(self) -> float {
+        let r = self.next();
+        return _int_to_float(r) / 2147483648.0;
+    }
+}
+
+// ============================================================================
 // Parsing Functions
 // ============================================================================
 
