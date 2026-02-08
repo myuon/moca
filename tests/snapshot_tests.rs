@@ -918,6 +918,26 @@ fn rust_text_counting<W: Write>(writer: &mut W) {
     }
 }
 
+#[cfg(feature = "jit")]
+fn rust_quicksort<W: Write>(writer: &mut W) {
+    // Same LCG as moca _perf_lcg_next
+    let mut seed: i64 = 42;
+    let mut v: Vec<i64> = Vec::with_capacity(1000);
+    for _ in 0..1000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if seed < 0 {
+            seed = -seed;
+        }
+        v.push(seed % 10000);
+    }
+
+    v.sort();
+
+    for val in &v {
+        writeln!(writer, "{}", val).unwrap();
+    }
+}
+
 /// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
 fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
@@ -1054,6 +1074,10 @@ fn snapshot_performance() {
     // Test text character counting with Rust reference
     let text_counting_path = perf_dir.join("text_counting.mc");
     run_performance_test(&text_counting_path, |w| rust_text_counting(w));
+
+    // Test quicksort with Rust reference
+    let quicksort_path = perf_dir.join("quicksort.mc");
+    run_performance_test(&quicksort_path, |w| rust_quicksort(w));
 }
 
 // ============================================================================
