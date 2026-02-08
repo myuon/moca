@@ -971,6 +971,7 @@ impl<'a> Parser<'a> {
                         type_args,
                         args,
                         span,
+                        object_type: None,
                     };
                 } else if self.match_token(&TokenKind::LParen) {
                     // Method call without type args
@@ -991,6 +992,7 @@ impl<'a> Parser<'a> {
                         type_args: Vec::new(),
                         args,
                         span,
+                        object_type: None,
                     };
                 } else {
                     expr = Expr::Field {

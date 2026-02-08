@@ -940,6 +940,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             type_args,
             args,
             span,
+            object_type,
         } => Expr::MethodCall {
             object: Box::new(substitute_expr(object, type_map)),
             method: method.clone(),
@@ -949,6 +950,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .collect(),
             args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
             span: *span,
+            object_type: object_type.clone(),
         },
         Expr::AssociatedFunctionCall {
             type_name,
@@ -1343,6 +1345,7 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
             type_args,
             args,
             span,
+            object_type,
         } => Expr::MethodCall {
             object: Box::new(rewrite_expr(object, instantiations)),
             method: method.clone(),
@@ -1352,6 +1355,7 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
                 .map(|a| rewrite_expr(a, instantiations))
                 .collect(),
             span: *span,
+            object_type: object_type.clone(),
         },
         Expr::AssociatedFunctionCall {
             type_name,

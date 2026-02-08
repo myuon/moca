@@ -235,6 +235,8 @@ pub enum Expr {
         type_args: Vec<TypeAnnotation>,
         args: Vec<Expr>,
         span: Span,
+        /// Type of the object (set by typechecker for linter)
+        object_type: Option<Type>,
     },
     /// Associated function call: `Type::func(args)` or `Type<T>::func(args)`
     AssociatedFunctionCall {
