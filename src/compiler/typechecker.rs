@@ -217,23 +217,10 @@ pub struct TypeChecker {
     structs: HashMap<String, StructInfo>,
     /// Substitution accumulated during inference
     substitution: Substitution,
-    /// Type of objects in index expressions (Span -> Type)
-    /// Used by codegen to differentiate between array and vector access
-    index_object_types: HashMap<Span, Type>,
     /// Current type parameters in scope (during function signature inference)
     current_type_params: Vec<String>,
     /// Name of the function currently being type-checked (None for top-level)
     current_function_name: Option<String>,
-    /// Local variable types collected during type checking.
-    /// Maps function name -> [(variable name, type)].
-    /// Used to propagate type info to JIT compiler via codegen.
-    local_variable_types: HashMap<String, Vec<(String, Type)>>,
-    /// Type of arguments in len() builtin calls (Span -> Type)
-    /// Used by desugar to convert len(array) to array.len() method call
-    len_arg_types: HashMap<Span, Type>,
-    /// Type of objects in method call expressions (Span -> Type)
-    /// Used by linter to detect vec/map get/set/put calls
-    method_call_object_types: HashMap<Span, Type>,
 }
 
 impl TypeChecker {
@@ -246,52 +233,9 @@ impl TypeChecker {
             generic_functions: HashMap::new(),
             structs: HashMap::new(),
             substitution: Substitution::new(),
-            index_object_types: HashMap::new(),
             current_type_params: Vec::new(),
             current_function_name: None,
-            local_variable_types: HashMap::new(),
-            len_arg_types: HashMap::new(),
-            method_call_object_types: HashMap::new(),
         }
-    }
-
-    /// Get the index object types map (for codegen)
-    pub fn index_object_types(&self) -> &HashMap<Span, Type> {
-        &self.index_object_types
-    }
-
-    /// Get the len argument types map (for desugar)
-    pub fn len_arg_types(&self) -> &HashMap<Span, Type> {
-        &self.len_arg_types
-    }
-
-    /// Get the method call object types map (for linter)
-    pub fn method_call_object_types(&self) -> &HashMap<Span, Type> {
-        &self.method_call_object_types
-    }
-
-    /// Get the local variable types map with substitution applied.
-    /// Returns fn_name -> [(var_name, resolved_type)].
-    pub fn local_variable_types(&self) -> HashMap<String, Vec<(String, Type)>> {
-        let mut result = self.local_variable_types.clone();
-        for vars in result.values_mut() {
-            for (_, ty) in vars.iter_mut() {
-                *ty = self.substitution.apply(ty);
-            }
-        }
-        result
-    }
-
-    /// Record a local variable's type during type checking.
-    fn record_local_var(&mut self, var_name: &str, ty: &Type) {
-        let fn_name = self
-            .current_function_name
-            .clone()
-            .unwrap_or_else(|| "__main__".to_string());
-        self.local_variable_types
-            .entry(fn_name)
-            .or_default()
-            .push((var_name.to_string(), ty.clone()));
     }
 
     /// Generate a fresh type variable.
@@ -625,7 +569,7 @@ impl TypeChecker {
     }
 
     /// Type check a program.
-    pub fn check_program(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
+    pub fn check_program(&mut self, program: &mut Program) -> Result<(), Vec<TypeError>> {
         // First pass: collect struct definitions
         for item in &program.items {
             if let Item::StructDef(struct_def) = item {
@@ -656,9 +600,9 @@ impl TypeChecker {
             }
         }
 
-        // Third pass: type check function bodies and statements
+        // Third pass: type check function bodies and statements (mutable)
         let mut main_env = TypeEnv::new();
-        for item in &program.items {
+        for item in &mut program.items {
             match item {
                 Item::FnDef(fn_def) => {
                     self.check_function(fn_def);
@@ -730,7 +674,7 @@ impl TypeChecker {
     }
 
     /// Type check a function definition.
-    fn check_function(&mut self, fn_def: &FnDef) {
+    fn check_function(&mut self, fn_def: &mut FnDef) {
         let mut env = TypeEnv::new();
 
         // Set current type params for generic functions
@@ -750,14 +694,13 @@ impl TypeChecker {
             }
         };
 
-        // Bind parameters and record their types
+        // Bind parameters
         for (param, param_type) in fn_def.params.iter().zip(param_types.iter()) {
             env.bind(param.name.clone(), param_type.clone());
-            self.record_local_var(&param.name, param_type);
         }
 
         // Infer body type
-        let body_type = self.infer_block(&fn_def.body, &mut env);
+        let body_type = self.infer_block(&mut fn_def.body, &mut env);
 
         // Unify return type
         if let Err(e) = self.unify(&body_type, &expected_ret, fn_def.span) {
@@ -872,7 +815,7 @@ impl TypeChecker {
     }
 
     /// Type check an impl block.
-    fn check_impl_block(&mut self, impl_block: &ImplBlock) {
+    fn check_impl_block(&mut self, impl_block: &mut ImplBlock) {
         let struct_name = &impl_block.struct_name;
         let is_builtin_type = struct_name == "vec" || struct_name == "map";
 
@@ -902,7 +845,7 @@ impl TypeChecker {
             return; // Error already reported in register_impl_methods
         };
 
-        for method in &impl_block.methods {
+        for method in &mut impl_block.methods {
             let mut env = TypeEnv::new();
             let has_self = method.params.iter().any(|p| p.name == "self");
 
@@ -944,7 +887,7 @@ impl TypeChecker {
             }
 
             // Infer body type
-            let body_type = self.infer_block(&method.body, &mut env);
+            let body_type = self.infer_block(&mut method.body, &mut env);
 
             // Unify return type
             // Skip type checking for builtin type associated functions
@@ -961,11 +904,11 @@ impl TypeChecker {
     }
 
     /// Infer the type of a block (returns the type of the last expression).
-    fn infer_block(&mut self, block: &Block, env: &mut TypeEnv) -> Type {
+    fn infer_block(&mut self, block: &mut Block, env: &mut TypeEnv) -> Type {
         env.enter_scope();
         let mut result_type = Type::Nil;
 
-        for stmt in &block.statements {
+        for stmt in &mut block.statements {
             result_type = self.infer_statement(stmt, env);
         }
 
@@ -974,13 +917,14 @@ impl TypeChecker {
     }
 
     /// Infer the type of a statement.
-    fn infer_statement(&mut self, stmt: &Statement, env: &mut TypeEnv) -> Type {
+    fn infer_statement(&mut self, stmt: &mut Statement, env: &mut TypeEnv) -> Type {
         match stmt {
             Statement::Let {
                 name,
                 type_annotation,
                 init,
                 span,
+                inferred_type,
                 ..
             } => {
                 let init_type = self.infer_expr(init, env);
@@ -1002,9 +946,9 @@ impl TypeChecker {
                     env.bind(name.clone(), init_type);
                 }
 
-                // Record the resolved type for JIT optimization
+                // Write the resolved type directly to the AST node
                 if let Some(ty) = env.lookup(name).cloned() {
-                    self.record_local_var(name, &ty);
+                    *inferred_type = Some(self.substitution.apply(&ty));
                 }
 
                 Type::Nil
@@ -1086,8 +1030,7 @@ impl TypeChecker {
                 };
 
                 env.enter_scope();
-                env.bind(var.clone(), elem_type.clone());
-                self.record_local_var(var, &elem_type);
+                env.bind(var.clone(), elem_type);
                 self.infer_block(body, env);
                 env.exit_scope();
                 Type::Nil
@@ -1108,16 +1051,15 @@ impl TypeChecker {
                 index,
                 value,
                 span,
-                ..
+                object_type,
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
                 let val_type = self.infer_expr(value, env);
 
-                // Record the object type for codegen
+                // Write the object type directly to the AST node
                 let resolved_obj_type = self.substitution.apply(&obj_type);
-                self.index_object_types
-                    .insert(*span, resolved_obj_type.clone());
+                *object_type = Some(resolved_obj_type.clone());
 
                 // Object can be array<T>, Vector<T>, Vec<T>, or Map<K,V> generic struct
                 match resolved_obj_type {
@@ -1268,8 +1210,15 @@ impl TypeChecker {
         }
     }
 
-    /// Infer the type of an expression.
-    fn infer_expr(&mut self, expr: &Expr, env: &mut TypeEnv) -> Type {
+    /// Infer the type of an expression and set it on the AST node.
+    fn infer_expr(&mut self, expr: &mut Expr, env: &mut TypeEnv) -> Type {
+        let ty = self.infer_expr_inner(expr, env);
+        expr.set_inferred_type(ty.clone());
+        ty
+    }
+
+    /// Inner implementation of expression type inference.
+    fn infer_expr_inner(&mut self, expr: &mut Expr, env: &mut TypeEnv) -> Type {
         match expr {
             Expr::Int { .. } => Type::Int,
             Expr::Float { .. } => Type::Float,
@@ -1277,7 +1226,7 @@ impl TypeChecker {
             Expr::Str { .. } => Type::String,
             Expr::Nil { .. } => Type::Nil,
 
-            Expr::Ident { name, span } => {
+            Expr::Ident { name, span, .. } => {
                 if let Some(ty) = env.lookup(name) {
                     self.substitution.apply(ty)
                 } else if let Some(fn_type) = self.functions.get(name) {
@@ -1292,13 +1241,13 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Array { elements, span } => {
+            Expr::Array { elements, span, .. } => {
                 if elements.is_empty() {
                     // Empty array has unknown element type
                     Type::Array(Box::new(self.fresh_var()))
                 } else {
-                    let first_type = self.infer_expr(&elements[0], env);
-                    for elem in elements.iter().skip(1) {
+                    let first_type = self.infer_expr(&mut elements[0], env);
+                    for elem in elements.iter_mut().skip(1) {
                         let elem_type = self.infer_expr(elem, env);
                         if let Err(e) = self.unify(&first_type, &elem_type, *span) {
                             self.errors.push(e);
@@ -1312,15 +1261,15 @@ impl TypeChecker {
                 object,
                 index,
                 span,
+                object_type,
                 ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let idx_type = self.infer_expr(index, env);
 
-                // Record the object type for codegen
+                // Write the object type directly to the AST node
                 let resolved_obj_type = self.substitution.apply(&obj_type);
-                self.index_object_types
-                    .insert(*span, resolved_obj_type.clone());
+                *object_type = Some(resolved_obj_type.clone());
 
                 // Object can be array<T>, Vector<T>, Vec<T>, Map<K,V>, string, or struct
                 match resolved_obj_type {
@@ -1411,6 +1360,7 @@ impl TypeChecker {
                 object,
                 field,
                 span,
+                ..
             } => {
                 let obj_type = self.infer_expr(object, env);
 
@@ -1463,7 +1413,9 @@ impl TypeChecker {
                 }
             }
 
-            Expr::Unary { op, operand, span } => {
+            Expr::Unary {
+                op, operand, span, ..
+            } => {
                 let operand_type = self.infer_expr(operand, env);
 
                 match op {
@@ -1497,6 +1449,7 @@ impl TypeChecker {
                 left,
                 right,
                 span,
+                ..
             } => {
                 let left_type = self.infer_expr(left, env);
                 let right_type = self.infer_expr(right, env);
@@ -1587,6 +1540,7 @@ impl TypeChecker {
                 type_args,
                 args,
                 span,
+                ..
             } => {
                 // Check for builtin functions
                 if let Some(result_type) = self.check_builtin(callee, args, env, *span) {
@@ -1654,7 +1608,7 @@ impl TypeChecker {
                                 return self.substitution.apply(&ret);
                             }
 
-                            for (arg, param_type) in args.iter().zip(params.iter()) {
+                            for (arg, param_type) in args.iter_mut().zip(params.iter()) {
                                 let arg_type = self.infer_expr(arg, env);
                                 if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
                                     self.errors.push(e);
@@ -1688,7 +1642,7 @@ impl TypeChecker {
                                 return self.substitution.apply(&ret);
                             }
 
-                            for (arg, param_type) in args.iter().zip(params.iter()) {
+                            for (arg, param_type) in args.iter_mut().zip(params.iter()) {
                                 let arg_type = self.infer_expr(arg, env);
                                 if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
                                     self.errors.push(e);
@@ -1719,6 +1673,7 @@ impl TypeChecker {
                 type_args,
                 fields,
                 span,
+                ..
             } => {
                 // Look up struct definition
                 let struct_info = match self.structs.get(name) {
@@ -1729,7 +1684,7 @@ impl TypeChecker {
                             *span,
                         ));
                         // Still infer field types to find nested errors
-                        for (_, expr) in fields {
+                        for (_, expr) in fields.iter_mut() {
                             self.infer_expr(expr, env);
                         }
                         return self.fresh_var();
@@ -1808,35 +1763,36 @@ impl TypeChecker {
                     struct_info.fields.clone()
                 };
 
-                // Check that all required fields are provided
-                let provided_fields: HashMap<&str, &Expr> =
-                    fields.iter().map(|(n, e)| (n.as_str(), e)).collect();
+                // Build expected type map from struct definition
+                let expected_types: HashMap<&str, &Type> = instantiated_fields
+                    .iter()
+                    .map(|(n, t)| (n.as_str(), t))
+                    .collect();
 
-                for (field_name, expected_type) in &instantiated_fields {
-                    match provided_fields.get(field_name.as_str()) {
-                        Some(expr) => {
-                            let actual_type = self.infer_expr(expr, env);
-                            if let Err(e) = self.unify(&actual_type, expected_type, expr.span()) {
-                                self.errors.push(e);
-                            }
-                        }
-                        None => {
-                            self.errors.push(TypeError::new(
-                                format!("missing field `{}` in struct `{}`", field_name, name),
-                                *span,
-                            ));
-                        }
+                // Check for missing fields
+                let provided_names: std::collections::HashSet<&str> =
+                    fields.iter().map(|(n, _)| n.as_str()).collect();
+                for (field_name, _) in &instantiated_fields {
+                    if !provided_names.contains(field_name.as_str()) {
+                        self.errors.push(TypeError::new(
+                            format!("missing field `{}` in struct `{}`", field_name, name),
+                            *span,
+                        ));
                     }
                 }
 
-                // Check for extra fields not in the struct definition
+                // Type check all provided fields
                 let struct_field_names: std::collections::HashSet<&str> = instantiated_fields
                     .iter()
                     .map(|(n, _)| n.as_str())
                     .collect();
-
-                for (field_name, expr) in fields {
-                    if !struct_field_names.contains(field_name.as_str()) {
+                for (field_name, expr) in fields.iter_mut() {
+                    if let Some(expected_type) = expected_types.get(field_name.as_str()) {
+                        let actual_type = self.infer_expr(expr, env);
+                        if let Err(e) = self.unify(&actual_type, expected_type, expr.span()) {
+                            self.errors.push(e);
+                        }
+                    } else if !struct_field_names.contains(field_name.as_str()) {
                         self.errors.push(TypeError::new(
                             format!("unknown field `{}` in struct `{}`", field_name, name),
                             expr.span(),
@@ -1874,14 +1830,14 @@ impl TypeChecker {
                 method,
                 args,
                 span,
+                object_type,
                 ..
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let resolved_obj_type = self.substitution.apply(&obj_type);
 
-                // Store the resolved object type for linter use
-                self.method_call_object_types
-                    .insert(*span, resolved_obj_type.clone());
+                // Write the object type directly to the AST node
+                *object_type = Some(resolved_obj_type.clone());
 
                 // Handle vec<T> methods
                 if let Type::Vector(elem_type) = &resolved_obj_type {
@@ -1968,7 +1924,7 @@ impl TypeChecker {
                         }
 
                         // Type check arguments
-                        for (arg, param_type) in args.iter().zip(params.iter()) {
+                        for (arg, param_type) in args.iter_mut().zip(params.iter()) {
                             let arg_type = self.infer_expr(arg, env);
                             if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
                                 self.errors.push(e);
@@ -2034,9 +1990,10 @@ impl TypeChecker {
                 type_args,
                 elements,
                 span,
+                ..
             } => {
                 // Type check the elements
-                for elem in elements {
+                for elem in elements.iter_mut() {
                     match elem {
                         NewLiteralElement::Value(e) => {
                             self.infer_expr(e, env);
@@ -2106,11 +2063,12 @@ impl TypeChecker {
                 statements,
                 expr,
                 span: _,
+                ..
             } => {
                 // Block is generated by desugar, which runs after type checking.
                 // This should not be encountered during type checking, but we handle it
                 // for completeness. Type check all statements and return the type of the final expr.
-                for stmt in statements {
+                for stmt in statements.iter_mut() {
                     self.infer_statement(stmt, env);
                 }
                 self.infer_expr(expr, env)
@@ -2124,12 +2082,15 @@ impl TypeChecker {
         type_name: &str,
         struct_type_args: &[crate::compiler::types::TypeAnnotation],
         function: &str,
-        args: &[Expr],
+        args: &mut [Expr],
         env: &mut TypeEnv,
         span: Span,
     ) -> Type {
         // Infer types of all arguments
-        let arg_types: Vec<Type> = args.iter().map(|arg| self.infer_expr(arg, env)).collect();
+        let arg_types: Vec<Type> = args
+            .iter_mut()
+            .map(|arg| self.infer_expr(arg, env))
+            .collect();
 
         // Check if it's an associated function on a struct
         // Clone the struct info to avoid borrow issues
@@ -2284,7 +2245,7 @@ impl TypeChecker {
     fn check_builtin(
         &mut self,
         name: &str,
-        args: &[Expr],
+        args: &mut [Expr],
         env: &mut TypeEnv,
         span: Span,
     ) -> Option<Type> {
@@ -2307,12 +2268,12 @@ impl TypeChecker {
                     return Some(self.fresh_var());
                 }
                 // First arg must be Int (syscall number)
-                let num_type = self.infer_expr(&args[0], env);
+                let num_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&num_type, &Type::Int, span) {
                     self.errors.push(e);
                 }
                 // Infer types for remaining arguments (no strict checking)
-                for arg in args.iter().skip(1) {
+                for arg in args.iter_mut().skip(1) {
                     self.infer_expr(arg, env);
                 }
                 // Return type depends on syscall (can be Int or String for read)
@@ -2324,7 +2285,7 @@ impl TypeChecker {
                         .push(TypeError::new("len expects 1 argument", span));
                     return Some(Type::Int);
                 }
-                let arg_type = self.infer_expr(&args[0], env);
+                let arg_type = self.infer_expr(&mut args[0], env);
                 let resolved = self.substitution.apply(&arg_type);
                 // len works on array or string
                 match &resolved {
@@ -2337,8 +2298,7 @@ impl TypeChecker {
                         ));
                     }
                 }
-                // Store resolved arg type for desugar phase
-                self.len_arg_types.insert(span, resolved);
+                // The resolved type is now on the argument's inferred_type via infer_expr
                 Some(Type::Int)
             }
             "push" => {
@@ -2347,8 +2307,8 @@ impl TypeChecker {
                         .push(TypeError::new("push expects 2 arguments", span));
                     return Some(Type::Nil);
                 }
-                let arr_type = self.infer_expr(&args[0], env);
-                let val_type = self.infer_expr(&args[1], env);
+                let arr_type = self.infer_expr(&mut args[0], env);
+                let val_type = self.infer_expr(&mut args[1], env);
 
                 let elem_type = self.fresh_var();
                 let expected = Type::Array(Box::new(elem_type.clone()));
@@ -2366,7 +2326,7 @@ impl TypeChecker {
                         .push(TypeError::new("pop expects 1 argument", span));
                     return Some(self.fresh_var());
                 }
-                let arr_type = self.infer_expr(&args[0], env);
+                let arr_type = self.infer_expr(&mut args[0], env);
                 let elem_type = self.fresh_var();
                 let expected = Type::Array(Box::new(elem_type.clone()));
                 if let Err(e) = self.unify(&arr_type, &expected, span) {
@@ -2400,7 +2360,7 @@ impl TypeChecker {
                         .push(TypeError::new("parse_int expects 1 argument", span));
                     return Some(Type::Int);
                 }
-                let arg_type = self.infer_expr(&args[0], env);
+                let arg_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&arg_type, &Type::String, span) {
                     self.errors.push(e);
                 }
@@ -2464,7 +2424,7 @@ impl TypeChecker {
                         .push(TypeError::new("argv expects 1 argument (index)", span));
                     return Some(Type::String);
                 }
-                let arg_type = self.infer_expr(&args[0], env);
+                let arg_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
                     self.errors.push(e);
                 }
@@ -2487,7 +2447,7 @@ impl TypeChecker {
     fn check_vec_method(
         &mut self,
         method: &str,
-        args: &[Expr],
+        args: &mut [Expr],
         elem_type: &Type,
         env: &mut TypeEnv,
         span: Span,
@@ -2502,7 +2462,7 @@ impl TypeChecker {
                     ));
                     return Type::Nil;
                 }
-                let arg_type = self.infer_expr(&args[0], env);
+                let arg_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&arg_type, elem_type, args[0].span()) {
                     self.errors.push(e);
                 }
@@ -2527,7 +2487,7 @@ impl TypeChecker {
                     ));
                     return self.substitution.apply(elem_type);
                 }
-                let index_type = self.infer_expr(&args[0], env);
+                let index_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&index_type, &Type::Int, args[0].span()) {
                     self.errors.push(e);
                 }
@@ -2542,11 +2502,11 @@ impl TypeChecker {
                     ));
                     return Type::Nil;
                 }
-                let index_type = self.infer_expr(&args[0], env);
+                let index_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&index_type, &Type::Int, args[0].span()) {
                     self.errors.push(e);
                 }
-                let value_type = self.infer_expr(&args[1], env);
+                let value_type = self.infer_expr(&mut args[1], env);
                 if let Err(e) = self.unify(&value_type, elem_type, args[1].span()) {
                     self.errors.push(e);
                 }
@@ -2579,7 +2539,7 @@ impl TypeChecker {
     fn check_map_method(
         &mut self,
         method: &str,
-        args: &[Expr],
+        args: &mut [Expr],
         key_type: &Type,
         value_type: &Type,
         env: &mut TypeEnv,
@@ -2595,11 +2555,11 @@ impl TypeChecker {
                     ));
                     return Type::Nil;
                 }
-                let k_type = self.infer_expr(&args[0], env);
+                let k_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
                     self.errors.push(e);
                 }
-                let v_type = self.infer_expr(&args[1], env);
+                let v_type = self.infer_expr(&mut args[1], env);
                 if let Err(e) = self.unify(&v_type, value_type, args[1].span()) {
                     self.errors.push(e);
                 }
@@ -2614,7 +2574,7 @@ impl TypeChecker {
                     ));
                     return self.substitution.apply(value_type);
                 }
-                let k_type = self.infer_expr(&args[0], env);
+                let k_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
                     self.errors.push(e);
                 }
@@ -2629,7 +2589,7 @@ impl TypeChecker {
                     ));
                     return Type::Bool;
                 }
-                let k_type = self.infer_expr(&args[0], env);
+                let k_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
                     self.errors.push(e);
                 }
@@ -2644,7 +2604,7 @@ impl TypeChecker {
                     ));
                     return Type::Bool;
                 }
-                let k_type = self.infer_expr(&args[0], env);
+                let k_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
                     self.errors.push(e);
                 }
@@ -2719,9 +2679,9 @@ mod tests {
         let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
         let mut parser = Parser::new("test.mc", tokens);
-        let program = parser.parse().unwrap();
+        let mut program = parser.parse().unwrap();
         let mut checker = TypeChecker::new("test.mc");
-        checker.check_program(&program)
+        checker.check_program(&mut program)
     }
 
     #[test]

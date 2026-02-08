@@ -1,5 +1,5 @@
 use crate::compiler::ast::{AsmArg, BinaryOp, UnaryOp};
-use crate::compiler::lexer::Span;
+
 use crate::compiler::resolver::{
     ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement,
     ResolvedStruct,
@@ -18,10 +18,6 @@ pub struct Codegen {
     structs: Vec<ResolvedStruct>,
     /// Map struct name -> (struct_index, field_name -> field_index)
     struct_field_indices: HashMap<String, HashMap<String, usize>>,
-    /// Index expression object types (from typechecker)
-    index_object_types: HashMap<Span, Type>,
-    /// len() builtin argument types (from typechecker)
-    len_arg_types: HashMap<Span, Type>,
     /// Map function name -> function index (for calling stdlib functions)
     function_indices: HashMap<String, usize>,
     /// ValueType for each local variable in the currently-being-compiled function
@@ -56,8 +52,6 @@ impl Codegen {
             emit_debug: true, // Enable debug info by default
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
-            index_object_types: HashMap::new(),
-            len_arg_types: HashMap::new(),
             function_indices: HashMap::new(),
             current_local_types: Vec::new(),
             function_return_types: Vec::new(),
@@ -77,8 +71,6 @@ impl Codegen {
             emit_debug: false,
             structs: Vec::new(),
             struct_field_indices: HashMap::new(),
-            index_object_types: HashMap::new(),
-            len_arg_types: HashMap::new(),
             function_indices: HashMap::new(),
             current_local_types: Vec::new(),
             function_return_types: Vec::new(),
@@ -87,16 +79,6 @@ impl Codegen {
             inline_return_patches: None,
             current_locals_count: 0,
         }
-    }
-
-    /// Set index object types from typechecker.
-    pub fn set_index_object_types(&mut self, types: HashMap<Span, Type>) {
-        self.index_object_types = types;
-    }
-
-    /// Set len() argument types from typechecker.
-    pub fn set_len_arg_types(&mut self, types: HashMap<Span, Type>) {
-        self.len_arg_types = types;
     }
 
     /// Convert the typechecker's full Type to a simplified ValueType for the VM.
@@ -452,12 +434,12 @@ impl Codegen {
                 object,
                 index,
                 value,
-                span,
+                object_type,
+                ..
             } => {
                 // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
-                let has_ptr_layout = self
-                    .index_object_types
-                    .get(span)
+                let has_ptr_layout = object_type
+                    .as_ref()
                     .map(|t| {
                         matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
                             || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
@@ -724,12 +706,12 @@ impl Codegen {
             ResolvedExpr::Index {
                 object,
                 index,
-                span,
+                object_type,
+                ..
             } => {
                 // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
-                let has_ptr_layout = self
-                    .index_object_types
-                    .get(span)
+                let has_ptr_layout = object_type
+                    .as_ref()
                     .map(|t| {
                         matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
                             || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")

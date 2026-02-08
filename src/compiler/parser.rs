@@ -223,6 +223,7 @@ impl<'a> Parser<'a> {
             type_args: Vec::new(), // TODO: Parse type args in Phase 3
             fields,
             span,
+            inferred_type: None,
         })
     }
 
@@ -355,6 +356,7 @@ impl<'a> Parser<'a> {
             type_annotation,
             init,
             span,
+            inferred_type: None,
         })
     }
 
@@ -381,6 +383,7 @@ impl<'a> Parser<'a> {
             type_annotation,
             init,
             span,
+            inferred_type: None,
         })
     }
 
@@ -663,6 +666,7 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
+                inferred_type: None,
             };
         }
 
@@ -680,6 +684,7 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
+                inferred_type: None,
             };
         }
 
@@ -705,6 +710,7 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
+                inferred_type: None,
             };
         }
 
@@ -734,6 +740,7 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
+                inferred_type: None,
             };
         }
 
@@ -759,6 +766,7 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
+                inferred_type: None,
             };
         }
 
@@ -786,6 +794,7 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
+                inferred_type: None,
             };
         }
 
@@ -800,6 +809,7 @@ impl<'a> Parser<'a> {
                 op: UnaryOp::Not,
                 operand: Box::new(operand),
                 span,
+                inferred_type: None,
             });
         }
 
@@ -810,6 +820,7 @@ impl<'a> Parser<'a> {
                 op: UnaryOp::Neg,
                 operand: Box::new(operand),
                 span,
+                inferred_type: None,
             });
         }
 
@@ -823,7 +834,7 @@ impl<'a> Parser<'a> {
             // Check for type arguments: identity<int>(...) or Type<T>::func(...)
             if self.check(&TokenKind::Lt)
                 && self.looks_like_type_args()
-                && let Expr::Ident { name, span } = &expr
+                && let Expr::Ident { name, span, .. } = &expr
             {
                 let name = name.clone();
                 let span = *span;
@@ -860,6 +871,7 @@ impl<'a> Parser<'a> {
                         fn_type_args,
                         args,
                         span,
+                        inferred_type: None,
                     };
                 } else if self.match_token(&TokenKind::LBrace) {
                     // Struct literal with type args: Container<int> { value: 42 }
@@ -887,6 +899,7 @@ impl<'a> Parser<'a> {
                         type_args,
                         fields,
                         span,
+                        inferred_type: None,
                     };
                 } else {
                     // Function call with type args: func<T>(...)
@@ -906,6 +919,7 @@ impl<'a> Parser<'a> {
                         type_args,
                         args,
                         span,
+                        inferred_type: None,
                     };
                 }
                 continue;
@@ -913,7 +927,7 @@ impl<'a> Parser<'a> {
 
             if self.match_token(&TokenKind::LParen) {
                 // Function call (without type args)
-                if let Expr::Ident { name, span } = &expr {
+                if let Expr::Ident { name, span, .. } = &expr {
                     let mut args = Vec::new();
 
                     if !self.check(&TokenKind::RParen) {
@@ -930,6 +944,7 @@ impl<'a> Parser<'a> {
                         type_args: Vec::new(),
                         args,
                         span: *span,
+                        inferred_type: None,
                     };
                 } else {
                     return Err(self.error("expected function name before '('"));
@@ -945,6 +960,7 @@ impl<'a> Parser<'a> {
                     index: Box::new(index),
                     span,
                     object_type: None,
+                    inferred_type: None,
                 };
             } else if self.match_token(&TokenKind::Dot) {
                 // Field access or method call
@@ -972,6 +988,7 @@ impl<'a> Parser<'a> {
                         args,
                         span,
                         object_type: None,
+                        inferred_type: None,
                     };
                 } else if self.match_token(&TokenKind::LParen) {
                     // Method call without type args
@@ -993,12 +1010,14 @@ impl<'a> Parser<'a> {
                         args,
                         span,
                         object_type: None,
+                        inferred_type: None,
                     };
                 } else {
                     expr = Expr::Field {
                         object: Box::new(expr),
                         field,
                         span,
+                        inferred_type: None,
                     };
                 }
             } else if self.match_token(&TokenKind::ColonColon) {
@@ -1007,6 +1026,7 @@ impl<'a> Parser<'a> {
                 if let Expr::Ident {
                     name: type_name,
                     span,
+                    ..
                 } = &expr
                 {
                     let type_name = type_name.clone();
@@ -1041,6 +1061,7 @@ impl<'a> Parser<'a> {
                         fn_type_args,
                         args,
                         span,
+                        inferred_type: None,
                     };
                 } else {
                     return Err(self.error("expected type name before '::'"));
@@ -1059,31 +1080,54 @@ impl<'a> Parser<'a> {
         if let Some(TokenKind::Int(value)) = self.peek_kind() {
             let value = *value;
             self.advance();
-            return Ok(Expr::Int { value, span });
+            return Ok(Expr::Int {
+                value,
+                span,
+                inferred_type: None,
+            });
         }
 
         if let Some(TokenKind::Float(value)) = self.peek_kind() {
             let value = *value;
             self.advance();
-            return Ok(Expr::Float { value, span });
+            return Ok(Expr::Float {
+                value,
+                span,
+                inferred_type: None,
+            });
         }
 
         if let Some(TokenKind::Str(value)) = self.peek_kind() {
             let value = value.clone();
             self.advance();
-            return Ok(Expr::Str { value, span });
+            return Ok(Expr::Str {
+                value,
+                span,
+                inferred_type: None,
+            });
         }
 
         if self.match_token(&TokenKind::True) {
-            return Ok(Expr::Bool { value: true, span });
+            return Ok(Expr::Bool {
+                value: true,
+                span,
+                inferred_type: None,
+            });
         }
 
         if self.match_token(&TokenKind::False) {
-            return Ok(Expr::Bool { value: false, span });
+            return Ok(Expr::Bool {
+                value: false,
+                span,
+                inferred_type: None,
+            });
         }
 
         if self.match_token(&TokenKind::Nil) {
-            return Ok(Expr::Nil { span });
+            return Ok(Expr::Nil {
+                span,
+                inferred_type: None,
+            });
         }
 
         if let Some(TokenKind::Ident(name)) = self.peek_kind() {
@@ -1096,7 +1140,11 @@ impl<'a> Parser<'a> {
                 return self.struct_literal(name, span);
             }
 
-            return Ok(Expr::Ident { name, span });
+            return Ok(Expr::Ident {
+                name,
+                span,
+                inferred_type: None,
+            });
         }
 
         if self.match_token(&TokenKind::LParen) {
@@ -1120,7 +1168,11 @@ impl<'a> Parser<'a> {
             }
 
             self.expect(&TokenKind::RBracket)?;
-            return Ok(Expr::Array { elements, span });
+            return Ok(Expr::Array {
+                elements,
+                span,
+                inferred_type: None,
+            });
         }
 
         // Inline assembly block: asm { ... } or asm(inputs) { ... } or asm(inputs) -> type { ... }
@@ -1341,6 +1393,7 @@ impl<'a> Parser<'a> {
             type_args,
             elements,
             span,
+            inferred_type: None,
         })
     }
 

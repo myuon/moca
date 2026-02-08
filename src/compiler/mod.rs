@@ -114,33 +114,26 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
 
     // Parsing
     let mut parser = Parser::new(filename, tokens);
-    let program = parser.parse()?;
+    let mut program = parser.parse()?;
 
-    // Type checking
+    // Type checking (writes inferred types to AST)
     let mut typechecker = TypeChecker::new(filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(filename, &errors))?;
-    let index_object_types = typechecker.index_object_types().clone();
-    let len_arg_types = typechecker.len_arg_types().clone();
-    let local_variable_types = typechecker.local_variable_types();
 
     // Desugar (expand syntax sugar like new literals, index operations)
-    let program =
-        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
+    let program = desugar::desugar_program(program);
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
 
     // Name resolution
     let mut resolver = Resolver::new(filename);
-    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
 
     // Code generation
     let mut codegen = Codegen::new();
-    codegen.set_index_object_types(index_object_types);
-    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
 
     // Execution
@@ -188,35 +181,28 @@ pub fn run_file_capturing_output(
         let user_program = loader.load_with_imports(path)?;
 
         // Prepend standard library
-        let program = prepend_stdlib(user_program)?;
+        let mut program = prepend_stdlib(user_program)?;
 
         let filename = path.to_string_lossy().to_string();
 
-        // Type checking
+        // Type checking (writes inferred types to AST)
         let mut typechecker = TypeChecker::new(&filename);
         typechecker
-            .check_program(&program)
+            .check_program(&mut program)
             .map_err(|errors| format_type_errors(&filename, &errors))?;
-        let index_object_types = typechecker.index_object_types().clone();
-        let len_arg_types = typechecker.len_arg_types().clone();
 
-        let local_variable_types = typechecker.local_variable_types();
         // Desugar (expand syntax sugar like new literals, index operations)
-        let program =
-            desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
+        let program = desugar::desugar_program(program);
 
         // Monomorphisation (specialize generic functions/structs)
         let program = monomorphise::monomorphise_program(program);
 
         // Name resolution
         let mut resolver = Resolver::new(&filename);
-        resolver.set_variable_types(local_variable_types);
         let resolved = resolver.resolve(program)?;
 
         // Code generation
         let mut codegen = Codegen::new();
-        codegen.set_index_object_types(index_object_types);
-        codegen.set_len_arg_types(len_arg_types);
         let chunk = codegen.compile(resolved)?;
 
         // Execution with output capture using wrappers that write to shared buffers
@@ -278,35 +264,28 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
     let user_program = loader.load_with_imports(path)?;
 
     // Prepend standard library
-    let program = prepend_stdlib(user_program)?;
+    let mut program = prepend_stdlib(user_program)?;
 
     let filename = path.to_string_lossy().to_string();
 
-    // Type checking
+    // Type checking (writes inferred types to AST)
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
-    let index_object_types = typechecker.index_object_types().clone();
-    let len_arg_types = typechecker.len_arg_types().clone();
 
-    let local_variable_types = typechecker.local_variable_types();
     // Desugar (expand syntax sugar like new literals, index operations)
-    let program =
-        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
+    let program = desugar::desugar_program(program);
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
-    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
 
     // Code generation
     let mut codegen = Codegen::new();
-    codegen.set_index_object_types(index_object_types);
-    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
 
     // Log JIT settings if tracing is enabled
@@ -359,7 +338,7 @@ pub fn run_file_with_dump(
 
     // Prepend standard library (includes lexing and parsing of stdlib)
     let start = Instant::now();
-    let program = prepend_stdlib(user_program)?;
+    let mut program = prepend_stdlib(user_program)?;
     // Stdlib lexing/parsing time is added to lexer/parser
     let stdlib_time = start.elapsed();
     // Approximate: split stdlib time between lexer and parser (rough estimate)
@@ -374,21 +353,17 @@ pub fn run_file_with_dump(
         write_dump(&ast_str, output_path.as_ref(), "AST")?;
     }
 
-    // Type checking
+    // Type checking (writes inferred types to AST)
     let start = Instant::now();
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
-    let index_object_types = typechecker.index_object_types().clone();
-    let len_arg_types = typechecker.len_arg_types().clone();
     timings.typecheck = start.elapsed();
-    let local_variable_types = typechecker.local_variable_types();
 
     // Desugar (expand syntax sugar like new literals, index operations)
     let start = Instant::now();
-    let program =
-        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
+    let program = desugar::desugar_program(program);
     timings.desugar = start.elapsed();
 
     // Monomorphisation (specialize generic functions/structs)
@@ -399,7 +374,6 @@ pub fn run_file_with_dump(
     // Name resolution
     let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
-    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
     timings.resolve = start.elapsed();
 
@@ -412,8 +386,6 @@ pub fn run_file_with_dump(
     // Code generation
     let start = Instant::now();
     let mut codegen = Codegen::new();
-    codegen.set_index_object_types(index_object_types);
-    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
     timings.codegen = start.elapsed();
 
@@ -511,7 +483,7 @@ pub fn run_source(
 
     // Prepend standard library (includes lexing and parsing of stdlib)
     let start = Instant::now();
-    let program = prepend_stdlib(user_program)?;
+    let mut program = prepend_stdlib(user_program)?;
     // Stdlib lexing/parsing time is added to lexer/parser
     let stdlib_time = start.elapsed();
     timings.lexer += stdlib_time / 2;
@@ -523,21 +495,17 @@ pub fn run_source(
         write_dump(&ast_str, output_path.as_ref(), "AST")?;
     }
 
-    // Type checking
+    // Type checking (writes inferred types to AST)
     let start = Instant::now();
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
-    let index_object_types = typechecker.index_object_types().clone();
-    let len_arg_types = typechecker.len_arg_types().clone();
     timings.typecheck = start.elapsed();
-    let local_variable_types = typechecker.local_variable_types();
 
     // Desugar
     let start = Instant::now();
-    let program =
-        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
+    let program = desugar::desugar_program(program);
     timings.desugar = start.elapsed();
 
     // Monomorphisation
@@ -548,7 +516,6 @@ pub fn run_source(
     // Name resolution
     let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
-    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
     timings.resolve = start.elapsed();
 
@@ -561,8 +528,6 @@ pub fn run_source(
     // Code generation
     let start = Instant::now();
     let mut codegen = Codegen::new();
-    codegen.set_index_object_types(index_object_types);
-    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
     timings.codegen = start.elapsed();
 
@@ -668,19 +633,19 @@ pub fn lint_file(path: &Path) -> Result<(String, usize), String> {
     let user_item_count = user_program.items.len();
 
     // Prepend standard library
-    let program = prepend_stdlib(user_program)?;
+    let mut program = prepend_stdlib(user_program)?;
 
     let filename = path.to_string_lossy().to_string();
 
-    // Type checking (must pass before linting)
+    // Type checking (must pass before linting; writes types to AST)
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     // Linting (skip stdlib items at the beginning)
     let stdlib_item_count = program.items.len() - user_item_count;
-    let rules = linter::default_rules(typechecker.method_call_object_types().clone());
+    let rules = linter::default_rules();
     let diagnostics = linter::lint_program(&program, &filename, &rules, stdlib_item_count);
     let count = diagnostics.len();
     let output = linter::format_diagnostics(&filename, &diagnostics);
@@ -694,14 +659,14 @@ pub fn check_file(path: &Path) -> Result<(), String> {
     let mut loader = ModuleLoader::new(root_dir);
 
     // Load main file with all imports
-    let program = loader.load_with_imports(path)?;
+    let mut program = loader.load_with_imports(path)?;
 
     let filename = path.to_string_lossy().to_string();
 
     // Type checking only
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     Ok(())
@@ -724,35 +689,28 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
     let mut loader = ModuleLoader::new(root_dir);
 
     // Load main file with all imports
-    let program = loader.load_with_imports(path)?;
+    let mut program = loader.load_with_imports(path)?;
 
     let filename = path.to_string_lossy().to_string();
 
-    // Type checking
+    // Type checking (writes inferred types to AST)
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
-        .check_program(&program)
+        .check_program(&mut program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
-    let index_object_types = typechecker.index_object_types().clone();
-    let len_arg_types = typechecker.len_arg_types().clone();
 
-    let local_variable_types = typechecker.local_variable_types();
     // Desugar (expand syntax sugar like new literals, index operations)
-    let program =
-        desugar::desugar_program(program, index_object_types.clone(), len_arg_types.clone());
+    let program = desugar::desugar_program(program);
 
     // Monomorphisation (specialize generic functions/structs)
     let program = monomorphise::monomorphise_program(program);
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
-    resolver.set_variable_types(local_variable_types);
     let resolved = resolver.resolve(program)?;
 
     // Code generation
     let mut codegen = Codegen::new();
-    codegen.set_index_object_types(index_object_types);
-    codegen.set_len_arg_types(len_arg_types);
     let chunk = codegen.compile(resolved)?;
 
     Ok(dump::format_bytecode(&chunk))

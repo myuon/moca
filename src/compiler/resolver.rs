@@ -58,6 +58,8 @@ pub enum ResolvedStatement {
         index: ResolvedExpr,
         value: ResolvedExpr,
         span: Span,
+        /// Type of the object (from typechecker, for codegen)
+        object_type: Option<Type>,
     },
     FieldAssign {
         object: ResolvedExpr,
@@ -109,6 +111,8 @@ pub enum ResolvedExpr {
         object: Box<ResolvedExpr>,
         index: Box<ResolvedExpr>,
         span: Span,
+        /// Type of the object (from typechecker, for codegen)
+        object_type: Option<Type>,
     },
     Field {
         object: Box<ResolvedExpr>,
@@ -216,8 +220,6 @@ pub struct Resolver<'a> {
     structs: HashMap<String, StructDefInfo>,
     /// Resolved struct list (for output)
     resolved_structs: Vec<ResolvedStruct>,
-    /// Local variable types from typechecker: fn_name -> [(var_name, type)]
-    variable_types: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -251,27 +253,59 @@ impl<'a> Resolver<'a> {
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),
-            variable_types: HashMap::new(),
         }
     }
 
-    /// Set local variable types from the typechecker for slot-to-type mapping.
-    pub fn set_variable_types(&mut self, types: HashMap<String, Vec<(String, Type)>>) {
-        self.variable_types = types;
+    /// Collect variable types from AST Statement::Let.inferred_type fields.
+    fn collect_var_types(stmts: &[Statement]) -> HashMap<String, Type> {
+        let mut type_map = HashMap::new();
+        Self::collect_var_types_inner(stmts, &mut type_map);
+        type_map
+    }
+
+    fn collect_var_types_inner(stmts: &[Statement], type_map: &mut HashMap<String, Type>) {
+        for stmt in stmts {
+            match stmt {
+                Statement::Let {
+                    name,
+                    inferred_type: Some(ty),
+                    ..
+                } => {
+                    type_map.insert(name.clone(), ty.clone());
+                }
+                Statement::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    Self::collect_var_types_inner(&then_block.statements, type_map);
+                    if let Some(else_block) = else_block {
+                        Self::collect_var_types_inner(&else_block.statements, type_map);
+                    }
+                }
+                Statement::While { body, .. } | Statement::ForIn { body, .. } => {
+                    Self::collect_var_types_inner(&body.statements, type_map);
+                }
+                Statement::Try {
+                    try_block,
+                    catch_block,
+                    ..
+                } => {
+                    Self::collect_var_types_inner(&try_block.statements, type_map);
+                    Self::collect_var_types_inner(&catch_block.statements, type_map);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Build a Vec<Type> indexed by slot number for a function,
-    /// using the slot_names from Scope and the variable_types from typechecker.
-    fn build_local_types(&self, fn_name: &str, scope: &Scope) -> Vec<Type> {
+    /// using the slot_names from Scope and the type_map built from AST nodes.
+    fn build_local_types(scope: &Scope, type_map: &HashMap<String, Type>) -> Vec<Type> {
         let mut local_types = vec![Type::Any; scope.locals_count];
-        if let Some(var_types) = self.variable_types.get(fn_name) {
-            // Build a name -> type map for this function
-            let type_map: HashMap<&str, &Type> =
-                var_types.iter().map(|(n, t)| (n.as_str(), t)).collect();
-            for (slot, name) in scope.slot_names.iter().enumerate() {
-                if let Some(ty) = type_map.get(name.as_str()) {
-                    local_types[slot] = (*ty).clone();
-                }
+        for (slot, name) in scope.slot_names.iter().enumerate() {
+            if let Some(ty) = type_map.get(name) {
+                local_types[slot] = ty.clone();
             }
         }
         local_types
@@ -436,9 +470,10 @@ impl<'a> Resolver<'a> {
 
         // Resolve main body
         let mut scope = Scope::new();
+        let main_type_map = Self::collect_var_types(&main_stmts);
         let resolved_main = self.resolve_statements(main_stmts, &mut scope)?;
         let main_locals_count = scope.locals_count;
-        let main_local_types = self.build_local_types("__main__", &scope);
+        let main_local_types = Self::build_local_types(&scope, &main_type_map);
 
         Ok(ResolvedProgram {
             functions: resolved_functions,
@@ -471,6 +506,7 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        let method_type_map = Self::collect_var_types(&method.body.statements);
         let body = self.resolve_statements(method.body.statements, &mut scope)?;
 
         // Function name: {Type}::{method} for methods, {type}_{func} for associated functions on builtin types
@@ -491,7 +527,7 @@ impl<'a> Resolver<'a> {
             ));
         }
 
-        let local_types = self.build_local_types(&func_name, &scope);
+        let local_types = Self::build_local_types(&scope, &method_type_map);
 
         Ok(ResolvedFunction {
             name: func_name,
@@ -513,8 +549,9 @@ impl<'a> Resolver<'a> {
             scope.declare(param_name.clone(), false);
         }
 
+        let fn_type_map = Self::collect_var_types(&fn_def.body.statements);
         let body = self.resolve_statements(fn_def.body.statements, &mut scope)?;
-        let local_types = self.build_local_types(&fn_def.name, &scope);
+        let local_types = Self::build_local_types(&scope, &fn_type_map);
 
         // Check for direct recursion in @inline functions
         if is_inline
@@ -579,6 +616,7 @@ impl<'a> Resolver<'a> {
                 type_annotation,
                 init,
                 span: _,
+                ..
             } => {
                 let init = self.resolve_expr(init, scope)?;
                 // First try to get struct name from type annotation
@@ -686,16 +724,17 @@ impl<'a> Resolver<'a> {
                 index,
                 value,
                 span,
-                ..
+                object_type,
             } => {
-                let object = self.resolve_expr(object, scope)?;
-                let index = self.resolve_expr(index, scope)?;
-                let value = self.resolve_expr(value, scope)?;
+                let resolved_object = self.resolve_expr(object, scope)?;
+                let resolved_index = self.resolve_expr(index, scope)?;
+                let resolved_value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::IndexAssign {
-                    object,
-                    index,
-                    value,
+                    object: resolved_object,
+                    index: resolved_index,
+                    value: resolved_value,
                     span,
+                    object_type,
                 })
             }
             Statement::FieldAssign {
@@ -770,7 +809,7 @@ impl<'a> Resolver<'a> {
             Expr::Bool { value, .. } => Ok(ResolvedExpr::Bool(value)),
             Expr::Str { value, .. } => Ok(ResolvedExpr::Str(value)),
             Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
-            Expr::Ident { name, span } => {
+            Expr::Ident { name, span, .. } => {
                 let (slot, _) = scope
                     .lookup(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
@@ -787,6 +826,7 @@ impl<'a> Resolver<'a> {
                 object,
                 index,
                 span,
+                object_type,
                 ..
             } => {
                 let resolved_object = self.resolve_expr(*object, scope)?;
@@ -795,6 +835,7 @@ impl<'a> Resolver<'a> {
                     object: Box::new(resolved_object),
                     index: Box::new(resolved_index),
                     span,
+                    object_type,
                 })
             }
             Expr::Field { object, field, .. } => {
@@ -837,6 +878,7 @@ impl<'a> Resolver<'a> {
                     if let Expr::Ident {
                         name,
                         span: arg_span,
+                        ..
                     } = &args[0]
                     {
                         if let Some(&func_index) = self.functions.get(name) {
