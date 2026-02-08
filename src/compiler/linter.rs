@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use crate::compiler::ast::{Block, Expr, FnDef, Item, Program, Statement};
 use crate::compiler::lexer::Span;
-use crate::compiler::types::TypeAnnotation;
+use crate::compiler::types::{Type, TypeAnnotation};
 
 /// A single lint diagnostic.
 #[derive(Debug, Clone)]
@@ -22,15 +24,16 @@ pub trait LintRule {
     fn check_statement(&self, _stmt: &Statement, _diagnostics: &mut Vec<Diagnostic>) {}
 }
 
-/// Run all lint rules on a program, skipping stdlib items (those from `<stdlib>`).
+/// Run all lint rules on a program, skipping the first `skip_items` items (stdlib).
 pub fn lint_program(
     program: &Program,
     filename: &str,
     rules: &[Box<dyn LintRule>],
+    skip_items: usize,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    for item in &program.items {
+    for item in program.items.iter().skip(skip_items) {
         match item {
             Item::FnDef(fn_def) => {
                 // Skip stdlib functions
@@ -254,9 +257,10 @@ pub fn format_diagnostics(filename: &str, diagnostics: &[Diagnostic]) -> String 
 }
 
 /// Return the default set of lint rules.
-pub fn default_rules() -> Vec<Box<dyn LintRule>> {
+pub fn default_rules(method_call_types: HashMap<Span, Type>) -> Vec<Box<dyn LintRule>> {
     vec![
         Box::new(PreferNewLiteral),
+        Box::new(PreferIndexAccess { method_call_types }),
         Box::new(RedundantTypeAnnotation),
     ]
 }
@@ -290,6 +294,65 @@ impl LintRule for PreferNewLiteral {
                 message: "use `new Vec<T> {}` instead of `vec::\\`new\\`()`".to_string(),
                 span: *span,
             });
+        }
+    }
+}
+
+/// Suggests using `obj[index]` instead of `obj.get(index)` and
+/// `obj[index] = value` instead of `obj.set(index, value)` / `obj.put(key, value)`
+/// for vec and map types.
+pub struct PreferIndexAccess {
+    method_call_types: HashMap<Span, Type>,
+}
+
+impl PreferIndexAccess {
+    fn is_vec_or_map(&self, span: &Span) -> bool {
+        match self.method_call_types.get(span) {
+            Some(Type::Vector(_)) | Some(Type::Map(_, _)) => true,
+            Some(Type::GenericStruct { name, .. }) => name == "Vec" || name == "Map",
+            _ => false,
+        }
+    }
+}
+
+impl LintRule for PreferIndexAccess {
+    fn name(&self) -> &str {
+        "prefer-index-access"
+    }
+
+    fn check_expr(&self, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
+        if let Expr::MethodCall {
+            method, args, span, ..
+        } = expr
+        {
+            if !self.is_vec_or_map(span) {
+                return;
+            }
+
+            match method.as_str() {
+                "get" if args.len() == 1 => {
+                    diagnostics.push(Diagnostic {
+                        rule: self.name().to_string(),
+                        message: "use `[]` indexing instead of `.get()`".to_string(),
+                        span: *span,
+                    });
+                }
+                "set" if args.len() == 2 => {
+                    diagnostics.push(Diagnostic {
+                        rule: self.name().to_string(),
+                        message: "use `[] =` indexing instead of `.set()`".to_string(),
+                        span: *span,
+                    });
+                }
+                "put" if args.len() == 2 => {
+                    diagnostics.push(Diagnostic {
+                        rule: self.name().to_string(),
+                        message: "use `[] =` indexing instead of `.put()`".to_string(),
+                        span: *span,
+                    });
+                }
+                _ => {}
+            }
         }
     }
 }

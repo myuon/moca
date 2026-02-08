@@ -196,6 +196,7 @@ impl Desugar {
                             type_args: vec![],
                             args: vec![desugared_index, desugared_value],
                             span,
+                            object_type: None,
                         },
                         span,
                     };
@@ -316,6 +317,7 @@ impl Desugar {
                         type_args: vec![],
                         args: vec![desugared_index],
                         span,
+                        object_type: None,
                     };
                 }
 
@@ -395,12 +397,14 @@ impl Desugar {
                 type_args,
                 args,
                 span,
+                object_type,
             } => Expr::MethodCall {
                 object: Box::new(self.desugar_expr(*object)),
                 method,
                 type_args,
                 args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
                 span,
+                object_type,
             },
 
             // Associated function call - desugar arguments
@@ -570,6 +574,7 @@ impl Desugar {
                             value,
                         ],
                         span,
+                        object_type: None,
                     },
                     span,
                 });
@@ -652,6 +657,7 @@ impl Desugar {
                         type_args: vec![],
                         args: vec![key, value],
                         span,
+                        object_type: None,
                     },
                     span,
                 });

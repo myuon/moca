@@ -231,6 +231,9 @@ pub struct TypeChecker {
     /// Type of arguments in len() builtin calls (Span -> Type)
     /// Used by desugar to convert len(array) to array.len() method call
     len_arg_types: HashMap<Span, Type>,
+    /// Type of objects in method call expressions (Span -> Type)
+    /// Used by linter to detect vec/map get/set/put calls
+    method_call_object_types: HashMap<Span, Type>,
 }
 
 impl TypeChecker {
@@ -248,6 +251,7 @@ impl TypeChecker {
             current_function_name: None,
             local_variable_types: HashMap::new(),
             len_arg_types: HashMap::new(),
+            method_call_object_types: HashMap::new(),
         }
     }
 
@@ -259,6 +263,11 @@ impl TypeChecker {
     /// Get the len argument types map (for desugar)
     pub fn len_arg_types(&self) -> &HashMap<Span, Type> {
         &self.len_arg_types
+    }
+
+    /// Get the method call object types map (for linter)
+    pub fn method_call_object_types(&self) -> &HashMap<Span, Type> {
+        &self.method_call_object_types
     }
 
     /// Get the local variable types map with substitution applied.
@@ -1869,6 +1878,10 @@ impl TypeChecker {
             } => {
                 let obj_type = self.infer_expr(object, env);
                 let resolved_obj_type = self.substitution.apply(&obj_type);
+
+                // Store the resolved object type for linter use
+                self.method_call_object_types
+                    .insert(*span, resolved_obj_type.clone());
 
                 // Handle vec<T> methods
                 if let Type::Vector(elem_type) = &resolved_obj_type {
