@@ -95,6 +95,7 @@ pub struct Block {
 
 /// Statements in the language.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     Let {
         name: String,
