@@ -189,3 +189,141 @@ fun _test_rand_float_distribution() {
     assert(max_count * 5 <= min_count * 6,
         "rand_float distribution: max/min ratio should be within 20% (max=" + to_string(max_count) + ", min=" + to_string(min_count) + ")");
 }
+
+// ============================================================================
+// Sort Functions Tests
+// ============================================================================
+
+// Helper: check that a vec<int> is sorted in ascending order
+fun _assert_sorted_int(v: Vec<int>, msg: string) {
+    let n = v.len();
+    var i = 0;
+    while i < n - 1 {
+        assert(v[i] <= v[i + 1],
+            msg + " (v[" + to_string(i) + "]=" + to_string(v[i]) + " > v[" + to_string(i + 1) + "]=" + to_string(v[i + 1]) + ")");
+        i = i + 1;
+    }
+}
+
+// Helper: check that a vec<float> is sorted in ascending order
+fun _assert_sorted_float(v: Vec<float>, msg: string) {
+    let n = v.len();
+    var i = 0;
+    while i < n - 1 {
+        assert(v[i] <= v[i + 1], msg + " (index " + to_string(i) + ")");
+        i = i + 1;
+    }
+}
+
+// Test: sort_int with empty vec
+fun _test_sort_int_empty() {
+    var v: Vec<int> = Vec::<int>`new`();
+    sort_int(v);
+    assert_eq(v.len(), 0, "empty vec should remain empty after sort");
+}
+
+// Test: sort_int with single element
+fun _test_sort_int_single() {
+    var v: Vec<int> = new Vec<int> {42};
+    sort_int(v);
+    assert_eq(v.len(), 1, "single element vec length");
+    assert_eq(v[0], 42, "single element should be unchanged");
+}
+
+// Test: sort_int with two elements
+fun _test_sort_int_two() {
+    var v1: Vec<int> = new Vec<int> {5, 3};
+    sort_int(v1);
+    assert_eq(v1[0], 3, "two elements: first should be 3");
+    assert_eq(v1[1], 5, "two elements: second should be 5");
+
+    var v2: Vec<int> = new Vec<int> {3, 5};
+    sort_int(v2);
+    assert_eq(v2[0], 3, "already sorted: first should be 3");
+    assert_eq(v2[1], 5, "already sorted: second should be 5");
+}
+
+// Test: sort_int with 100 random integers (seed 42)
+fun _test_sort_int_random_seed42() {
+    var rng: Rand = Rand::`new`(42);
+    var v: Vec<int> = Vec::<int>`new`();
+    var i = 0;
+    while i < 100 {
+        v.push(rng.int(-1000, 1000));
+        i = i + 1;
+    }
+    sort_int(v);
+    _assert_sorted_int(v, "sort_int random seed=42");
+    assert_eq(v.len(), 100, "length should be preserved");
+}
+
+// Test: sort_int with 100 random integers (seed 123)
+fun _test_sort_int_random_seed123() {
+    var rng: Rand = Rand::`new`(123);
+    var v: Vec<int> = Vec::<int>`new`();
+    var i = 0;
+    while i < 100 {
+        v.push(rng.int(-1000, 1000));
+        i = i + 1;
+    }
+    sort_int(v);
+    _assert_sorted_int(v, "sort_int random seed=123");
+}
+
+// Test: sort_int with 100 random integers (seed 999)
+fun _test_sort_int_random_seed999() {
+    var rng: Rand = Rand::`new`(999);
+    var v: Vec<int> = Vec::<int>`new`();
+    var i = 0;
+    while i < 100 {
+        v.push(rng.int(-5000, 5000));
+        i = i + 1;
+    }
+    sort_int(v);
+    _assert_sorted_int(v, "sort_int random seed=999");
+}
+
+// Test: sort_int with duplicate values
+fun _test_sort_int_duplicates() {
+    var v: Vec<int> = new Vec<int> {5, 3, 5, 1, 3, 1, 5};
+    sort_int(v);
+    _assert_sorted_int(v, "sort_int with duplicates");
+    assert_eq(v.len(), 7, "length should be preserved");
+}
+
+// Test: sort_int with already sorted input
+fun _test_sort_int_already_sorted() {
+    var v: Vec<int> = new Vec<int> {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    sort_int(v);
+    _assert_sorted_int(v, "sort_int already sorted");
+}
+
+// Test: sort_int with reverse sorted input
+fun _test_sort_int_reverse() {
+    var v: Vec<int> = new Vec<int> {10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
+    sort_int(v);
+    _assert_sorted_int(v, "sort_int reverse sorted");
+    assert_eq(v[0], 1, "first element should be 1");
+    assert_eq(v[9], 10, "last element should be 10");
+}
+
+// Test: sort_float with empty vec
+fun _test_sort_float_empty() {
+    var v: Vec<float> = Vec::<float>`new`();
+    sort_float(v);
+    assert_eq(v.len(), 0, "empty float vec should remain empty");
+}
+
+// Test: sort_float with 100 random floats
+fun _test_sort_float_random() {
+    var rng: Rand = Rand::`new`(42);
+    var v: Vec<float> = Vec::<float>`new`();
+    var i = 0;
+    while i < 100 {
+        v.push(rng.float() * 1000.0 - 500.0);
+        i = i + 1;
+    }
+    sort_float(v);
+    _assert_sorted_float(v, "sort_float random seed=42");
+    assert_eq(v.len(), 100, "length should be preserved");
+}

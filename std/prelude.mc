@@ -1079,3 +1079,115 @@ fun std_parse_int(s: string) -> int {
     }
     return result;
 }
+
+// ============================================================================
+// Sort Functions (Quicksort with median-of-three pivot)
+// ============================================================================
+
+// Internal: swap two elements in a vec using heap intrinsics
+fun _sort_swap(ptr: int, i: int, j: int) {
+    let tmp = __heap_load(ptr, i);
+    __heap_store(ptr, i, __heap_load(ptr, j));
+    __heap_store(ptr, j, tmp);
+}
+
+// Internal: quicksort implementation for vec<int>
+fun _sort_int_impl(ptr: int, low: int, high: int) {
+    if low >= high {
+        return;
+    }
+
+    // Median-of-three pivot selection (only for 3+ elements)
+    if high - low >= 2 {
+        let mid = low + (high - low) / 2;
+        if __heap_load(ptr, low) > __heap_load(ptr, mid) {
+            _sort_swap(ptr, low, mid);
+        }
+        if __heap_load(ptr, low) > __heap_load(ptr, high) {
+            _sort_swap(ptr, low, high);
+        }
+        if __heap_load(ptr, mid) > __heap_load(ptr, high) {
+            _sort_swap(ptr, mid, high);
+        }
+        // v[mid] is the median, swap to high for Lomuto partition
+        _sort_swap(ptr, mid, high);
+    }
+
+    // Lomuto partition with pivot at v[high]
+    let pivot = __heap_load(ptr, high);
+    var i = low;
+    var j = low;
+    while j < high {
+        if __heap_load(ptr, j) <= pivot {
+            _sort_swap(ptr, i, j);
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    _sort_swap(ptr, i, high);
+
+    // Recurse on both sides
+    if i > low {
+        _sort_int_impl(ptr, low, i - 1);
+    }
+    _sort_int_impl(ptr, i + 1, high);
+}
+
+// Sort a vec<int> in-place in ascending order using quicksort.
+fun sort_int(v: Vec<any>) {
+    let n = v.len;
+    if n <= 1 {
+        return;
+    }
+    _sort_int_impl(v.ptr, 0, n - 1);
+}
+
+// Internal: quicksort implementation for vec<float>
+fun _sort_float_impl(ptr: int, low: int, high: int) {
+    if low >= high {
+        return;
+    }
+
+    // Median-of-three pivot selection (only for 3+ elements)
+    if high - low >= 2 {
+        let mid = low + (high - low) / 2;
+        if __heap_load(ptr, low) > __heap_load(ptr, mid) {
+            _sort_swap(ptr, low, mid);
+        }
+        if __heap_load(ptr, low) > __heap_load(ptr, high) {
+            _sort_swap(ptr, low, high);
+        }
+        if __heap_load(ptr, mid) > __heap_load(ptr, high) {
+            _sort_swap(ptr, mid, high);
+        }
+        _sort_swap(ptr, mid, high);
+    }
+
+    // Lomuto partition with pivot at v[high]
+    let pivot = __heap_load(ptr, high);
+    var i = low;
+    var j = low;
+    while j < high {
+        if __heap_load(ptr, j) <= pivot {
+            _sort_swap(ptr, i, j);
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    _sort_swap(ptr, i, high);
+
+    // Recurse on both sides
+    if i > low {
+        _sort_float_impl(ptr, low, i - 1);
+    }
+    _sort_float_impl(ptr, i + 1, high);
+}
+
+// Sort a vec<float> in-place in ascending order using quicksort.
+fun sort_float(v: Vec<any>) {
+    let n = v.len;
+    if n <= 1 {
+        return;
+    }
+    _sort_float_impl(v.ptr, 0, n - 1);
+}
