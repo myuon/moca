@@ -664,6 +664,9 @@ pub fn lint_file(path: &Path) -> Result<(String, usize), String> {
     // Load main file with all imports
     let user_program = loader.load_with_imports(path)?;
 
+    // Record the number of user items before prepending stdlib
+    let user_item_count = user_program.items.len();
+
     // Prepend standard library
     let program = prepend_stdlib(user_program)?;
 
@@ -675,9 +678,10 @@ pub fn lint_file(path: &Path) -> Result<(String, usize), String> {
         .check_program(&program)
         .map_err(|errors| format_type_errors(&filename, &errors))?;
 
-    // Linting
-    let rules = linter::default_rules();
-    let diagnostics = linter::lint_program(&program, &filename, &rules);
+    // Linting (skip stdlib items at the beginning)
+    let stdlib_item_count = program.items.len() - user_item_count;
+    let rules = linter::default_rules(typechecker.method_call_object_types().clone());
+    let diagnostics = linter::lint_program(&program, &filename, &rules, stdlib_item_count);
     let count = diagnostics.len();
     let output = linter::format_diagnostics(&filename, &diagnostics);
 

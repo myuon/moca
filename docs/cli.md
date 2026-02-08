@@ -118,6 +118,7 @@ warning: {RULE_NAME}: {MESSAGE}
 | ルール名 | 検出内容 | サジェスト |
 |----------|---------|-----------|
 | `prefer-new-literal` | `vec::\`new\`()` の呼び出し | `new Vec<T> {}` 構文の使用 |
+| `prefer-index-access` | vec/mapの `.get()` / `.set()` / `.put()` 呼び出し | `[]` インデックス記法の使用 |
 
 ### ルールの追加
 

@@ -95,6 +95,7 @@ pub struct Block {
 
 /// Statements in the language.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     Let {
         name: String,
@@ -235,6 +236,8 @@ pub enum Expr {
         type_args: Vec<TypeAnnotation>,
         args: Vec<Expr>,
         span: Span,
+        /// Type of the object (set by typechecker for linter)
+        object_type: Option<Type>,
     },
     /// Associated function call: `Type::func(args)` or `Type<T>::func(args)`
     AssociatedFunctionCall {
