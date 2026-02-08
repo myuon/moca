@@ -902,12 +902,14 @@ impl Rand {
 
     // Generate a random integer in [min_val, max_val].
     // Throws an error if min_val > max_val.
+    // Uses scaling (upper bits) instead of modulo to avoid LCG lower-bit bias.
     fun int(self, min_val: int, max_val: int) -> int {
         if min_val > max_val {
             throw "rand_int: min must be <= max";
         }
         let r = self.next();
-        return min_val + r % (max_val - min_val + 1);
+        let range = max_val - min_val + 1;
+        return min_val + r * range / 2147483648;
     }
 
     // Generate a random float in [0.0, 1.0).
