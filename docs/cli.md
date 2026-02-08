@@ -118,6 +118,7 @@ warning: {RULE_NAME}: {MESSAGE}
 | ルール名 | 検出内容 | サジェスト |
 |----------|---------|-----------|
 | `prefer-new-literal` | `vec::\`new\`()` の呼び出し | `new Vec<T> {}` 構文の使用 |
+| `redundant-type-annotation` | `let v: T = new T {...}` の冗長な型注釈 | 型注釈の削除（`new` で型が明白なため） |
 
 ### ルールの追加
 
