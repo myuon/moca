@@ -199,7 +199,7 @@ impl SymbolTable {
 
     fn collect_expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::Ident { name, span } => {
+            Expr::Ident { name, span, .. } => {
                 // This is a reference to a symbol
                 self.references.push((*span, name.clone()));
             }

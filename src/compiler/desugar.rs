@@ -12,24 +12,15 @@ use crate::compiler::ast::{
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
-use std::collections::HashMap;
 
 /// Counter for generating unique variable names.
 struct Desugar {
     counter: usize,
-    /// Type information for index expressions, keyed by span.
-    index_object_types: HashMap<Span, Type>,
-    /// Type information for len() builtin arguments, keyed by call span.
-    len_arg_types: HashMap<Span, Type>,
 }
 
 impl Desugar {
-    fn new(index_object_types: HashMap<Span, Type>, len_arg_types: HashMap<Span, Type>) -> Self {
-        Self {
-            counter: 0,
-            index_object_types,
-            len_arg_types,
-        }
+    fn new() -> Self {
+        Self { counter: 0 }
     }
 
     /// Generate a unique variable name for desugared temporaries.
@@ -161,12 +152,14 @@ impl Desugar {
                 type_annotation,
                 init,
                 span,
+                inferred_type,
             } => Statement::Let {
                 name,
                 mutable,
                 type_annotation,
                 init: self.desugar_expr(init),
                 span,
+                inferred_type,
             },
             Statement::Assign { name, value, span } => Statement::Assign {
                 name,
@@ -178,14 +171,14 @@ impl Desugar {
                 index,
                 value,
                 span,
-                ..
+                object_type,
             } => {
                 let desugared_object = self.desugar_expr(object);
                 let desugared_index = self.desugar_expr(index);
                 let desugared_value = self.desugar_expr(value);
 
                 // Check if this is a Vec or Map type that should be desugared
-                if let Some(obj_type) = self.index_object_types.get(&span)
+                if let Some(ref obj_type) = object_type
                     && self.should_desugar_index(obj_type)
                 {
                     // Transform to method call: object.set(index, value)
@@ -197,6 +190,7 @@ impl Desugar {
                             args: vec![desugared_index, desugared_value],
                             span,
                             object_type: None,
+                            inferred_type: None,
                         },
                         span,
                     };
@@ -208,7 +202,7 @@ impl Desugar {
                     index: desugared_index,
                     value: desugared_value,
                     span,
-                    object_type: None,
+                    object_type,
                 }
             }
             Statement::FieldAssign {
@@ -291,9 +285,14 @@ impl Desugar {
             | Expr::Ident { .. } => expr,
 
             // Array - desugar elements
-            Expr::Array { elements, span } => Expr::Array {
+            Expr::Array {
+                elements,
+                span,
+                inferred_type,
+            } => Expr::Array {
                 elements: elements.into_iter().map(|e| self.desugar_expr(e)).collect(),
                 span,
+                inferred_type,
             },
 
             // Index - desugar to method call for Vec/Map types
@@ -301,13 +300,14 @@ impl Desugar {
                 object,
                 index,
                 span,
-                ..
+                object_type,
+                inferred_type,
             } => {
                 let desugared_object = self.desugar_expr(*object);
                 let desugared_index = self.desugar_expr(*index);
 
                 // Check if this is a Vec or Map type that should be desugared
-                if let Some(obj_type) = self.index_object_types.get(&span)
+                if let Some(ref obj_type) = object_type
                     && self.should_desugar_index(obj_type)
                 {
                     // Transform to method call: object.get(index)
@@ -318,6 +318,7 @@ impl Desugar {
                         args: vec![desugared_index],
                         span,
                         object_type: None,
+                        inferred_type,
                     };
                 }
 
@@ -326,7 +327,8 @@ impl Desugar {
                     object: Box::new(desugared_object),
                     index: Box::new(desugared_index),
                     span,
-                    object_type: None,
+                    object_type,
+                    inferred_type,
                 }
             }
 
@@ -335,17 +337,25 @@ impl Desugar {
                 object,
                 field,
                 span,
+                inferred_type,
             } => Expr::Field {
                 object: Box::new(self.desugar_expr(*object)),
                 field,
                 span,
+                inferred_type,
             },
 
             // Unary - desugar operand
-            Expr::Unary { op, operand, span } => Expr::Unary {
+            Expr::Unary {
+                op,
+                operand,
+                span,
+                inferred_type,
+            } => Expr::Unary {
                 op,
                 operand: Box::new(self.desugar_expr(*operand)),
                 span,
+                inferred_type,
             },
 
             // Binary - desugar both sides
@@ -354,11 +364,13 @@ impl Desugar {
                 left,
                 right,
                 span,
+                inferred_type,
             } => Expr::Binary {
                 op,
                 left: Box::new(self.desugar_expr(*left)),
                 right: Box::new(self.desugar_expr(*right)),
                 span,
+                inferred_type,
             },
 
             // Call - desugar arguments
@@ -367,11 +379,13 @@ impl Desugar {
                 type_args,
                 args,
                 span,
+                inferred_type,
             } => Expr::Call {
                 callee,
                 type_args,
                 args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
                 span,
+                inferred_type,
             },
 
             // Struct literal - desugar field values
@@ -380,6 +394,7 @@ impl Desugar {
                 type_args,
                 fields,
                 span,
+                inferred_type,
             } => Expr::StructLiteral {
                 name,
                 type_args,
@@ -388,6 +403,7 @@ impl Desugar {
                     .map(|(name, value)| (name, self.desugar_expr(value)))
                     .collect(),
                 span,
+                inferred_type,
             },
 
             // Method call - desugar object and arguments
@@ -398,6 +414,7 @@ impl Desugar {
                 args,
                 span,
                 object_type,
+                inferred_type,
             } => Expr::MethodCall {
                 object: Box::new(self.desugar_expr(*object)),
                 method,
@@ -405,6 +422,7 @@ impl Desugar {
                 args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
                 span,
                 object_type,
+                inferred_type,
             },
 
             // Associated function call - desugar arguments
@@ -415,6 +433,7 @@ impl Desugar {
                 fn_type_args,
                 args,
                 span,
+                inferred_type,
             } => Expr::AssociatedFunctionCall {
                 type_name,
                 type_args,
@@ -422,6 +441,7 @@ impl Desugar {
                 fn_type_args,
                 args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
                 span,
+                inferred_type,
             },
 
             // Asm - desugar (inputs are just variable names, no expressions)
@@ -433,6 +453,7 @@ impl Desugar {
                 type_args,
                 elements,
                 span,
+                ..
             } => self.desugar_new_literal(type_name, type_args, elements, span),
 
             // Block - desugar statements and the final expression
@@ -440,6 +461,7 @@ impl Desugar {
                 statements,
                 expr,
                 span,
+                inferred_type,
             } => Expr::Block {
                 statements: statements
                     .into_iter()
@@ -447,6 +469,7 @@ impl Desugar {
                     .collect(),
                 expr: Box::new(self.desugar_expr(*expr)),
                 span,
+                inferred_type,
             },
         }
     }
@@ -543,8 +566,10 @@ impl Desugar {
             args: vec![Expr::Int {
                 value: count as i64,
                 span,
+                inferred_type: None,
             }],
             span,
+            inferred_type: None,
         };
 
         statements.push(Statement::Let {
@@ -553,6 +578,7 @@ impl Desugar {
             type_annotation: Some(type_annotation),
             init: init_expr,
             span,
+            inferred_type: None,
         });
 
         // __new_literal_N.set(i, e_i);
@@ -563,6 +589,7 @@ impl Desugar {
                         object: Box::new(Expr::Ident {
                             name: var_name.clone(),
                             span,
+                            inferred_type: None,
                         }),
                         method: "set".to_string(),
                         type_args: vec![],
@@ -570,11 +597,13 @@ impl Desugar {
                             Expr::Int {
                                 value: i as i64,
                                 span,
+                                inferred_type: None,
                             },
                             value,
                         ],
                         span,
                         object_type: None,
+                        inferred_type: None,
                     },
                     span,
                 });
@@ -587,8 +616,10 @@ impl Desugar {
             expr: Box::new(Expr::Ident {
                 name: var_name,
                 span,
+                inferred_type: None,
             }),
             span,
+            inferred_type: None,
         }
     }
 
@@ -634,6 +665,7 @@ impl Desugar {
             fn_type_args: vec![],
             args: vec![],
             span,
+            inferred_type: None,
         };
 
         statements.push(Statement::Let {
@@ -642,6 +674,7 @@ impl Desugar {
             type_annotation: Some(type_annotation),
             init: init_expr,
             span,
+            inferred_type: None,
         });
 
         // __new_literal_N.put(k, v);
@@ -652,12 +685,14 @@ impl Desugar {
                         object: Box::new(Expr::Ident {
                             name: var_name.clone(),
                             span,
+                            inferred_type: None,
                         }),
                         method: "put".to_string(),
                         type_args: vec![],
                         args: vec![key, value],
                         span,
                         object_type: None,
+                        inferred_type: None,
                     },
                     span,
                 });
@@ -670,18 +705,16 @@ impl Desugar {
             expr: Box::new(Expr::Ident {
                 name: var_name,
                 span,
+                inferred_type: None,
             }),
             span,
+            inferred_type: None,
         }
     }
 }
 
 /// Desugar a program, expanding syntax sugar into core constructs.
-pub fn desugar_program(
-    program: Program,
-    index_object_types: HashMap<Span, Type>,
-    len_arg_types: HashMap<Span, Type>,
-) -> Program {
-    let mut desugar = Desugar::new(index_object_types, len_arg_types);
+pub fn desugar_program(program: Program) -> Program {
+    let mut desugar = Desugar::new();
     desugar.desugar_program(program)
 }

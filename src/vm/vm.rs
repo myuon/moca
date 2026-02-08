@@ -1652,7 +1652,8 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     let va = self.stack[sb + a.0];
                     let vb = self.stack[sb + b.0];
-                    self.stack[sb + dst.0] = Value::Bool(va == vb);
+                    let result = self.values_equal(&va, &vb);
+                    self.stack[sb + dst.0] = Value::Bool(result);
                 }
                 MicroOp::RefIsNull { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;

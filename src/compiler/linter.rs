@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::compiler::ast::{Block, Expr, FnDef, Item, Program, Statement};
 use crate::compiler::lexer::Span;
 use crate::compiler::types::Type;
@@ -257,11 +255,8 @@ pub fn format_diagnostics(filename: &str, diagnostics: &[Diagnostic]) -> String 
 }
 
 /// Return the default set of lint rules.
-pub fn default_rules(method_call_types: HashMap<Span, Type>) -> Vec<Box<dyn LintRule>> {
-    vec![
-        Box::new(PreferNewLiteral),
-        Box::new(PreferIndexAccess { method_call_types }),
-    ]
+pub fn default_rules() -> Vec<Box<dyn LintRule>> {
+    vec![Box::new(PreferNewLiteral), Box::new(PreferIndexAccess)]
 }
 
 // ============================================================================
@@ -300,13 +295,11 @@ impl LintRule for PreferNewLiteral {
 /// Suggests using `obj[index]` instead of `obj.get(index)` and
 /// `obj[index] = value` instead of `obj.set(index, value)` / `obj.put(key, value)`
 /// for vec and map types.
-pub struct PreferIndexAccess {
-    method_call_types: HashMap<Span, Type>,
-}
+pub struct PreferIndexAccess;
 
 impl PreferIndexAccess {
-    fn is_vec_or_map(&self, span: &Span) -> bool {
-        match self.method_call_types.get(span) {
+    fn is_vec_or_map(object_type: &Option<Type>) -> bool {
+        match object_type {
             Some(Type::Vector(_)) | Some(Type::Map(_, _)) => true,
             Some(Type::GenericStruct { name, .. }) => name == "Vec" || name == "Map",
             _ => false,
@@ -321,10 +314,14 @@ impl LintRule for PreferIndexAccess {
 
     fn check_expr(&self, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
         if let Expr::MethodCall {
-            method, args, span, ..
+            method,
+            args,
+            span,
+            object_type,
+            ..
         } = expr
         {
-            if !self.is_vec_or_map(span) {
+            if !Self::is_vec_or_map(object_type) {
                 return;
             }
 
