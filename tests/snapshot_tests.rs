@@ -5,6 +5,7 @@
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use moca::compiler::{dump_ast, dump_bytecode, lint_file, run_file_capturing_output, run_tests};
 use moca::config::{JitMode, RuntimeConfig};
@@ -1248,4 +1249,105 @@ fn snapshot_http() {
             template_path, expected_exitcode, actual_exitcode, actual_stderr
         );
     }
+}
+
+// ============================================================================
+// Time Syscall Tests
+// ============================================================================
+
+/// Format epoch seconds as "YYYY-MM-DD HH:MM:SS" in UTC (same algorithm as VM).
+fn format_epoch_secs_utc(epoch_secs: i64) -> String {
+    let mut days = epoch_secs / 86400;
+    let day_secs = ((epoch_secs % 86400) + 86400) % 86400;
+    if epoch_secs < 0 && epoch_secs % 86400 != 0 {
+        days -= 1;
+    }
+    let hour = day_secs / 3600;
+    let minute = (day_secs % 3600) / 60;
+    let second = day_secs % 60;
+
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        y, m, d, hour, minute, second
+    )
+}
+
+/// Test time syscalls: verify time accuracy and format correctness.
+#[test]
+fn snapshot_time_syscall() {
+    let test_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("basic")
+        .join("syscall_time.mc");
+
+    let config = RuntimeConfig::default();
+    let before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let (stdout, stderr, exitcode, _) = run_moca_file_inprocess(&test_path, &config);
+    let after = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+    assert_eq!(
+        exitcode, 0,
+        "syscall_time.mc failed with exit code {}\nstderr: {}",
+        exitcode, stderr
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        4,
+        "expected 4 lines of output, got {}: {:?}",
+        lines.len(),
+        lines
+    );
+
+    // Line 0: epoch seconds
+    let moca_secs: i64 = lines[0].parse().expect("failed to parse time seconds");
+    let before_secs = before.as_secs() as i64;
+    let after_secs = after.as_secs() as i64;
+    assert!(
+        moca_secs >= before_secs - 2 && moca_secs <= after_secs + 2,
+        "time() value {} is not within ±2s of Rust time [{}, {}]",
+        moca_secs,
+        before_secs,
+        after_secs
+    );
+
+    // Line 1: epoch nanoseconds
+    let moca_nanos: i64 = lines[1].parse().expect("failed to parse time_nanos");
+    let before_nanos = before.as_nanos() as i64;
+    let after_nanos = after.as_nanos() as i64;
+    assert!(
+        moca_nanos >= before_nanos - 5_000_000_000 && moca_nanos <= after_nanos + 5_000_000_000,
+        "time_nanos() value {} is not within ±5s of Rust time [{}, {}]",
+        moca_nanos,
+        before_nanos,
+        after_nanos
+    );
+
+    // Line 2: formatted time string — verify against Rust formatting of the same seconds
+    let expected_formatted = format_epoch_secs_utc(moca_secs);
+    assert_eq!(
+        lines[2], expected_formatted,
+        "time_format({}) mismatch: moca='{}', rust='{}'",
+        moca_secs, lines[2], expected_formatted
+    );
+
+    // Line 3: format of epoch 0
+    assert_eq!(
+        lines[3], "1970-01-01 00:00:00",
+        "time_format(0) should be '1970-01-01 00:00:00', got '{}'",
+        lines[3]
+    );
 }

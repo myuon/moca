@@ -3322,11 +3322,8 @@ impl VM {
 
 /// Format epoch seconds as "YYYY-MM-DD HH:MM:SS" in UTC.
 fn format_epoch_secs_utc(epoch_secs: i64) -> String {
-    let mut days = epoch_secs / 86400;
-    let day_secs = ((epoch_secs % 86400) + 86400) % 86400;
-    if epoch_secs < 0 && epoch_secs % 86400 != 0 {
-        days -= 1;
-    }
+    let days = epoch_secs.div_euclid(86400);
+    let day_secs = epoch_secs.rem_euclid(86400);
     let hour = day_secs / 3600;
     let minute = (day_secs % 3600) / 60;
     let second = day_secs % 60;
