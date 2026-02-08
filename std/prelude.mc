@@ -15,7 +15,6 @@
 // Syscall 9: accept(fd) -> client_fd
 // Syscall 10: time() -> epoch_seconds
 // Syscall 11: time_nanos() -> epoch_nanoseconds
-// Syscall 12: time_format(secs) -> "YYYY-MM-DD HH:MM:SS"
 
 // ============================================================================
 // POSIX-like Constants (as functions to avoid polluting the stack)
@@ -106,7 +105,7 @@ fun accept(fd: int) -> int {
 }
 
 // ============================================================================
-// Time Functions (using __syscall)
+// Time Functions
 // ============================================================================
 
 // Get current time as Unix epoch seconds.
@@ -119,9 +118,84 @@ fun time_nanos() -> int {
     return __syscall(11);
 }
 
+// Zero-pad an integer to 2 digits.
+fun _pad2(n: int) -> string {
+    if n < 10 {
+        return "0" + to_string(n);
+    }
+    return to_string(n);
+}
+
+// Zero-pad an integer to 4 digits.
+fun _pad4(n: int) -> string {
+    if n < 10 {
+        return "000" + to_string(n);
+    }
+    if n < 100 {
+        return "00" + to_string(n);
+    }
+    if n < 1000 {
+        return "0" + to_string(n);
+    }
+    return to_string(n);
+}
+
+// Check if a year is a leap year.
+fun _is_leap_year(y: int) -> bool {
+    return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+}
+
+// Get number of days in a month (1-indexed).
+fun _days_in_month(y: int, m: int) -> int {
+    if m == 2 {
+        if _is_leap_year(y) {
+            return 29;
+        }
+        return 28;
+    }
+    if m == 4 || m == 6 || m == 9 || m == 11 {
+        return 30;
+    }
+    return 31;
+}
+
 // Format epoch seconds as "YYYY-MM-DD HH:MM:SS" (UTC).
-fun time_format(secs: int) -> string {
-    return __syscall(12, secs);
+// Uses civil_from_days algorithm for date calculation.
+fun time_format(epoch_secs: int) -> string {
+    // Euclidean division for correct negative handling
+    var days = epoch_secs / 86400;
+    var day_secs = epoch_secs - days * 86400;
+    if day_secs < 0 {
+        days = days - 1;
+        day_secs = day_secs + 86400;
+    }
+
+    let hour = day_secs / 3600;
+    let minute = (day_secs - hour * 3600) / 60;
+    let second = day_secs - hour * 3600 - minute * 60;
+
+    // civil_from_days: convert days since 1970-01-01 to y/m/d
+    let z = days + 719468;
+    var era = z / 146097;
+    if z < 0 {
+        era = (z - 146096) / 146097;
+    }
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y_base = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    var m = mp + 3;
+    if mp >= 10 {
+        m = mp - 9;
+    }
+    var y = y_base;
+    if m <= 2 {
+        y = y_base + 1;
+    }
+
+    return _pad4(y) + "-" + _pad2(m) + "-" + _pad2(d) + " " + _pad2(hour) + ":" + _pad2(minute) + ":" + _pad2(second);
 }
 
 // ============================================================================

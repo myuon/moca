@@ -29,7 +29,7 @@
 - 入力: なし（引数0個）
 - 出力: `int` — Unix epoch からのナノ秒数（i64範囲内、2262年頃まで）
 
-### Syscall 12: `time_format`
+### `time_format` (moca純粋実装 in prelude.mc)
 - 入力: `int` — Unix epoch からの秒数
 - 出力: `string` — `"YYYY-MM-DD HH:MM:SS"` 形式のUTC文字列
 
@@ -40,9 +40,9 @@
 - UTCフォーマット: 手動計算（chrono等の外部クレート不使用）
 
 ## 7. Rules & Constraints
-- 既存のsyscall体系（1-9）に続く番号（10, 11, 12）を使用する
+- 既存のsyscall体系（1-9）に続く番号（10, 11）を使用する
 - `std::time::SystemTime::now()` を使用し、外部クレートに依存しない
-- UTC フォーマットの年月日時分秒計算は Rust 側で手動実装する（うるう年考慮）
+- UTC フォーマットの年月日時分秒計算は moca 側（prelude.mc）で自前実装する（civil_from_daysアルゴリズム）
 - `prelude.mc` に追加するラッパー関数は既存パターン（`__syscall` 呼び出し）に従う
 - スナップショットテストは stdout 完全一致ではなく、Rust側テスト関数で時刻の近似比較を行う
 
