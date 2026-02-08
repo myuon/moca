@@ -2860,6 +2860,8 @@ impl VM {
     /// - 2: open(path, flags) -> fd
     /// - 3: close(fd) -> 0 on success
     /// - 4: read(fd, count) -> string (heap ref) or error
+    /// - 10: time() -> epoch seconds
+    /// - 11: time_nanos() -> epoch nanoseconds
     fn handle_syscall(&mut self, syscall_num: usize, args: &[Value]) -> Result<Value, String> {
         // Syscall numbers
         const SYSCALL_WRITE: usize = 1;
@@ -2871,6 +2873,8 @@ impl VM {
         const SYSCALL_BIND: usize = 7;
         const SYSCALL_LISTEN: usize = 8;
         const SYSCALL_ACCEPT: usize = 9;
+        const SYSCALL_TIME: usize = 10;
+        const SYSCALL_TIME_NANOS: usize = 11;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
@@ -3266,6 +3270,32 @@ impl VM {
                     }
                     Err(_) => Ok(Value::I64(EBADF)),
                 }
+            }
+            SYSCALL_TIME => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "time syscall expects 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let duration = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| format!("time syscall failed: {}", e))?;
+                Ok(Value::I64(duration.as_secs() as i64))
+            }
+            SYSCALL_TIME_NANOS => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "time_nanos syscall expects 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let duration = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| format!("time_nanos syscall failed: {}", e))?;
+                Ok(Value::I64(duration.as_nanos() as i64))
             }
             _ => Err(format!("unknown syscall: {}", syscall_num)),
         }

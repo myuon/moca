@@ -327,6 +327,11 @@ SYSCALL <num> <argc>  // Execute system call
 | 4      | read    | fd, count                 | string (heap ref) or error   |
 | 5      | socket  | domain, type              | socket fd (>=3) or error     |
 | 6      | connect | fd, host (string), port   | 0 on success or error        |
+| 7      | bind    | fd, host (string), port   | 0 on success or error        |
+| 8      | listen  | fd, backlog               | 0 on success or error        |
+| 9      | accept  | fd                        | client fd (>=3) or error     |
+| 10     | time    | (none)                    | epoch seconds (int)          |
+| 11     | time_nanos | (none)                 | epoch nanoseconds (int)      |
 
 #### Error Codes
 
@@ -488,6 +493,26 @@ let response = syscall_read(fd, 4096);
 // Close socket
 syscall_close(fd);
 ```
+
+#### time Syscall
+
+```
+syscall_time() -> int
+```
+
+- **Returns**: Current time as Unix epoch seconds (i64)
+
+Uses `std::time::SystemTime::now()` internally.
+
+#### time_nanos Syscall
+
+```
+syscall_time_nanos() -> int
+```
+
+- **Returns**: Current time as Unix epoch nanoseconds (i64, valid until ~2262)
+
+Uses `std::time::SystemTime::now()` internally.
 
 ## Garbage Collection
 
