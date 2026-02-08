@@ -119,6 +119,7 @@ warning: {RULE_NAME}: {MESSAGE}
 |----------|---------|-----------|
 | `prefer-new-literal` | `vec::\`new\`()` の呼び出し | `new Vec<T> {}` 構文の使用 |
 | `prefer-index-access` | vec/mapの `.get()` / `.set()` / `.put()` 呼び出し | `[]` インデックス記法の使用 |
+| `redundant-type-annotation` | `let v: T = new T {...}` の冗長な型注釈 | 型注釈の削除（`new` で型が明白なため） |
 
 ### ルールの追加
 
