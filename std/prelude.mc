@@ -13,6 +13,9 @@
 // Syscall 7: bind(fd, host, port) -> status
 // Syscall 8: listen(fd, backlog) -> status
 // Syscall 9: accept(fd) -> client_fd
+// Syscall 10: time() -> epoch_seconds
+// Syscall 11: time_nanos() -> epoch_nanoseconds
+// Syscall 12: time_format(secs) -> "YYYY-MM-DD HH:MM:SS"
 
 // ============================================================================
 // POSIX-like Constants (as functions to avoid polluting the stack)
@@ -100,6 +103,25 @@ fun listen(fd: int, backlog: int) -> int {
 // Returns: new socket fd for the client connection, or negative error code on failure
 fun accept(fd: int) -> int {
     return __syscall(9, fd);
+}
+
+// ============================================================================
+// Time Functions (using __syscall)
+// ============================================================================
+
+// Get current time as Unix epoch seconds.
+fun time() -> int {
+    return __syscall(10);
+}
+
+// Get current time as Unix epoch nanoseconds.
+fun time_nanos() -> int {
+    return __syscall(11);
+}
+
+// Format epoch seconds as "YYYY-MM-DD HH:MM:SS" (UTC).
+fun time_format(secs: int) -> string {
+    return __syscall(12, secs);
 }
 
 // ============================================================================

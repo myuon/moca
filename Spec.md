@@ -1,135 +1,85 @@
-# Spec.md — JIT: HeapLoad/HeapStore/HeapLoadDyn/HeapStoreDyn ネイティブ対応
+# Spec.md — 時刻取得syscallの追加
 
 ## 1. Goal
-- JITコンパイラが `HeapLoad(n)` / `HeapStore(n)` / `HeapLoadDyn` / `HeapStoreDyn` をネイティブコードに変換できるようにする
-- これにより、`@inline` で `Vec::get`/`Vec::set` を展開したループがJITコンパイル可能になる
+- mocaプログラムから現在時刻を取得できるsyscallを追加し、秒単位・ナノ秒単位での取得と簡易フォーマット表示を可能にする
 
 ## 2. Non-Goals
-- `HeapAlloc` / `HeapAllocDyn`（ヒープアロケーション）のJIT対応
-- GCセーフポイントの追加（Heap読み書きはアロケーションを発生させないため不要）
-- 境界チェックの追加（インタプリタと同じくチェックなし）
-- JIT内からのVM呼び出しヘルパー方式（アプローチBはフォールバック時のみ）
+- タイムゾーン対応（UTCのみ）
+- 日付パース（文字列→時刻への変換）
+- sleep / timer 系の機能
+- モノトニッククロック
+- 高度な日付フォーマット（strftime等）
 
 ## 3. Target Users
-- moca言語のユーザーが、配列・ベクター操作を含むホットループの高速化の恩恵を受ける
+- mocaプログラムの開発者が、プログラム内で現在時刻の取得・表示を行いたい場合に使用
 
 ## 4. Core User Flow
-1. ユーザーが `Vec::get` / `Vec::set` に `@inline` を付与（stdlibで設定済みにする）
-2. ホットループ内で `counts[idx]` 等のベクターアクセスがインライン展開され、`Call` が `HeapLoad`/`HeapLoadDyn`/`HeapStoreDyn` に置き換わる
-3. ループJITコンパイラがこれらのOpをネイティブコードに変換
-4. ループ全体がネイティブ実行される
+1. mocaコード内で `time()` を呼び出し、Unix epoch からの秒数（int）を取得する
+2. mocaコード内で `time_nanos()` を呼び出し、Unix epoch からのナノ秒数（int）を取得する
+3. `time_format(seconds)` に秒数を渡し、`"YYYY-MM-DD HH:MM:SS"` 形式のUTC文字列を取得する
+4. 取得した値を `print` 等で出力する
 
 ## 5. Inputs & Outputs
-- **入力**: HeapLoad/HeapStore/HeapLoadDyn/HeapStoreDyn を含むバイトコード
-- **出力**: ヒープメモリを直接読み書きするネイティブ機械語（x86_64 / aarch64）
+
+### Syscall 10: `time`
+- 入力: なし（引数0個）
+- 出力: `int` — Unix epoch からの秒数
+
+### Syscall 11: `time_nanos`
+- 入力: なし（引数0個）
+- 出力: `int` — Unix epoch からのナノ秒数（i64範囲内、2262年頃まで）
+
+### Syscall 12: `time_format`
+- 入力: `int` — Unix epoch からの秒数
+- 出力: `string` — `"YYYY-MM-DD HH:MM:SS"` 形式のUTC文字列
 
 ## 6. Tech Stack
-- 言語: Rust（既存プロジェクト）
-- 対象: `src/jit/compiler.rs` (aarch64), `src/jit/compiler_x86_64.rs` (x86_64)
-- テスト: `cargo test`（既存パフォーマンステスト + スナップショットテスト）
+- 言語: Rust（VM実装）、moca（標準ライブラリラッパー）
+- テスト: `cargo test`（snapshot_tests.rs 内にカスタムテスト関数を追加）
+- 時刻取得: `std::time::SystemTime` / `std::time::UNIX_EPOCH`（外部クレート不要）
+- UTCフォーマット: 手動計算（chrono等の外部クレート不使用）
 
 ## 7. Rules & Constraints
+- 既存のsyscall体系（1-9）に続く番号（10, 11, 12）を使用する
+- `std::time::SystemTime::now()` を使用し、外部クレートに依存しない
+- UTC フォーマットの年月日時分秒計算は Rust 側で手動実装する（うるう年考慮）
+- `prelude.mc` に追加するラッパー関数は既存パターン（`__syscall` 呼び出し）に従う
+- スナップショットテストは stdout 完全一致ではなく、Rust側テスト関数で時刻の近似比較を行う
 
-### 7.1 ヒープメモリレイアウト
-- ヒープは `Vec<u64>` の線形メモリ
-- オブジェクトレイアウト: `[Header(1word) | Tag0 | Val0 | Tag1 | Val1 | ...]`
-- 各スロットは2ワード（tag: u64 + payload: u64）= 16バイト
-- スロットNのアドレス: `heap_base + (ref_index + 1 + 2*N) * 8`
+## 8. Open Questions
+なし
 
-### 7.2 JitCallContext の heap_base
-- `JitCallContext.heap_base` (offset 48) にヒープメモリのベースポインタが格納済み
-- ループ内に `Call` がない場合、GC/アロケーションは発生しないので `heap_base` は安定
+## 9. Acceptance Criteria
 
-### 7.3 各Opのセマンティクス
-
-**HeapLoad(n)** — 静的フィールド読み込み
-- スタック: `[ref] → [value]`
-- ref の payload がヒープインデックス
-- `heap_base[ref + 1 + 2*n]` から tag、`heap_base[ref + 1 + 2*n + 1]` から payload を読む
-- tag + payload をスタックにプッシュ
-
-**HeapStore(n)** — 静的フィールド書き込み
-- スタック: `[ref, value] → []`
-- value の tag/payload を `heap_base[ref + 1 + 2*n]` / `heap_base[ref + 1 + 2*n + 1]` に書く
-
-**HeapLoadDyn** — 動的インデックス読み込み
-- スタック: `[ref, index] → [value]`
-- index の payload を整数としてスロット番号に使用
-- `heap_base[ref + 1 + 2*index]` から tag、`+1` から payload
-
-**HeapStoreDyn** — 動的インデックス書き込み
-- スタック: `[ref, index, value] → []`
-- `heap_base[ref + 1 + 2*index]` に tag、`+1` に payload を書く
-
-### 7.4 ネイティブコード生成パターン（x86_64 の例）
-
-```
-; HeapLoad(n): [ref] → [value]
-; ref を VSTACK からポップ
-sub VSTACK, 16
-mov TMP0, [VSTACK + 8]           ; ref payload (heap index)
-mov TMP1, [VM_CTX + 48]          ; heap_base
-; アドレス計算: heap_base + (ref + 1 + 2*n) * 8
-add TMP0, (1 + 2*n)
-shl TMP0, 3                       ; * sizeof(u64)
-add TMP1, TMP0
-; tag + payload を読み込み
-mov TMP2, [TMP1]                  ; tag
-mov TMP3, [TMP1 + 8]             ; payload
-; VSTACK にプッシュ
-mov [VSTACK], TMP2
-mov [VSTACK + 8], TMP3
-add VSTACK, 16
-```
-
-### 7.5 フォールバック戦略
-- 基本はネイティブ実装（アプローチA）で進める
-- 実装上の障壁が発生した場合のみ、VMヘルパー方式（アプローチB）にフォールバックする
-
-### 7.6 stdlib の @inline 化
-- `Vec<T>::get` と `Vec<T>::set` に `@inline` を付与する（`std/prelude.mc`）
-- これにより、ベクターアクセスがループ内でインライン展開され、HeapLoad系Opに変わる
-
-### 7.7 text_counting.mc の更新
-- `to_letter_index` に `@inline` を付与
-- パフォーマンステスト（`snapshot_performance`）が to_letter_index の関数JITではなくループJITで動作することを確認
-
-## 8. Acceptance Criteria
-
-1. `HeapLoad(n)` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
-2. `HeapStore(n)` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
-3. `HeapLoadDyn` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
-4. `HeapStoreDyn` がJITコンパイラでネイティブコードに変換される（x86_64 + aarch64）
-5. `Vec<T>::get` / `Vec<T>::set` に `@inline` が付与され、ループ内で展開される
-6. text_counting.mc のホットループがJITコンパイルされる（`--trace-jit` でコンパイル成功を確認）
-7. text_counting.mc の実行結果が変わらない（出力一致）
-8. `snapshot_performance` テストがパスする（JITコンパイル発生 + 出力一致）
+1. `__syscall(10)` を呼び出すと、現在のUnix epoch秒（int）が返る
+2. `__syscall(11)` を呼び出すと、現在のUnix epochナノ秒（int）が返る
+3. `__syscall(12, seconds)` を呼び出すと、`"YYYY-MM-DD HH:MM:SS"` 形式の文字列が返る
+4. `prelude.mc` に `time() -> int`、`time_nanos() -> int`、`time_format(secs: int) -> string` のラッパー関数が存在する
+5. `prelude.mc` のsyscall番号コメントに syscall 10, 11, 12 が追記されている
+6. スナップショットテストで、mocaの `time()` とRustの `SystemTime::now()` の差が ±2秒以内である
+7. スナップショットテストで、mocaの `time_nanos()` が妥当な範囲（Rustのナノ秒と大きく乖離しない）である
+8. スナップショットテストで、mocaの `time_format()` とRustで同じ秒数をフォーマットした結果が一致する
 9. `cargo fmt && cargo check && cargo test && cargo clippy` が全てパスする
 
-## 9. Verification Strategy
-- **進捗検証**: 各Op実装後に `cargo check && cargo test` でリグレッションなしを確認
-- **達成検証**: `cargo run -- run tests/snapshots/performance/text_counting.mc --trace-jit` でループJITコンパイル成功を確認
-- **漏れ検出**: 全4 Opのネイティブ実装 + 全テストパスで確認
+## 10. Verification Strategy
 
-## 10. Test Plan
+- **進捗検証**: 各syscallの実装後に個別に `cargo test` を実行し、コンパイルエラー・テスト失敗がないことを確認
+- **達成検証**: 全Acceptance Criteriaをチェックリストで確認。特にスナップショットテストが時刻の近似比較で合格すること
+- **漏れ検出**: `cargo clippy` による静的解析、`moca lint` による `.mc` ファイルのチェック
 
-### Test 1: text_counting ループJITコンパイル成功
-```
-Given: to_letter_index に @inline、Vec::get/Vec::set に @inline を付与した text_counting.mc
-When: --trace-jit で実行する
-Then: "[JIT] Compiled loop in 'count_chars'" が出力され、実行結果が元と同一
-```
+## 11. Test Plan
 
-### Test 2: snapshot_performance テスト通過
-```
-Given: 全パフォーマンステスト
-When: cargo test snapshot_performance を実行
-Then: text_counting を含む全テストが通過（JITコンパイルが1回以上発生）
-```
+### Test 1: 時刻取得の正確性
+- **Given**: mocaプログラムが `time()` と `time_nanos()` を呼び出して出力する
+- **When**: テストがmocaプログラムを実行し、出力をキャプチャする
+- **Then**: Rust側で取得した `SystemTime::now()` との差が秒単位で±2秒以内、ナノ秒も妥当な範囲内
 
-### Test 3: 全テスト通過
-```
-Given: Vec::get/Vec::set に @inline を追加した状態
-When: cargo test を実行
-Then: 全テストが通過（@inline 化によるリグレッションなし）
-```
+### Test 2: フォーマット出力の一致
+- **Given**: mocaプログラムが `time()` で秒数を取得し `time_format()` でフォーマットする
+- **When**: テストがmocaプログラムの出力をキャプチャする
+- **Then**: mocaの出力した秒数をRust側で同じロジックでフォーマットした結果と一致する
+
+### Test 3: time_format の固定値テスト
+- **Given**: mocaプログラムが `time_format(0)` を呼び出す（Unix epoch = 1970-01-01 00:00:00）
+- **When**: テストがmocaプログラムの出力をキャプチャする
+- **Then**: 出力が `"1970-01-01 00:00:00"` と一致する
