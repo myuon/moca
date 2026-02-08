@@ -344,6 +344,27 @@ fun main() {
 }
 ```
 
+### Time Functions
+
+Functions for getting and formatting the current time (UTC).
+
+| Function | Description |
+|----------|-------------|
+| `time()` | Get current time as Unix epoch seconds |
+| `time_nanos()` | Get current time as Unix epoch nanoseconds |
+| `time_format(secs)` | Format epoch seconds as `"YYYY-MM-DD HH:MM:SS"` (UTC) |
+
+**Example:**
+
+```
+let now = time();
+let formatted = time_format(now);
+print_debug(formatted);  // "2026-02-08 12:34:56"
+
+let nanos = time_nanos();
+print_debug(nanos);  // 1770508496000000000
+```
+
 ### Random Number Generation
 
 Pseudo-random number generation using the `Rand` struct (LCG algorithm).
