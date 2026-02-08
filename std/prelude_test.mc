@@ -114,3 +114,78 @@ fun _test_assert_eq_bool_basic() {
     assert_eq_bool(1 < 2, true, "1 < 2 is true");
     assert_eq_bool(1 > 2, false, "1 > 2 is false");
 }
+
+// ============================================================================
+// Random Number Generation Tests
+// ============================================================================
+
+// Helper: get bucket index (0-9) for a float in [0.0, 1.0)
+fun _float_bucket(val: float) -> int {
+    var i = 0;
+    while i < 10 {
+        let threshold = _int_to_float(i + 1) / 10.0;
+        if val < threshold {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 9;
+}
+
+// Generate rand_int(1,10) 10000 times and check frequency uniformity (max/min <= 1.2)
+fun _test_rand_int_distribution() {
+    var rng: Rand = Rand::`new`(42);
+
+    var counts: Vec<int> = new Vec<int> { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    var i = 0;
+    while i < 10000 {
+        let val = rng.int(1, 10);
+        let idx = val - 1;
+        counts.set(idx, counts.get(idx) + 1);
+        i = i + 1;
+    }
+
+    var max_count = counts.get(0);
+    var min_count = counts.get(0);
+    i = 1;
+    while i < 10 {
+        let c = counts.get(i);
+        if c > max_count { max_count = c; }
+        if c < min_count { min_count = c; }
+        i = i + 1;
+    }
+
+    // max/min <= 1.2  <=>  max * 5 <= min * 6
+    assert(max_count * 5 <= min_count * 6,
+        "rand_int distribution: max/min ratio should be within 20% (max=" + to_string(max_count) + ", min=" + to_string(min_count) + ")");
+}
+
+// Generate rand_float() 10000 times into 10 buckets and check frequency uniformity (max/min <= 1.2)
+fun _test_rand_float_distribution() {
+    var rng: Rand = Rand::`new`(42);
+
+    var counts: Vec<int> = new Vec<int> { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    var i = 0;
+    while i < 10000 {
+        let val = rng.float();
+        let idx = _float_bucket(val);
+        counts.set(idx, counts.get(idx) + 1);
+        i = i + 1;
+    }
+
+    var max_count = counts.get(0);
+    var min_count = counts.get(0);
+    i = 1;
+    while i < 10 {
+        let c = counts.get(i);
+        if c > max_count { max_count = c; }
+        if c < min_count { min_count = c; }
+        i = i + 1;
+    }
+
+    // max/min <= 1.2  <=>  max * 5 <= min * 6
+    assert(max_count * 5 <= min_count * 6,
+        "rand_float distribution: max/min ratio should be within 20% (max=" + to_string(max_count) + ", min=" + to_string(min_count) + ")");
+}
