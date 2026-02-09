@@ -905,10 +905,10 @@ impl JitCompiler {
         // Load payloads only (tags known to be INT=0)
         asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
-        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a (at VSTACK - VALUE_SIZE + 8)
+        asm.ldur(regs::TMP0, regs::VSTACK, -8); // a (at VSTACK - VALUE_SIZE + 8)
         asm.add(regs::TMP0, regs::TMP0, regs::TMP1);
         // a's tag slot is already TAG_INT (0), just write result payload
-        asm.str(regs::TMP0, regs::VSTACK, -8);
+        asm.stur(regs::TMP0, regs::VSTACK, -8);
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
@@ -919,9 +919,9 @@ impl JitCompiler {
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
-        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a
+        asm.ldur(regs::TMP0, regs::VSTACK, -8); // a
         asm.sub(regs::TMP0, regs::TMP0, regs::TMP1);
-        asm.str(regs::TMP0, regs::VSTACK, -8);
+        asm.stur(regs::TMP0, regs::VSTACK, -8);
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
@@ -932,9 +932,9 @@ impl JitCompiler {
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         asm.ldr(regs::TMP1, regs::VSTACK, 8); // b
-        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a
+        asm.ldur(regs::TMP0, regs::VSTACK, -8); // a
         asm.mul(regs::TMP0, regs::TMP0, regs::TMP1);
-        asm.str(regs::TMP0, regs::VSTACK, -8);
+        asm.stur(regs::TMP0, regs::VSTACK, -8);
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
@@ -945,9 +945,9 @@ impl JitCompiler {
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
         asm.ldr(regs::TMP1, regs::VSTACK, 8); // b (divisor)
-        asm.ldr(regs::TMP0, regs::VSTACK, -8); // a (dividend)
+        asm.ldur(regs::TMP0, regs::VSTACK, -8); // a (dividend)
         asm.sdiv(regs::TMP0, regs::TMP0, regs::TMP1);
-        asm.str(regs::TMP0, regs::VSTACK, -8);
+        asm.stur(regs::TMP0, regs::VSTACK, -8);
 
         self.stack_depth = self.stack_depth.saturating_sub(1);
         Ok(())
