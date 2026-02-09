@@ -3,8 +3,8 @@
 # Default task: run all checks
 default: check
 
-# Run all checks (fmt, clippy, test)
-check: fmt-check clippy test
+# Run all checks (fmt, clippy, test, moca-lint)
+check: fmt-check clippy test moca-lint
     @echo "All checks passed!"
 
 # Format check (doesn't modify files)
@@ -65,6 +65,22 @@ coverage-check:
         exit 1
     fi
     echo "Coverage check passed!"
+
+# Run moca lint on std .mc files
+moca-lint: build
+    #!/usr/bin/env bash
+    set -e
+    failed=0
+    for file in std/*.mc; do
+        if ! ./target/debug/moca lint "$file"; then
+            failed=1
+        fi
+    done
+    if [ $failed -eq 1 ]; then
+        echo "moca lint failed!"
+        exit 1
+    fi
+    echo "moca lint passed!"
 
 # Build the project
 build:
