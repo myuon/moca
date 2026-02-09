@@ -136,21 +136,21 @@ fun _float_bucket(val: float) -> int {
 fun _test_rand_int_distribution() {
     var rng: Rand = Rand::`new`(42);
 
-    var counts: Vec<int> = new Vec<int> { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var counts = new Vec<int> { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
     var i = 0;
     while i < 10000 {
         let val = rng.int(1, 10);
         let idx = val - 1;
-        counts.set(idx, counts.get(idx) + 1);
+        counts[idx] = counts[idx] + 1;
         i = i + 1;
     }
 
-    var max_count = counts.get(0);
-    var min_count = counts.get(0);
+    var max_count = counts[0];
+    var min_count = counts[0];
     i = 1;
     while i < 10 {
-        let c = counts.get(i);
+        let c = counts[i];
         if c > max_count { max_count = c; }
         if c < min_count { min_count = c; }
         i = i + 1;
@@ -165,21 +165,21 @@ fun _test_rand_int_distribution() {
 fun _test_rand_float_distribution() {
     var rng: Rand = Rand::`new`(42);
 
-    var counts: Vec<int> = new Vec<int> { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var counts = new Vec<int> { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
     var i = 0;
     while i < 10000 {
         let val = rng.float();
         let idx = _float_bucket(val);
-        counts.set(idx, counts.get(idx) + 1);
+        counts[idx] = counts[idx] + 1;
         i = i + 1;
     }
 
-    var max_count = counts.get(0);
-    var min_count = counts.get(0);
+    var max_count = counts[0];
+    var min_count = counts[0];
     i = 1;
     while i < 10 {
-        let c = counts.get(i);
+        let c = counts[i];
         if c > max_count { max_count = c; }
         if c < min_count { min_count = c; }
         i = i + 1;

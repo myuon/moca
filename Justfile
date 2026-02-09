@@ -3,8 +3,8 @@
 # Default task: run all checks
 default: check
 
-# Run all checks (fmt, clippy, test)
-check: fmt-check clippy test
+# Run all checks (fmt, clippy, test, moca-lint)
+check: fmt-check clippy test moca-lint
     @echo "All checks passed!"
 
 # Format check (doesn't modify files)
@@ -65,6 +65,29 @@ coverage-check:
         exit 1
     fi
     echo "Coverage check passed!"
+
+# Run moca lint on std .mc files
+moca-lint: build
+    #!/usr/bin/env bash
+    set -e
+    failed=0
+    # Known acceptable warnings (false positives):
+    # - prelude.mc: Map.set() must call .put() internally (using []= would cause infinite recursion)
+    known_warnings="use \`\\[\\] =\` indexing instead of \`\\.put\\(\\)\`"
+    for file in std/*.mc; do
+        output=$(./target/debug/moca lint "$file" 2>&1) || {
+            unexpected=$(echo "$output" | grep -v -E "$known_warnings" | grep "^warning:" || true)
+            if [ -n "$unexpected" ]; then
+                echo "$output"
+                failed=1
+            fi
+        }
+    done
+    if [ $failed -eq 1 ]; then
+        echo "moca lint failed!"
+        exit 1
+    fi
+    echo "moca lint passed!"
 
 # Build the project
 build:
