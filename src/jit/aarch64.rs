@@ -298,6 +298,16 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// STUR Xt, [Xn, #simm9] (store 64-bit, unscaled signed offset)
+    pub fn stur(&mut self, rt: Reg, rn: Reg, simm9: i16) {
+        // 1111 1000 000i iiii iiii 00nn nnnt tttt
+        let inst = 0xF8000000
+            | (((simm9 as u32) & 0x1FF) << 12)
+            | ((rn.code() as u32) << 5)
+            | (rt.code() as u32);
+        self.emit_raw(inst);
+    }
+
     /// STR Xt, [Xn, #imm12] (store 64-bit, unsigned offset)
     pub fn str(&mut self, rt: Reg, rn: Reg, imm12: u16) {
         // 1111 1001 00ii iiii iiii iinn nnnt tttt
