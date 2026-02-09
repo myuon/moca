@@ -502,7 +502,9 @@ impl<'a> Resolver<'a> {
         for param in &method.params {
             if param.name != "self" {
                 param_names.push(param.name.clone());
-                scope.declare(param.name.clone(), false);
+                let struct_name_for_param =
+                    self.struct_name_from_type_annotation(&param.type_annotation);
+                scope.declare_with_type(param.name.clone(), false, struct_name_for_param);
             }
         }
 
@@ -545,8 +547,9 @@ impl<'a> Resolver<'a> {
 
         // Add parameters to scope
         let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-        for param_name in &param_names {
-            scope.declare(param_name.clone(), false);
+        for param in &fn_def.params {
+            let struct_name = self.struct_name_from_type_annotation(&param.type_annotation);
+            scope.declare_with_type(param.name.clone(), false, struct_name);
         }
 
         let fn_type_map = Self::collect_var_types(&fn_def.body.statements);
@@ -572,6 +575,33 @@ impl<'a> Resolver<'a> {
             local_types,
             is_inline,
         })
+    }
+
+    /// Extract struct name from a type annotation (for function parameters).
+    fn struct_name_from_type_annotation(
+        &self,
+        type_annotation: &Option<crate::compiler::types::TypeAnnotation>,
+    ) -> Option<String> {
+        match type_annotation {
+            Some(crate::compiler::types::TypeAnnotation::Named(type_name)) => {
+                if self.structs.contains_key(type_name) {
+                    Some(type_name.clone())
+                } else {
+                    None
+                }
+            }
+            Some(crate::compiler::types::TypeAnnotation::Array(_)) => Some("Array".to_string()),
+            Some(crate::compiler::types::TypeAnnotation::Vec(_)) => Some("Vec".to_string()),
+            Some(crate::compiler::types::TypeAnnotation::Map(_, _)) => Some("Map".to_string()),
+            Some(crate::compiler::types::TypeAnnotation::Generic { name, .. }) => {
+                if self.structs.contains_key(name) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Get struct name from a ResolvedExpr if it evaluates to a struct
