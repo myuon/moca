@@ -889,7 +889,7 @@ impl<K, V> Map<K, V> {
 
     // Alias for put - used by index assignment desugar (map[key] = value)
     fun set(self, key: any, val: any) {
-        self[key] = val;
+        self.put(key, val);
     }
 
     // Generic get method - dispatches based on key type
