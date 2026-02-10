@@ -272,6 +272,87 @@ fun min(a: int, b: int) -> int {
     return b;
 }
 
+// Internal: Convert float to int (truncation toward zero)
+fun _float_to_int(x: float) -> int {
+    return asm(x) -> i64 {
+        __emit("I64TruncF64S");
+    };
+}
+
+// Absolute value of a float
+fun abs_f(x: float) -> float {
+    if x < 0.0 {
+        return 0.0 - x;
+    }
+    return x;
+}
+
+// Square root using Newton's method (Babylonian method)
+fun sqrt_f(x: float) -> float {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    var guess = x;
+    // Better initial guess: halve repeatedly until reasonable
+    if x > 1.0 {
+        guess = x / 2.0;
+    }
+    var i = 0;
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0;
+        i = i + 1;
+    }
+    return guess;
+}
+
+// Floor: largest integer <= x, returned as float
+fun floor_f(x: float) -> float {
+    let t = _float_to_int(x);
+    let tf = _int_to_float(t);
+    // _float_to_int truncates toward zero, so for negative non-integers we need -1
+    if tf > x {
+        return tf - 1.0;
+    }
+    return tf;
+}
+
+// Float modulo (equivalent to fmod)
+fun fmod_f(x: float, y: float) -> float {
+    return x - floor_f(x / y) * y;
+}
+
+// Sine function using Taylor series with range reduction
+fun sin_f(x: float) -> float {
+    let pi = 3.14159265358979323846;
+    let two_pi = 6.28318530717958647692;
+
+    // Range reduction to [-pi, pi]
+    var a = fmod_f(x, two_pi);
+    if a > pi {
+        a = a - two_pi;
+    }
+    if a < 0.0 - pi {
+        a = a + two_pi;
+    }
+
+    // Taylor series: sin(a) = a - a^3/3! + a^5/5! - a^7/7! + ...
+    var term = a;
+    var sum = a;
+    var i = 1;
+    while i < 12 {
+        let n = _int_to_float(2 * i) * (_int_to_float(2 * i) + 1.0);
+        term = 0.0 - term * a * a / n;
+        sum = sum + term;
+        i = i + 1;
+    }
+    return sum;
+}
+
+// Cosine function: cos(x) = sin(x + pi/2)
+fun cos_f(x: float) -> float {
+    return sin_f(x + 1.5707963267948966);
+}
+
 // ============================================================================
 // String Functions
 // ============================================================================
