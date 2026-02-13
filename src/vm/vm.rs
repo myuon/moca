@@ -1204,21 +1204,6 @@ impl VM {
                 // ========================================
                 // Closure operations (register-based)
                 // ========================================
-                MicroOp::MakeClosure {
-                    dst,
-                    func_index,
-                    ref captures,
-                } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let mut closure_slots = Vec::with_capacity(captures.len() + 1);
-                    closure_slots.push(Value::I64(func_index as i64));
-                    for cap in captures.iter() {
-                        closure_slots.push(self.stack[sb + cap.0]);
-                    }
-                    let r = self.heap.alloc_slots(closure_slots)?;
-                    let sb = self.frames.last().unwrap().stack_base;
-                    self.stack[sb + dst.0] = Value::Ref(r);
-                }
                 MicroOp::CallClosure {
                     callee,
                     ref args,
@@ -2637,24 +2622,6 @@ impl VM {
             }
 
             // Closure operations
-            Op::MakeClosure(func_index, n_captures) => {
-                // Pop n_captures values from the stack (these are the captured values)
-                let stack_len = self.stack.len();
-                if stack_len < n_captures {
-                    return Err("stack underflow in MakeClosure".to_string());
-                }
-                // Build closure heap object: [func_index_as_i64, cap0, cap1, ...]
-                let mut closure_slots = Vec::with_capacity(n_captures + 1);
-                closure_slots.push(Value::I64(func_index as i64));
-                // Captures are on the stack in order: cap0 was pushed first, capN last
-                let captures_start = stack_len - n_captures;
-                for i in 0..n_captures {
-                    closure_slots.push(self.stack[captures_start + i]);
-                }
-                self.stack.truncate(captures_start);
-                let r = self.heap.alloc_slots(closure_slots)?;
-                self.stack.push(Value::Ref(r));
-            }
             Op::CallClosure(argc) => {
                 // Stack layout: [..., closure_ref, arg0, arg1, ..., arg_{argc-1}]
                 let stack_len = self.stack.len();

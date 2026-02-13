@@ -1173,12 +1173,14 @@ impl Codegen {
                 func_index,
                 captures,
             } => {
-                // Push captured values onto the stack
+                // Build closure heap object using generic heap instructions:
+                // slots[0] = func_index, slots[1..] = captured values
+                ops.push(Op::I64Const(*func_index as i64));
                 for &slot in captures {
                     ops.push(Op::LocalGet(slot + self.local_offset));
                 }
-                // MakeClosure pops n_captures values and creates a closure heap object
-                ops.push(Op::MakeClosure(*func_index, captures.len()));
+                // HeapAlloc pops (1 + n_captures) values from stack in push order
+                ops.push(Op::HeapAlloc(1 + captures.len()));
             }
             ResolvedExpr::CallClosure { callee, args } => {
                 // Push the closure reference first

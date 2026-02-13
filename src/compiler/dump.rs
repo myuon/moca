@@ -1619,9 +1619,6 @@ impl<'a> Disassembler<'a> {
             Op::ThreadJoin => self.output.push_str("ThreadJoin"),
 
             // Closures
-            Op::MakeClosure(fi, nc) => {
-                self.output.push_str(&format!("MakeClosure {}, {}", fi, nc));
-            }
             Op::CallClosure(argc) => {
                 self.output.push_str(&format!("CallClosure {}", argc));
             }
@@ -1722,19 +1719,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             Some(s) => output.push_str(&format!("Ret {}", format_vreg(s))),
             None => output.push_str("Ret"),
         },
-        MicroOp::MakeClosure {
-            dst,
-            func_index,
-            captures,
-        } => {
-            let caps_str: Vec<String> = captures.iter().map(format_vreg).collect();
-            output.push_str(&format!(
-                "MakeClosure {} = func[{}]([{}])",
-                format_vreg(dst),
-                func_index,
-                caps_str.join(", ")
-            ))
-        }
         MicroOp::CallClosure { callee, args, ret } => {
             let args_str: Vec<String> = args.iter().map(format_vreg).collect();
             let ret_str = match ret {
