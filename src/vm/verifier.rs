@@ -473,6 +473,10 @@ impl Verifier {
             Op::ChannelSend => (2, 0),    // pops channel and value
             Op::ChannelRecv => (1, 1),    // pops channel, pushes value
             Op::ThreadJoin => (1, 1),     // pops handle, pushes result
+
+            // Closures
+            Op::MakeClosure(_, n_captures) => (*n_captures, 1), // pops captures, pushes closure ref
+            Op::CallClosure(argc) => (argc + 1, 1), // pops closure + argc args, pushes result
         }
     }
 }

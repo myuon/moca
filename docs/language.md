@@ -63,6 +63,36 @@ let result = add(1, 2);
 // Functions can be called before definition (hoisting)
 ```
 
+### Lambda / Closures
+
+```
+// Lambda expression (anonymous function)
+let double = fun(x: int) -> int { return x * 2; };
+print(double(5)); // 10
+
+// Type annotations are optional (inferred)
+let inc = fun(x) { return x + 1; };
+
+// Pass as argument (function type: (int) -> int)
+fun apply(f: (int) -> int, n: int) -> int {
+    return f(n);
+}
+print(apply(double, 7)); // 14
+
+// Return from function
+fun make_adder(n: int) -> (int) -> int {
+    return fun(x: int) -> int { return x + n; };
+}
+let add5 = make_adder(5);
+print(add5(10)); // 15
+
+// Copy capture: outer mutations don't affect captured values
+var y = 100;
+let get_y = fun() -> int { return y; };
+y = 200;
+print(get_y()); // 100 (captured at creation time)
+```
+
 ### Control Flow
 
 ```

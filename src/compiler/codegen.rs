@@ -150,6 +150,8 @@ impl Codegen {
             ResolvedExpr::AsmBlock { .. } => ValueType::I64,
             ResolvedExpr::NewLiteral { .. } => ValueType::Ref,
             ResolvedExpr::Block { expr, .. } => self.infer_expr_type(expr),
+            ResolvedExpr::MakeClosure { .. } => ValueType::Ref,
+            ResolvedExpr::CallClosure { .. } => ValueType::I64, // Default; dynamic
         }
     }
 
@@ -1166,6 +1168,27 @@ impl Codegen {
                 }
                 // Compile the final expression - its result is the block's result
                 self.compile_expr(expr, ops)?;
+            }
+            ResolvedExpr::MakeClosure {
+                func_index,
+                captures,
+            } => {
+                // Push captured values onto the stack
+                for &slot in captures {
+                    ops.push(Op::LocalGet(slot + self.local_offset));
+                }
+                // MakeClosure pops n_captures values and creates a closure heap object
+                ops.push(Op::MakeClosure(*func_index, captures.len()));
+            }
+            ResolvedExpr::CallClosure { callee, args } => {
+                // Push the closure reference first
+                self.compile_expr(callee, ops)?;
+                // Then push arguments
+                for arg in args {
+                    self.compile_expr(arg, ops)?;
+                }
+                // CallClosure pops argc args + closure ref, calls the function
+                ops.push(Op::CallClosure(args.len()));
             }
         }
 
