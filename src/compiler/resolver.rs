@@ -694,11 +694,211 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// First pass: scan a block of statements to find `var` variables that are
+    /// captured by any lambda within the block. These variables need to be
+    /// promoted to RefCell for reference capture semantics.
+    fn find_captured_mutable_vars(stmts: &[Statement]) -> HashSet<String> {
+        // Collect all var declarations in this block
+        let mut var_names: HashSet<String> = HashSet::new();
+        Self::collect_var_decls(stmts, &mut var_names);
+
+        // Find which of these vars are captured by lambdas
+        let mut captured = HashSet::new();
+        Self::scan_lambdas_for_captures(stmts, &var_names, &mut captured);
+        captured
+    }
+
+    /// Collect names of var (mutable) declarations at the current block level.
+    fn collect_var_decls(stmts: &[Statement], var_names: &mut HashSet<String>) {
+        for stmt in stmts {
+            if let Statement::Let {
+                name,
+                mutable: true,
+                ..
+            } = stmt
+            {
+                var_names.insert(name.clone());
+            }
+        }
+    }
+
+    /// Scan statements for lambdas and check if they capture any of the target vars.
+    fn scan_lambdas_for_captures(
+        stmts: &[Statement],
+        var_names: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        for stmt in stmts {
+            Self::scan_stmt_for_lambdas(stmt, var_names, captured);
+        }
+    }
+
+    fn scan_stmt_for_lambdas(
+        stmt: &Statement,
+        var_names: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        match stmt {
+            Statement::Let { init, .. } => {
+                Self::scan_expr_for_lambdas(init, var_names, captured);
+            }
+            Statement::Assign { value, .. } => {
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::IndexAssign {
+                object,
+                index,
+                value,
+                ..
+            } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                Self::scan_expr_for_lambdas(index, var_names, captured);
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::FieldAssign { object, value, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                Self::scan_expr_for_lambdas(condition, var_names, captured);
+                Self::scan_lambdas_for_captures(&then_block.statements, var_names, captured);
+                if let Some(else_b) = else_block {
+                    Self::scan_lambdas_for_captures(&else_b.statements, var_names, captured);
+                }
+            }
+            Statement::While {
+                condition, body, ..
+            } => {
+                Self::scan_expr_for_lambdas(condition, var_names, captured);
+                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+            }
+            Statement::ForIn { iterable, body, .. } => {
+                Self::scan_expr_for_lambdas(iterable, var_names, captured);
+                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+            }
+            Statement::Return { value, .. } => {
+                if let Some(v) = value {
+                    Self::scan_expr_for_lambdas(v, var_names, captured);
+                }
+            }
+            Statement::Throw { value, .. } => {
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                Self::scan_lambdas_for_captures(&try_block.statements, var_names, captured);
+                Self::scan_lambdas_for_captures(&catch_block.statements, var_names, captured);
+            }
+            Statement::Expr { expr, .. } => {
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+            }
+        }
+    }
+
+    fn scan_expr_for_lambdas(
+        expr: &Expr,
+        var_names: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        match expr {
+            Expr::Lambda { params, body, .. } => {
+                // This lambda's free vars that are in var_names → captured
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                let free_vars = collect_free_vars_block(body, &param_names);
+                for fv in &free_vars {
+                    if var_names.contains(fv) {
+                        captured.insert(fv.clone());
+                    }
+                }
+                // Also scan inside the lambda body for nested lambdas
+                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+            }
+            Expr::Array { elements, .. } => {
+                for e in elements {
+                    Self::scan_expr_for_lambdas(e, var_names, captured);
+                }
+            }
+            Expr::Index { object, index, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                Self::scan_expr_for_lambdas(index, var_names, captured);
+            }
+            Expr::Field { object, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+            }
+            Expr::Unary { operand, .. } => {
+                Self::scan_expr_for_lambdas(operand, var_names, captured);
+            }
+            Expr::Binary { left, right, .. } => {
+                Self::scan_expr_for_lambdas(left, var_names, captured);
+                Self::scan_expr_for_lambdas(right, var_names, captured);
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::CallExpr { callee, args, .. } => {
+                Self::scan_expr_for_lambdas(callee, var_names, captured);
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::StructLiteral { fields, .. } => {
+                for (_, e) in fields {
+                    Self::scan_expr_for_lambdas(e, var_names, captured);
+                }
+            }
+            Expr::AssociatedFunctionCall { args, .. } => {
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::NewLiteral { elements, .. } => {
+                for e in elements {
+                    match e {
+                        NewLiteralElement::Value(v) => {
+                            Self::scan_expr_for_lambdas(v, var_names, captured)
+                        }
+                        NewLiteralElement::KeyValue { key, value } => {
+                            Self::scan_expr_for_lambdas(key, var_names, captured);
+                            Self::scan_expr_for_lambdas(value, var_names, captured);
+                        }
+                    }
+                }
+            }
+            Expr::Block {
+                statements, expr, ..
+            } => {
+                Self::scan_lambdas_for_captures(statements, var_names, captured);
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+            }
+            _ => {}
+        }
+    }
+
     fn resolve_statements(
         &mut self,
         statements: Vec<Statement>,
         scope: &mut Scope,
     ) -> Result<Vec<ResolvedStatement>, String> {
+        // First pass: find var variables that are captured by lambdas
+        let promoted = Self::find_captured_mutable_vars(&statements);
+        scope.promoted_vars.extend(promoted);
+
         let mut resolved = Vec::new();
 
         for stmt in statements {
@@ -753,9 +953,32 @@ impl<'a> Resolver<'a> {
                     _ => self.get_struct_name(&init),
                 };
                 let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
-                Ok(ResolvedStatement::Let { slot, init })
+                // If this var is promoted to RefCell, wrap the init value
+                if mutable && scope.promoted_vars.contains(&name) {
+                    Ok(ResolvedStatement::Let {
+                        slot,
+                        init: ResolvedExpr::RefCellNew {
+                            value: Box::new(init),
+                        },
+                    })
+                } else {
+                    Ok(ResolvedStatement::Let { slot, init })
+                }
             }
             Statement::Assign { name, value, span } => {
+                // Check if this is a captured variable in a closure scope
+                if let Some(offset) = scope.lookup_capture(&name) {
+                    if scope.capture_mutable.contains(&name) {
+                        let value = self.resolve_expr(value, scope)?;
+                        return Ok(ResolvedStatement::Expr {
+                            expr: ResolvedExpr::CaptureStore {
+                                offset,
+                                value: Box::new(value),
+                            },
+                        });
+                    }
+                }
+
                 let (slot, mutable) = scope
                     .lookup(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
@@ -768,7 +991,12 @@ impl<'a> Resolver<'a> {
                 }
 
                 let value = self.resolve_expr(value, scope)?;
-                Ok(ResolvedStatement::Assign { slot, value })
+                // If this var is promoted to RefCell, use RefCellStore
+                if scope.promoted_vars.contains(&name) {
+                    Ok(ResolvedStatement::RefCellStore { slot, value })
+                } else {
+                    Ok(ResolvedStatement::Assign { slot, value })
+                }
             }
             Statement::If {
                 condition,
