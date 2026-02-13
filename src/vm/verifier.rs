@@ -474,8 +474,8 @@ impl Verifier {
             Op::ChannelRecv => (1, 1),    // pops channel, pushes value
             Op::ThreadJoin => (1, 1),     // pops handle, pushes result
 
-            // Closures
-            Op::CallClosure(argc) => (argc + 1, 1), // pops closure + argc args, pushes result
+            // Indirect call
+            Op::CallIndirect(argc) => (argc + 1, 1), // pops callable ref + argc args, pushes result
         }
     }
 }

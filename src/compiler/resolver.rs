@@ -187,15 +187,15 @@ pub enum ResolvedExpr {
     },
     /// Create a closure: captures local variables and associates with a lifted function.
     /// The closure is a heap object: [func_index, captured_val_0, captured_val_1, ...]
-    MakeClosure {
+    Closure {
         /// Index of the lifted function in the function table
         func_index: usize,
         /// Local slots to capture (values will be copied into the closure object)
         captures: Vec<usize>,
     },
-    /// Call a closure/function value dynamically.
-    /// The callee is an expression that evaluates to a closure reference.
-    CallClosure {
+    /// Call a function value indirectly (closure, function pointer, etc.).
+    /// The callee is an expression that evaluates to a callable reference.
+    CallIndirect {
         callee: Box<ResolvedExpr>,
         args: Vec<ResolvedExpr>,
     },
@@ -982,7 +982,7 @@ impl<'a> Resolver<'a> {
 
                 // Check if it's a local variable (possibly holding a closure)
                 if let Some((slot, _)) = scope.lookup_or_capture(&callee) {
-                    return Ok(ResolvedExpr::CallClosure {
+                    return Ok(ResolvedExpr::CallIndirect {
                         callee: Box::new(ResolvedExpr::Local(slot)),
                         args: resolved_args,
                     });
@@ -1285,7 +1285,7 @@ impl<'a> Resolver<'a> {
                     is_inline: false,
                 });
 
-                Ok(ResolvedExpr::MakeClosure {
+                Ok(ResolvedExpr::Closure {
                     func_index,
                     captures: capture_slots,
                 })
@@ -1298,7 +1298,7 @@ impl<'a> Resolver<'a> {
                     .map(|a| self.resolve_expr(a, scope))
                     .collect::<Result<_, _>>()?;
 
-                Ok(ResolvedExpr::CallClosure {
+                Ok(ResolvedExpr::CallIndirect {
                     callee: Box::new(resolved_callee),
                     args: resolved_args,
                 })

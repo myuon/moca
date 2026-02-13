@@ -190,12 +190,13 @@ pub enum Op {
     ThreadJoin,
 
     // ========================================
-    // Closures
+    // Indirect call
     // ========================================
-    /// Call a closure. Pops `argc` arguments, then the closure reference.
-    /// Reads func_index from closure slot 0, pushes captured values as extra args,
-    /// then calls the function with (n_captures + argc) arguments.
-    CallClosure(usize), // (argc) — number of user-visible arguments
+    /// Indirect function call via heap object (closure, function pointer, etc.).
+    /// Pops `argc` arguments, then the callable reference.
+    /// Reads func_index from slot 0, extra args (captures) from slots 1..,
+    /// then calls the function with (extra_args + argc) arguments.
+    CallIndirect(usize), // (argc) — number of user-visible arguments
 }
 
 impl Op {
@@ -305,7 +306,7 @@ impl Op {
             Op::ChannelSend => "ChannelSend",
             Op::ChannelRecv => "ChannelRecv",
             Op::ThreadJoin => "ThreadJoin",
-            Op::CallClosure(_) => "CallClosure",
+            Op::CallIndirect(_) => "CallIndirect",
         }
     }
 }

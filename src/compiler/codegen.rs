@@ -150,8 +150,8 @@ impl Codegen {
             ResolvedExpr::AsmBlock { .. } => ValueType::I64,
             ResolvedExpr::NewLiteral { .. } => ValueType::Ref,
             ResolvedExpr::Block { expr, .. } => self.infer_expr_type(expr),
-            ResolvedExpr::MakeClosure { .. } => ValueType::Ref,
-            ResolvedExpr::CallClosure { .. } => ValueType::I64, // Default; dynamic
+            ResolvedExpr::Closure { .. } => ValueType::Ref,
+            ResolvedExpr::CallIndirect { .. } => ValueType::I64, // Default; dynamic
         }
     }
 
@@ -1169,7 +1169,7 @@ impl Codegen {
                 // Compile the final expression - its result is the block's result
                 self.compile_expr(expr, ops)?;
             }
-            ResolvedExpr::MakeClosure {
+            ResolvedExpr::Closure {
                 func_index,
                 captures,
             } => {
@@ -1182,15 +1182,15 @@ impl Codegen {
                 // HeapAlloc pops (1 + n_captures) values from stack in push order
                 ops.push(Op::HeapAlloc(1 + captures.len()));
             }
-            ResolvedExpr::CallClosure { callee, args } => {
+            ResolvedExpr::CallIndirect { callee, args } => {
                 // Push the closure reference first
                 self.compile_expr(callee, ops)?;
                 // Then push arguments
                 for arg in args {
                     self.compile_expr(arg, ops)?;
                 }
-                // CallClosure pops argc args + closure ref, calls the function
-                ops.push(Op::CallClosure(args.len()));
+                // CallIndirect pops argc args + closure ref, calls the function
+                ops.push(Op::CallIndirect(args.len()));
             }
         }
 

@@ -1202,9 +1202,9 @@ impl VM {
                     }
                 }
                 // ========================================
-                // Closure operations (register-based)
+                // Indirect call (register-based)
                 // ========================================
-                MicroOp::CallClosure {
+                MicroOp::CallIndirect {
                     callee,
                     ref args,
                     ret,
@@ -1213,7 +1213,7 @@ impl VM {
                     let closure_val = self.stack[caller_stack_base + callee.0];
                     let closure_ref = closure_val
                         .as_ref()
-                        .ok_or("runtime error: CallClosure expects a closure reference")?;
+                        .ok_or("runtime error: CallIndirect expects a closure reference")?;
 
                     let closure_obj = self
                         .heap
@@ -2622,11 +2622,11 @@ impl VM {
             }
 
             // Closure operations
-            Op::CallClosure(argc) => {
+            Op::CallIndirect(argc) => {
                 // Stack layout: [..., closure_ref, arg0, arg1, ..., arg_{argc-1}]
                 let stack_len = self.stack.len();
                 if stack_len < argc + 1 {
-                    return Err("stack underflow in CallClosure".to_string());
+                    return Err("stack underflow in CallIndirect".to_string());
                 }
 
                 // Pop argc args off the stack
@@ -2635,10 +2635,10 @@ impl VM {
                 self.stack.truncate(args_start);
 
                 // Pop the closure reference
-                let closure_val = self.stack.pop().ok_or("stack underflow in CallClosure")?;
+                let closure_val = self.stack.pop().ok_or("stack underflow in CallIndirect")?;
                 let closure_ref = closure_val
                     .as_ref()
-                    .ok_or("runtime error: CallClosure expects a closure reference")?;
+                    .ok_or("runtime error: CallIndirect expects a closure reference")?;
 
                 // Read the closure object from the heap
                 let closure_obj = self
