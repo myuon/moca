@@ -1306,19 +1306,19 @@ impl ResolvedProgramPrinter {
                 self.print_expr(expr, "└── result: ", &block_child_prefix);
             }
 
-            ResolvedExpr::MakeClosure {
+            ResolvedExpr::Closure {
                 func_index,
                 captures,
             } => {
                 self.write(&format!(
-                    "{}MakeClosure(func:{}, captures:{:?})",
+                    "{}Closure(func:{}, captures:{:?})",
                     prefix, func_index, captures
                 ));
                 self.newline();
             }
 
-            ResolvedExpr::CallClosure { callee, args } => {
-                self.write(&format!("{}CallClosure(args:{})", prefix, args.len()));
+            ResolvedExpr::CallIndirect { callee, args } => {
+                self.write(&format!("{}CallIndirect(args:{})", prefix, args.len()));
                 self.newline();
                 let has_args = !args.is_empty();
                 let callee_prefix = if has_args { "├── " } else { "└── " };
@@ -1340,6 +1340,11 @@ impl ResolvedProgramPrinter {
                     self.write_indent_with(parent_prefix);
                     self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
                 }
+            }
+
+            ResolvedExpr::CaptureLoad { offset } => {
+                self.write(&format!("{}CaptureLoad(offset:{})", prefix, offset));
+                self.newline();
             }
         }
     }
@@ -1619,11 +1624,8 @@ impl<'a> Disassembler<'a> {
             Op::ThreadJoin => self.output.push_str("ThreadJoin"),
 
             // Closures
-            Op::MakeClosure(fi, nc) => {
-                self.output.push_str(&format!("MakeClosure {}, {}", fi, nc));
-            }
-            Op::CallClosure(argc) => {
-                self.output.push_str(&format!("CallClosure {}", argc));
+            Op::CallIndirect(argc) => {
+                self.output.push_str(&format!("CallIndirect {}", argc));
             }
         }
     }
@@ -1722,27 +1724,14 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             Some(s) => output.push_str(&format!("Ret {}", format_vreg(s))),
             None => output.push_str("Ret"),
         },
-        MicroOp::MakeClosure {
-            dst,
-            func_index,
-            captures,
-        } => {
-            let caps_str: Vec<String> = captures.iter().map(format_vreg).collect();
-            output.push_str(&format!(
-                "MakeClosure {} = func[{}]([{}])",
-                format_vreg(dst),
-                func_index,
-                caps_str.join(", ")
-            ))
-        }
-        MicroOp::CallClosure { callee, args, ret } => {
+        MicroOp::CallIndirect { callee, args, ret } => {
             let args_str: Vec<String> = args.iter().map(format_vreg).collect();
             let ret_str = match ret {
                 Some(r) => format!(" → {}", format_vreg(r)),
                 None => String::new(),
             };
             output.push_str(&format!(
-                "CallClosure {}({}){}",
+                "CallIndirect {}({}){}",
                 format_vreg(callee),
                 args_str.join(", "),
                 ret_str

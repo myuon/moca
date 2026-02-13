@@ -1202,24 +1202,9 @@ impl VM {
                     }
                 }
                 // ========================================
-                // Closure operations (register-based)
+                // Indirect call (register-based)
                 // ========================================
-                MicroOp::MakeClosure {
-                    dst,
-                    func_index,
-                    ref captures,
-                } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let mut closure_slots = Vec::with_capacity(captures.len() + 1);
-                    closure_slots.push(Value::I64(func_index as i64));
-                    for cap in captures.iter() {
-                        closure_slots.push(self.stack[sb + cap.0]);
-                    }
-                    let r = self.heap.alloc_slots(closure_slots)?;
-                    let sb = self.frames.last().unwrap().stack_base;
-                    self.stack[sb + dst.0] = Value::Ref(r);
-                }
-                MicroOp::CallClosure {
+                MicroOp::CallIndirect {
                     callee,
                     ref args,
                     ret,
@@ -1228,19 +1213,17 @@ impl VM {
                     let closure_val = self.stack[caller_stack_base + callee.0];
                     let closure_ref = closure_val
                         .as_ref()
-                        .ok_or("runtime error: CallClosure expects a closure reference")?;
+                        .ok_or("runtime error: CallIndirect expects a callable reference")?;
 
                     let closure_obj = self
                         .heap
                         .get(closure_ref)
-                        .ok_or("runtime error: invalid closure reference")?;
+                        .ok_or("runtime error: invalid callable reference")?;
 
                     let func_index = closure_obj.slots[0]
                         .as_i64()
-                        .ok_or("runtime error: closure slot 0 must be func_index")?
+                        .ok_or("runtime error: callable slot 0 must be func_index")?
                         as usize;
-                    let n_captures = closure_obj.slots.len() - 1;
-                    let captured_values: Vec<Value> = closure_obj.slots[1..].to_vec();
 
                     let callee_func = &chunk.functions[func_index];
 
@@ -1260,14 +1243,10 @@ impl VM {
                     // Allocate register file for callee
                     self.stack.resize(new_stack_base + callee_regs, Value::Null);
 
-                    // Copy captured values as first locals
-                    for (i, cap) in captured_values.iter().enumerate() {
-                        self.stack[new_stack_base + i] = *cap;
-                    }
-                    // Copy user args after captures
+                    // Slot 0: closure_ref, slots 1..: user args
+                    self.stack[new_stack_base] = closure_val;
                     for (i, arg) in args.iter().enumerate() {
-                        self.stack[new_stack_base + n_captures + i] =
-                            self.stack[caller_stack_base + arg.0];
+                        self.stack[new_stack_base + 1 + i] = self.stack[caller_stack_base + arg.0];
                     }
 
                     self.frames.push(Frame {
@@ -2636,30 +2615,12 @@ impl VM {
                 self.stack.push(Value::Ref(arr_ref));
             }
 
-            // Closure operations
-            Op::MakeClosure(func_index, n_captures) => {
-                // Pop n_captures values from the stack (these are the captured values)
-                let stack_len = self.stack.len();
-                if stack_len < n_captures {
-                    return Err("stack underflow in MakeClosure".to_string());
-                }
-                // Build closure heap object: [func_index_as_i64, cap0, cap1, ...]
-                let mut closure_slots = Vec::with_capacity(n_captures + 1);
-                closure_slots.push(Value::I64(func_index as i64));
-                // Captures are on the stack in order: cap0 was pushed first, capN last
-                let captures_start = stack_len - n_captures;
-                for i in 0..n_captures {
-                    closure_slots.push(self.stack[captures_start + i]);
-                }
-                self.stack.truncate(captures_start);
-                let r = self.heap.alloc_slots(closure_slots)?;
-                self.stack.push(Value::Ref(r));
-            }
-            Op::CallClosure(argc) => {
+            // Indirect call: closure_ref is passed as slot 0, function body reads captures via HeapLoad
+            Op::CallIndirect(argc) => {
                 // Stack layout: [..., closure_ref, arg0, arg1, ..., arg_{argc-1}]
                 let stack_len = self.stack.len();
                 if stack_len < argc + 1 {
-                    return Err("stack underflow in CallClosure".to_string());
+                    return Err("stack underflow in CallIndirect".to_string());
                 }
 
                 // Pop argc args off the stack
@@ -2668,46 +2629,38 @@ impl VM {
                 self.stack.truncate(args_start);
 
                 // Pop the closure reference
-                let closure_val = self.stack.pop().ok_or("stack underflow in CallClosure")?;
+                let closure_val = self.stack.pop().ok_or("stack underflow in CallIndirect")?;
                 let closure_ref = closure_val
                     .as_ref()
-                    .ok_or("runtime error: CallClosure expects a closure reference")?;
+                    .ok_or("runtime error: CallIndirect expects a callable reference")?;
 
-                // Read the closure object from the heap
+                // Read func_index from heap slot 0
                 let closure_obj = self
                     .heap
                     .get(closure_ref)
-                    .ok_or("runtime error: invalid closure reference")?;
-
-                // slot 0 = func_index, slots 1.. = captured values
+                    .ok_or("runtime error: invalid callable reference")?;
                 let func_index = closure_obj.slots[0]
                     .as_i64()
-                    .ok_or("runtime error: closure slot 0 must be func_index (integer)")?
+                    .ok_or("runtime error: callable slot 0 must be func_index (integer)")?
                     as usize;
-                let n_captures = closure_obj.slots.len() - 1;
-                let captured_values: Vec<Value> = closure_obj.slots[1..].to_vec();
 
                 let func = &chunk.functions[func_index];
-                let expected_arity = func.arity; // captures + user args
-                let total_args = n_captures + argc;
+                let expected_arity = func.arity; // 1 (closure_ref) + user args
+                let total_args = 1 + argc;
 
                 if total_args != expected_arity {
                     return Err(format!(
-                        "runtime error: closure function '{}' expects {} arguments ({} captures + {} params), got {} captures + {} args",
+                        "runtime error: function '{}' expects {} arguments (1 closure_ref + {} params), got 1 + {} args",
                         func.name,
                         expected_arity,
-                        n_captures,
-                        expected_arity - n_captures,
-                        n_captures,
+                        expected_arity - 1,
                         argc
                     ));
                 }
 
-                // Push captured values first, then user args (fills local slots in order)
+                // Slot 0: closure_ref, slots 1..: user args
                 let new_stack_base = self.stack.len();
-                for cap in captured_values {
-                    self.stack.push(cap);
-                }
+                self.stack.push(closure_val);
                 for arg in args {
                     self.stack.push(arg);
                 }

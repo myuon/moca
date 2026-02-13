@@ -58,14 +58,9 @@ pub enum MicroOp {
     Ret {
         src: Option<VReg>,
     },
-    /// Create a closure heap object from captured vregs.
-    MakeClosure {
-        dst: VReg,
-        func_index: usize,
-        captures: Vec<VReg>,
-    },
-    /// Call a closure. Callee vreg holds the closure reference.
-    CallClosure {
+    /// Indirect call via callable reference (closure, function pointer, etc.).
+    /// Callee vreg holds the callable reference (heap object with func_index in slot 0).
+    CallIndirect {
         callee: VReg,
         args: Vec<VReg>,
         ret: Option<VReg>,

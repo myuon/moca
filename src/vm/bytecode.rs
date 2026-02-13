@@ -396,8 +396,7 @@ const OP_THREAD_JOIN: u8 = 103;
 const OP_HEAP_ALLOC_ARRAY: u8 = 104;
 
 // Closures
-const OP_MAKE_CLOSURE: u8 = 105;
-const OP_CALL_CLOSURE: u8 = 106;
+const OP_CALL_INDIRECT: u8 = 106;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -603,13 +602,8 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::ThreadJoin => w.write_all(&[OP_THREAD_JOIN])?,
 
         // Closures
-        Op::MakeClosure(func_idx, n_captures) => {
-            w.write_all(&[OP_MAKE_CLOSURE])?;
-            write_u32(w, *func_idx as u32)?;
-            write_u32(w, *n_captures as u32)?;
-        }
-        Op::CallClosure(argc) => {
-            w.write_all(&[OP_CALL_CLOSURE])?;
+        Op::CallIndirect(argc) => {
+            w.write_all(&[OP_CALL_INDIRECT])?;
             write_u32(w, *argc as u32)?;
         }
     }
@@ -763,12 +757,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_THREAD_JOIN => Op::ThreadJoin,
 
         // Closures
-        OP_MAKE_CLOSURE => {
-            let func_idx = read_u32(r)? as usize;
-            let n_captures = read_u32(r)? as usize;
-            Op::MakeClosure(func_idx, n_captures)
-        }
-        OP_CALL_CLOSURE => Op::CallClosure(read_u32(r)? as usize),
+        OP_CALL_INDIRECT => Op::CallIndirect(read_u32(r)? as usize),
 
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };

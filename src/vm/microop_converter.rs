@@ -756,27 +756,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // ============================================================
             // Closure operations → register-based
             // ============================================================
-            Op::MakeClosure(func_index, n_captures) => {
-                let mut captures = Vec::with_capacity(*n_captures);
-                for _ in 0..*n_captures {
-                    captures.push(pop_vreg(
-                        &mut vstack,
-                        &mut micro_ops,
-                        &mut next_temp,
-                        &mut max_temp,
-                    ));
-                }
-                captures.reverse();
-                flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::MakeClosure {
-                    dst,
-                    func_index: *func_index,
-                    captures,
-                });
-                vstack.push(Vse::Reg(dst));
-            }
-            Op::CallClosure(argc) => {
+            Op::CallIndirect(argc) => {
                 let mut args = Vec::with_capacity(*argc);
                 for _ in 0..*argc {
                     args.push(pop_vreg(
@@ -790,7 +770,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let callee = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 flush_vstack(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let ret = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::CallClosure {
+                micro_ops.push(MicroOp::CallIndirect {
                     callee,
                     args,
                     ret: Some(ret),
