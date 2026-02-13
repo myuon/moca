@@ -85,12 +85,34 @@ fun make_adder(n: int) -> (int) -> int {
 }
 let add5 = make_adder(5);
 print(add5(10)); // 15
+```
 
-// Copy capture: outer mutations don't affect captured values
+#### Capture Semantics
+
+- `let` variables: **copy capture** (value copied at closure creation time)
+- `var` variables: **reference capture** (shared via RefCell, mutations visible both ways)
+
+```
+// let → copy capture: outer mutations don't affect captured value
+let x = 100;
+let get_x = fun() -> int { return x; };
+print(get_x()); // 100
+
+// var → reference capture: outer mutation reflected in closure
 var y = 100;
 let get_y = fun() -> int { return y; };
 y = 200;
-print(get_y()); // 100 (captured at creation time)
+print(get_y()); // 200
+
+// var → reference capture: closure can write back to outer scope
+var counter = 0;
+let inc = fun() -> int {
+    counter = counter + 1;
+    return counter;
+};
+print(inc());     // 1
+print(inc());     // 2
+print(counter);   // 2
 ```
 
 ### Control Flow
