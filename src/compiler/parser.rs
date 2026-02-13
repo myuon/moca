@@ -54,7 +54,7 @@ impl<'a> Parser<'a> {
             }
         } else if self.check(&TokenKind::Import) {
             Ok(Item::Import(self.import_stmt()?))
-        } else if self.check(&TokenKind::Fun) {
+        } else if self.check(&TokenKind::Fun) && self.check_ahead_ident(1) {
             Ok(Item::FnDef(self.fn_def()?))
         } else if self.check(&TokenKind::Struct) {
             Ok(Item::StructDef(self.struct_def()?))
@@ -927,18 +927,19 @@ impl<'a> Parser<'a> {
 
             if self.match_token(&TokenKind::LParen) {
                 // Function call (without type args)
-                if let Expr::Ident { name, span, .. } = &expr {
-                    let mut args = Vec::new();
+                let mut args = Vec::new();
 
-                    if !self.check(&TokenKind::RParen) {
+                if !self.check(&TokenKind::RParen) {
+                    args.push(self.expression()?);
+                    while self.match_token(&TokenKind::Comma) {
                         args.push(self.expression()?);
-                        while self.match_token(&TokenKind::Comma) {
-                            args.push(self.expression()?);
-                        }
                     }
+                }
 
-                    self.expect(&TokenKind::RParen)?;
+                self.expect(&TokenKind::RParen)?;
 
+                if let Expr::Ident { name, span, .. } = &expr {
+                    // Static function call
                     expr = Expr::Call {
                         callee: name.clone(),
                         type_args: Vec::new(),
@@ -947,7 +948,14 @@ impl<'a> Parser<'a> {
                         inferred_type: None,
                     };
                 } else {
-                    return Err(self.error("expected function name before '('"));
+                    // Dynamic call (closure/lambda)
+                    let span = expr.span();
+                    expr = Expr::CallExpr {
+                        callee: Box::new(expr),
+                        args,
+                        span,
+                        inferred_type: None,
+                    };
                 }
             } else if self.match_token(&TokenKind::LBracket) {
                 // Index access
@@ -1185,6 +1193,11 @@ impl<'a> Parser<'a> {
             return self.new_literal(span);
         }
 
+        // Lambda expression: fun(params) -> ret { body }
+        if self.check(&TokenKind::Fun) {
+            return self.lambda_expr();
+        }
+
         Err(self.error("expected expression"))
     }
 
@@ -1323,6 +1336,38 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a lambda expression: fun(params) -> ret { body }
+    fn lambda_expr(&mut self) -> Result<Expr, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Fun)?;
+
+        self.expect(&TokenKind::LParen)?;
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            params.push(self.parse_param()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.parse_param()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+
+        let return_type = if self.match_token(&TokenKind::Arrow) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
+        let body = self.block()?;
+
+        Ok(Expr::Lambda {
+            params,
+            return_type,
+            body,
+            span,
+            inferred_type: None,
+        })
+    }
+
     /// Parse a new literal: new TypeName { expr, ... } or new TypeName { key: value, ... }
     fn new_literal(&mut self, span: Span) -> Result<Expr, String> {
         // Parse type name
@@ -1421,6 +1466,13 @@ impl<'a> Parser<'a> {
 
     fn check_ahead(&self, kind: &TokenKind, offset: usize) -> bool {
         self.tokens.get(self.current + offset).map(|t| &t.kind) == Some(kind)
+    }
+
+    fn check_ahead_ident(&self, offset: usize) -> bool {
+        matches!(
+            self.tokens.get(self.current + offset).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+        )
     }
 
     /// Check if the current position looks like the start of a struct literal.

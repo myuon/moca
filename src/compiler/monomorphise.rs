@@ -398,6 +398,17 @@ impl InstantiationCollector {
                 }
                 self.collect_expr(expr);
             }
+            Expr::Lambda { body, .. } => {
+                for stmt in &body.statements {
+                    self.collect_statement(stmt);
+                }
+            }
+            Expr::CallExpr { callee, args, .. } => {
+                self.collect_expr(callee);
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
             // Literals and asm blocks don't contain generic calls
             Expr::Int { .. }
             | Expr::Float { .. }
@@ -1072,6 +1083,32 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .map(|s| substitute_statement(s, type_map))
                 .collect(),
             expr: Box::new(substitute_expr(expr, type_map)),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
+        Expr::Lambda {
+            params,
+            return_type,
+            body,
+            span,
+            inferred_type,
+        } => Expr::Lambda {
+            params: params.clone(),
+            return_type: return_type
+                .as_ref()
+                .map(|ta| substitute_type_annotation(ta, type_map)),
+            body: substitute_block(body, type_map),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
+        Expr::CallExpr {
+            callee,
+            args,
+            span,
+            inferred_type,
+        } => Expr::CallExpr {
+            callee: Box::new(substitute_expr(callee, type_map)),
+            args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
             span: *span,
             inferred_type: inferred_type.clone(),
         },

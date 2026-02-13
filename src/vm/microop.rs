@@ -58,6 +58,18 @@ pub enum MicroOp {
     Ret {
         src: Option<VReg>,
     },
+    /// Create a closure heap object from captured vregs.
+    MakeClosure {
+        dst: VReg,
+        func_index: usize,
+        captures: Vec<VReg>,
+    },
+    /// Call a closure. Callee vreg holds the closure reference.
+    CallClosure {
+        callee: VReg,
+        args: Vec<VReg>,
+        ret: Option<VReg>,
+    },
 
     // ========================================
     // Move / Constants

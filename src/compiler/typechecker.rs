@@ -1659,6 +1659,55 @@ impl TypeChecker {
                             self.fresh_var()
                         }
                     }
+                } else if let Some(var_type) = env.lookup(callee).cloned() {
+                    // Variable holding a closure / function value
+                    let var_type = self.substitution.apply(&var_type);
+                    match var_type {
+                        Type::Function { params, ret } => {
+                            if args.len() != params.len() {
+                                self.errors.push(TypeError::new(
+                                    format!(
+                                        "`{}` expects {} arguments, got {}",
+                                        callee,
+                                        params.len(),
+                                        args.len()
+                                    ),
+                                    *span,
+                                ));
+                                return self.substitution.apply(&ret);
+                            }
+                            for (arg, param_type) in args.iter_mut().zip(params.iter()) {
+                                let arg_type = self.infer_expr(arg, env);
+                                if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                                    self.errors.push(e);
+                                }
+                            }
+                            self.substitution.apply(&ret)
+                        }
+                        Type::Var(_) => {
+                            // Unresolved type variable — create function type constraint
+                            let mut param_types = Vec::new();
+                            for arg in args.iter_mut() {
+                                param_types.push(self.infer_expr(arg, env));
+                            }
+                            let ret_type = self.fresh_var();
+                            let fn_type = Type::Function {
+                                params: param_types,
+                                ret: Box::new(ret_type.clone()),
+                            };
+                            if let Err(e) = self.unify(&var_type, &fn_type, *span) {
+                                self.errors.push(e);
+                            }
+                            self.substitution.apply(&ret_type)
+                        }
+                        _ => {
+                            self.errors.push(TypeError::new(
+                                format!("`{}` is not callable", callee),
+                                *span,
+                            ));
+                            self.fresh_var()
+                        }
+                    }
                 } else {
                     self.errors.push(TypeError::new(
                         format!("undefined function `{}`", callee),
@@ -2072,6 +2121,129 @@ impl TypeChecker {
                     self.infer_statement(stmt, env);
                 }
                 self.infer_expr(expr, env)
+            }
+
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                span,
+                ..
+            } => {
+                // Infer parameter types
+                let param_types: Vec<Type> = params
+                    .iter()
+                    .map(|p| {
+                        if let Some(ann) = &p.type_annotation {
+                            self.resolve_type_annotation(ann, p.span)
+                                .unwrap_or_else(|e| {
+                                    self.errors.push(e);
+                                    self.fresh_var()
+                                })
+                        } else {
+                            self.fresh_var()
+                        }
+                    })
+                    .collect();
+
+                let expected_ret = if let Some(ann) = return_type {
+                    self.resolve_type_annotation(ann, *span)
+                        .unwrap_or_else(|e| {
+                            self.errors.push(e);
+                            self.fresh_var()
+                        })
+                } else {
+                    self.fresh_var()
+                };
+
+                // Enter new scope and bind parameters
+                env.enter_scope();
+                for (param, param_type) in params.iter().zip(param_types.iter()) {
+                    env.bind(param.name.clone(), param_type.clone());
+                }
+
+                // Infer body type
+                let body_type = {
+                    let mut result_type = Type::Nil;
+                    for stmt in &mut body.statements {
+                        result_type = self.infer_statement(stmt, env);
+                    }
+                    result_type
+                };
+
+                env.exit_scope();
+
+                // Unify body type with expected return type
+                if let Err(e) = self.unify(&body_type, &expected_ret, *span) {
+                    self.errors.push(e);
+                }
+
+                Type::Function {
+                    params: param_types
+                        .iter()
+                        .map(|t| self.substitution.apply(t))
+                        .collect(),
+                    ret: Box::new(self.substitution.apply(&expected_ret)),
+                }
+            }
+
+            Expr::CallExpr {
+                callee, args, span, ..
+            } => {
+                let callee_type = self.infer_expr(callee, env);
+                let resolved = self.substitution.apply(&callee_type);
+
+                match resolved {
+                    Type::Function { params, ret } => {
+                        if args.len() != params.len() {
+                            self.errors.push(TypeError::new(
+                                format!(
+                                    "closure expects {} arguments, got {}",
+                                    params.len(),
+                                    args.len()
+                                ),
+                                *span,
+                            ));
+                            return self.substitution.apply(&ret);
+                        }
+
+                        for (arg, param_type) in args.iter_mut().zip(params.iter()) {
+                            let arg_type = self.infer_expr(arg, env);
+                            if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                                self.errors.push(e);
+                            }
+                        }
+
+                        self.substitution.apply(&ret)
+                    }
+                    Type::Var(_) => {
+                        // Unknown callee type - infer args and create function type constraint
+                        let arg_types: Vec<Type> = args
+                            .iter_mut()
+                            .map(|arg| self.infer_expr(arg, env))
+                            .collect();
+                        let ret = self.fresh_var();
+                        let fn_type = Type::Function {
+                            params: arg_types,
+                            ret: Box::new(ret.clone()),
+                        };
+                        if let Err(e) = self.unify(&callee_type, &fn_type, *span) {
+                            self.errors.push(e);
+                        }
+                        self.substitution.apply(&ret)
+                    }
+                    _ => {
+                        self.errors.push(TypeError::new(
+                            format!("expected function type, found `{}`", resolved),
+                            *span,
+                        ));
+                        // Still infer args for error reporting
+                        for arg in args.iter_mut() {
+                            self.infer_expr(arg, env);
+                        }
+                        self.fresh_var()
+                    }
+                }
             }
         }
     }

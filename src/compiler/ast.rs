@@ -164,6 +164,7 @@ pub enum Statement {
 
 /// Expressions in the language.
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum Expr {
     Int {
         value: i64,
@@ -289,6 +290,22 @@ pub enum Expr {
         span: Span,
         inferred_type: Option<Type>,
     },
+    /// Lambda expression: `fun(x: int) -> int { return x + 1; }`
+    Lambda {
+        params: Vec<Param>,
+        return_type: Option<TypeAnnotation>,
+        body: Block,
+        span: Span,
+        inferred_type: Option<Type>,
+    },
+    /// Dynamic call expression: `expr(args)` where expr is not a simple identifier.
+    /// Used for calling closures stored in variables: `f(10)` or `make_adder(5)(10)`
+    CallExpr {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+        span: Span,
+        inferred_type: Option<Type>,
+    },
 }
 
 impl Expr {
@@ -312,6 +329,8 @@ impl Expr {
             Expr::Asm(asm_block) => asm_block.span,
             Expr::NewLiteral { span, .. } => *span,
             Expr::Block { span, .. } => *span,
+            Expr::Lambda { span, .. } => *span,
+            Expr::CallExpr { span, .. } => *span,
         }
     }
 
@@ -334,7 +353,9 @@ impl Expr {
             | Expr::MethodCall { inferred_type, .. }
             | Expr::AssociatedFunctionCall { inferred_type, .. }
             | Expr::NewLiteral { inferred_type, .. }
-            | Expr::Block { inferred_type, .. } => *inferred_type = Some(ty),
+            | Expr::Block { inferred_type, .. }
+            | Expr::Lambda { inferred_type, .. }
+            | Expr::CallExpr { inferred_type, .. } => *inferred_type = Some(ty),
             Expr::Asm(_) => {}
         }
     }
@@ -358,7 +379,9 @@ impl Expr {
             | Expr::MethodCall { inferred_type, .. }
             | Expr::AssociatedFunctionCall { inferred_type, .. }
             | Expr::NewLiteral { inferred_type, .. }
-            | Expr::Block { inferred_type, .. } => inferred_type.as_ref(),
+            | Expr::Block { inferred_type, .. }
+            | Expr::Lambda { inferred_type, .. }
+            | Expr::CallExpr { inferred_type, .. } => inferred_type.as_ref(),
             Expr::Asm(_) => None,
         }
     }

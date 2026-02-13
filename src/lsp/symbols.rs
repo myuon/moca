@@ -277,6 +277,15 @@ impl SymbolTable {
                 }
                 self.collect_expr(expr);
             }
+            Expr::Lambda { body, .. } => {
+                self.collect_block(body);
+            }
+            Expr::CallExpr { callee, args, .. } => {
+                self.collect_expr(callee);
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
             // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }
             | Expr::Float { .. }

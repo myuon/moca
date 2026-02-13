@@ -231,6 +231,15 @@ fn lint_expr(expr: &Expr, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Dia
             }
             lint_expr(expr, rules, diagnostics);
         }
+        Expr::Lambda { body, .. } => {
+            lint_block(body, rules, diagnostics);
+        }
+        Expr::CallExpr { callee, args, .. } => {
+            lint_expr(callee, rules, diagnostics);
+            for arg in args {
+                lint_expr(arg, rules, diagnostics);
+            }
+        }
         // Leaf expressions: no sub-expressions to recurse into
         Expr::Int { .. }
         | Expr::Float { .. }

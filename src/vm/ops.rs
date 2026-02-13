@@ -188,6 +188,18 @@ pub enum Op {
     ChannelSend,
     ChannelRecv,
     ThreadJoin,
+
+    // ========================================
+    // Closures
+    // ========================================
+    /// Create a closure object on the heap.
+    /// Pops `n_captures` values from stack, creates heap object [func_index, cap0, cap1, ...].
+    /// Pushes the closure reference onto the stack.
+    MakeClosure(usize, usize), // (func_index, n_captures)
+    /// Call a closure. Pops `argc` arguments, then the closure reference.
+    /// Reads func_index from closure slot 0, pushes captured values as extra args,
+    /// then calls the function with (n_captures + argc) arguments.
+    CallClosure(usize), // (argc) — number of user-visible arguments
 }
 
 impl Op {
@@ -297,6 +309,8 @@ impl Op {
             Op::ChannelSend => "ChannelSend",
             Op::ChannelRecv => "ChannelRecv",
             Op::ThreadJoin => "ThreadJoin",
+            Op::MakeClosure(_, _) => "MakeClosure",
+            Op::CallClosure(_) => "CallClosure",
         }
     }
 }

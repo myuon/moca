@@ -471,6 +471,34 @@ impl Desugar {
                 span,
                 inferred_type,
             },
+
+            // Lambda - desugar body
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                span,
+                inferred_type,
+            } => Expr::Lambda {
+                params,
+                return_type,
+                body: self.desugar_block(body),
+                span,
+                inferred_type,
+            },
+
+            // CallExpr - desugar callee and arguments
+            Expr::CallExpr {
+                callee,
+                args,
+                span,
+                inferred_type,
+            } => Expr::CallExpr {
+                callee: Box::new(self.desugar_expr(*callee)),
+                args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                span,
+                inferred_type,
+            },
         }
     }
 

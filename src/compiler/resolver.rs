@@ -185,6 +185,20 @@ pub enum ResolvedExpr {
         statements: Vec<ResolvedStatement>,
         expr: Box<ResolvedExpr>,
     },
+    /// Create a closure: captures local variables and associates with a lifted function.
+    /// The closure is a heap object: [func_index, captured_val_0, captured_val_1, ...]
+    MakeClosure {
+        /// Index of the lifted function in the function table
+        func_index: usize,
+        /// Local slots to capture (values will be copied into the closure object)
+        captures: Vec<usize>,
+    },
+    /// Call a closure/function value dynamically.
+    /// The callee is an expression that evaluates to a closure reference.
+    CallClosure {
+        callee: Box<ResolvedExpr>,
+        args: Vec<ResolvedExpr>,
+    },
 }
 
 /// An element in a resolved new literal.
@@ -220,6 +234,13 @@ pub struct Resolver<'a> {
     structs: HashMap<String, StructDefInfo>,
     /// Resolved struct list (for output)
     resolved_structs: Vec<ResolvedStruct>,
+    /// Lambda functions lifted during resolution
+    lifted_functions: Vec<ResolvedFunction>,
+    /// Counter for generating unique lambda function names
+    next_lambda_id: usize,
+    /// Total number of functions registered before lambda lifting
+    /// (used to compute correct func_index for lifted lambdas)
+    base_func_count: usize,
 }
 
 impl<'a> Resolver<'a> {
@@ -253,6 +274,9 @@ impl<'a> Resolver<'a> {
             ],
             structs: HashMap::new(),
             resolved_structs: Vec::new(),
+            lifted_functions: Vec::new(),
+            next_lambda_id: 0,
+            base_func_count: 0,
         }
     }
 
@@ -453,6 +477,9 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        // Record total function count before resolution (for lambda lifting indices)
+        self.base_func_count = self.functions.len();
+
         // Second pass: resolve function bodies
         let mut resolved_functions = Vec::new();
         for fn_def in func_defs {
@@ -475,6 +502,9 @@ impl<'a> Resolver<'a> {
         let main_locals_count = scope.locals_count;
         let main_local_types = Self::build_local_types(&scope, &main_type_map);
 
+        // Append lifted lambda functions
+        resolved_functions.append(&mut self.lifted_functions);
+
         Ok(ResolvedProgram {
             functions: resolved_functions,
             main_body: resolved_main,
@@ -484,7 +514,11 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    fn resolve_method(&self, method: FnDef, struct_name: &str) -> Result<ResolvedFunction, String> {
+    fn resolve_method(
+        &mut self,
+        method: FnDef,
+        struct_name: &str,
+    ) -> Result<ResolvedFunction, String> {
         let mut scope = Scope::new();
         let has_self = method.params.iter().any(|p| p.name == "self");
         let is_builtin_type = struct_name == "vec" || struct_name == "map";
@@ -541,7 +575,7 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    fn resolve_function(&self, fn_def: FnDef) -> Result<ResolvedFunction, String> {
+    fn resolve_function(&mut self, fn_def: FnDef) -> Result<ResolvedFunction, String> {
         let mut scope = Scope::new();
         let is_inline = fn_def.attributes.iter().any(|a| a.name == "inline");
 
@@ -621,7 +655,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_statements(
-        &self,
+        &mut self,
         statements: Vec<Statement>,
         scope: &mut Scope,
     ) -> Result<Vec<ResolvedStatement>, String> {
@@ -635,7 +669,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_statement(
-        &self,
+        &mut self,
         stmt: Statement,
         scope: &mut Scope,
     ) -> Result<ResolvedStatement, String> {
@@ -832,7 +866,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn resolve_expr(&self, expr: Expr, scope: &mut Scope) -> Result<ResolvedExpr, String> {
+    fn resolve_expr(&mut self, expr: Expr, scope: &mut Scope) -> Result<ResolvedExpr, String> {
         match expr {
             Expr::Int { value, .. } => Ok(ResolvedExpr::Int(value)),
             Expr::Float { value, .. } => Ok(ResolvedExpr::Float(value)),
@@ -841,7 +875,7 @@ impl<'a> Resolver<'a> {
             Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
             Expr::Ident { name, span, .. } => {
                 let (slot, _) = scope
-                    .lookup(&name)
+                    .lookup_or_capture(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
                 Ok(ResolvedExpr::Local(slot))
             }
@@ -942,6 +976,14 @@ impl<'a> Resolver<'a> {
                 if let Some(&func_index) = self.functions.get(&callee) {
                     return Ok(ResolvedExpr::Call {
                         func_index,
+                        args: resolved_args,
+                    });
+                }
+
+                // Check if it's a local variable (possibly holding a closure)
+                if let Some((slot, _)) = scope.lookup_or_capture(&callee) {
+                    return Ok(ResolvedExpr::CallClosure {
+                        callee: Box::new(ResolvedExpr::Local(slot)),
                         args: resolved_args,
                     });
                 }
@@ -1184,6 +1226,83 @@ impl<'a> Resolver<'a> {
                     expr: Box::new(resolved_expr),
                 })
             }
+
+            Expr::Lambda {
+                params, body, span, ..
+            } => {
+                // Lambda lifting with static free variable analysis.
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                let free_vars = collect_free_vars_block(&body, &param_names);
+
+                // Resolve captured variable slots from outer scope
+                let mut captures: Vec<(String, usize)> = Vec::new();
+                for var_name in &free_vars {
+                    if let Some((slot, _)) = scope.lookup(var_name) {
+                        captures.push((var_name.clone(), slot));
+                    } else if !self.builtins.contains(var_name)
+                        && !self.functions.contains_key(var_name)
+                    {
+                        return Err(self.error(
+                            &format!("undefined variable '{}' in lambda", var_name),
+                            span,
+                        ));
+                    }
+                }
+
+                let capture_slots: Vec<usize> = captures.iter().map(|(_, slot)| *slot).collect();
+
+                // Create a fresh scope: [captured_0, ..., param_0, ...]
+                let mut lambda_scope = Scope::new();
+                for (cap_name, _) in &captures {
+                    lambda_scope.declare(cap_name.clone(), false);
+                }
+                for param in &params {
+                    let struct_name = self.struct_name_from_type_annotation(&param.type_annotation);
+                    lambda_scope.declare_with_type(param.name.clone(), false, struct_name);
+                }
+
+                // Resolve the lambda body
+                let fn_type_map = Self::collect_var_types(&body.statements);
+                let resolved_body = self.resolve_statements(body.statements, &mut lambda_scope)?;
+                let local_types = Self::build_local_types(&lambda_scope, &fn_type_map);
+
+                // Generate unique name and func_index
+                let lambda_id = self.next_lambda_id;
+                self.next_lambda_id += 1;
+                let lambda_name = format!("__lambda_{}", lambda_id);
+                let func_index = self.base_func_count + self.lifted_functions.len();
+
+                let mut all_param_names: Vec<String> =
+                    captures.iter().map(|(name, _)| name.clone()).collect();
+                all_param_names.extend(param_names);
+
+                self.lifted_functions.push(ResolvedFunction {
+                    name: lambda_name,
+                    params: all_param_names,
+                    locals_count: lambda_scope.locals_count,
+                    body: resolved_body,
+                    local_types,
+                    is_inline: false,
+                });
+
+                Ok(ResolvedExpr::MakeClosure {
+                    func_index,
+                    captures: capture_slots,
+                })
+            }
+
+            Expr::CallExpr { callee, args, .. } => {
+                let resolved_callee = self.resolve_expr(*callee, scope)?;
+                let resolved_args: Vec<_> = args
+                    .into_iter()
+                    .map(|a| self.resolve_expr(a, scope))
+                    .collect::<Result<_, _>>()?;
+
+                Ok(ResolvedExpr::CallClosure {
+                    callee: Box::new(resolved_callee),
+                    args: resolved_args,
+                })
+            }
         }
     }
 
@@ -1327,6 +1446,12 @@ struct Scope {
     locals_count: usize,
     /// Maps slot number → variable name (accumulated across all scopes).
     slot_names: Vec<String>,
+    /// For lambda scopes: outer variables available for capture.
+    /// Maps outer variable name → outer slot index.
+    outer_vars: HashMap<String, usize>,
+    /// Variables actually captured from outer scope during resolution.
+    /// Vec of (name, outer_slot) in order of capture.
+    captured_vars: Vec<(String, usize)>,
 }
 
 impl Scope {
@@ -1335,6 +1460,18 @@ impl Scope {
             locals: vec![HashMap::new()],
             locals_count: 0,
             slot_names: Vec::new(),
+            outer_vars: HashMap::new(),
+            captured_vars: Vec::new(),
+        }
+    }
+
+    fn new_lambda(outer_vars: HashMap<String, usize>) -> Self {
+        Self {
+            locals: vec![HashMap::new()],
+            locals_count: 0,
+            slot_names: Vec::new(),
+            outer_vars,
+            captured_vars: Vec::new(),
         }
     }
 
@@ -1363,6 +1500,32 @@ impl Scope {
             .map(|(slot, mutable, _)| (slot, mutable))
     }
 
+    /// Lookup a variable, and if not found locally but available in outer_vars,
+    /// capture it (declare it as a local and record the capture).
+    fn lookup_or_capture(&mut self, name: &str) -> Option<(usize, bool)> {
+        // First try local lookup
+        if let Some(info) = self.lookup(name) {
+            return Some(info);
+        }
+
+        // If this is a lambda scope and the variable exists in the outer scope, capture it
+        if let Some(&outer_slot) = self.outer_vars.get(name) {
+            // Check if already captured
+            for (captured_name, _) in &self.captured_vars {
+                if captured_name == name {
+                    // Already captured, find its local slot
+                    return self.lookup(name);
+                }
+            }
+            // Capture it: declare as a local in this scope
+            let local_slot = self.declare(name.to_string(), false);
+            self.captured_vars.push((name.to_string(), outer_slot));
+            return Some((local_slot, false));
+        }
+
+        None
+    }
+
     fn lookup_with_type(&self, name: &str) -> Option<LocalInfo> {
         for scope in self.locals.iter().rev() {
             if let Some(info) = scope.get(name) {
@@ -1378,6 +1541,205 @@ impl Scope {
 
     fn exit_scope(&mut self) {
         self.locals.pop();
+    }
+}
+
+/// Collect free variable names from a block that are not in `bound`.
+fn collect_free_vars_block(block: &Block, bound: &[String]) -> Vec<String> {
+    let mut free = Vec::new();
+    let mut bound_set: std::collections::HashSet<String> = bound.iter().cloned().collect();
+    for stmt in &block.statements {
+        collect_free_vars_statement(stmt, &mut bound_set, &mut free);
+    }
+    free
+}
+
+fn collect_free_vars_statement(
+    stmt: &Statement,
+    bound: &mut std::collections::HashSet<String>,
+    free: &mut Vec<String>,
+) {
+    match stmt {
+        Statement::Let { name, init, .. } => {
+            collect_free_vars_expr(init, bound, free);
+            bound.insert(name.clone());
+        }
+        Statement::Assign { name, value, .. } => {
+            if !bound.contains(name.as_str()) && !free.contains(name) {
+                free.push(name.clone());
+            }
+            collect_free_vars_expr(value, bound, free);
+        }
+        Statement::IndexAssign {
+            object,
+            index,
+            value,
+            ..
+        } => {
+            collect_free_vars_expr(object, bound, free);
+            collect_free_vars_expr(index, bound, free);
+            collect_free_vars_expr(value, bound, free);
+        }
+        Statement::FieldAssign { object, value, .. } => {
+            collect_free_vars_expr(object, bound, free);
+            collect_free_vars_expr(value, bound, free);
+        }
+        Statement::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_free_vars_expr(condition, bound, free);
+            for s in &then_block.statements {
+                collect_free_vars_statement(s, bound, free);
+            }
+            if let Some(else_b) = else_block {
+                for s in &else_b.statements {
+                    collect_free_vars_statement(s, bound, free);
+                }
+            }
+        }
+        Statement::While {
+            condition, body, ..
+        } => {
+            collect_free_vars_expr(condition, bound, free);
+            for s in &body.statements {
+                collect_free_vars_statement(s, bound, free);
+            }
+        }
+        Statement::ForIn {
+            var,
+            iterable,
+            body,
+            ..
+        } => {
+            collect_free_vars_expr(iterable, bound, free);
+            bound.insert(var.clone());
+            for s in &body.statements {
+                collect_free_vars_statement(s, bound, free);
+            }
+        }
+        Statement::Return { value, .. } => {
+            if let Some(expr) = value {
+                collect_free_vars_expr(expr, bound, free);
+            }
+        }
+        Statement::Throw { value, .. } => {
+            collect_free_vars_expr(value, bound, free);
+        }
+        Statement::Try {
+            try_block,
+            catch_var,
+            catch_block,
+            ..
+        } => {
+            for s in &try_block.statements {
+                collect_free_vars_statement(s, bound, free);
+            }
+            bound.insert(catch_var.clone());
+            for s in &catch_block.statements {
+                collect_free_vars_statement(s, bound, free);
+            }
+        }
+        Statement::Expr { expr, .. } => {
+            collect_free_vars_expr(expr, bound, free);
+        }
+    }
+}
+
+fn collect_free_vars_expr(
+    expr: &Expr,
+    bound: &std::collections::HashSet<String>,
+    free: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Ident { name, .. } => {
+            if !bound.contains(name.as_str()) && !free.contains(name) {
+                free.push(name.clone());
+            }
+        }
+        Expr::Array { elements, .. } => {
+            for e in elements {
+                collect_free_vars_expr(e, bound, free);
+            }
+        }
+        Expr::Index { object, index, .. } => {
+            collect_free_vars_expr(object, bound, free);
+            collect_free_vars_expr(index, bound, free);
+        }
+        Expr::Field { object, .. } => collect_free_vars_expr(object, bound, free),
+        Expr::Unary { operand, .. } => collect_free_vars_expr(operand, bound, free),
+        Expr::Binary { left, right, .. } => {
+            collect_free_vars_expr(left, bound, free);
+            collect_free_vars_expr(right, bound, free);
+        }
+        Expr::Call { callee, args, .. } => {
+            // The callee might be a variable holding a closure (not just a function name)
+            if !bound.contains(callee.as_str()) && !free.contains(callee) {
+                free.push(callee.clone());
+            }
+            for a in args {
+                collect_free_vars_expr(a, bound, free);
+            }
+        }
+        Expr::CallExpr { callee, args, .. } => {
+            collect_free_vars_expr(callee, bound, free);
+            for a in args {
+                collect_free_vars_expr(a, bound, free);
+            }
+        }
+        Expr::MethodCall { object, args, .. } => {
+            collect_free_vars_expr(object, bound, free);
+            for a in args {
+                collect_free_vars_expr(a, bound, free);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for (_, e) in fields {
+                collect_free_vars_expr(e, bound, free);
+            }
+        }
+        Expr::AssociatedFunctionCall { args, .. } => {
+            for a in args {
+                collect_free_vars_expr(a, bound, free);
+            }
+        }
+        Expr::NewLiteral { elements, .. } => {
+            for e in elements {
+                match e {
+                    NewLiteralElement::Value(v) => collect_free_vars_expr(v, bound, free),
+                    NewLiteralElement::KeyValue { key, value } => {
+                        collect_free_vars_expr(key, bound, free);
+                        collect_free_vars_expr(value, bound, free);
+                    }
+                }
+            }
+        }
+        Expr::Block {
+            statements, expr, ..
+        } => {
+            let mut inner_bound = bound.clone();
+            for s in statements {
+                collect_free_vars_statement(s, &mut inner_bound, free);
+            }
+            collect_free_vars_expr(expr, &inner_bound, free);
+        }
+        Expr::Lambda { params, body, .. } => {
+            let mut inner_bound = bound.clone();
+            for p in params {
+                inner_bound.insert(p.name.clone());
+            }
+            for s in &body.statements {
+                collect_free_vars_statement(s, &mut inner_bound, free);
+            }
+        }
+        Expr::Int { .. }
+        | Expr::Float { .. }
+        | Expr::Bool { .. }
+        | Expr::Str { .. }
+        | Expr::Nil { .. }
+        | Expr::Asm(_) => {}
     }
 }
 

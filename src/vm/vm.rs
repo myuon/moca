@@ -1202,6 +1202,84 @@ impl VM {
                     }
                 }
                 // ========================================
+                // Closure operations (register-based)
+                // ========================================
+                MicroOp::MakeClosure {
+                    dst,
+                    func_index,
+                    ref captures,
+                } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let mut closure_slots = Vec::with_capacity(captures.len() + 1);
+                    closure_slots.push(Value::I64(func_index as i64));
+                    for cap in captures.iter() {
+                        closure_slots.push(self.stack[sb + cap.0]);
+                    }
+                    let r = self.heap.alloc_slots(closure_slots)?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Ref(r);
+                }
+                MicroOp::CallClosure {
+                    callee,
+                    ref args,
+                    ret,
+                } => {
+                    let caller_stack_base = self.frames.last().unwrap().stack_base;
+                    let closure_val = self.stack[caller_stack_base + callee.0];
+                    let closure_ref = closure_val
+                        .as_ref()
+                        .ok_or("runtime error: CallClosure expects a closure reference")?;
+
+                    let closure_obj = self
+                        .heap
+                        .get(closure_ref)
+                        .ok_or("runtime error: invalid closure reference")?;
+
+                    let func_index = closure_obj.slots[0]
+                        .as_i64()
+                        .ok_or("runtime error: closure slot 0 must be func_index")?
+                        as usize;
+                    let n_captures = closure_obj.slots.len() - 1;
+                    let captured_values: Vec<Value> = closure_obj.slots[1..].to_vec();
+
+                    let callee_func = &chunk.functions[func_index];
+
+                    // Convert and cache if needed
+                    if func_cache.len() <= func_index {
+                        func_cache.resize(func_index + 1, None);
+                    }
+                    if func_cache[func_index].is_none() {
+                        func_cache[func_index] =
+                            Some(microop_converter::convert(&chunk.functions[func_index]));
+                    }
+                    let callee_temps = func_cache[func_index].as_ref().unwrap().temps_count;
+                    let callee_regs = callee_func.locals_count + callee_temps;
+
+                    let new_stack_base = self.stack.len();
+
+                    // Allocate register file for callee
+                    self.stack.resize(new_stack_base + callee_regs, Value::Null);
+
+                    // Copy captured values as first locals
+                    for (i, cap) in captured_values.iter().enumerate() {
+                        self.stack[new_stack_base + i] = *cap;
+                    }
+                    // Copy user args after captures
+                    for (i, arg) in args.iter().enumerate() {
+                        self.stack[new_stack_base + n_captures + i] =
+                            self.stack[caller_stack_base + arg.0];
+                    }
+
+                    self.frames.push(Frame {
+                        func_index,
+                        pc: 0,
+                        stack_base: new_stack_base,
+                        ret_vreg: ret.map(|v| v.0),
+                        stack_floor: new_stack_base + callee_regs,
+                    });
+                }
+
+                // ========================================
                 // Heap operations (register-based)
                 // ========================================
                 MicroOp::HeapLoad { dst, src, offset } => {
@@ -2556,6 +2634,91 @@ impl VM {
                 }
                 let arr_ref = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(arr_ref));
+            }
+
+            // Closure operations
+            Op::MakeClosure(func_index, n_captures) => {
+                // Pop n_captures values from the stack (these are the captured values)
+                let stack_len = self.stack.len();
+                if stack_len < n_captures {
+                    return Err("stack underflow in MakeClosure".to_string());
+                }
+                // Build closure heap object: [func_index_as_i64, cap0, cap1, ...]
+                let mut closure_slots = Vec::with_capacity(n_captures + 1);
+                closure_slots.push(Value::I64(func_index as i64));
+                // Captures are on the stack in order: cap0 was pushed first, capN last
+                let captures_start = stack_len - n_captures;
+                for i in 0..n_captures {
+                    closure_slots.push(self.stack[captures_start + i]);
+                }
+                self.stack.truncate(captures_start);
+                let r = self.heap.alloc_slots(closure_slots)?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::CallClosure(argc) => {
+                // Stack layout: [..., closure_ref, arg0, arg1, ..., arg_{argc-1}]
+                let stack_len = self.stack.len();
+                if stack_len < argc + 1 {
+                    return Err("stack underflow in CallClosure".to_string());
+                }
+
+                // Pop argc args off the stack
+                let args_start = stack_len - argc;
+                let args: Vec<Value> = self.stack[args_start..].to_vec();
+                self.stack.truncate(args_start);
+
+                // Pop the closure reference
+                let closure_val = self.stack.pop().ok_or("stack underflow in CallClosure")?;
+                let closure_ref = closure_val
+                    .as_ref()
+                    .ok_or("runtime error: CallClosure expects a closure reference")?;
+
+                // Read the closure object from the heap
+                let closure_obj = self
+                    .heap
+                    .get(closure_ref)
+                    .ok_or("runtime error: invalid closure reference")?;
+
+                // slot 0 = func_index, slots 1.. = captured values
+                let func_index = closure_obj.slots[0]
+                    .as_i64()
+                    .ok_or("runtime error: closure slot 0 must be func_index (integer)")?
+                    as usize;
+                let n_captures = closure_obj.slots.len() - 1;
+                let captured_values: Vec<Value> = closure_obj.slots[1..].to_vec();
+
+                let func = &chunk.functions[func_index];
+                let expected_arity = func.arity; // captures + user args
+                let total_args = n_captures + argc;
+
+                if total_args != expected_arity {
+                    return Err(format!(
+                        "runtime error: closure function '{}' expects {} arguments ({} captures + {} params), got {} captures + {} args",
+                        func.name,
+                        expected_arity,
+                        n_captures,
+                        expected_arity - n_captures,
+                        n_captures,
+                        argc
+                    ));
+                }
+
+                // Push captured values first, then user args (fills local slots in order)
+                let new_stack_base = self.stack.len();
+                for cap in captured_values {
+                    self.stack.push(cap);
+                }
+                for arg in args {
+                    self.stack.push(arg);
+                }
+
+                self.frames.push(Frame {
+                    func_index,
+                    pc: 0,
+                    stack_base: new_stack_base,
+                    ret_vreg: None,
+                    stack_floor: 0,
+                });
             }
         }
 

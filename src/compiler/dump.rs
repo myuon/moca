@@ -591,6 +591,58 @@ impl<'a> AstPrinter<'a> {
                     &format!("{}    ", child_prefix),
                 );
             }
+
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                let params_str = params
+                    .iter()
+                    .map(|p| self.format_param(p))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ret_str = return_type
+                    .as_ref()
+                    .map(|t| format!(" -> {}", t))
+                    .unwrap_or_default();
+                self.write(&format!("{}Lambda: fun({}){}", prefix, params_str, ret_str));
+                self.write_type_suffix(expr);
+                self.newline();
+                let body_prefix = format!("{}    ", child_prefix);
+                self.print_block_contents(body, &body_prefix);
+            }
+
+            Expr::CallExpr { callee, args, .. } => {
+                self.write(&format!("{}CallExpr({})", prefix, args.len()));
+                self.write_type_suffix(expr);
+                self.newline();
+                let has_args = !args.is_empty();
+                let callee_prefix = if has_args { "├── " } else { "└── " };
+                self.write_indent_with(&child_prefix);
+                self.print_expr(
+                    callee,
+                    &format!("{}callee: ", callee_prefix),
+                    !has_args,
+                    &child_prefix,
+                );
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_is_last = i == args.len() - 1;
+                    let arg_prefix = if arg_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
+                    self.write_indent_with(&child_prefix);
+                    self.print_expr(
+                        arg,
+                        &format!("{}arg: ", arg_prefix),
+                        arg_is_last,
+                        &child_prefix,
+                    );
+                }
+            }
         }
     }
 
@@ -1253,6 +1305,42 @@ impl ResolvedProgramPrinter {
                 self.write_indent_with(parent_prefix);
                 self.print_expr(expr, "└── result: ", &block_child_prefix);
             }
+
+            ResolvedExpr::MakeClosure {
+                func_index,
+                captures,
+            } => {
+                self.write(&format!(
+                    "{}MakeClosure(func:{}, captures:{:?})",
+                    prefix, func_index, captures
+                ));
+                self.newline();
+            }
+
+            ResolvedExpr::CallClosure { callee, args } => {
+                self.write(&format!("{}CallClosure(args:{})", prefix, args.len()));
+                self.newline();
+                let has_args = !args.is_empty();
+                let callee_prefix = if has_args { "├── " } else { "└── " };
+                let callee_child = if has_args {
+                    format!("{}│   ", parent_prefix)
+                } else {
+                    format!("{}    ", parent_prefix)
+                };
+                self.write_indent_with(parent_prefix);
+                self.print_expr(callee, &format!("{}callee: ", callee_prefix), &callee_child);
+                for (i, arg) in args.iter().enumerate() {
+                    let is_last = i == args.len() - 1;
+                    let arg_prefix = if is_last { "└── " } else { "├── " };
+                    let arg_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
+                }
+            }
         }
     }
 
@@ -1529,6 +1617,14 @@ impl<'a> Disassembler<'a> {
             Op::ChannelSend => self.output.push_str("ChannelSend"),
             Op::ChannelRecv => self.output.push_str("ChannelRecv"),
             Op::ThreadJoin => self.output.push_str("ThreadJoin"),
+
+            // Closures
+            Op::MakeClosure(fi, nc) => {
+                self.output.push_str(&format!("MakeClosure {}, {}", fi, nc));
+            }
+            Op::CallClosure(argc) => {
+                self.output.push_str(&format!("CallClosure {}", argc));
+            }
         }
     }
 }
@@ -1626,6 +1722,32 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             Some(s) => output.push_str(&format!("Ret {}", format_vreg(s))),
             None => output.push_str("Ret"),
         },
+        MicroOp::MakeClosure {
+            dst,
+            func_index,
+            captures,
+        } => {
+            let caps_str: Vec<String> = captures.iter().map(format_vreg).collect();
+            output.push_str(&format!(
+                "MakeClosure {} = func[{}]([{}])",
+                format_vreg(dst),
+                func_index,
+                caps_str.join(", ")
+            ))
+        }
+        MicroOp::CallClosure { callee, args, ret } => {
+            let args_str: Vec<String> = args.iter().map(format_vreg).collect();
+            let ret_str = match ret {
+                Some(r) => format!(" → {}", format_vreg(r)),
+                None => String::new(),
+            };
+            output.push_str(&format!(
+                "CallClosure {}({}){}",
+                format_vreg(callee),
+                args_str.join(", "),
+                ret_str
+            ))
+        }
 
         // Move / Constants
         MicroOp::Mov { dst, src } => {
