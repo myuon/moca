@@ -996,6 +996,14 @@ impl ResolvedProgramPrinter {
                 let expr_child = format!("{}    ", parent_prefix);
                 self.print_expr(expr, "└── ", &expr_child);
             }
+
+            ResolvedStatement::RefCellStore { slot, value } => {
+                self.write(&format!("{}RefCellStore slot:{}", prefix, slot));
+                self.newline();
+                self.write_indent_with(parent_prefix);
+                let expr_child = format!("{}    ", parent_prefix);
+                self.print_expr(value, "└── value: ", &expr_child);
+            }
         }
     }
 
@@ -1310,9 +1318,21 @@ impl ResolvedProgramPrinter {
                 func_index,
                 captures,
             } => {
+                let cap_strs: Vec<String> = captures
+                    .iter()
+                    .map(|c| {
+                        if c.mutable {
+                            format!("slot:{}(ref)", c.outer_slot)
+                        } else {
+                            format!("slot:{}", c.outer_slot)
+                        }
+                    })
+                    .collect();
                 self.write(&format!(
-                    "{}Closure(func:{}, captures:{:?})",
-                    prefix, func_index, captures
+                    "{}Closure(func:{}, captures:[{}])",
+                    prefix,
+                    func_index,
+                    cap_strs.join(", ")
                 ));
                 self.newline();
             }
@@ -1342,8 +1362,30 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedExpr::CaptureLoad { offset } => {
-                self.write(&format!("{}CaptureLoad(offset:{})", prefix, offset));
+            ResolvedExpr::CaptureLoad { offset, is_ref } => {
+                let ref_str = if *is_ref { ", ref" } else { "" };
+                self.write(&format!(
+                    "{}CaptureLoad(offset:{}{})",
+                    prefix, offset, ref_str
+                ));
+                self.newline();
+            }
+            ResolvedExpr::CaptureStore { offset, value } => {
+                self.write(&format!("{}CaptureStore(offset:{})", prefix, offset));
+                self.newline();
+                let val_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── value: ", &val_child);
+            }
+            ResolvedExpr::RefCellNew { value } => {
+                self.write(&format!("{}RefCellNew", prefix));
+                self.newline();
+                let val_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(value, "└── value: ", &val_child);
+            }
+            ResolvedExpr::RefCellLoad { slot } => {
+                self.write(&format!("{}RefCellLoad(slot:{})", prefix, slot));
                 self.newline();
             }
         }
