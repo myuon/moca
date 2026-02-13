@@ -199,6 +199,11 @@ pub enum ResolvedExpr {
         callee: Box<ResolvedExpr>,
         args: Vec<ResolvedExpr>,
     },
+    /// Load a captured variable from the closure reference (local slot 0).
+    /// Compiles to: LocalGet(0) + HeapLoad(offset)
+    CaptureLoad {
+        offset: usize,
+    },
 }
 
 /// An element in a resolved new literal.
@@ -874,6 +879,10 @@ impl<'a> Resolver<'a> {
             Expr::Str { value, .. } => Ok(ResolvedExpr::Str(value)),
             Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
             Expr::Ident { name, span, .. } => {
+                // Check if this is a captured variable (closure_ref-based)
+                if let Some(offset) = scope.lookup_capture(&name) {
+                    return Ok(ResolvedExpr::CaptureLoad { offset });
+                }
                 let (slot, _) = scope
                     .lookup_or_capture(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
@@ -976,6 +985,14 @@ impl<'a> Resolver<'a> {
                 if let Some(&func_index) = self.functions.get(&callee) {
                     return Ok(ResolvedExpr::Call {
                         func_index,
+                        args: resolved_args,
+                    });
+                }
+
+                // Check if it's a captured variable (closure_ref-based)
+                if let Some(offset) = scope.lookup_capture(&callee) {
+                    return Ok(ResolvedExpr::CallIndirect {
+                        callee: Box::new(ResolvedExpr::CaptureLoad { offset }),
                         args: resolved_args,
                     });
                 }
@@ -1251,10 +1268,16 @@ impl<'a> Resolver<'a> {
 
                 let capture_slots: Vec<usize> = captures.iter().map(|(_, slot)| *slot).collect();
 
-                // Create a fresh scope: [captured_0, ..., param_0, ...]
+                // Create a fresh scope: [__closure, param_0, param_1, ...]
+                // Captured variables are accessed via CaptureLoad (HeapLoad from closure_ref)
                 let mut lambda_scope = Scope::new();
-                for (cap_name, _) in &captures {
-                    lambda_scope.declare(cap_name.clone(), false);
+                // Slot 0: __closure (the closure reference itself)
+                lambda_scope.declare("__closure".to_string(), false);
+                // Register capture name → heap offset mappings
+                for (i, (cap_name, _)) in captures.iter().enumerate() {
+                    lambda_scope
+                        .capture_heap_offsets
+                        .insert(cap_name.clone(), i + 1); // offset 0 = func_index, so captures start at 1
                 }
                 for param in &params {
                     let struct_name = self.struct_name_from_type_annotation(&param.type_annotation);
@@ -1272,8 +1295,8 @@ impl<'a> Resolver<'a> {
                 let lambda_name = format!("__lambda_{}", lambda_id);
                 let func_index = self.base_func_count + self.lifted_functions.len();
 
-                let mut all_param_names: Vec<String> =
-                    captures.iter().map(|(name, _)| name.clone()).collect();
+                // Params: [__closure, user_params...]
+                let mut all_param_names: Vec<String> = vec!["__closure".to_string()];
                 all_param_names.extend(param_names);
 
                 self.lifted_functions.push(ResolvedFunction {
@@ -1452,6 +1475,9 @@ struct Scope {
     /// Variables actually captured from outer scope during resolution.
     /// Vec of (name, outer_slot) in order of capture.
     captured_vars: Vec<(String, usize)>,
+    /// For closure_ref-based capture: maps capture variable name → heap offset.
+    /// When set, captured variables resolve to CaptureLoad instead of Local.
+    capture_heap_offsets: HashMap<String, usize>,
 }
 
 impl Scope {
@@ -1462,6 +1488,7 @@ impl Scope {
             slot_names: Vec::new(),
             outer_vars: HashMap::new(),
             captured_vars: Vec::new(),
+            capture_heap_offsets: HashMap::new(),
         }
     }
 
@@ -1472,6 +1499,7 @@ impl Scope {
             slot_names: Vec::new(),
             outer_vars,
             captured_vars: Vec::new(),
+            capture_heap_offsets: HashMap::new(),
         }
     }
 
@@ -1524,6 +1552,11 @@ impl Scope {
         }
 
         None
+    }
+
+    /// Look up a captured variable's heap offset (for closure_ref-based captures).
+    fn lookup_capture(&self, name: &str) -> Option<usize> {
+        self.capture_heap_offsets.get(name).copied()
     }
 
     fn lookup_with_type(&self, name: &str) -> Option<LocalInfo> {

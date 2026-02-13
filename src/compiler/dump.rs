@@ -1341,6 +1341,11 @@ impl ResolvedProgramPrinter {
                     self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
                 }
             }
+
+            ResolvedExpr::CaptureLoad { offset } => {
+                self.write(&format!("{}CaptureLoad(offset:{})", prefix, offset));
+                self.newline();
+            }
         }
     }
 

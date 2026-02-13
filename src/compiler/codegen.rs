@@ -152,6 +152,7 @@ impl Codegen {
             ResolvedExpr::Block { expr, .. } => self.infer_expr_type(expr),
             ResolvedExpr::Closure { .. } => ValueType::Ref,
             ResolvedExpr::CallIndirect { .. } => ValueType::I64, // Default; dynamic
+            ResolvedExpr::CaptureLoad { .. } => ValueType::I64,  // Default; dynamic
         }
     }
 
@@ -1189,8 +1190,13 @@ impl Codegen {
                 for arg in args {
                     self.compile_expr(arg, ops)?;
                 }
-                // CallIndirect pops argc args + closure ref, calls the function
+                // CallIndirect pops argc args + callable ref, calls the function
                 ops.push(Op::CallIndirect(args.len()));
+            }
+            ResolvedExpr::CaptureLoad { offset } => {
+                // Load a captured variable from the closure reference (slot 0)
+                ops.push(Op::LocalGet(self.local_offset));
+                ops.push(Op::HeapLoad(*offset));
             }
         }
 
