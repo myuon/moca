@@ -967,16 +967,16 @@ impl<'a> Resolver<'a> {
             }
             Statement::Assign { name, value, span } => {
                 // Check if this is a captured variable in a closure scope
-                if let Some(offset) = scope.lookup_capture(&name) {
-                    if scope.capture_mutable.contains(&name) {
-                        let value = self.resolve_expr(value, scope)?;
-                        return Ok(ResolvedStatement::Expr {
-                            expr: ResolvedExpr::CaptureStore {
-                                offset,
-                                value: Box::new(value),
-                            },
-                        });
-                    }
+                if let Some(offset) = scope.lookup_capture(&name)
+                    && scope.capture_mutable.contains(&name)
+                {
+                    let value = self.resolve_expr(value, scope)?;
+                    return Ok(ResolvedStatement::Expr {
+                        expr: ResolvedExpr::CaptureStore {
+                            offset,
+                            value: Box::new(value),
+                        },
+                    });
                 }
 
                 let (slot, mutable) = scope

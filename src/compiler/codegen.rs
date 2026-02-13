@@ -1222,6 +1222,8 @@ impl Codegen {
                 ops.push(Op::HeapLoad(*offset));
                 self.compile_expr(value, ops)?;
                 ops.push(Op::HeapStore(0));
+                // Push nil so this works as an expression (Stmt::Expr will Drop it)
+                ops.push(Op::RefNull);
             }
             ResolvedExpr::RefCellNew { value } => {
                 // Create a 1-slot heap object (RefCell) wrapping the value
