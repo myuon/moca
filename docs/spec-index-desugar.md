@@ -29,7 +29,7 @@ m["a"] = 10;      // -> m.set("a", 10) にdesugar
 print(m["a"]);    // -> m.get("a") にdesugar -> 10
 
 // Array<T> - desugar対象外
-var arr: Array<int, 3> = [1, 2, 3];
+let arr: Array<int, 3> = [1, 2, 3];
 print(arr[0]);    // 直接codegenで処理 -> 1
 arr[0] = 10;      // 直接codegenで処理
 print(arr[0]);    // -> 10

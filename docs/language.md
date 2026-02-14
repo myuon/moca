@@ -39,15 +39,24 @@ This document defines the syntax and semantics of the Moca programming language.
 ### Variable Declaration
 
 ```
-// Immutable variable
+// Variable (reassignable)
 let x = 42;
+x = x + 1;
 
-// Mutable variable
-var y = 0;
+// Constant (compile-time literal, inline expanded)
+const MAX = 100;
+const PI = 3.14;
+const NAME = "hello";
+const FLAG = true;
 
-// Assignment (var only)
-y = y + 1;
+// const initializer must be a literal (int, float, string, bool)
+// const x = 1 + 2;  // Error: const initializer must be a literal
+
+// const cannot be reassigned
+// MAX = 200;  // Error: cannot assign to constant 'MAX'
 ```
+
+> **Note:** `var` is no longer supported. Use `let` instead.
 
 ### Functions
 
@@ -89,23 +98,18 @@ print(add5(10)); // 15
 
 #### Capture Semantics
 
-- `let` variables: **copy capture** (value copied at closure creation time)
-- `var` variables: **reference capture** (shared via RefCell, mutations visible both ways)
+- `let` variables that are **not reassigned**: **copy capture** (value copied at closure creation time)
+- `let` variables that are **reassigned**: **reference capture** (shared via RefCell, mutations visible both ways)
+- `const` variables: **inline expanded** (no capture needed, value substituted at compile time)
 
 ```
-// let → copy capture: outer mutations don't affect captured value
+// Not reassigned → copy capture
 let x = 100;
 let get_x = fun() -> int { return x; };
 print(get_x()); // 100
 
-// var → reference capture: outer mutation reflected in closure
-var y = 100;
-let get_y = fun() -> int { return y; };
-y = 200;
-print(get_y()); // 200
-
-// var → reference capture: closure can write back to outer scope
-var counter = 0;
+// Reassigned → reference capture: mutations visible both ways
+let counter = 0;
 let inc = fun() -> int {
     counter = counter + 1;
     return counter;
@@ -113,6 +117,11 @@ let inc = fun() -> int {
 print(inc());     // 1
 print(inc());     // 2
 print(counter);   // 2
+
+// const → inline expanded, no capture
+const MAX = 100;
+let check = fun(n: int) -> bool { return n < MAX; };
+print(check(50)); // true
 ```
 
 ### Control Flow
@@ -154,7 +163,7 @@ let s = "hello, world";
 let escaped = "line1\nline2";
 
 // Array literals
-var arr = [1, 2, 3];
+let arr = [1, 2, 3];
 let first = arr[0];
 arr[1] = 42;
 
@@ -172,7 +181,7 @@ let nothing = nil;
 
 ```
 // Create a new vector
-var vec = vec_new();
+let vec = vec_new();
 
 // Push elements
 vec_push(vec, 10);
@@ -232,7 +241,7 @@ let value = rx.recv();
 
 | Category | Tokens |
 |----------|--------|
-| Keywords | `let`, `var`, `fun`, `if`, `else`, `while`, `for`, `in`, `return`, `true`, `false`, `nil`, `try`, `catch`, `throw`, `spawn` |
+| Keywords | `let`, `const`, `fun`, `if`, `else`, `while`, `for`, `in`, `return`, `true`, `false`, `nil`, `try`, `catch`, `throw`, `spawn` |
 | Literals | Integer (`0`, `42`, `-1`), Float (`3.14`), Bool (`true`, `false`), String (`"hello"`) |
 | Identifiers | `[a-zA-Z_][a-zA-Z0-9_]*` |
 | Operators | `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `\|\|`, `!` |
@@ -261,7 +270,7 @@ params      = IDENT { "," IDENT } ;
 block       = "{" { statement } "}" ;
 
 statement   = let_stmt
-            | var_stmt
+            | const_stmt
             | assign_stmt
             | if_stmt
             | while_stmt
@@ -272,7 +281,7 @@ statement   = let_stmt
             | expr_stmt ;
 
 let_stmt    = "let" IDENT "=" expr ";" ;
-var_stmt    = "var" IDENT "=" expr ";" ;
+const_stmt  = "const" IDENT "=" literal ";" ;
 assign_stmt = IDENT "=" expr ";"
             | IDENT "[" expr "]" "=" expr ";"
             | IDENT "." IDENT "=" expr ";" ;
@@ -432,7 +441,7 @@ Pseudo-random number generation using the `Rand` struct (LCG algorithm).
 **Example:**
 
 ```
-var rng: Rand = Rand::`new`(42);
+let rng: Rand = Rand::`new`(42);
 print(rng.int(1, 100));   // Random int between 1 and 100
 print(rng.float());        // Random float between 0.0 and 1.0
 ```
@@ -455,7 +464,7 @@ error: <message>
 
 ```
 fun fizzbuzz(n) {
-    var i = 1;
+    let i = 1;
     while i <= n {
         if i % 15 == 0 {
             print("FizzBuzz");
@@ -483,7 +492,7 @@ fun fib(n) {
     return fib(n - 1) + fib(n - 2);
 }
 
-var i = 0;
+let i = 0;
 while i < 10 {
     print(fib(i));
     i = i + 1;

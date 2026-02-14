@@ -1044,7 +1044,11 @@ impl TypeChecker {
                 }
             }
 
-            Statement::Const { init, .. } => self.infer_expr(init, env),
+            Statement::Const { name, init, .. } => {
+                let init_type = self.infer_expr(init, env);
+                env.bind(name.clone(), init_type.clone());
+                init_type
+            }
 
             Statement::Expr { expr, .. } => self.infer_expr(expr, env),
 

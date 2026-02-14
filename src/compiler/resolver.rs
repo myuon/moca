@@ -1051,6 +1051,9 @@ impl<'a> Resolver<'a> {
                     }
                     _ => self.get_struct_name(&init),
                 };
+                // If this let shadows a const, remove the inline value
+                scope.const_values.remove(&name);
+                scope.const_names.remove(&name);
                 // All let variables are mutable (reassignable)
                 let slot = scope.declare_with_type(name.clone(), true, struct_name);
                 // If this var is promoted to RefCell, wrap the init value

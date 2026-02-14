@@ -86,7 +86,7 @@ print(argv(2));     // "world"
 print(argv(3));     // "123"
 
 // args() - Returns all arguments as an array
-var all = args();   // ["script.mc", "hello", "world", "123"]
+let all = args();   // ["script.mc", "hello", "world", "123"]
 ```
 
 - `argv(0)` is always the script file path
