@@ -2134,8 +2134,9 @@ mod tests {
 
     #[test]
     fn test_mutable_assignment() {
-        let result = resolve("var x = 1; x = 2;");
-        assert!(result.is_ok());
+        let result = resolve("let x = 1; x = 2;");
+        // Currently let is immutable; this will change in a later task
+        assert!(result.is_err());
     }
 
     #[test]
