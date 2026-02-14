@@ -1,7 +1,7 @@
 use crate::compiler::ast::*;
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A resolved asm instruction.
 #[derive(Debug, Clone)]
@@ -94,6 +94,21 @@ pub enum ResolvedStatement {
     Expr {
         expr: ResolvedExpr,
     },
+    /// Store to a promoted var variable through its RefCell (outer scope).
+    /// Compiles to: LocalGet(slot) + compile(value) + HeapStore(0)
+    RefCellStore {
+        slot: usize,
+        value: ResolvedExpr,
+    },
+}
+
+/// Information about a captured variable in a closure.
+#[derive(Debug, Clone)]
+pub struct CaptureInfo {
+    /// Slot index in the outer scope
+    pub outer_slot: usize,
+    /// Whether the captured variable is `var` (mutable) — uses reference capture via RefCell
+    pub mutable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -186,12 +201,14 @@ pub enum ResolvedExpr {
         expr: Box<ResolvedExpr>,
     },
     /// Create a closure: captures local variables and associates with a lifted function.
-    /// The closure is a heap object: [func_index, captured_val_0, captured_val_1, ...]
+    /// The closure is a heap object: [func_index, captured_val_or_ref_0, ...]
     Closure {
         /// Index of the lifted function in the function table
         func_index: usize,
-        /// Local slots to capture (values will be copied into the closure object)
-        captures: Vec<usize>,
+        /// Captured variables with mutability information.
+        /// For `let` variables: value is copied into the closure object.
+        /// For `var` variables: RefCell reference is shared with the closure object.
+        captures: Vec<CaptureInfo>,
     },
     /// Call a function value indirectly (closure, function pointer, etc.).
     /// The callee is an expression that evaluates to a callable reference.
@@ -200,9 +217,27 @@ pub enum ResolvedExpr {
         args: Vec<ResolvedExpr>,
     },
     /// Load a captured variable from the closure reference (local slot 0).
-    /// Compiles to: LocalGet(0) + HeapLoad(offset)
+    /// When is_ref is false: LocalGet(0) + HeapLoad(offset) (copy capture, let variable)
+    /// When is_ref is true:  LocalGet(0) + HeapLoad(offset) + HeapLoad(0) (ref capture via RefCell, var variable)
     CaptureLoad {
         offset: usize,
+        is_ref: bool,
+    },
+    /// Store to a captured var variable through its RefCell.
+    /// Compiles to: LocalGet(0) + HeapLoad(offset) + compile(value) + HeapStore(0)
+    CaptureStore {
+        offset: usize,
+        value: Box<ResolvedExpr>,
+    },
+    /// Create a new RefCell wrapping a value. Used for var variables that are captured by closures.
+    /// Compiles to: compile(value) + HeapAlloc(1)
+    RefCellNew {
+        value: Box<ResolvedExpr>,
+    },
+    /// Load a value from a RefCell (for promoted var variables in outer scope).
+    /// Compiles to: LocalGet(slot) + HeapLoad(0)
+    RefCellLoad {
+        slot: usize,
     },
 }
 
@@ -659,11 +694,211 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// First pass: scan a block of statements to find `var` variables that are
+    /// captured by any lambda within the block. These variables need to be
+    /// promoted to RefCell for reference capture semantics.
+    fn find_captured_mutable_vars(stmts: &[Statement]) -> HashSet<String> {
+        // Collect all var declarations in this block
+        let mut var_names: HashSet<String> = HashSet::new();
+        Self::collect_var_decls(stmts, &mut var_names);
+
+        // Find which of these vars are captured by lambdas
+        let mut captured = HashSet::new();
+        Self::scan_lambdas_for_captures(stmts, &var_names, &mut captured);
+        captured
+    }
+
+    /// Collect names of var (mutable) declarations at the current block level.
+    fn collect_var_decls(stmts: &[Statement], var_names: &mut HashSet<String>) {
+        for stmt in stmts {
+            if let Statement::Let {
+                name,
+                mutable: true,
+                ..
+            } = stmt
+            {
+                var_names.insert(name.clone());
+            }
+        }
+    }
+
+    /// Scan statements for lambdas and check if they capture any of the target vars.
+    fn scan_lambdas_for_captures(
+        stmts: &[Statement],
+        var_names: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        for stmt in stmts {
+            Self::scan_stmt_for_lambdas(stmt, var_names, captured);
+        }
+    }
+
+    fn scan_stmt_for_lambdas(
+        stmt: &Statement,
+        var_names: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        match stmt {
+            Statement::Let { init, .. } => {
+                Self::scan_expr_for_lambdas(init, var_names, captured);
+            }
+            Statement::Assign { value, .. } => {
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::IndexAssign {
+                object,
+                index,
+                value,
+                ..
+            } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                Self::scan_expr_for_lambdas(index, var_names, captured);
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::FieldAssign { object, value, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                Self::scan_expr_for_lambdas(condition, var_names, captured);
+                Self::scan_lambdas_for_captures(&then_block.statements, var_names, captured);
+                if let Some(else_b) = else_block {
+                    Self::scan_lambdas_for_captures(&else_b.statements, var_names, captured);
+                }
+            }
+            Statement::While {
+                condition, body, ..
+            } => {
+                Self::scan_expr_for_lambdas(condition, var_names, captured);
+                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+            }
+            Statement::ForIn { iterable, body, .. } => {
+                Self::scan_expr_for_lambdas(iterable, var_names, captured);
+                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+            }
+            Statement::Return { value, .. } => {
+                if let Some(v) = value {
+                    Self::scan_expr_for_lambdas(v, var_names, captured);
+                }
+            }
+            Statement::Throw { value, .. } => {
+                Self::scan_expr_for_lambdas(value, var_names, captured);
+            }
+            Statement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                Self::scan_lambdas_for_captures(&try_block.statements, var_names, captured);
+                Self::scan_lambdas_for_captures(&catch_block.statements, var_names, captured);
+            }
+            Statement::Expr { expr, .. } => {
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+            }
+        }
+    }
+
+    fn scan_expr_for_lambdas(
+        expr: &Expr,
+        var_names: &HashSet<String>,
+        captured: &mut HashSet<String>,
+    ) {
+        match expr {
+            Expr::Lambda { params, body, .. } => {
+                // This lambda's free vars that are in var_names → captured
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                let free_vars = collect_free_vars_block(body, &param_names);
+                for fv in &free_vars {
+                    if var_names.contains(fv) {
+                        captured.insert(fv.clone());
+                    }
+                }
+                // Also scan inside the lambda body for nested lambdas
+                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+            }
+            Expr::Array { elements, .. } => {
+                for e in elements {
+                    Self::scan_expr_for_lambdas(e, var_names, captured);
+                }
+            }
+            Expr::Index { object, index, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                Self::scan_expr_for_lambdas(index, var_names, captured);
+            }
+            Expr::Field { object, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+            }
+            Expr::Unary { operand, .. } => {
+                Self::scan_expr_for_lambdas(operand, var_names, captured);
+            }
+            Expr::Binary { left, right, .. } => {
+                Self::scan_expr_for_lambdas(left, var_names, captured);
+                Self::scan_expr_for_lambdas(right, var_names, captured);
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::CallExpr { callee, args, .. } => {
+                Self::scan_expr_for_lambdas(callee, var_names, captured);
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::scan_expr_for_lambdas(object, var_names, captured);
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::StructLiteral { fields, .. } => {
+                for (_, e) in fields {
+                    Self::scan_expr_for_lambdas(e, var_names, captured);
+                }
+            }
+            Expr::AssociatedFunctionCall { args, .. } => {
+                for a in args {
+                    Self::scan_expr_for_lambdas(a, var_names, captured);
+                }
+            }
+            Expr::NewLiteral { elements, .. } => {
+                for e in elements {
+                    match e {
+                        NewLiteralElement::Value(v) => {
+                            Self::scan_expr_for_lambdas(v, var_names, captured)
+                        }
+                        NewLiteralElement::KeyValue { key, value } => {
+                            Self::scan_expr_for_lambdas(key, var_names, captured);
+                            Self::scan_expr_for_lambdas(value, var_names, captured);
+                        }
+                    }
+                }
+            }
+            Expr::Block {
+                statements, expr, ..
+            } => {
+                Self::scan_lambdas_for_captures(statements, var_names, captured);
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+            }
+            _ => {}
+        }
+    }
+
     fn resolve_statements(
         &mut self,
         statements: Vec<Statement>,
         scope: &mut Scope,
     ) -> Result<Vec<ResolvedStatement>, String> {
+        // First pass: find var variables that are captured by lambdas
+        let promoted = Self::find_captured_mutable_vars(&statements);
+        scope.promoted_vars.extend(promoted);
+
         let mut resolved = Vec::new();
 
         for stmt in statements {
@@ -718,9 +953,32 @@ impl<'a> Resolver<'a> {
                     _ => self.get_struct_name(&init),
                 };
                 let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
-                Ok(ResolvedStatement::Let { slot, init })
+                // If this var is promoted to RefCell, wrap the init value
+                if mutable && scope.promoted_vars.contains(&name) {
+                    Ok(ResolvedStatement::Let {
+                        slot,
+                        init: ResolvedExpr::RefCellNew {
+                            value: Box::new(init),
+                        },
+                    })
+                } else {
+                    Ok(ResolvedStatement::Let { slot, init })
+                }
             }
             Statement::Assign { name, value, span } => {
+                // Check if this is a captured variable in a closure scope
+                if let Some(offset) = scope.lookup_capture(&name)
+                    && scope.capture_mutable.contains(&name)
+                {
+                    let value = self.resolve_expr(value, scope)?;
+                    return Ok(ResolvedStatement::Expr {
+                        expr: ResolvedExpr::CaptureStore {
+                            offset,
+                            value: Box::new(value),
+                        },
+                    });
+                }
+
                 let (slot, mutable) = scope
                     .lookup(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
@@ -733,7 +991,12 @@ impl<'a> Resolver<'a> {
                 }
 
                 let value = self.resolve_expr(value, scope)?;
-                Ok(ResolvedStatement::Assign { slot, value })
+                // If this var is promoted to RefCell, use RefCellStore
+                if scope.promoted_vars.contains(&name) {
+                    Ok(ResolvedStatement::RefCellStore { slot, value })
+                } else {
+                    Ok(ResolvedStatement::Assign { slot, value })
+                }
             }
             Statement::If {
                 condition,
@@ -881,7 +1144,15 @@ impl<'a> Resolver<'a> {
             Expr::Ident { name, span, .. } => {
                 // Check if this is a captured variable (closure_ref-based)
                 if let Some(offset) = scope.lookup_capture(&name) {
-                    return Ok(ResolvedExpr::CaptureLoad { offset });
+                    let is_ref = scope.capture_mutable.contains(&name);
+                    return Ok(ResolvedExpr::CaptureLoad { offset, is_ref });
+                }
+                // Check if this is a promoted var (RefCell) in outer scope
+                if scope.promoted_vars.contains(&name) {
+                    let (slot, _) = scope.lookup(&name).ok_or_else(|| {
+                        self.error(&format!("undefined variable '{}'", name), span)
+                    })?;
+                    return Ok(ResolvedExpr::RefCellLoad { slot });
                 }
                 let (slot, _) = scope
                     .lookup_or_capture(&name)
@@ -991,8 +1262,9 @@ impl<'a> Resolver<'a> {
 
                 // Check if it's a captured variable (closure_ref-based)
                 if let Some(offset) = scope.lookup_capture(&callee) {
+                    let is_ref = scope.capture_mutable.contains(&callee);
                     return Ok(ResolvedExpr::CallIndirect {
-                        callee: Box::new(ResolvedExpr::CaptureLoad { offset }),
+                        callee: Box::new(ResolvedExpr::CaptureLoad { offset, is_ref }),
                         args: resolved_args,
                     });
                 }
@@ -1251,11 +1523,17 @@ impl<'a> Resolver<'a> {
                 let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 let free_vars = collect_free_vars_block(&body, &param_names);
 
-                // Resolve captured variable slots from outer scope
-                let mut captures: Vec<(String, usize)> = Vec::new();
+                // Resolve captured variable slots and mutability from outer scope
+                let mut captures: Vec<(String, usize, bool)> = Vec::new(); // (name, slot, is_promoted)
                 for var_name in &free_vars {
-                    if let Some((slot, _)) = scope.lookup(var_name) {
-                        captures.push((var_name.clone(), slot));
+                    if let Some((slot, mutable)) = scope.lookup(var_name) {
+                        // Only mark as ref-capture if the variable is actually promoted to RefCell
+                        let is_promoted = mutable && scope.promoted_vars.contains(var_name);
+                        captures.push((var_name.clone(), slot, is_promoted));
+                    } else if scope.lookup_capture(var_name).is_some() {
+                        // Variable is captured from an even outer scope — propagate
+                        let is_ref = scope.capture_mutable.contains(var_name);
+                        captures.push((var_name.clone(), 0, is_ref)); // slot doesn't matter for re-capture
                     } else if !self.builtins.contains(var_name)
                         && !self.functions.contains_key(var_name)
                     {
@@ -1266,7 +1544,13 @@ impl<'a> Resolver<'a> {
                     }
                 }
 
-                let capture_slots: Vec<usize> = captures.iter().map(|(_, slot)| *slot).collect();
+                let capture_infos: Vec<CaptureInfo> = captures
+                    .iter()
+                    .map(|(_, slot, mutable)| CaptureInfo {
+                        outer_slot: *slot,
+                        mutable: *mutable,
+                    })
+                    .collect();
 
                 // Create a fresh scope: [__closure, param_0, param_1, ...]
                 // Captured variables are accessed via CaptureLoad (HeapLoad from closure_ref)
@@ -1274,10 +1558,13 @@ impl<'a> Resolver<'a> {
                 // Slot 0: __closure (the closure reference itself)
                 lambda_scope.declare("__closure".to_string(), false);
                 // Register capture name → heap offset mappings
-                for (i, (cap_name, _)) in captures.iter().enumerate() {
+                for (i, (cap_name, _, mutable)) in captures.iter().enumerate() {
                     lambda_scope
                         .capture_heap_offsets
                         .insert(cap_name.clone(), i + 1); // offset 0 = func_index, so captures start at 1
+                    if *mutable {
+                        lambda_scope.capture_mutable.insert(cap_name.clone());
+                    }
                 }
                 for param in &params {
                     let struct_name = self.struct_name_from_type_annotation(&param.type_annotation);
@@ -1310,7 +1597,7 @@ impl<'a> Resolver<'a> {
 
                 Ok(ResolvedExpr::Closure {
                     func_index,
-                    captures: capture_slots,
+                    captures: capture_infos,
                 })
             }
 
@@ -1391,6 +1678,9 @@ impl<'a> Resolver<'a> {
                     || self.body_calls_function(catch_block, target_index)
             }
             ResolvedStatement::Expr { expr } => self.expr_calls_function(expr, target_index),
+            ResolvedStatement::RefCellStore { value, .. } => {
+                self.expr_calls_function(value, target_index)
+            }
         }
     }
 
@@ -1447,6 +1737,10 @@ impl<'a> Resolver<'a> {
                 self.body_calls_function(statements, target_index)
                     || self.expr_calls_function(expr, target_index)
             }
+            ResolvedExpr::CaptureStore { value, .. } => {
+                self.expr_calls_function(value, target_index)
+            }
+            ResolvedExpr::RefCellNew { value } => self.expr_calls_function(value, target_index),
             _ => false,
         }
     }
@@ -1478,6 +1772,11 @@ struct Scope {
     /// For closure_ref-based capture: maps capture variable name → heap offset.
     /// When set, captured variables resolve to CaptureLoad instead of Local.
     capture_heap_offsets: HashMap<String, usize>,
+    /// For closure_ref-based capture: tracks which captured variables are mutable (var).
+    capture_mutable: HashSet<String>,
+    /// Set of var variable names that are captured by a closure and promoted to RefCell.
+    /// Populated by the first pass (find_captured_mutable_vars) before resolution.
+    promoted_vars: HashSet<String>,
 }
 
 impl Scope {
@@ -1489,6 +1788,8 @@ impl Scope {
             outer_vars: HashMap::new(),
             captured_vars: Vec::new(),
             capture_heap_offsets: HashMap::new(),
+            capture_mutable: HashSet::new(),
+            promoted_vars: HashSet::new(),
         }
     }
 
@@ -1500,6 +1801,8 @@ impl Scope {
             outer_vars,
             captured_vars: Vec::new(),
             capture_heap_offsets: HashMap::new(),
+            capture_mutable: HashSet::new(),
+            promoted_vars: HashSet::new(),
         }
     }
 

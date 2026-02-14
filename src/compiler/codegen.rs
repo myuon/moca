@@ -153,6 +153,9 @@ impl Codegen {
             ResolvedExpr::Closure { .. } => ValueType::Ref,
             ResolvedExpr::CallIndirect { .. } => ValueType::I64, // Default; dynamic
             ResolvedExpr::CaptureLoad { .. } => ValueType::I64,  // Default; dynamic
+            ResolvedExpr::CaptureStore { .. } => ValueType::Ref, // HeapStore result
+            ResolvedExpr::RefCellNew { .. } => ValueType::Ref,   // Returns a Ref
+            ResolvedExpr::RefCellLoad { .. } => ValueType::I64,  // Default; dynamic
         }
     }
 
@@ -661,6 +664,13 @@ impl Codegen {
             ResolvedStatement::Expr { expr } => {
                 self.compile_expr(expr, ops)?;
                 ops.push(Op::Drop); // Discard result
+            }
+            ResolvedStatement::RefCellStore { slot, value } => {
+                // Store to a promoted var variable through its RefCell (outer scope)
+                // LocalGet(slot) gives the RefCell ref, then store value into RefCell[0]
+                ops.push(Op::LocalGet(*slot + self.local_offset));
+                self.compile_expr(value, ops)?;
+                ops.push(Op::HeapStore(0));
             }
         }
 
@@ -1175,10 +1185,13 @@ impl Codegen {
                 captures,
             } => {
                 // Build closure heap object using generic heap instructions:
-                // slots[0] = func_index, slots[1..] = captured values
+                // slots[0] = func_index, slots[1..] = captured values or RefCell refs
                 ops.push(Op::I64Const(*func_index as i64));
-                for &slot in captures {
-                    ops.push(Op::LocalGet(slot + self.local_offset));
+                for cap in captures {
+                    // For both let and var: LocalGet pushes the value.
+                    // For var (mutable): the local already holds a RefCell reference,
+                    // so we share it by copying the reference.
+                    ops.push(Op::LocalGet(cap.outer_slot + self.local_offset));
                 }
                 // HeapAlloc pops (1 + n_captures) values from stack in push order
                 ops.push(Op::HeapAlloc(1 + captures.len()));
@@ -1193,10 +1206,34 @@ impl Codegen {
                 // CallIndirect pops argc args + callable ref, calls the function
                 ops.push(Op::CallIndirect(args.len()));
             }
-            ResolvedExpr::CaptureLoad { offset } => {
+            ResolvedExpr::CaptureLoad { offset, is_ref } => {
                 // Load a captured variable from the closure reference (slot 0)
                 ops.push(Op::LocalGet(self.local_offset));
                 ops.push(Op::HeapLoad(*offset));
+                if *is_ref {
+                    // Dereference the RefCell to get the actual value
+                    ops.push(Op::HeapLoad(0));
+                }
+            }
+            ResolvedExpr::CaptureStore { offset, value } => {
+                // Store to a captured var variable through its RefCell
+                // closure_ref -> HeapLoad(offset) -> RefCell; then store value into RefCell[0]
+                ops.push(Op::LocalGet(self.local_offset));
+                ops.push(Op::HeapLoad(*offset));
+                self.compile_expr(value, ops)?;
+                ops.push(Op::HeapStore(0));
+                // Push nil so this works as an expression (Stmt::Expr will Drop it)
+                ops.push(Op::RefNull);
+            }
+            ResolvedExpr::RefCellNew { value } => {
+                // Create a 1-slot heap object (RefCell) wrapping the value
+                self.compile_expr(value, ops)?;
+                ops.push(Op::HeapAlloc(1));
+            }
+            ResolvedExpr::RefCellLoad { slot } => {
+                // Load value from RefCell: LocalGet(slot) gives the RefCell ref, HeapLoad(0) reads the value
+                ops.push(Op::LocalGet(*slot + self.local_offset));
+                ops.push(Op::HeapLoad(0));
             }
         }
 
