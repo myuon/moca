@@ -244,6 +244,7 @@ fn lint_expr(expr: &Expr, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Dia
         }
         Expr::Lambda { body, .. } => {
             lint_block(body, rules, diagnostics);
+            check_unused_variables_in_stmts(&body.statements, diagnostics);
         }
         Expr::CallExpr { callee, args, .. } => {
             lint_expr(callee, rules, diagnostics);
