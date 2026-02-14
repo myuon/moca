@@ -1036,6 +1036,32 @@ impl TypeChecker {
                 Type::Nil
             }
 
+            Statement::ForRange {
+                var,
+                start,
+                end,
+                body,
+                span,
+                ..
+            } => {
+                let start_type = self.infer_expr(start, env);
+                let end_type = self.infer_expr(end, env);
+
+                // Both start and end must be int
+                if let Err(e) = self.unify(&start_type, &Type::Int, *span) {
+                    self.errors.push(e);
+                }
+                if let Err(e) = self.unify(&end_type, &Type::Int, *span) {
+                    self.errors.push(e);
+                }
+
+                env.enter_scope();
+                env.bind(var.clone(), Type::Int);
+                self.infer_block(body, env);
+                env.exit_scope();
+                Type::Nil
+            }
+
             Statement::Return { value, span: _ } => {
                 if let Some(expr) = value {
                     self.infer_expr(expr, env)

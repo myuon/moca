@@ -144,6 +144,14 @@ while y < 10 {
 for item in arr {
     print(item);
 }
+
+// for-in range loop (counter-based, no array allocation)
+for i in 0..5 {       // exclusive: 0, 1, 2, 3, 4
+    print(i);
+}
+for i in 0..=3 {      // inclusive: 0, 1, 2, 3
+    print(i);
+}
 ```
 
 ### Literals
@@ -245,6 +253,7 @@ let value = rx.recv();
 | Literals | Integer (`0`, `42`, `-1`), Float (`3.14`), Bool (`true`, `false`), String (`"hello"`) |
 | Identifiers | `[a-zA-Z_][a-zA-Z0-9_]*` |
 | Operators | `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `\|\|`, `!` |
+| Range | `..`, `..=` |
 | Delimiters | `(`, `)`, `{`, `}`, `[`, `]`, `,`, `;`, `=`, `.`, `:` |
 | Comments | `//` to end of line |
 
@@ -287,7 +296,8 @@ assign_stmt = IDENT "=" expr ";"
             | IDENT "." IDENT "=" expr ";" ;
 if_stmt     = "if" expr block [ "else" block ] ;
 while_stmt  = "while" expr block ;
-for_stmt    = "for" IDENT "in" expr block ;
+for_stmt    = "for" IDENT "in" expr block
+            | "for" IDENT "in" expr ( ".." | "..=" ) expr block ;
 return_stmt = "return" [ expr ] ";" ;
 try_stmt    = "try" block "catch" IDENT block ;
 throw_stmt  = "throw" expr ";" ;

@@ -51,6 +51,8 @@ pub enum TokenKind {
     Arrow,    // ->
     Question, // ?
     At,       // @
+    DotDot,   // ..
+    DotDotEq, // ..=
 
     // Delimiters
     LParen,
@@ -172,7 +174,15 @@ impl<'a> Lexer<'a> {
                 }
                 '.' => {
                     self.advance();
-                    TokenKind::Dot
+                    if self.match_char('.') {
+                        if self.match_char('=') {
+                            TokenKind::DotDotEq
+                        } else {
+                            TokenKind::DotDot
+                        }
+                    } else {
+                        TokenKind::Dot
+                    }
                 }
                 '+' => {
                     self.advance();

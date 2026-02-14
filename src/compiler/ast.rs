@@ -141,6 +141,15 @@ pub enum Statement {
         body: Block,
         span: Span,
     },
+    /// Range-based for loop: `for i in start..end { body }` or `for i in start..=end { body }`
+    ForRange {
+        var: String,
+        start: Expr,
+        end: Expr,
+        inclusive: bool,
+        body: Block,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
         span: Span,

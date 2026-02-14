@@ -251,6 +251,28 @@ impl<'a> AstPrinter<'a> {
                 self.print_block_contents(body, &body_child);
             }
 
+            Statement::ForRange {
+                var,
+                start,
+                end,
+                inclusive,
+                body,
+                ..
+            } => {
+                let op = if *inclusive { "..=" } else { ".." };
+                self.write_prefixed(prefix, &format!("ForRange: {}{}", var, op));
+                self.newline();
+                self.write_indent_with(parent_prefix);
+                self.print_expr(start, "├── start: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(end, "├── end: ", false, parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.write("└── body:");
+                self.newline();
+                let body_child = format!("{}    ", parent_prefix);
+                self.print_block_contents(body, &body_child);
+            }
+
             Statement::Return { value, .. } => {
                 self.write_prefixed(prefix, "Return");
                 self.newline();
@@ -992,6 +1014,28 @@ impl ResolvedProgramPrinter {
                 self.newline();
                 let catch_child = format!("{}    ", parent_prefix);
                 self.print_block(catch_block, &catch_child);
+            }
+
+            ResolvedStatement::ForRange {
+                slot,
+                start,
+                end,
+                inclusive,
+                body,
+            } => {
+                let op = if *inclusive { "..=" } else { ".." };
+                self.write(&format!("{}ForRange slot:{} {}", prefix, slot, op));
+                self.newline();
+                let start_child = format!("{}│   ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(start, "├── start: ", &start_child);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(end, "├── end: ", &start_child);
+                self.write_indent_with(parent_prefix);
+                self.write("└── body:");
+                self.newline();
+                let body_child = format!("{}    ", parent_prefix);
+                self.print_block(body, &body_child);
             }
 
             ResolvedStatement::Expr { expr } => {
