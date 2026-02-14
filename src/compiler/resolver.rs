@@ -698,27 +698,126 @@ impl<'a> Resolver<'a> {
     /// captured by any lambda within the block. These variables need to be
     /// promoted to RefCell for reference capture semantics.
     fn find_captured_mutable_vars(stmts: &[Statement]) -> HashSet<String> {
-        // Collect all var declarations in this block
-        let mut var_names: HashSet<String> = HashSet::new();
-        Self::collect_var_decls(stmts, &mut var_names);
+        // Collect all let declarations in this block
+        let mut let_names: HashSet<String> = HashSet::new();
+        Self::collect_let_decls(stmts, &mut let_names);
 
-        // Find which of these vars are captured by lambdas
+        // Collect which variables are reassigned anywhere
+        let mut reassigned: HashSet<String> = HashSet::new();
+        Self::collect_reassigned_vars(stmts, &mut reassigned);
+
+        // Only consider variables that are both declared and reassigned
+        let candidates: HashSet<String> = let_names.intersection(&reassigned).cloned().collect();
+
+        // Find which of these are captured by lambdas
         let mut captured = HashSet::new();
-        Self::scan_lambdas_for_captures(stmts, &var_names, &mut captured);
+        Self::scan_lambdas_for_captures(stmts, &candidates, &mut captured);
         captured
     }
 
-    /// Collect names of var (mutable) declarations at the current block level.
-    fn collect_var_decls(stmts: &[Statement], var_names: &mut HashSet<String>) {
+    /// Collect names of let declarations at the current block level.
+    fn collect_let_decls(stmts: &[Statement], let_names: &mut HashSet<String>) {
         for stmt in stmts {
-            if let Statement::Let {
-                name,
-                mutable: true,
-                ..
-            } = stmt
-            {
-                var_names.insert(name.clone());
+            if let Statement::Let { name, .. } = stmt {
+                let_names.insert(name.clone());
             }
+        }
+    }
+
+    /// Collect names of variables that are reassigned (appear on LHS of assignment).
+    fn collect_reassigned_vars(stmts: &[Statement], reassigned: &mut HashSet<String>) {
+        for stmt in stmts {
+            Self::collect_reassigned_vars_stmt(stmt, reassigned);
+        }
+    }
+
+    fn collect_reassigned_vars_stmt(stmt: &Statement, reassigned: &mut HashSet<String>) {
+        match stmt {
+            Statement::Assign { name, .. } => {
+                reassigned.insert(name.clone());
+            }
+            Statement::Let { init, .. } => {
+                Self::collect_reassigned_vars_expr(init, reassigned);
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                Self::collect_reassigned_vars_expr(condition, reassigned);
+                Self::collect_reassigned_vars(&then_block.statements, reassigned);
+                if let Some(else_b) = else_block {
+                    Self::collect_reassigned_vars(&else_b.statements, reassigned);
+                }
+            }
+            Statement::While {
+                condition, body, ..
+            } => {
+                Self::collect_reassigned_vars_expr(condition, reassigned);
+                Self::collect_reassigned_vars(&body.statements, reassigned);
+            }
+            Statement::ForIn { body, .. } => {
+                Self::collect_reassigned_vars(&body.statements, reassigned);
+            }
+            Statement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                Self::collect_reassigned_vars(&try_block.statements, reassigned);
+                Self::collect_reassigned_vars(&catch_block.statements, reassigned);
+            }
+            Statement::Expr { expr, .. } => {
+                Self::collect_reassigned_vars_expr(expr, reassigned);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_reassigned_vars_expr(expr: &Expr, reassigned: &mut HashSet<String>) {
+        match expr {
+            Expr::Lambda { body, .. } => {
+                // Also scan inside lambda bodies for reassignments to outer vars
+                Self::collect_reassigned_vars(&body.statements, reassigned);
+            }
+            Expr::Binary { left, right, .. } => {
+                Self::collect_reassigned_vars_expr(left, reassigned);
+                Self::collect_reassigned_vars_expr(right, reassigned);
+            }
+            Expr::Unary { operand, .. } => {
+                Self::collect_reassigned_vars_expr(operand, reassigned);
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    Self::collect_reassigned_vars_expr(a, reassigned);
+                }
+            }
+            Expr::CallExpr { callee, args, .. } => {
+                Self::collect_reassigned_vars_expr(callee, reassigned);
+                for a in args {
+                    Self::collect_reassigned_vars_expr(a, reassigned);
+                }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::collect_reassigned_vars_expr(object, reassigned);
+                for a in args {
+                    Self::collect_reassigned_vars_expr(a, reassigned);
+                }
+            }
+            Expr::Array { elements, .. } => {
+                for e in elements {
+                    Self::collect_reassigned_vars_expr(e, reassigned);
+                }
+            }
+            Expr::Index { object, index, .. } => {
+                Self::collect_reassigned_vars_expr(object, reassigned);
+                Self::collect_reassigned_vars_expr(index, reassigned);
+            }
+            Expr::Field { object, .. } => {
+                Self::collect_reassigned_vars_expr(object, reassigned);
+            }
+            _ => {}
         }
     }
 
