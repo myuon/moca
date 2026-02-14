@@ -1109,11 +1109,14 @@ impl<'a> Resolver<'a> {
                 let value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::Throw { value })
             }
-            Statement::Const { name, .. } => {
+            Statement::Const { name, init, .. } => {
+                // Resolve the init expression (should be a literal)
+                let resolved_init = self.resolve_expr(init, scope)?;
                 // Register const name for reassignment checking
                 scope.const_names.insert(name.clone());
-                // Const is handled via inline expansion in a later pass;
-                // for now, just skip it (no slot allocation needed)
+                // Store the resolved literal for inline expansion
+                scope.const_values.insert(name, resolved_init);
+                // Const produces no runtime code (no slot allocation)
                 Ok(ResolvedStatement::Expr {
                     expr: ResolvedExpr::Nil,
                 })
@@ -1150,6 +1153,10 @@ impl<'a> Resolver<'a> {
             Expr::Str { value, .. } => Ok(ResolvedExpr::Str(value)),
             Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
             Expr::Ident { name, span, .. } => {
+                // Check if this is a const (inline expansion)
+                if let Some(value) = scope.const_values.get(&name) {
+                    return Ok(value.clone());
+                }
                 // Check if this is a captured variable (closure_ref-based)
                 if let Some(offset) = scope.lookup_capture(&name) {
                     let is_ref = scope.capture_mutable.contains(&name);
@@ -1787,6 +1794,8 @@ struct Scope {
     promoted_vars: HashSet<String>,
     /// Set of const variable names in the current scope (used to prevent reassignment).
     const_names: HashSet<String>,
+    /// Inline values for const variables (maps name → resolved literal expression).
+    const_values: HashMap<String, ResolvedExpr>,
 }
 
 impl Scope {
@@ -1801,6 +1810,7 @@ impl Scope {
             capture_mutable: HashSet::new(),
             promoted_vars: HashSet::new(),
             const_names: HashSet::new(),
+            const_values: HashMap::new(),
         }
     }
 
@@ -1815,6 +1825,7 @@ impl Scope {
             capture_mutable: HashSet::new(),
             promoted_vars: HashSet::new(),
             const_names: HashSet::new(),
+            const_values: HashMap::new(),
         }
     }
 
