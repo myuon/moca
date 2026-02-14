@@ -749,14 +749,12 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
     match stmt {
         Statement::Let {
             name,
-            mutable,
             type_annotation,
             init,
             span,
             inferred_type,
         } => Statement::Let {
             name: name.clone(),
-            mutable: *mutable,
             type_annotation: type_annotation
                 .as_ref()
                 .map(|ta| substitute_type_annotation(ta, type_map)),
@@ -1209,14 +1207,12 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
     match stmt {
         Statement::Let {
             name,
-            mutable,
             type_annotation,
             init,
             span,
             inferred_type,
         } => Statement::Let {
             name: name.clone(),
-            mutable: *mutable,
             type_annotation: type_annotation.clone(),
             init: rewrite_expr(init, instantiations),
             span: *span,

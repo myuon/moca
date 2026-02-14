@@ -358,7 +358,6 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Let {
             name,
-            mutable: false,
             type_annotation,
             init,
             span,
@@ -1634,9 +1633,8 @@ mod tests {
         let program = parse("let x = 42;").unwrap();
         assert_eq!(program.items.len(), 1);
         match &program.items[0] {
-            Item::Statement(Statement::Let { name, mutable, .. }) => {
+            Item::Statement(Statement::Let { name, .. }) => {
                 assert_eq!(name, "x");
-                assert!(!mutable);
             }
             _ => panic!("expected let statement"),
         }

@@ -99,7 +99,6 @@ pub struct Block {
 pub enum Statement {
     Let {
         name: String,
-        mutable: bool,
         type_annotation: Option<TypeAnnotation>,
         init: Expr,
         span: Span,
