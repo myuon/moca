@@ -202,6 +202,25 @@ impl SymbolTable {
                 self.definitions.entry(name.clone()).or_default().push(info);
                 self.collect_expr(init);
             }
+            Statement::ForRange {
+                var,
+                start,
+                end,
+                body,
+                span,
+                ..
+            } => {
+                let info = SymbolInfo {
+                    name: var.clone(),
+                    kind: SymbolKind::Variable,
+                    def_span: *span,
+                };
+                self.definitions.entry(var.clone()).or_default().push(info);
+
+                self.collect_expr(start);
+                self.collect_expr(end);
+                self.collect_block(body);
+            }
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }

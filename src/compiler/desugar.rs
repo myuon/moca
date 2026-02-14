@@ -245,6 +245,21 @@ impl Desugar {
                 body: self.desugar_block(body),
                 span,
             },
+            Statement::ForRange {
+                var,
+                start,
+                end,
+                inclusive,
+                body,
+                span,
+            } => Statement::ForRange {
+                var,
+                start: self.desugar_expr(start),
+                end: self.desugar_expr(end),
+                inclusive,
+                body: self.desugar_block(body),
+                span,
+            },
             Statement::Return { value, span } => Statement::Return {
                 value: value.map(|e| self.desugar_expr(e)),
                 span,

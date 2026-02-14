@@ -153,6 +153,13 @@ fn lint_statement(
             lint_expr(iterable, rules, diagnostics);
             lint_block(body, rules, diagnostics);
         }
+        Statement::ForRange {
+            start, end, body, ..
+        } => {
+            lint_expr(start, rules, diagnostics);
+            lint_expr(end, rules, diagnostics);
+            lint_block(body, rules, diagnostics);
+        }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
                 lint_expr(value, rules, diagnostics);
@@ -538,6 +545,15 @@ fn collect_declarations_stmt(
                 collect_declarations_stmt(s, declarations, order);
             }
         }
+        Statement::ForRange {
+            var, body, span, ..
+        } => {
+            declarations.insert(var.clone(), (*span, *order));
+            *order += 1;
+            for s in &body.statements {
+                collect_declarations_stmt(s, declarations, order);
+            }
+        }
         _ => {}
     }
 }
@@ -593,6 +609,15 @@ fn collect_usages_stmt(stmt: &Statement, used: &mut HashSet<String>) {
         }
         Statement::ForIn { iterable, body, .. } => {
             collect_usages_expr(iterable, used);
+            for s in &body.statements {
+                collect_usages_stmt(s, used);
+            }
+        }
+        Statement::ForRange {
+            start, end, body, ..
+        } => {
+            collect_usages_expr(start, used);
+            collect_usages_expr(end, used);
             for s in &body.statements {
                 collect_usages_stmt(s, used);
             }

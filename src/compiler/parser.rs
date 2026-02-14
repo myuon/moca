@@ -481,12 +481,40 @@ impl<'a> Parser<'a> {
 
         let var = self.expect_ident()?;
         self.expect(&TokenKind::In)?;
-        let iterable = self.expression()?;
-        let body = self.block()?;
+        let start_expr = self.expression()?;
 
+        // Check for range syntax: expr..expr or expr..=expr
+        if self.check(&TokenKind::DotDot) {
+            self.advance();
+            let end_expr = self.expression()?;
+            let body = self.block()?;
+            return Ok(Statement::ForRange {
+                var,
+                start: start_expr,
+                end: end_expr,
+                inclusive: false,
+                body,
+                span,
+            });
+        }
+        if self.check(&TokenKind::DotDotEq) {
+            self.advance();
+            let end_expr = self.expression()?;
+            let body = self.block()?;
+            return Ok(Statement::ForRange {
+                var,
+                start: start_expr,
+                end: end_expr,
+                inclusive: true,
+                body,
+                span,
+            });
+        }
+
+        let body = self.block()?;
         Ok(Statement::ForIn {
             var,
-            iterable,
+            iterable: start_expr,
             body,
             span,
         })

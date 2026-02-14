@@ -665,6 +665,65 @@ impl Codegen {
                 self.compile_expr(expr, ops)?;
                 ops.push(Op::Drop); // Discard result
             }
+            ResolvedStatement::ForRange {
+                slot,
+                start,
+                end,
+                inclusive,
+                body,
+            } => {
+                // For-range loop: for i in start..end { body }
+                // Desugars to:
+                //   let __end = end;        (slot + 1)
+                //   let i = start;          (slot)
+                //   while i < __end {       (or <= for inclusive)
+                //     body
+                //     i = i + 1;
+                //   }
+
+                let var_slot = *slot + self.local_offset;
+                let end_slot = slot + 1 + self.local_offset;
+
+                // Store end value
+                self.compile_expr(end, ops)?;
+                ops.push(Op::LocalSet(end_slot));
+
+                // Initialize loop var to start
+                self.compile_expr(start, ops)?;
+                ops.push(Op::LocalSet(var_slot));
+
+                let loop_start = ops.len();
+
+                // Check: i < end (or i <= end for inclusive)
+                ops.push(Op::LocalGet(var_slot));
+                ops.push(Op::LocalGet(end_slot));
+                if *inclusive {
+                    ops.push(Op::I64LeS);
+                } else {
+                    ops.push(Op::I64LtS);
+                }
+
+                let jump_to_end = ops.len();
+                ops.push(Op::BrIfFalse(0)); // Placeholder
+
+                // Body
+                for stmt in body {
+                    self.compile_statement(stmt, ops)?;
+                }
+
+                // i = i + 1
+                ops.push(Op::LocalGet(var_slot));
+                ops.push(Op::I64Const(1));
+                ops.push(Op::I64Add);
+                ops.push(Op::LocalSet(var_slot));
+
+                // Jump back to loop start
+                ops.push(Op::Jmp(loop_start));
+
+                // End of loop
+                let loop_end = ops.len();
+                ops[jump_to_end] = Op::BrIfFalse(loop_end);
+            }
             ResolvedStatement::RefCellStore { slot, value } => {
                 // Store to a promoted var variable through its RefCell (outer scope)
                 // LocalGet(slot) gives the RefCell ref, then store value into RefCell[0]
