@@ -139,17 +139,15 @@ impl<'a> AstPrinter<'a> {
         match stmt {
             Statement::Let {
                 name,
-                mutable,
                 type_annotation,
                 init,
                 ..
             } => {
-                let mut_str = if *mutable { "mut " } else { "" };
                 let type_str = type_annotation
                     .as_ref()
                     .map(|t| format!(": {}", t))
                     .unwrap_or_default();
-                self.write_prefixed(prefix, &format!("Let: {}{}{}", mut_str, name, type_str));
+                self.write_prefixed(prefix, &format!("Let: {}{}", name, type_str));
                 self.newline();
                 self.write_indent_with(parent_prefix);
                 self.print_expr(init, "└── ", true, parent_prefix);

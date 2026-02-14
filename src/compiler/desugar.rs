@@ -148,14 +148,12 @@ impl Desugar {
         match stmt {
             Statement::Let {
                 name,
-                mutable,
                 type_annotation,
                 init,
                 span,
                 inferred_type,
             } => Statement::Let {
                 name,
-                mutable,
                 type_annotation,
                 init: self.desugar_expr(init),
                 span,
@@ -603,7 +601,6 @@ impl Desugar {
 
         statements.push(Statement::Let {
             name: var_name.clone(),
-            mutable: false,
             type_annotation: Some(type_annotation),
             init: init_expr,
             span,
@@ -699,7 +696,6 @@ impl Desugar {
 
         statements.push(Statement::Let {
             name: var_name.clone(),
-            mutable: false,
             type_annotation: Some(type_annotation),
             init: init_expr,
             span,
