@@ -311,6 +311,8 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) -> Result<Statement, String> {
         if self.check(&TokenKind::Let) {
             self.let_stmt()
+        } else if self.check(&TokenKind::Const) {
+            self.const_stmt()
         } else if self.check(&TokenKind::Var) {
             self.var_stmt()
         } else if self.check(&TokenKind::If) {
@@ -385,6 +387,30 @@ impl<'a> Parser<'a> {
             span,
             inferred_type: None,
         })
+    }
+
+    fn const_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Const)?;
+
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let init = self.expression()?;
+
+        // Validate that init is a literal
+        match &init {
+            Expr::Int { .. } | Expr::Float { .. } | Expr::Str { .. } | Expr::Bool { .. } => {}
+            _ => {
+                return Err(format!(
+                    "error: const initializer must be a literal\n  --> {}:{}:{}",
+                    self.filename, span.line, span.column
+                ));
+            }
+        }
+
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(Statement::Const { name, init, span })
     }
 
     fn assign_stmt(&mut self) -> Result<Statement, String> {

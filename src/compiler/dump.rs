@@ -295,6 +295,13 @@ impl<'a> AstPrinter<'a> {
                 self.write_indent_with(parent_prefix);
                 self.print_expr(expr, "└── ", true, parent_prefix);
             }
+
+            Statement::Const { name, init, .. } => {
+                self.write_prefixed(prefix, &format!("Const: {}", name));
+                self.newline();
+                self.write_indent_with(parent_prefix);
+                self.print_expr(init, "└── ", true, parent_prefix);
+            }
         }
     }
 

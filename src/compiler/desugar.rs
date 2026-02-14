@@ -270,6 +270,7 @@ impl Desugar {
                 expr: self.desugar_expr(expr),
                 span,
             },
+            Statement::Const { name, init, span } => Statement::Const { name, init, span },
         }
     }
 

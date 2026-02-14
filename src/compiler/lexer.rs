@@ -22,7 +22,8 @@ pub enum TokenKind {
     Impl,
     Asm,
     Type,
-    New, // new literal keyword
+    New,   // new literal keyword
+    Const, // const keyword
 
     // Literals
     Int(i64),
@@ -496,6 +497,7 @@ impl<'a> Lexer<'a> {
             "asm" => TokenKind::Asm,
             "type" => TokenKind::Type,
             "new" => TokenKind::New,
+            "const" => TokenKind::Const,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }

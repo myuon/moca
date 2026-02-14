@@ -800,6 +800,7 @@ impl<'a> Resolver<'a> {
             Statement::Expr { expr, .. } => {
                 Self::scan_expr_for_lambdas(expr, var_names, captured);
             }
+            Statement::Const { .. } => {}
         }
     }
 
@@ -1109,6 +1110,13 @@ impl<'a> Resolver<'a> {
             Statement::Throw { value, .. } => {
                 let value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::Throw { value })
+            }
+            Statement::Const { .. } => {
+                // Const is handled via inline expansion in a later pass;
+                // for now, just skip it (no slot allocation needed)
+                Ok(ResolvedStatement::Expr {
+                    expr: ResolvedExpr::Nil,
+                })
             }
             Statement::Try {
                 try_block,
@@ -1977,6 +1985,9 @@ fn collect_free_vars_statement(
             for s in &catch_block.statements {
                 collect_free_vars_statement(s, bound, free);
             }
+        }
+        Statement::Const { .. } => {
+            // Const values are inlined; they don't create free variables
         }
         Statement::Expr { expr, .. } => {
             collect_free_vars_expr(expr, bound, free);

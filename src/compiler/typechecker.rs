@@ -1044,6 +1044,8 @@ impl TypeChecker {
                 }
             }
 
+            Statement::Const { init, .. } => self.infer_expr(init, env),
+
             Statement::Expr { expr, .. } => self.infer_expr(expr, env),
 
             Statement::IndexAssign {

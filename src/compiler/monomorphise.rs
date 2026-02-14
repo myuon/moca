@@ -234,6 +234,7 @@ impl InstantiationCollector {
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }
+            Statement::Const { .. } => {}
         }
     }
 
@@ -846,6 +847,11 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
             expr: substitute_expr(expr, type_map),
             span: *span,
         },
+        Statement::Const { name, init, span } => Statement::Const {
+            name: name.clone(),
+            init: init.clone(),
+            span: *span,
+        },
     }
 }
 
@@ -1299,6 +1305,11 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
         },
         Statement::Expr { expr, span } => Statement::Expr {
             expr: rewrite_expr(expr, instantiations),
+            span: *span,
+        },
+        Statement::Const { name, init, span } => Statement::Const {
+            name: name.clone(),
+            init: init.clone(),
             span: *span,
         },
     }

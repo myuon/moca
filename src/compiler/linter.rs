@@ -162,6 +162,7 @@ fn lint_statement(
         Statement::Expr { expr, .. } => {
             lint_expr(expr, rules, diagnostics);
         }
+        Statement::Const { .. } => {}
     }
 }
 
