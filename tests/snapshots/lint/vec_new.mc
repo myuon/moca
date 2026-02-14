@@ -1,1 +1,1 @@
-let v = vec::`new`();
+let _v = vec::`new`();
