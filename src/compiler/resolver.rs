@@ -917,7 +917,6 @@ impl<'a> Resolver<'a> {
         match stmt {
             Statement::Let {
                 name,
-                mutable,
                 type_annotation,
                 init,
                 span: _,
@@ -953,9 +952,10 @@ impl<'a> Resolver<'a> {
                     }
                     _ => self.get_struct_name(&init),
                 };
-                let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
+                // All let variables are mutable (reassignable)
+                let slot = scope.declare_with_type(name.clone(), true, struct_name);
                 // If this var is promoted to RefCell, wrap the init value
-                if mutable && scope.promoted_vars.contains(&name) {
+                if scope.promoted_vars.contains(&name) {
                     Ok(ResolvedStatement::Let {
                         slot,
                         init: ResolvedExpr::RefCellNew {
@@ -967,6 +967,11 @@ impl<'a> Resolver<'a> {
                 }
             }
             Statement::Assign { name, value, span } => {
+                // Check if trying to reassign a const
+                if scope.const_names.contains(&name) {
+                    return Err(self.error(&format!("cannot assign to constant '{}'", name), span));
+                }
+
                 // Check if this is a captured variable in a closure scope
                 if let Some(offset) = scope.lookup_capture(&name)
                     && scope.capture_mutable.contains(&name)
@@ -980,16 +985,9 @@ impl<'a> Resolver<'a> {
                     });
                 }
 
-                let (slot, mutable) = scope
+                let (slot, _mutable) = scope
                     .lookup(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
-
-                if !mutable {
-                    return Err(self.error(
-                        &format!("cannot assign to immutable variable '{}'", name),
-                        span,
-                    ));
-                }
 
                 let value = self.resolve_expr(value, scope)?;
                 // If this var is promoted to RefCell, use RefCellStore
@@ -1111,7 +1109,9 @@ impl<'a> Resolver<'a> {
                 let value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::Throw { value })
             }
-            Statement::Const { .. } => {
+            Statement::Const { name, .. } => {
+                // Register const name for reassignment checking
+                scope.const_names.insert(name.clone());
                 // Const is handled via inline expansion in a later pass;
                 // for now, just skip it (no slot allocation needed)
                 Ok(ResolvedStatement::Expr {
@@ -1785,6 +1785,8 @@ struct Scope {
     /// Set of var variable names that are captured by a closure and promoted to RefCell.
     /// Populated by the first pass (find_captured_mutable_vars) before resolution.
     promoted_vars: HashSet<String>,
+    /// Set of const variable names in the current scope (used to prevent reassignment).
+    const_names: HashSet<String>,
 }
 
 impl Scope {
@@ -1798,6 +1800,7 @@ impl Scope {
             capture_heap_offsets: HashMap::new(),
             capture_mutable: HashSet::new(),
             promoted_vars: HashSet::new(),
+            const_names: HashSet::new(),
         }
     }
 
@@ -1811,6 +1814,7 @@ impl Scope {
             capture_heap_offsets: HashMap::new(),
             capture_mutable: HashSet::new(),
             promoted_vars: HashSet::new(),
+            const_names: HashSet::new(),
         }
     }
 
@@ -2126,17 +2130,16 @@ mod tests {
     }
 
     #[test]
-    fn test_immutable_assignment() {
+    fn test_let_reassignment() {
         let result = resolve("let x = 1; x = 2;");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot assign to immutable"));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_mutable_assignment() {
-        let result = resolve("let x = 1; x = 2;");
-        // Currently let is immutable; this will change in a later task
+    fn test_const_reassignment_error() {
+        let result = resolve("const x = 1; x = 2;");
         assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot assign to constant"));
     }
 
     #[test]
