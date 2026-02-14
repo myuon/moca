@@ -670,6 +670,41 @@ impl<'a> AstPrinter<'a> {
                     );
                 }
             }
+
+            Expr::StringInterpolation { parts, .. } => {
+                self.write(&format!(
+                    "{}StringInterpolation[{} parts]",
+                    prefix,
+                    parts.len()
+                ));
+                self.write_type_suffix(expr);
+                self.newline();
+                for (i, part) in parts.iter().enumerate() {
+                    let part_is_last = i == parts.len() - 1;
+                    let part_prefix = if part_is_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
+                    match part {
+                        crate::compiler::ast::StringInterpPart::Literal(s) => {
+                            let escaped = s.replace('\n', "\\n").replace('\t', "\\t");
+                            self.write_indent_with(&child_prefix);
+                            self.write(&format!("{}Literal: \"{}\"", part_prefix, escaped));
+                            self.newline();
+                        }
+                        crate::compiler::ast::StringInterpPart::Expr(e) => {
+                            self.write_indent_with(&child_prefix);
+                            self.print_expr(
+                                e,
+                                &format!("{}Expr: ", part_prefix),
+                                part_is_last,
+                                &child_prefix,
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

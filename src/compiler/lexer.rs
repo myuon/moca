@@ -1,3 +1,12 @@
+/// A part of a string interpolation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringPart {
+    /// Literal text (no interpolation).
+    Literal(String),
+    /// Expression source text to be parsed.
+    Expr(String),
+}
+
 /// Token kinds for the moca language.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -29,6 +38,9 @@ pub enum TokenKind {
     Int(i64),
     Float(f64),
     Str(String),
+    /// String interpolation: a string with embedded expressions.
+    /// Parts alternate between literal text and expression source text.
+    StringInterpolation(Vec<StringPart>),
     Ident(String),
 
     // Operators
@@ -380,10 +392,40 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn scan_escape(&mut self) -> Result<char, String> {
+        self.advance(); // consume backslash
+        match self.peek() {
+            Some((_, 'n')) => {
+                self.advance();
+                Ok('\n')
+            }
+            Some((_, 't')) => {
+                self.advance();
+                Ok('\t')
+            }
+            Some((_, 'r')) => {
+                self.advance();
+                Ok('\r')
+            }
+            Some((_, '\\')) => {
+                self.advance();
+                Ok('\\')
+            }
+            Some((_, '"')) => {
+                self.advance();
+                Ok('"')
+            }
+            Some((_, ch)) => Err(self.error(&format!("invalid escape sequence '\\{}'", ch))),
+            None => Err(self.error("unterminated string")),
+        }
+    }
+
     fn scan_string(&mut self) -> Result<TokenKind, String> {
         self.advance(); // consume opening quote
 
-        let mut value = String::new();
+        let mut parts: Vec<StringPart> = Vec::new();
+        let mut current = String::new();
+        let mut has_interpolation = false;
 
         loop {
             match self.peek() {
@@ -393,32 +435,67 @@ impl<'a> Lexer<'a> {
                     break;
                 }
                 Some((_, '\\')) => {
+                    let ch = self.scan_escape()?;
+                    current.push(ch);
+                }
+                Some((_, '{')) => {
                     self.advance();
-                    match self.peek() {
-                        Some((_, 'n')) => {
-                            self.advance();
-                            value.push('\n');
+                    // Check for {{ escape
+                    if let Some((_, '{')) = self.peek() {
+                        self.advance();
+                        current.push('{');
+                    } else {
+                        // Start of interpolation
+                        has_interpolation = true;
+                        if !current.is_empty() {
+                            parts.push(StringPart::Literal(std::mem::take(&mut current)));
                         }
-                        Some((_, 't')) => {
-                            self.advance();
-                            value.push('\t');
+                        // Collect expression text until matching }
+                        let mut expr_text = String::new();
+                        let mut depth = 1;
+                        loop {
+                            match self.peek() {
+                                None => return Err(self.error("unterminated string interpolation")),
+                                Some((_, '}')) => {
+                                    self.advance();
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                    expr_text.push('}');
+                                }
+                                Some((_, '{')) => {
+                                    self.advance();
+                                    depth += 1;
+                                    expr_text.push('{');
+                                }
+                                Some((_, '\n')) => {
+                                    return Err(self.error(
+                                        "unterminated string interpolation (newline in expression)",
+                                    ));
+                                }
+                                Some((_, ch)) => {
+                                    self.advance();
+                                    expr_text.push(ch);
+                                }
+                            }
                         }
-                        Some((_, 'r')) => {
-                            self.advance();
-                            value.push('\r');
+                        if expr_text.is_empty() {
+                            return Err(self.error("empty interpolation expression"));
                         }
-                        Some((_, '\\')) => {
-                            self.advance();
-                            value.push('\\');
-                        }
-                        Some((_, '"')) => {
-                            self.advance();
-                            value.push('"');
-                        }
-                        Some((_, ch)) => {
-                            return Err(self.error(&format!("invalid escape sequence '\\{}'", ch)));
-                        }
-                        None => return Err(self.error("unterminated string")),
+                        parts.push(StringPart::Expr(expr_text));
+                    }
+                }
+                Some((_, '}')) => {
+                    self.advance();
+                    // Check for }} escape
+                    if let Some((_, '}')) = self.peek() {
+                        self.advance();
+                        current.push('}');
+                    } else {
+                        return Err(
+                            self.error("unmatched '}' in string (use '}}' for literal '}')")
+                        );
                     }
                 }
                 Some((_, '\n')) => {
@@ -426,12 +503,19 @@ impl<'a> Lexer<'a> {
                 }
                 Some((_, ch)) => {
                     self.advance();
-                    value.push(ch);
+                    current.push(ch);
                 }
             }
         }
 
-        Ok(TokenKind::Str(value))
+        if has_interpolation {
+            if !current.is_empty() {
+                parts.push(StringPart::Literal(current));
+            }
+            Ok(TokenKind::StringInterpolation(parts))
+        } else {
+            Ok(TokenKind::Str(current))
+        }
     }
 
     fn scan_escaped_identifier(&mut self) -> Result<TokenKind, String> {

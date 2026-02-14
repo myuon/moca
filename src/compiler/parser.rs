@@ -1,5 +1,5 @@
 use crate::compiler::ast::*;
-use crate::compiler::lexer::{Span, Token, TokenKind};
+use crate::compiler::lexer::{Lexer, Span, StringPart, Token, TokenKind};
 use crate::compiler::types::TypeAnnotation;
 
 /// Identifiers for asm block built-in functions.
@@ -1140,6 +1140,39 @@ impl<'a> Parser<'a> {
             self.advance();
             return Ok(Expr::Str {
                 value,
+                span,
+                inferred_type: None,
+            });
+        }
+
+        if let Some(TokenKind::StringInterpolation(parts)) = self.peek_kind() {
+            let parts = parts.clone();
+            self.advance();
+            let parsed_parts = parts
+                .into_iter()
+                .map(|part| match part {
+                    StringPart::Literal(s) => Ok(StringInterpPart::Literal(s)),
+                    StringPart::Expr(expr_src) => {
+                        let mut lexer = Lexer::new(self.filename, &expr_src);
+                        let tokens = lexer.scan_tokens().map_err(|e| {
+                            format!(
+                                "error in string interpolation at {}:{}:{}: {}",
+                                self.filename, span.line, span.column, e
+                            )
+                        })?;
+                        let mut parser = Parser::new(self.filename, tokens);
+                        let expr = parser.expression().map_err(|e| {
+                            format!(
+                                "error in string interpolation at {}:{}:{}: {}",
+                                self.filename, span.line, span.column, e
+                            )
+                        })?;
+                        Ok(StringInterpPart::Expr(Box::new(expr)))
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            return Ok(Expr::StringInterpolation {
+                parts: parsed_parts,
                 span,
                 inferred_type: None,
             });

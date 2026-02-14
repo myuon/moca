@@ -618,6 +618,56 @@ impl Desugar {
                 span,
                 inferred_type,
             },
+
+            // StringInterpolation - desugar to to_string(part1) + to_string(part2) + ...
+            Expr::StringInterpolation { parts, span, .. } => {
+                use crate::compiler::ast::StringInterpPart;
+                use crate::compiler::types::Type;
+
+                let exprs: Vec<Expr> = parts
+                    .into_iter()
+                    .map(|part| match part {
+                        StringInterpPart::Literal(s) => Expr::Str {
+                            value: s,
+                            span,
+                            inferred_type: Some(Type::String),
+                        },
+                        StringInterpPart::Expr(expr) => {
+                            let expr = self.desugar_expr(*expr);
+                            // If the expression is already a string, no need to wrap in to_string
+                            if expr.inferred_type() == Some(&Type::String) {
+                                expr
+                            } else {
+                                Expr::Call {
+                                    callee: "to_string".to_string(),
+                                    type_args: vec![],
+                                    args: vec![expr],
+                                    span,
+                                    inferred_type: Some(Type::String),
+                                }
+                            }
+                        }
+                    })
+                    .collect();
+
+                if exprs.is_empty() {
+                    return Expr::Str {
+                        value: String::new(),
+                        span,
+                        inferred_type: Some(Type::String),
+                    };
+                }
+
+                let mut result = exprs.into_iter();
+                let first = result.next().unwrap();
+                result.fold(first, |acc, expr| Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(acc),
+                    right: Box::new(expr),
+                    span,
+                    inferred_type: Some(Type::String),
+                })
+            }
         }
     }
 

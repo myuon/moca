@@ -170,6 +170,14 @@ let f = false;
 let s = "hello, world";
 let escaped = "line1\nline2";
 
+// String interpolation
+let name = "Alice";
+let age = 30;
+print("hello {name}");              // → hello Alice
+print("{name} is {age} years old"); // → Alice is 30 years old
+print("{1 + 2}");                   // → 3
+print("literal: {{not interpolated}}"); // → literal: {not interpolated}
+
 // Array literals
 let arr = [1, 2, 3];
 let first = arr[0];
@@ -250,7 +258,7 @@ let value = rx.recv();
 | Category | Tokens |
 |----------|--------|
 | Keywords | `let`, `const`, `fun`, `if`, `else`, `while`, `for`, `in`, `return`, `true`, `false`, `nil`, `try`, `catch`, `throw`, `spawn` |
-| Literals | Integer (`0`, `42`, `-1`), Float (`3.14`), Bool (`true`, `false`), String (`"hello"`) |
+| Literals | Integer (`0`, `42`, `-1`), Float (`3.14`), Bool (`true`, `false`), String (`"hello"`), String interpolation (`"hello {name}"`) |
 | Identifiers | `[a-zA-Z_][a-zA-Z0-9_]*` |
 | Operators | `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `\|\|`, `!` |
 | Range | `..`, `..=` |

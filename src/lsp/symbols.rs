@@ -316,6 +316,13 @@ impl SymbolTable {
                     self.collect_expr(arg);
                 }
             }
+            Expr::StringInterpolation { parts, .. } => {
+                for part in parts {
+                    if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
+                        self.collect_expr(e);
+                    }
+                }
+            }
             // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }
             | Expr::Float { .. }

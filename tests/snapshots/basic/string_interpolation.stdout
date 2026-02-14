@@ -1,0 +1,15 @@
+hello Alice
+Alice is 30 years old
+3
+bool=true, float=3.14
+literal: {not interpolated}
+1020
+hi world
+Alice
+11 is eleven
+a {b} Alice {c}
+length=3
+just a plain string
+line1
+line2
+tab	here

@@ -413,6 +413,13 @@ impl InstantiationCollector {
                     self.collect_expr(arg);
                 }
             }
+            Expr::StringInterpolation { parts, .. } => {
+                for part in parts {
+                    if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
+                        self.collect_expr(e);
+                    }
+                }
+            }
             // Literals and asm blocks don't contain generic calls
             Expr::Int { .. }
             | Expr::Float { .. }
@@ -1119,6 +1126,27 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::CallExpr {
             callee: Box::new(substitute_expr(callee, type_map)),
             args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
+        Expr::StringInterpolation {
+            parts,
+            span,
+            inferred_type,
+        } => Expr::StringInterpolation {
+            parts: parts
+                .iter()
+                .map(|part| match part {
+                    crate::compiler::ast::StringInterpPart::Literal(s) => {
+                        crate::compiler::ast::StringInterpPart::Literal(s.clone())
+                    }
+                    crate::compiler::ast::StringInterpPart::Expr(e) => {
+                        crate::compiler::ast::StringInterpPart::Expr(Box::new(substitute_expr(
+                            e, type_map,
+                        )))
+                    }
+                })
+                .collect(),
             span: *span,
             inferred_type: inferred_type.clone(),
         },
