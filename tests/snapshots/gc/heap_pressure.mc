@@ -3,7 +3,7 @@
 // With GC disabled and small heap limit, this should fail with heap limit exceeded
 
 fun create_garbage() {
-    var i = 0;
+    let i = 0;
     while i < 1000 {
         // Create arrays that become garbage after each iteration
         let arr = [i, i + 1, i + 2, i + 3, i + 4];

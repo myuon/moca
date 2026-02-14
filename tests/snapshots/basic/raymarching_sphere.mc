@@ -34,9 +34,9 @@ fun render() {
     let half_h = 12.0;
     let eps = 0.001;
 
-    var py = 0;
+    let py = 0;
     while py < height {
-        var px = 0;
+        let px = 0;
         while px < width {
             // Map pixel to ray direction
             let u = (_int_to_float(px) - half_w + 0.5) / half_w;
@@ -49,12 +49,12 @@ fun render() {
             let dz = (0.0 - focal) / rd_len;
 
             // Raymarching loop (inline SDF: sqrt(x^2+y^2+z^2) - radius)
-            var t = 0.0;
-            var hit_x = 0.0;
-            var hit_y = 0.0;
-            var hit_z = 0.0;
-            var hit = false;
-            var step = 0;
+            let t = 0.0;
+            let hit_x = 0.0;
+            let hit_y = 0.0;
+            let hit_z = 0.0;
+            let hit = false;
+            let step = 0;
             while step < 64 {
                 let rx = dx * t;
                 let ry = dy * t;
@@ -88,7 +88,7 @@ fun render() {
 
                 // Lambert shading
                 let dot_val = (nx / n_len) * lx + (ny / n_len) * ly + (nz / n_len) * lz;
-                var brightness = dot_val;
+                let brightness = dot_val;
                 if brightness < 0.0 {
                     brightness = 0.0;
                 }

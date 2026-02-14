@@ -30,7 +30,7 @@ print(clamp(15, 0, 10));
 // Return in while loop
 @inline
 fun find_first_ge(threshold: int) -> int {
-    var i = 0;
+    let i = 0;
     while i < 100 {
         if i >= threshold {
             return i;

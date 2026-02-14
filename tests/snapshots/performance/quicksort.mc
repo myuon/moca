@@ -3,7 +3,7 @@
 
 // JIT-compilable: pure integer arithmetic LCG
 fun _perf_lcg_next(seed: int) -> int {
-    var s = seed * 1103515245 + 12345;
+    let s = seed * 1103515245 + 12345;
     s = s % 2147483648;
     if s < 0 {
         s = 0 - s;
@@ -13,9 +13,9 @@ fun _perf_lcg_next(seed: int) -> int {
 
 fun quicksort_benchmark() {
     // Generate 1000 random integers using LCG
-    var v: Vec<int> = Vec<int> { ptr: 0, len: 0, cap: 0 };
-    var seed = 42;
-    var i = 0;
+    let v: Vec<int> = Vec<int> { ptr: 0, len: 0, cap: 0 };
+    let seed = 42;
+    let i = 0;
     while i < 1000 {
         seed = _perf_lcg_next(seed);
         v.push(seed % 10000);

@@ -24,13 +24,13 @@ fun count_chars() {
     };
 
     // Initialize letter counts (26 letters)
-    var counts: Vec<int> = new Vec<int> {
+    let counts: Vec<int> = new Vec<int> {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     };
 
     // Count letters (case-insensitive, skip non-letters)
-    var i = 0;
+    let i = 0;
     while i < len(text) {
         let ch = text[i];
         let idx = to_letter_index(ch);
@@ -41,11 +41,11 @@ fun count_chars() {
     }
 
     // Find and print top 10 by frequency
-    var rank = 0;
+    let rank = 0;
     while rank < 10 {
-        var max_idx = 0;
-        var max_val = counts[0];
-        var j = 1;
+        let max_idx = 0;
+        let max_val = counts[0];
+        let j = 1;
         while j < 26 {
             if counts[j] > max_val {
                 max_val = counts[j];

@@ -3,7 +3,7 @@
 fun mandelbrot_bench(max_iter: int) -> int {
     let width = 80;
     let height = 24;
-    var escape_count = 0;
+    let escape_count = 0;
 
     let x_min = -2.0;
     let x_max = 1.0;
@@ -13,15 +13,15 @@ fun mandelbrot_bench(max_iter: int) -> int {
     let x_step = (x_max - x_min) / 80.0;
     let y_step = (y_max - y_min) / 24.0;
 
-    var cy = y_min;
-    var py = 0;
+    let cy = y_min;
+    let py = 0;
     while py < height {
-        var cx = x_min;
-        var px = 0;
+        let cx = x_min;
+        let px = 0;
         while px < width {
-            var zr = 0.0;
-            var zi = 0.0;
-            var iter = 0;
+            let zr = 0.0;
+            let zi = 0.0;
+            let iter = 0;
 
             while iter < max_iter {
                 let zr2 = zr * zr;

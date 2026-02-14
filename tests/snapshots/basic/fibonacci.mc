@@ -5,7 +5,7 @@ fun fib(n) {
     return fib(n - 1) + fib(n - 2);
 }
 
-var i = 0;
+let i = 0;
 while i < 10 {
     print(fib(i));
     i = i + 1;

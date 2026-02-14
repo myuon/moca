@@ -15,7 +15,7 @@ if true {
 print(x);
 
 // Shadowing within while loop
-var i = 0;
+let i = 0;
 while i < 1 {
     let x = 50;
     print(x);

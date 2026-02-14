@@ -47,7 +47,7 @@ fun main() {
     print("--- Response ---");
 
     // Read response
-    var response = read(fd, 4096);
+    let response = read(fd, 4096);
     while len(response) > 0 {
         print_str(response);
         response = read(fd, 4096);

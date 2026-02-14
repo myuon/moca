@@ -28,7 +28,7 @@ let c1 = Counter { count: 10 };
 print(c1.get());
 
 // Test 2: Method that modifies self
-var c2 = Counter { count: 0 };
+let c2 = Counter { count: 0 };
 c2.increment();
 print(c2.get());
 
@@ -37,12 +37,12 @@ c2.increment();
 print(c2.get());
 
 // Test 3: Method with arguments
-var c3 = Counter { count: 5 };
+let c3 = Counter { count: 5 };
 c3.add(10);
 print(c3.get());
 
 // Test 4: Multiple method calls
-var c4 = Counter { count: 100 };
+let c4 = Counter { count: 100 };
 c4.add(50);
 c4.increment();
 print(c4.get());
@@ -68,7 +68,7 @@ impl Point {
 let p = Point { x: 3, y: 4 };
 print(p.sum());
 
-var p2 = Point { x: 0, y: 10 };
+let p2 = Point { x: 0, y: 10 };
 p2.set_x(5);
 print(p2.sum());
 

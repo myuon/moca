@@ -19,8 +19,8 @@ fun parse_content_length(response: string, header_end: int) -> int {
     }
 
     // Parse the number after "content-length:"
-    var value = 0;
-    var i = pattern_pos + len(pattern);
+    let value = 0;
+    let i = pattern_pos + len(pattern);
 
     // Skip whitespace
     while i < header_end {
@@ -83,7 +83,7 @@ if fd >= 0 {
         let written = write(fd, request, len(request));
 
         // Read response - first read enough to get headers
-        var response = read(fd, 1024);
+        let response = read(fd, 1024);
 
         // Find end of headers (\r\n\r\n)
         let header_end = str_index_of(response, "\r\n\r\n");

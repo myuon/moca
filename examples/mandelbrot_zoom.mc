@@ -85,15 +85,15 @@ fun mandelbrot(max_iter: int) {
     let x_step = (x_max - x_min) / 120.0;
     let y_step = (y_max - y_min) / 40.0;
 
-    var cy = y_min;
-    var py = 0;
+    let cy = y_min;
+    let py = 0;
     while py < height {
-        var cx = x_min;
-        var px = 0;
+        let cx = x_min;
+        let px = 0;
         while px < width {
-            var zr = 0.0;
-            var zi = 0.0;
-            var iter = 0;
+            let zr = 0.0;
+            let zi = 0.0;
+            let iter = 0;
 
             while iter < max_iter {
                 let zr2 = zr * zr;
@@ -110,7 +110,7 @@ fun mandelbrot(max_iter: int) {
                 }
             }
 
-            var char_idx = 0;
+            let char_idx = 0;
             if iter > max_iter {
                 let escaped_iter = iter - max_iter - 1;
                 char_idx = escaped_iter * num_chars / max_iter;

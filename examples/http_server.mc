@@ -4,7 +4,7 @@
 // Then access: curl http://localhost:8080/
 
 fun main() {
-    var port = 8080;
+    let port = 8080;
     if argc() >= 2 {
         port = parse_int(argv(1));
     }
@@ -41,7 +41,7 @@ fun main() {
     print("Press Ctrl+C to stop");
 
     // Accept and handle connections in a loop
-    var running = true;
+    let running = true;
     while running {
         print("Waiting for connection...");
 
