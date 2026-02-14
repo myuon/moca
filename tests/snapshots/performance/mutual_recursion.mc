@@ -13,8 +13,8 @@ fun is_odd(n: int) -> int {
     return is_even(n - 1);
 }
 
-var sum = 0;
-var i = 0;
+let sum = 0;
+let i = 0;
 while i < 20000 {
     sum = sum + is_even(i % 200);
     i = i + 1;

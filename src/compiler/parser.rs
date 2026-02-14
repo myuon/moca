@@ -311,8 +311,14 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) -> Result<Statement, String> {
         if self.check(&TokenKind::Let) {
             self.let_stmt()
+        } else if self.check(&TokenKind::Const) {
+            self.const_stmt()
         } else if self.check(&TokenKind::Var) {
-            self.var_stmt()
+            let span = self.current_span();
+            Err(format!(
+                "error: 'var' is no longer supported. Use 'let' instead.\n  --> {}:{}:{}",
+                self.filename, span.line, span.column
+            ))
         } else if self.check(&TokenKind::If) {
             self.if_stmt()
         } else if self.check(&TokenKind::While) {
@@ -360,31 +366,28 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn var_stmt(&mut self) -> Result<Statement, String> {
+    fn const_stmt(&mut self) -> Result<Statement, String> {
         let span = self.current_span();
-        self.expect(&TokenKind::Var)?;
+        self.expect(&TokenKind::Const)?;
 
         let name = self.expect_ident()?;
-
-        // Parse optional type annotation: : Type
-        let type_annotation = if self.match_token(&TokenKind::Colon) {
-            Some(self.parse_type_annotation()?)
-        } else {
-            None
-        };
-
         self.expect(&TokenKind::Eq)?;
         let init = self.expression()?;
+
+        // Validate that init is a literal
+        match &init {
+            Expr::Int { .. } | Expr::Float { .. } | Expr::Str { .. } | Expr::Bool { .. } => {}
+            _ => {
+                return Err(format!(
+                    "error: const initializer must be a literal\n  --> {}:{}:{}",
+                    self.filename, span.line, span.column
+                ));
+            }
+        }
+
         self.expect(&TokenKind::Semi)?;
 
-        Ok(Statement::Let {
-            name,
-            mutable: true,
-            type_annotation,
-            init,
-            span,
-            inferred_type: None,
-        })
+        Ok(Statement::Const { name, init, span })
     }
 
     fn assign_stmt(&mut self) -> Result<Statement, String> {
@@ -1640,15 +1643,14 @@ mod tests {
     }
 
     #[test]
-    fn test_var_statement() {
-        let program = parse("var x = 0;").unwrap();
-        match &program.items[0] {
-            Item::Statement(Statement::Let { name, mutable, .. }) => {
-                assert_eq!(name, "x");
-                assert!(mutable);
-            }
-            _ => panic!("expected var statement"),
-        }
+    fn test_var_statement_error() {
+        let result = parse("var x = 0;");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("'var' is no longer supported. Use 'let' instead.")
+        );
     }
 
     #[test]

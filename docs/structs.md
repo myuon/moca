@@ -72,7 +72,7 @@ impl Rectangle {
     }
 }
 
-var rect = Rectangle { width: 10, height: 5 };
+let rect = Rectangle { width: 10, height: 5 };
 let a = rect.area();  // 50
 rect.scale(2);        // rect is now { width: 20, height: 10 }
 ```

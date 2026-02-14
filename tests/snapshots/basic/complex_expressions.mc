@@ -17,7 +17,7 @@ print(choose(true, 10, 20));
 print(choose(false, 10, 20));
 
 // Compound assignment simulation
-var x = 5;
+let x = 5;
 x = x + 3;
 x = x * 2;
 print(x);

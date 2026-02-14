@@ -191,6 +191,17 @@ impl SymbolTable {
 
                 self.collect_block(catch_block);
             }
+            Statement::Const {
+                name, init, span, ..
+            } => {
+                let info = SymbolInfo {
+                    name: name.clone(),
+                    kind: SymbolKind::Variable,
+                    def_span: *span,
+                };
+                self.definitions.entry(name.clone()).or_default().push(info);
+                self.collect_expr(init);
+            }
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }

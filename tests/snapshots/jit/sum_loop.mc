@@ -1,6 +1,6 @@
 fun sum_to(n) {
-    var total = 0;
-    var i = 1;
+    let total = 0;
+    let i = 1;
     while i <= n {
         total = total + i;
         i = i + 1;

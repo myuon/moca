@@ -698,27 +698,126 @@ impl<'a> Resolver<'a> {
     /// captured by any lambda within the block. These variables need to be
     /// promoted to RefCell for reference capture semantics.
     fn find_captured_mutable_vars(stmts: &[Statement]) -> HashSet<String> {
-        // Collect all var declarations in this block
-        let mut var_names: HashSet<String> = HashSet::new();
-        Self::collect_var_decls(stmts, &mut var_names);
+        // Collect all let declarations in this block
+        let mut let_names: HashSet<String> = HashSet::new();
+        Self::collect_let_decls(stmts, &mut let_names);
 
-        // Find which of these vars are captured by lambdas
+        // Collect which variables are reassigned anywhere
+        let mut reassigned: HashSet<String> = HashSet::new();
+        Self::collect_reassigned_vars(stmts, &mut reassigned);
+
+        // Only consider variables that are both declared and reassigned
+        let candidates: HashSet<String> = let_names.intersection(&reassigned).cloned().collect();
+
+        // Find which of these are captured by lambdas
         let mut captured = HashSet::new();
-        Self::scan_lambdas_for_captures(stmts, &var_names, &mut captured);
+        Self::scan_lambdas_for_captures(stmts, &candidates, &mut captured);
         captured
     }
 
-    /// Collect names of var (mutable) declarations at the current block level.
-    fn collect_var_decls(stmts: &[Statement], var_names: &mut HashSet<String>) {
+    /// Collect names of let declarations at the current block level.
+    fn collect_let_decls(stmts: &[Statement], let_names: &mut HashSet<String>) {
         for stmt in stmts {
-            if let Statement::Let {
-                name,
-                mutable: true,
-                ..
-            } = stmt
-            {
-                var_names.insert(name.clone());
+            if let Statement::Let { name, .. } = stmt {
+                let_names.insert(name.clone());
             }
+        }
+    }
+
+    /// Collect names of variables that are reassigned (appear on LHS of assignment).
+    fn collect_reassigned_vars(stmts: &[Statement], reassigned: &mut HashSet<String>) {
+        for stmt in stmts {
+            Self::collect_reassigned_vars_stmt(stmt, reassigned);
+        }
+    }
+
+    fn collect_reassigned_vars_stmt(stmt: &Statement, reassigned: &mut HashSet<String>) {
+        match stmt {
+            Statement::Assign { name, .. } => {
+                reassigned.insert(name.clone());
+            }
+            Statement::Let { init, .. } => {
+                Self::collect_reassigned_vars_expr(init, reassigned);
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                Self::collect_reassigned_vars_expr(condition, reassigned);
+                Self::collect_reassigned_vars(&then_block.statements, reassigned);
+                if let Some(else_b) = else_block {
+                    Self::collect_reassigned_vars(&else_b.statements, reassigned);
+                }
+            }
+            Statement::While {
+                condition, body, ..
+            } => {
+                Self::collect_reassigned_vars_expr(condition, reassigned);
+                Self::collect_reassigned_vars(&body.statements, reassigned);
+            }
+            Statement::ForIn { body, .. } => {
+                Self::collect_reassigned_vars(&body.statements, reassigned);
+            }
+            Statement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                Self::collect_reassigned_vars(&try_block.statements, reassigned);
+                Self::collect_reassigned_vars(&catch_block.statements, reassigned);
+            }
+            Statement::Expr { expr, .. } => {
+                Self::collect_reassigned_vars_expr(expr, reassigned);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_reassigned_vars_expr(expr: &Expr, reassigned: &mut HashSet<String>) {
+        match expr {
+            Expr::Lambda { body, .. } => {
+                // Also scan inside lambda bodies for reassignments to outer vars
+                Self::collect_reassigned_vars(&body.statements, reassigned);
+            }
+            Expr::Binary { left, right, .. } => {
+                Self::collect_reassigned_vars_expr(left, reassigned);
+                Self::collect_reassigned_vars_expr(right, reassigned);
+            }
+            Expr::Unary { operand, .. } => {
+                Self::collect_reassigned_vars_expr(operand, reassigned);
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    Self::collect_reassigned_vars_expr(a, reassigned);
+                }
+            }
+            Expr::CallExpr { callee, args, .. } => {
+                Self::collect_reassigned_vars_expr(callee, reassigned);
+                for a in args {
+                    Self::collect_reassigned_vars_expr(a, reassigned);
+                }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::collect_reassigned_vars_expr(object, reassigned);
+                for a in args {
+                    Self::collect_reassigned_vars_expr(a, reassigned);
+                }
+            }
+            Expr::Array { elements, .. } => {
+                for e in elements {
+                    Self::collect_reassigned_vars_expr(e, reassigned);
+                }
+            }
+            Expr::Index { object, index, .. } => {
+                Self::collect_reassigned_vars_expr(object, reassigned);
+                Self::collect_reassigned_vars_expr(index, reassigned);
+            }
+            Expr::Field { object, .. } => {
+                Self::collect_reassigned_vars_expr(object, reassigned);
+            }
+            _ => {}
         }
     }
 
@@ -800,6 +899,7 @@ impl<'a> Resolver<'a> {
             Statement::Expr { expr, .. } => {
                 Self::scan_expr_for_lambdas(expr, var_names, captured);
             }
+            Statement::Const { .. } => {}
         }
     }
 
@@ -916,7 +1016,6 @@ impl<'a> Resolver<'a> {
         match stmt {
             Statement::Let {
                 name,
-                mutable,
                 type_annotation,
                 init,
                 span: _,
@@ -952,9 +1051,13 @@ impl<'a> Resolver<'a> {
                     }
                     _ => self.get_struct_name(&init),
                 };
-                let slot = scope.declare_with_type(name.clone(), mutable, struct_name);
+                // If this let shadows a const, remove the inline value
+                scope.const_values.remove(&name);
+                scope.const_names.remove(&name);
+                // All let variables are mutable (reassignable)
+                let slot = scope.declare_with_type(name.clone(), true, struct_name);
                 // If this var is promoted to RefCell, wrap the init value
-                if mutable && scope.promoted_vars.contains(&name) {
+                if scope.promoted_vars.contains(&name) {
                     Ok(ResolvedStatement::Let {
                         slot,
                         init: ResolvedExpr::RefCellNew {
@@ -966,6 +1069,11 @@ impl<'a> Resolver<'a> {
                 }
             }
             Statement::Assign { name, value, span } => {
+                // Check if trying to reassign a const
+                if scope.const_names.contains(&name) {
+                    return Err(self.error(&format!("cannot assign to constant '{}'", name), span));
+                }
+
                 // Check if this is a captured variable in a closure scope
                 if let Some(offset) = scope.lookup_capture(&name)
                     && scope.capture_mutable.contains(&name)
@@ -979,16 +1087,9 @@ impl<'a> Resolver<'a> {
                     });
                 }
 
-                let (slot, mutable) = scope
+                let (slot, _mutable) = scope
                     .lookup(&name)
                     .ok_or_else(|| self.error(&format!("undefined variable '{}'", name), span))?;
-
-                if !mutable {
-                    return Err(self.error(
-                        &format!("cannot assign to immutable variable '{}'", name),
-                        span,
-                    ));
-                }
 
                 let value = self.resolve_expr(value, scope)?;
                 // If this var is promoted to RefCell, use RefCellStore
@@ -1110,6 +1211,18 @@ impl<'a> Resolver<'a> {
                 let value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::Throw { value })
             }
+            Statement::Const { name, init, .. } => {
+                // Resolve the init expression (should be a literal)
+                let resolved_init = self.resolve_expr(init, scope)?;
+                // Register const name for reassignment checking
+                scope.const_names.insert(name.clone());
+                // Store the resolved literal for inline expansion
+                scope.const_values.insert(name, resolved_init);
+                // Const produces no runtime code (no slot allocation)
+                Ok(ResolvedStatement::Expr {
+                    expr: ResolvedExpr::Nil,
+                })
+            }
             Statement::Try {
                 try_block,
                 catch_var,
@@ -1142,6 +1255,10 @@ impl<'a> Resolver<'a> {
             Expr::Str { value, .. } => Ok(ResolvedExpr::Str(value)),
             Expr::Nil { .. } => Ok(ResolvedExpr::Nil),
             Expr::Ident { name, span, .. } => {
+                // Check if this is a const (inline expansion)
+                if let Some(value) = scope.const_values.get(&name) {
+                    return Ok(value.clone());
+                }
                 // Check if this is a captured variable (closure_ref-based)
                 if let Some(offset) = scope.lookup_capture(&name) {
                     let is_ref = scope.capture_mutable.contains(&name);
@@ -1777,6 +1894,10 @@ struct Scope {
     /// Set of var variable names that are captured by a closure and promoted to RefCell.
     /// Populated by the first pass (find_captured_mutable_vars) before resolution.
     promoted_vars: HashSet<String>,
+    /// Set of const variable names in the current scope (used to prevent reassignment).
+    const_names: HashSet<String>,
+    /// Inline values for const variables (maps name → resolved literal expression).
+    const_values: HashMap<String, ResolvedExpr>,
 }
 
 impl Scope {
@@ -1790,6 +1911,8 @@ impl Scope {
             capture_heap_offsets: HashMap::new(),
             capture_mutable: HashSet::new(),
             promoted_vars: HashSet::new(),
+            const_names: HashSet::new(),
+            const_values: HashMap::new(),
         }
     }
 
@@ -1803,6 +1926,8 @@ impl Scope {
             capture_heap_offsets: HashMap::new(),
             capture_mutable: HashSet::new(),
             promoted_vars: HashSet::new(),
+            const_names: HashSet::new(),
+            const_values: HashMap::new(),
         }
     }
 
@@ -1978,6 +2103,9 @@ fn collect_free_vars_statement(
                 collect_free_vars_statement(s, bound, free);
             }
         }
+        Statement::Const { .. } => {
+            // Const values are inlined; they don't create free variables
+        }
         Statement::Expr { expr, .. } => {
             collect_free_vars_expr(expr, bound, free);
         }
@@ -2115,16 +2243,16 @@ mod tests {
     }
 
     #[test]
-    fn test_immutable_assignment() {
+    fn test_let_reassignment() {
         let result = resolve("let x = 1; x = 2;");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot assign to immutable"));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_mutable_assignment() {
-        let result = resolve("var x = 1; x = 2;");
-        assert!(result.is_ok());
+    fn test_const_reassignment_error() {
+        let result = resolve("const x = 1; x = 2;");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot assign to constant"));
     }
 
     #[test]

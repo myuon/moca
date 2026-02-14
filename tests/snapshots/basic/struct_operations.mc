@@ -24,7 +24,7 @@ print(alice.name);
 print(alice.age);
 
 // Struct field mutation
-var mutable_point = Point { x: 0, y: 0 };
+let mutable_point = Point { x: 0, y: 0 };
 mutable_point.x = 5;
 mutable_point.y = 15;
 print(mutable_point.x);

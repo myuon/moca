@@ -3,7 +3,7 @@
 let m: map<any, any> = map::`new`();
 
 // Add 20 entries to trigger resize (load factor > 0.75 = 12 entries)
-var i = 0;
+let i = 0;
 while i < 20 {
     m.put(i, i * 10);
     i = i + 1;
@@ -12,7 +12,7 @@ while i < 20 {
 print(m.len());
 
 // Verify all entries are still accessible after resize
-var all_ok = true;
+let all_ok = true;
 i = 0;
 while i < 20 {
     let val = m.get(i);
@@ -27,7 +27,7 @@ if all_ok {
 }
 
 // Test contains for all keys
-var contains_ok = true;
+let contains_ok = true;
 i = 0;
 while i < 20 {
     if !m.contains(i) {

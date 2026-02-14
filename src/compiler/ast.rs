@@ -160,6 +160,13 @@ pub enum Statement {
         expr: Expr,
         span: Span,
     },
+    /// A const declaration: `const NAME = <literal>;`
+    /// Only literal values (int, float, string, bool) are allowed.
+    Const {
+        name: String,
+        init: Expr,
+        span: Span,
+    },
 }
 
 /// Expressions in the language.

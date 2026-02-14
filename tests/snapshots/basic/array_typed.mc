@@ -1,6 +1,6 @@
 // Test array operations with type annotations
 fun sum_array(arr: array<int>) -> int {
-    var total = 0;
+    let total = 0;
     for x in arr {
         total = total + x;
     }

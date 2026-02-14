@@ -1,7 +1,7 @@
 // Test basic random number generation with Rand struct
 
 // Test 1: Deterministic output with fixed seed
-var rng: Rand = Rand::`new`(42);
+let rng: Rand = Rand::`new`(42);
 print(rng.int(1, 100));
 print(rng.int(1, 100));
 print(rng.int(1, 100));
@@ -28,7 +28,7 @@ try {
 }
 
 // Test 6: Different seed produces different sequence
-var rng2: Rand = Rand::`new`(123);
+let rng2: Rand = Rand::`new`(123);
 print(rng2.int(1, 100));
 print(rng2.int(1, 100));
 

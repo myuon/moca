@@ -1,9 +1,9 @@
 // Benchmark: 3000x3000 nested loop
 fun nested_loop() {
-    var sum = 0;
-    var i = 0;
+    let sum = 0;
+    let i = 0;
     while i < 3000 {
-        var j = 0;
+        let j = 0;
         while j < 3000 {
             sum = sum + i * j;
             j = j + 1;

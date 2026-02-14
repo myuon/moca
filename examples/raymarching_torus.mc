@@ -51,9 +51,9 @@ fun render() {
     let light_y = ly * cos_x - lz * sin_x;
     let light_z = ly * sin_x + lz * cos_x;
 
-    var py = 0;
+    let py = 0;
     while py < height {
-        var px = 0;
+        let px = 0;
         while px < width {
             let u = (_int_to_float(px) - half_w + 0.5) / half_w;
             let v = (half_h - _int_to_float(py) - 0.5) / half_w * 2.0;
@@ -70,12 +70,12 @@ fun render() {
 
             // Raymarching with inlined torus SDF
             // Torus SDF: length(vec2(length(p.xz) - R, p.y)) - r
-            var t = 0.0;
-            var hit_x = 0.0;
-            var hit_y = 0.0;
-            var hit_z = 0.0;
-            var hit = false;
-            var step = 0;
+            let t = 0.0;
+            let hit_x = 0.0;
+            let hit_y = 0.0;
+            let hit_z = 0.0;
+            let hit = false;
+            let step = 0;
             while step < 80 {
                 let rx = cam_ox + rdx * t;
                 let ry = cam_oy + rdy * t;
@@ -116,7 +116,7 @@ fun render() {
                 let n_len = sqrt_f(nx * nx + ny * ny + nz * nz);
 
                 let dot_val = (nx / n_len) * light_x + (ny / n_len) * light_y + (nz / n_len) * light_z;
-                var brightness = dot_val;
+                let brightness = dot_val;
                 if brightness < 0.0 {
                     brightness = 0.0;
                 }

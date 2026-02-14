@@ -34,7 +34,7 @@ fun map_len(m: Map<string, int>) -> int {
     return m.len();
 }
 
-var m: Map<string, int> = map::`new`();
+let m: Map<string, int> = map::`new`();
 m["hello"] = 42;
 print(map_len(m));
 
@@ -43,6 +43,6 @@ fun rand_next(r: Rand) -> int {
     return r.next();
 }
 
-var rng: Rand = Rand::`new`(42);
+let rng: Rand = Rand::`new`(42);
 let val = rand_next(rng);
 print(val > 0);

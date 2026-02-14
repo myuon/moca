@@ -9,8 +9,8 @@ let x = 10;
 let add_x = fun(n: int) -> int { return n + x; };
 print(add_x(5));
 
-// 3. Reference capture: var variable is captured by reference (RefCell)
-var y = 100;
+// 3. Reference capture: let variable is captured by reference (RefCell)
+let y = 100;
 let get_y = fun() -> int { return y; };
 y = 200;
 print(get_y());

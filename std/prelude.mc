@@ -163,8 +163,8 @@ fun _days_in_month(y: int, m: int) -> int {
 // Uses civil_from_days algorithm for date calculation.
 fun time_format(epoch_secs: int) -> string {
     // Euclidean division for correct negative handling
-    var days = epoch_secs / 86400;
-    var day_secs = epoch_secs - days * 86400;
+    let days = epoch_secs / 86400;
+    let day_secs = epoch_secs - days * 86400;
     if day_secs < 0 {
         days = days - 1;
         day_secs = day_secs + 86400;
@@ -176,7 +176,7 @@ fun time_format(epoch_secs: int) -> string {
 
     // civil_from_days: convert days since 1970-01-01 to y/m/d
     let z = days + 719468;
-    var era = z / 146097;
+    let era = z / 146097;
     if z < 0 {
         era = (z - 146096) / 146097;
     }
@@ -186,11 +186,11 @@ fun time_format(epoch_secs: int) -> string {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
-    var m = mp + 3;
+    let m = mp + 3;
     if mp >= 10 {
         m = mp - 9;
     }
-    var y = y_base;
+    let y = y_base;
     if m <= 2 {
         y = y_base + 1;
     }
@@ -292,12 +292,12 @@ fun sqrt_f(x: float) -> float {
     if x <= 0.0 {
         return 0.0;
     }
-    var guess = x;
+    let guess = x;
     // Better initial guess: halve repeatedly until reasonable
     if x > 1.0 {
         guess = x / 2.0;
     }
-    var i = 0;
+    let i = 0;
     while i < 20 {
         guess = (guess + x / guess) / 2.0;
         i = i + 1;
@@ -327,7 +327,7 @@ fun sin_f(x: float) -> float {
     let two_pi = 6.28318530717958647692;
 
     // Range reduction to [-pi, pi]
-    var a = fmod_f(x, two_pi);
+    let a = fmod_f(x, two_pi);
     if a > pi {
         a = a - two_pi;
     }
@@ -336,9 +336,9 @@ fun sin_f(x: float) -> float {
     }
 
     // Taylor series: sin(a) = a - a^3/3! + a^5/5! - a^7/7! + ...
-    var term = a;
-    var sum = a;
-    var i = 1;
+    let term = a;
+    let sum = a;
+    let i = 1;
     while i < 12 {
         let n = _int_to_float(2 * i) * (_int_to_float(2 * i) + 1.0);
         term = 0.0 - term * a * a / n;
@@ -372,10 +372,10 @@ fun str_contains(haystack: string, needle: string) -> bool {
         return false;
     }
 
-    var i = 0;
+    let i = 0;
     while i <= haystack_len - needle_len {
-        var j = 0;
-        var found = true;
+        let j = 0;
+        let found = true;
         while j < needle_len {
             if haystack[i + j] != needle[j] {
                 found = false;
@@ -404,10 +404,10 @@ fun str_index_of(haystack: string, needle: string) -> int {
         return -1;
     }
 
-    var i = 0;
+    let i = 0;
     while i <= haystack_len - needle_len {
-        var j = 0;
-        var found = true;
+        let j = 0;
+        let found = true;
         while j < needle_len {
             if haystack[i + j] != needle[j] {
                 found = false;
@@ -490,7 +490,7 @@ impl<T> Vec<T> {
     fun push(self, value: T) {
         if self.len >= self.cap {
             // Need to grow
-            var new_cap = self.cap * 2;
+            let new_cap = self.cap * 2;
             if new_cap < 8 {
                 new_cap = 8;
             }
@@ -498,7 +498,7 @@ impl<T> Vec<T> {
 
             // Copy old data if ptr is not null
             if self.ptr != 0 {
-                var i = 0;
+                let i = 0;
                 while i < self.len {
                     let val = __heap_load(self.ptr, i);
                     __heap_store(new_data, i, val);
@@ -595,9 +595,9 @@ fun _map_hash_int(key: int) -> int {
 
 // Hash function for strings - DJB2 algorithm
 fun _map_hash_string(key: string) -> int {
-    var hash = 5381;
+    let hash = 5381;
     let n = len(key);
-    var i = 0;
+    let i = 0;
     while i < n {
         let c = key[i];
         // hash = hash * 33 + c
@@ -613,7 +613,7 @@ fun _map_hash_string(key: string) -> int {
 // Internal: Find entry by key in a bucket chain (int key)
 fun _map_find_entry_int(m: Map<any, any>, key: int) -> int {
     let bucket_idx = _map_hash_int(key) % m.hm_capacity;
-    var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+    let entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
 
     while entry_ptr != 0 {
         let entry_key = __heap_load(entry_ptr, 0);
@@ -628,7 +628,7 @@ fun _map_find_entry_int(m: Map<any, any>, key: int) -> int {
 // Internal: Find entry by key in a bucket chain (string key)
 fun _map_find_entry_string(m: Map<any, any>, key: string) -> int {
     let bucket_idx = _map_hash_string(key) % m.hm_capacity;
-    var entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+    let entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
 
     while entry_ptr != 0 {
         let entry_key = __heap_load(entry_ptr, 0);
@@ -648,7 +648,7 @@ fun _map_rehash_int(m: Map<any, any>) {
     let new_buckets = __alloc_heap(new_capacity);
 
     // Initialize new buckets to 0
-    var i = 0;
+    let i = 0;
     while i < new_capacity {
         __heap_store(new_buckets, i, 0);
         i = i + 1;
@@ -657,7 +657,7 @@ fun _map_rehash_int(m: Map<any, any>) {
     // Rehash all entries
     i = 0;
     while i < old_capacity {
-        var entry_ptr = __heap_load(old_buckets, i);
+        let entry_ptr = __heap_load(old_buckets, i);
         while entry_ptr != 0 {
             let key = __heap_load(entry_ptr, 0);
             let next_ptr = __heap_load(entry_ptr, 2);
@@ -687,7 +687,7 @@ fun _map_rehash_string(m: Map<any, any>) {
     let new_buckets = __alloc_heap(new_capacity);
 
     // Initialize new buckets to 0
-    var i = 0;
+    let i = 0;
     while i < new_capacity {
         __heap_store(new_buckets, i, 0);
         i = i + 1;
@@ -696,7 +696,7 @@ fun _map_rehash_string(m: Map<any, any>) {
     // Rehash all entries
     i = 0;
     while i < old_capacity {
-        var entry_ptr = __heap_load(old_buckets, i);
+        let entry_ptr = __heap_load(old_buckets, i);
         while entry_ptr != 0 {
             let key = __heap_load(entry_ptr, 0);
             let next_ptr = __heap_load(entry_ptr, 2);
@@ -722,7 +722,7 @@ fun _map_rehash_string(m: Map<any, any>) {
 fun _vec_push_internal(v: Vec<any>, value) {
     if v.len >= v.cap {
         // Need to grow
-        var new_cap = v.cap * 2;
+        let new_cap = v.cap * 2;
         if new_cap < 8 {
             new_cap = 8;
         }
@@ -730,7 +730,7 @@ fun _vec_push_internal(v: Vec<any>, value) {
 
         // Copy old data if ptr is not null
         if v.ptr != 0 {
-            var i = 0;
+            let i = 0;
             while i < v.len {
                 let val = __heap_load(v.ptr, i);
                 __heap_store(new_data, i, val);
@@ -755,7 +755,7 @@ impl<K, V> Map<K, V> {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
         // Initialize all buckets to 0 (empty)
-        var i = 0;
+        let i = 0;
         while i < capacity {
             __heap_store(buckets, i, 0);
             i = i + 1;
@@ -768,7 +768,7 @@ impl<K, V> Map<K, V> {
     fun uninit() -> Map<K, V> {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
-        var i = 0;
+        let i = 0;
         while i < capacity {
             __heap_store(buckets, i, 0);
             i = i + 1;
@@ -872,8 +872,8 @@ impl<K, V> Map<K, V> {
     // Returns true if the key was found and removed, false otherwise
     fun remove_int(self, key: int) -> bool {
         let bucket_idx = _map_hash_int(key) % self.hm_capacity;
-        var entry_ptr = __heap_load(self.hm_buckets, bucket_idx);
-        var prev_ptr = 0;
+        let entry_ptr = __heap_load(self.hm_buckets, bucket_idx);
+        let prev_ptr = 0;
 
         while entry_ptr != 0 {
             let entry_key = __heap_load(entry_ptr, 0);
@@ -900,8 +900,8 @@ impl<K, V> Map<K, V> {
     // Returns true if the key was found and removed, false otherwise
     fun remove_string(self, key: string) -> bool {
         let bucket_idx = _map_hash_string(key) % self.hm_capacity;
-        var entry_ptr = __heap_load(self.hm_buckets, bucket_idx);
-        var prev_ptr = 0;
+        let entry_ptr = __heap_load(self.hm_buckets, bucket_idx);
+        let prev_ptr = 0;
 
         while entry_ptr != 0 {
             let entry_key = __heap_load(entry_ptr, 0);
@@ -926,10 +926,10 @@ impl<K, V> Map<K, V> {
 
     // Get all keys from the map as a vector (works for any key type)
     fun keys(self) -> vec<any> {
-        var result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
-        var i = 0;
+        let result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
+        let i = 0;
         while i < self.hm_capacity {
-            var entry_ptr = __heap_load(self.hm_buckets, i);
+            let entry_ptr = __heap_load(self.hm_buckets, i);
             while entry_ptr != 0 {
                 let key = __heap_load(entry_ptr, 0);
                 _vec_push_internal(result, key);
@@ -942,10 +942,10 @@ impl<K, V> Map<K, V> {
 
     // Get all values from the map as a vector
     fun values(self) -> vec<any> {
-        var result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
-        var i = 0;
+        let result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
+        let i = 0;
         while i < self.hm_capacity {
-            var entry_ptr = __heap_load(self.hm_buckets, i);
+            let entry_ptr = __heap_load(self.hm_buckets, i);
             while entry_ptr != 0 {
                 let val = __heap_load(entry_ptr, 1);
                 _vec_push_internal(result, val);
@@ -1026,7 +1026,7 @@ impl map {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
         // Initialize all buckets to 0 (nil)
-        var i = 0;
+        let i = 0;
         while i < capacity {
             __heap_store(buckets, i, 0);
             i = i + 1;
@@ -1050,7 +1050,7 @@ fun _int_to_float(n: int) -> float {
 // LCG parameters: a = 1103515245, c = 12345, m = 2147483648 (2^31)
 //
 // Usage:
-//   var rng = Rand::new(42);
+//   let rng = Rand::new(42);
 //   print(rng.int(1, 100));
 //   print(rng.float());
 struct Rand {
@@ -1115,7 +1115,7 @@ fun _is_digit(c: int) -> bool {
 // Throws an error if the string cannot be parsed as an integer.
 fun std_parse_int(s: string) -> int {
     let n = len(s);
-    var i = 0;
+    let i = 0;
 
     // Skip leading whitespace
     while i < n && _is_whitespace(s[i]) {
@@ -1127,7 +1127,7 @@ fun std_parse_int(s: string) -> int {
     }
 
     // Check for negative sign
-    var negative = false;
+    let negative = false;
     if s[i] == 45 {
         negative = true;
         i = i + 1;
@@ -1138,7 +1138,7 @@ fun std_parse_int(s: string) -> int {
     }
 
     // Parse digits
-    var result = 0;
+    let result = 0;
     while i < n && _is_digit(s[i]) {
         let digit = s[i] - 48;
         result = result * 10 + digit;
@@ -1196,8 +1196,8 @@ fun _sort_int_impl(v: Vec<int>, low: int, high: int) {
 
     // Lomuto partition with pivot at v[high]
     let pivot = v[high];
-    var i = low;
-    var j = low;
+    let i = low;
+    let j = low;
     while j < high {
         if v[j] <= pivot {
             _sort_int_swap(v, i, j);
@@ -1253,8 +1253,8 @@ fun _sort_float_impl(v: Vec<float>, low: int, high: int) {
 
     // Lomuto partition with pivot at v[high]
     let pivot = v[high];
-    var i = low;
-    var j = low;
+    let i = low;
+    let j = low;
     while j < high {
         if v[j] <= pivot {
             _sort_float_swap(v, i, j);
