@@ -1,2 +1,2 @@
-let a = vec::`new`();
-let b = vec::`new`();
+let _a = vec::`new`();
+let _b = vec::`new`();

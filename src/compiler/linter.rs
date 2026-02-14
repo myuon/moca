@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::compiler::ast::{Block, Expr, FnDef, Item, Program, Statement};
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
@@ -31,6 +33,9 @@ pub fn lint_program(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
+    // Collect top-level statements for unused variable analysis
+    let mut top_level_stmts = Vec::new();
+
     for item in program.items.iter().skip(skip_items) {
         match item {
             Item::FnDef(fn_def) => {
@@ -50,10 +55,14 @@ pub fn lint_program(
             }
             Item::Statement(stmt) => {
                 lint_statement(stmt, rules, &mut diagnostics);
+                top_level_stmts.push(stmt.clone());
             }
             _ => {}
         }
     }
+
+    // Check unused variables in top-level statements
+    check_unused_variables_in_stmts(&top_level_stmts, &mut diagnostics);
 
     diagnostics
 }
@@ -83,6 +92,7 @@ fn is_stdlib_span(_span: &Span, _filename: &str) -> bool {
 
 fn lint_fn_def(fn_def: &FnDef, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Diagnostic>) {
     lint_block(&fn_def.body, rules, diagnostics);
+    check_unused_variables_in_stmts(&fn_def.body.statements, diagnostics);
 }
 
 fn lint_block(block: &Block, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Diagnostic>) {
@@ -434,5 +444,268 @@ impl LintRule for RedundantTypeAnnotation {
                 span: *span,
             });
         }
+    }
+}
+
+// ============================================================================
+// Unused Variable Detection
+// ============================================================================
+
+/// Check for unused variables in a list of statements.
+/// Collects all variable declarations and all identifier usages,
+/// then reports declarations that are never referenced.
+fn check_unused_variables_in_stmts(stmts: &[Statement], diagnostics: &mut Vec<Diagnostic>) {
+    // Map from variable name to (span, declaration_order) for reporting
+    let mut declarations: HashMap<String, (Span, usize)> = HashMap::new();
+    let mut used_names: HashSet<String> = HashSet::new();
+    let mut order = 0;
+
+    for stmt in stmts {
+        collect_declarations_stmt(stmt, &mut declarations, &mut order);
+        collect_usages_stmt(stmt, &mut used_names);
+    }
+
+    // Report unused declarations, sorted by declaration order
+    let mut unused: Vec<_> = declarations
+        .iter()
+        .filter(|(name, _)| !used_names.contains(name.as_str()) && !name.starts_with('_'))
+        .collect();
+    unused.sort_by_key(|(_, (_, ord))| *ord);
+
+    for (name, (span, _)) in unused {
+        diagnostics.push(Diagnostic {
+            rule: "unused-variable".to_string(),
+            message: format!("variable '{}' is declared but never used", name),
+            span: *span,
+        });
+    }
+}
+
+/// Collect variable declarations from a statement.
+fn collect_declarations_stmt(
+    stmt: &Statement,
+    declarations: &mut HashMap<String, (Span, usize)>,
+    order: &mut usize,
+) {
+    match stmt {
+        Statement::Let { name, span, .. } => {
+            declarations.insert(name.clone(), (*span, *order));
+            *order += 1;
+        }
+        Statement::ForIn {
+            var, body, span, ..
+        } => {
+            declarations.insert(var.clone(), (*span, *order));
+            *order += 1;
+            // Recurse into for body for nested declarations
+            for s in &body.statements {
+                collect_declarations_stmt(s, declarations, order);
+            }
+        }
+        Statement::Try {
+            try_block,
+            catch_var,
+            catch_block,
+            span,
+            ..
+        } => {
+            for s in &try_block.statements {
+                collect_declarations_stmt(s, declarations, order);
+            }
+            declarations.insert(catch_var.clone(), (*span, *order));
+            *order += 1;
+            for s in &catch_block.statements {
+                collect_declarations_stmt(s, declarations, order);
+            }
+        }
+        Statement::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            for s in &then_block.statements {
+                collect_declarations_stmt(s, declarations, order);
+            }
+            if let Some(else_block) = else_block {
+                for s in &else_block.statements {
+                    collect_declarations_stmt(s, declarations, order);
+                }
+            }
+        }
+        Statement::While { body, .. } => {
+            for s in &body.statements {
+                collect_declarations_stmt(s, declarations, order);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect all identifier usages (reads) from a statement.
+/// Note: `Statement::Assign { name, .. }` target name is NOT a usage (it's a write).
+fn collect_usages_stmt(stmt: &Statement, used: &mut HashSet<String>) {
+    match stmt {
+        Statement::Let { init, .. } => {
+            collect_usages_expr(init, used);
+        }
+        Statement::Assign { value, .. } => {
+            // The assigned-to name is NOT a read usage
+            collect_usages_expr(value, used);
+        }
+        Statement::IndexAssign {
+            object,
+            index,
+            value,
+            ..
+        } => {
+            collect_usages_expr(object, used);
+            collect_usages_expr(index, used);
+            collect_usages_expr(value, used);
+        }
+        Statement::FieldAssign { object, value, .. } => {
+            collect_usages_expr(object, used);
+            collect_usages_expr(value, used);
+        }
+        Statement::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_usages_expr(condition, used);
+            for s in &then_block.statements {
+                collect_usages_stmt(s, used);
+            }
+            if let Some(else_block) = else_block {
+                for s in &else_block.statements {
+                    collect_usages_stmt(s, used);
+                }
+            }
+        }
+        Statement::While {
+            condition, body, ..
+        } => {
+            collect_usages_expr(condition, used);
+            for s in &body.statements {
+                collect_usages_stmt(s, used);
+            }
+        }
+        Statement::ForIn { iterable, body, .. } => {
+            collect_usages_expr(iterable, used);
+            for s in &body.statements {
+                collect_usages_stmt(s, used);
+            }
+        }
+        Statement::Return { value, .. } => {
+            if let Some(value) = value {
+                collect_usages_expr(value, used);
+            }
+        }
+        Statement::Throw { value, .. } => {
+            collect_usages_expr(value, used);
+        }
+        Statement::Try {
+            try_block,
+            catch_block,
+            ..
+        } => {
+            for s in &try_block.statements {
+                collect_usages_stmt(s, used);
+            }
+            for s in &catch_block.statements {
+                collect_usages_stmt(s, used);
+            }
+        }
+        Statement::Expr { expr, .. } => {
+            collect_usages_expr(expr, used);
+        }
+        Statement::Const { .. } => {}
+    }
+}
+
+/// Collect all identifier usages (reads) from an expression.
+fn collect_usages_expr(expr: &Expr, used: &mut HashSet<String>) {
+    match expr {
+        Expr::Ident { name, .. } => {
+            used.insert(name.clone());
+        }
+        Expr::Array { elements, .. } => {
+            for el in elements {
+                collect_usages_expr(el, used);
+            }
+        }
+        Expr::Index { object, index, .. } => {
+            collect_usages_expr(object, used);
+            collect_usages_expr(index, used);
+        }
+        Expr::Field { object, .. } => {
+            collect_usages_expr(object, used);
+        }
+        Expr::Unary { operand, .. } => {
+            collect_usages_expr(operand, used);
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_usages_expr(left, used);
+            collect_usages_expr(right, used);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_usages_expr(arg, used);
+            }
+        }
+        Expr::StructLiteral { fields, .. } => {
+            for (_, field_expr) in fields {
+                collect_usages_expr(field_expr, used);
+            }
+        }
+        Expr::MethodCall { object, args, .. } => {
+            collect_usages_expr(object, used);
+            for arg in args {
+                collect_usages_expr(arg, used);
+            }
+        }
+        Expr::AssociatedFunctionCall { args, .. } => {
+            for arg in args {
+                collect_usages_expr(arg, used);
+            }
+        }
+        Expr::NewLiteral { elements, .. } => {
+            use crate::compiler::ast::NewLiteralElement;
+            for el in elements {
+                match el {
+                    NewLiteralElement::Value(e) => collect_usages_expr(e, used),
+                    NewLiteralElement::KeyValue { key, value } => {
+                        collect_usages_expr(key, used);
+                        collect_usages_expr(value, used);
+                    }
+                }
+            }
+        }
+        Expr::Block {
+            statements, expr, ..
+        } => {
+            for s in statements {
+                collect_usages_stmt(s, used);
+            }
+            collect_usages_expr(expr, used);
+        }
+        Expr::Lambda { body, .. } => {
+            for s in &body.statements {
+                collect_usages_stmt(s, used);
+            }
+        }
+        Expr::CallExpr { callee, args, .. } => {
+            collect_usages_expr(callee, used);
+            for arg in args {
+                collect_usages_expr(arg, used);
+            }
+        }
+        // Leaf expressions: no identifiers to collect
+        Expr::Int { .. }
+        | Expr::Float { .. }
+        | Expr::Bool { .. }
+        | Expr::Str { .. }
+        | Expr::Nil { .. }
+        | Expr::Asm(_) => {}
     }
 }

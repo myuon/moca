@@ -1,3 +1,3 @@
-let v = new Vec<int> { 1, 2, 3 };
-let x: int = 42;
-let s: string = "hello";
+let _v = new Vec<int> { 1, 2, 3 };
+let _x: int = 42;
+let _s: string = "hello";
