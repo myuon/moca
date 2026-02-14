@@ -215,12 +215,8 @@ impl InstantiationCollector {
                 self.collect_expr(iterable);
                 self.collect_block(body);
             }
-            Statement::ForRange {
-                start, end, body, ..
-            } => {
-                self.collect_expr(start);
-                self.collect_expr(end);
-                self.collect_block(body);
+            Statement::ForRange { .. } => {
+                unreachable!("ForRange should be desugared before monomorphisation")
             }
             Statement::Return { value, .. } => {
                 if let Some(value) = value {
@@ -829,21 +825,9 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
             body: substitute_block(body, type_map),
             span: *span,
         },
-        Statement::ForRange {
-            var,
-            start,
-            end,
-            inclusive,
-            body,
-            span,
-        } => Statement::ForRange {
-            var: var.clone(),
-            start: substitute_expr(start, type_map),
-            end: substitute_expr(end, type_map),
-            inclusive: *inclusive,
-            body: substitute_block(body, type_map),
-            span: *span,
-        },
+        Statement::ForRange { .. } => {
+            unreachable!("ForRange should be desugared before monomorphisation")
+        }
         Statement::Return { value, span } => Statement::Return {
             value: value.as_ref().map(|v| substitute_expr(v, type_map)),
             span: *span,
@@ -1302,21 +1286,9 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
             body: rewrite_block(body, instantiations),
             span: *span,
         },
-        Statement::ForRange {
-            var,
-            start,
-            end,
-            inclusive,
-            body,
-            span,
-        } => Statement::ForRange {
-            var: var.clone(),
-            start: rewrite_expr(start, instantiations),
-            end: rewrite_expr(end, instantiations),
-            inclusive: *inclusive,
-            body: rewrite_block(body, instantiations),
-            span: *span,
-        },
+        Statement::ForRange { .. } => {
+            unreachable!("ForRange should be desugared before monomorphisation")
+        }
         Statement::Return { value, span } => Statement::Return {
             value: value.as_ref().map(|v| rewrite_expr(v, instantiations)),
             span: *span,

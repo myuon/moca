@@ -5,10 +5,11 @@
 //! - NewLiteral (`new Vec<T> {...}`) → uninit + index assignments
 //! - Index (`vec[i]`) → `vec.get(i)` for Vec/Map types
 //! - IndexAssign (`vec[i] = v`) → `vec.set(i, v)` for Vec/Map types
+//! - ForRange (`for i in start..end { body }`) → let + while loop
 
 use crate::compiler::ast::{
-    AsmBlock, Block, Expr, FnDef, ImplBlock, Item, NewLiteralElement, Param, Program, Statement,
-    StructDef, StructField,
+    AsmBlock, BinaryOp, Block, Expr, FnDef, ImplBlock, Item, NewLiteralElement, Param, Program,
+    Statement, StructDef, StructField,
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
@@ -48,25 +49,40 @@ impl Desugar {
         }
     }
 
+    /// Generate a unique variable name for for-range end bound.
+    fn fresh_for_end_var(&mut self) -> String {
+        let name = format!("__for_end_{}", self.counter);
+        self.counter += 1;
+        name
+    }
+
     /// Desugar a program.
     fn desugar_program(&mut self, program: Program) -> Program {
         Program {
             items: program
                 .items
                 .into_iter()
-                .map(|item| self.desugar_item(item))
+                .flat_map(|item| self.desugar_item_to_items(item))
                 .collect(),
         }
     }
 
-    /// Desugar an item.
-    fn desugar_item(&mut self, item: Item) -> Item {
+    /// Desugar an item, potentially producing multiple items (e.g. ForRange → multiple statements).
+    fn desugar_item_to_items(&mut self, item: Item) -> Vec<Item> {
         match item {
-            Item::Import(import) => Item::Import(import),
-            Item::FnDef(fn_def) => Item::FnDef(self.desugar_fn_def(fn_def)),
-            Item::StructDef(struct_def) => Item::StructDef(self.desugar_struct_def(struct_def)),
-            Item::ImplBlock(impl_block) => Item::ImplBlock(self.desugar_impl_block(impl_block)),
-            Item::Statement(stmt) => Item::Statement(self.desugar_statement(stmt)),
+            Item::Import(import) => vec![Item::Import(import)],
+            Item::FnDef(fn_def) => vec![Item::FnDef(self.desugar_fn_def(fn_def))],
+            Item::StructDef(struct_def) => {
+                vec![Item::StructDef(self.desugar_struct_def(struct_def))]
+            }
+            Item::ImplBlock(impl_block) => {
+                vec![Item::ImplBlock(self.desugar_impl_block(impl_block))]
+            }
+            Item::Statement(stmt) => self
+                .desugar_statement_to_stmts(stmt)
+                .into_iter()
+                .map(Item::Statement)
+                .collect(),
         }
     }
 
@@ -140,7 +156,108 @@ impl Desugar {
 
     /// Desugar a statement, potentially producing multiple statements.
     fn desugar_statement_to_stmts(&mut self, stmt: Statement) -> Vec<Statement> {
-        vec![self.desugar_statement(stmt)]
+        match stmt {
+            Statement::ForRange {
+                var,
+                start,
+                end,
+                inclusive,
+                body,
+                span,
+            } => self.desugar_for_range(var, start, end, inclusive, body, span),
+            _ => vec![self.desugar_statement(stmt)],
+        }
+    }
+
+    /// Desugar ForRange into: let __for_end = end; let var = start; while var < __for_end { body; var = var + 1; }
+    fn desugar_for_range(
+        &mut self,
+        var: String,
+        start: Expr,
+        end: Expr,
+        inclusive: bool,
+        body: Block,
+        span: Span,
+    ) -> Vec<Statement> {
+        let end_var = self.fresh_for_end_var();
+        let desugared_start = self.desugar_expr(start);
+        let desugared_end = self.desugar_expr(end);
+        let desugared_body = self.desugar_block(body);
+
+        // let __for_end_N = end;
+        let let_end = Statement::Let {
+            name: end_var.clone(),
+            type_annotation: None,
+            init: desugared_end,
+            span,
+            inferred_type: Some(Type::Int),
+        };
+
+        // let var = start;
+        let let_var = Statement::Let {
+            name: var.clone(),
+            type_annotation: None,
+            init: desugared_start,
+            span,
+            inferred_type: Some(Type::Int),
+        };
+
+        // var < __for_end_N  (or var <= for inclusive)
+        let cmp_op = if inclusive {
+            BinaryOp::Le
+        } else {
+            BinaryOp::Lt
+        };
+        let condition = Expr::Binary {
+            op: cmp_op,
+            left: Box::new(Expr::Ident {
+                name: var.clone(),
+                span,
+                inferred_type: Some(Type::Int),
+            }),
+            right: Box::new(Expr::Ident {
+                name: end_var,
+                span,
+                inferred_type: Some(Type::Int),
+            }),
+            span,
+            inferred_type: Some(Type::Bool),
+        };
+
+        // var = var + 1;
+        let increment = Statement::Assign {
+            name: var.clone(),
+            value: Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::Ident {
+                    name: var,
+                    span,
+                    inferred_type: Some(Type::Int),
+                }),
+                right: Box::new(Expr::Int {
+                    value: 1,
+                    span,
+                    inferred_type: Some(Type::Int),
+                }),
+                span,
+                inferred_type: Some(Type::Int),
+            },
+            span,
+        };
+
+        // while condition { body; var = var + 1; }
+        let mut while_body_stmts = desugared_body.statements;
+        while_body_stmts.push(increment);
+        let while_stmt = Statement::While {
+            condition,
+            body: Block {
+                statements: while_body_stmts,
+                span,
+            },
+            span,
+        };
+
+        vec![let_end, let_var, while_stmt]
     }
 
     /// Desugar a statement.
@@ -245,21 +362,9 @@ impl Desugar {
                 body: self.desugar_block(body),
                 span,
             },
-            Statement::ForRange {
-                var,
-                start,
-                end,
-                inclusive,
-                body,
-                span,
-            } => Statement::ForRange {
-                var,
-                start: self.desugar_expr(start),
-                end: self.desugar_expr(end),
-                inclusive,
-                body: self.desugar_block(body),
-                span,
-            },
+            Statement::ForRange { .. } => {
+                unreachable!("ForRange should be handled in desugar_statement_to_stmts")
+            }
             Statement::Return { value, span } => Statement::Return {
                 value: value.map(|e| self.desugar_expr(e)),
                 span,

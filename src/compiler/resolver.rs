@@ -80,13 +80,6 @@ pub enum ResolvedStatement {
         iterable: ResolvedExpr,
         body: Vec<ResolvedStatement>,
     },
-    ForRange {
-        slot: usize,
-        start: ResolvedExpr,
-        end: ResolvedExpr,
-        inclusive: bool,
-        body: Vec<ResolvedStatement>,
-    },
     Return {
         value: Option<ResolvedExpr>,
     },
@@ -354,9 +347,7 @@ impl<'a> Resolver<'a> {
                         Self::collect_var_types_inner(&else_block.statements, type_map);
                     }
                 }
-                Statement::While { body, .. }
-                | Statement::ForIn { body, .. }
-                | Statement::ForRange { body, .. } => {
+                Statement::While { body, .. } | Statement::ForIn { body, .. } => {
                     Self::collect_var_types_inner(&body.statements, type_map);
                 }
                 Statement::Try {
@@ -766,7 +757,7 @@ impl<'a> Resolver<'a> {
                 Self::collect_reassigned_vars_expr(condition, reassigned);
                 Self::collect_reassigned_vars(&body.statements, reassigned);
             }
-            Statement::ForIn { body, .. } | Statement::ForRange { body, .. } => {
+            Statement::ForIn { body, .. } => {
                 Self::collect_reassigned_vars(&body.statements, reassigned);
             }
             Statement::Try {
@@ -889,13 +880,6 @@ impl<'a> Resolver<'a> {
                 Self::scan_expr_for_lambdas(iterable, var_names, captured);
                 Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
             }
-            Statement::ForRange {
-                start, end, body, ..
-            } => {
-                Self::scan_expr_for_lambdas(start, var_names, captured);
-                Self::scan_expr_for_lambdas(end, var_names, captured);
-                Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
-            }
             Statement::Return { value, .. } => {
                 if let Some(v) = value {
                     Self::scan_expr_for_lambdas(v, var_names, captured);
@@ -914,6 +898,9 @@ impl<'a> Resolver<'a> {
             }
             Statement::Expr { expr, .. } => {
                 Self::scan_expr_for_lambdas(expr, var_names, captured);
+            }
+            Statement::ForRange { .. } => {
+                unreachable!("ForRange should be desugared before resolution")
             }
             Statement::Const { .. } => {}
         }
@@ -1223,31 +1210,8 @@ impl<'a> Resolver<'a> {
                     body: body_resolved,
                 })
             }
-            Statement::ForRange {
-                var,
-                start,
-                end,
-                inclusive,
-                body,
-                ..
-            } => {
-                let start = self.resolve_expr(start, scope)?;
-                let end = self.resolve_expr(end, scope)?;
-
-                scope.enter_scope();
-                let slot = scope.declare(var, true);
-                // Allocate 1 hidden slot for __end used by codegen
-                let _end_slot = scope.declare("__for_end".to_string(), true);
-                let body_resolved = self.resolve_statements(body.statements, scope)?;
-                scope.exit_scope();
-
-                Ok(ResolvedStatement::ForRange {
-                    slot,
-                    start,
-                    end,
-                    inclusive,
-                    body: body_resolved,
-                })
+            Statement::ForRange { .. } => {
+                unreachable!("ForRange should be desugared before resolution")
             }
             Statement::Throw { value, .. } => {
                 let value = self.resolve_expr(value, scope)?;
@@ -1824,13 +1788,6 @@ impl<'a> Resolver<'a> {
                 self.expr_calls_function(iterable, target_index)
                     || self.body_calls_function(body, target_index)
             }
-            ResolvedStatement::ForRange {
-                start, end, body, ..
-            } => {
-                self.expr_calls_function(start, target_index)
-                    || self.expr_calls_function(end, target_index)
-                    || self.body_calls_function(body, target_index)
-            }
             ResolvedStatement::Return { value } => value
                 .as_ref()
                 .is_some_and(|v| self.expr_calls_function(v, target_index)),
@@ -2130,19 +2087,10 @@ fn collect_free_vars_statement(
                 collect_free_vars_statement(s, bound, free);
             }
         }
-        Statement::ForRange {
-            var,
-            start,
-            end,
-            body,
-            ..
-        } => {
-            collect_free_vars_expr(start, bound, free);
-            collect_free_vars_expr(end, bound, free);
-            bound.insert(var.clone());
-            for s in &body.statements {
-                collect_free_vars_statement(s, bound, free);
-            }
+        Statement::ForRange { .. } => {
+            // ForRange is desugared before resolution; this branch handles
+            // the AST-level free-var collection which still sees ForRange.
+            unreachable!("ForRange should be desugared before free-var collection")
         }
         Statement::Return { value, .. } => {
             if let Some(expr) = value {
