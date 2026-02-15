@@ -13,6 +13,18 @@ cargo clippy   # lintチェック
 
 コミット前に必ず`cargo fmt`を実行し、全てのチェックがパスすることを確認してからコミット・プッシュする。
 
+## CI ウォッチ
+
+PRをプッシュした後は、CIの結果を確認すること。失敗があれば自分で修正してプッシュする。
+
+```bash
+gh pr checks --watch --fail-fast   # CIを完了までウォッチ（失敗時は即終了）
+gh run view <run-id> --log         # 失敗時のログ確認
+```
+
+- プッシュ後に `gh pr checks --watch --fail-fast` でCIの完了を待つ
+- failしたら `gh run view` でログを確認し、原因を調査して修正・再プッシュする
+
 ## moca lint
 
 `.mc` ファイルを変更・作成した場合は `moca lint <file>` を実行し、警告があれば修正すること。

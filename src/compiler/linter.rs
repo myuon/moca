@@ -259,6 +259,13 @@ fn lint_expr(expr: &Expr, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Dia
                 lint_expr(arg, rules, diagnostics);
             }
         }
+        Expr::StringInterpolation { parts, .. } => {
+            for part in parts {
+                if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
+                    lint_expr(e, rules, diagnostics);
+                }
+            }
+        }
         // Leaf expressions: no sub-expressions to recurse into
         Expr::Int { .. }
         | Expr::Float { .. }
@@ -724,6 +731,13 @@ fn collect_usages_expr(expr: &Expr, used: &mut HashSet<String>) {
             collect_usages_expr(callee, used);
             for arg in args {
                 collect_usages_expr(arg, used);
+            }
+        }
+        Expr::StringInterpolation { parts, .. } => {
+            for part in parts {
+                if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
+                    collect_usages_expr(e, used);
+                }
             }
         }
         // Leaf expressions: no identifiers to collect

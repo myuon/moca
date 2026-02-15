@@ -1256,6 +1256,14 @@ impl TypeChecker {
             Expr::Float { .. } => Type::Float,
             Expr::Bool { .. } => Type::Bool,
             Expr::Str { .. } => Type::String,
+            Expr::StringInterpolation { parts, .. } => {
+                for part in parts.iter_mut() {
+                    if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
+                        self.infer_expr(e, env);
+                    }
+                }
+                Type::String
+            }
             Expr::Nil { .. } => Type::Nil,
 
             Expr::Ident { name, span, .. } => {

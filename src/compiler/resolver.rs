@@ -1736,6 +1736,9 @@ impl<'a> Resolver<'a> {
                     args: resolved_args,
                 })
             }
+            Expr::StringInterpolation { .. } => {
+                unreachable!("StringInterpolation should be desugared before resolution")
+            }
         }
     }
 
@@ -2207,6 +2210,13 @@ fn collect_free_vars_expr(
             }
             for s in &body.statements {
                 collect_free_vars_statement(s, &mut inner_bound, free);
+            }
+        }
+        Expr::StringInterpolation { parts, .. } => {
+            for part in parts {
+                if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
+                    collect_free_vars_expr(e, bound, free);
+                }
             }
         }
         Expr::Int { .. }

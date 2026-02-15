@@ -177,6 +177,15 @@ pub enum Statement {
     },
 }
 
+/// A part of a string interpolation expression.
+#[derive(Debug, Clone)]
+pub enum StringInterpPart {
+    /// Literal text.
+    Literal(String),
+    /// An expression to be evaluated and converted to string.
+    Expr(Box<Expr>),
+}
+
 /// Expressions in the language.
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
@@ -198,6 +207,12 @@ pub enum Expr {
     },
     Str {
         value: String,
+        span: Span,
+        inferred_type: Option<Type>,
+    },
+    /// String interpolation: `"hello {name}, age {age}"`
+    StringInterpolation {
+        parts: Vec<StringInterpPart>,
         span: Span,
         inferred_type: Option<Type>,
     },
@@ -346,6 +361,7 @@ impl Expr {
             Expr::Block { span, .. } => *span,
             Expr::Lambda { span, .. } => *span,
             Expr::CallExpr { span, .. } => *span,
+            Expr::StringInterpolation { span, .. } => *span,
         }
     }
 
@@ -356,6 +372,7 @@ impl Expr {
             | Expr::Float { inferred_type, .. }
             | Expr::Bool { inferred_type, .. }
             | Expr::Str { inferred_type, .. }
+            | Expr::StringInterpolation { inferred_type, .. }
             | Expr::Nil { inferred_type, .. }
             | Expr::Ident { inferred_type, .. }
             | Expr::Array { inferred_type, .. }
@@ -396,7 +413,8 @@ impl Expr {
             | Expr::NewLiteral { inferred_type, .. }
             | Expr::Block { inferred_type, .. }
             | Expr::Lambda { inferred_type, .. }
-            | Expr::CallExpr { inferred_type, .. } => inferred_type.as_ref(),
+            | Expr::CallExpr { inferred_type, .. }
+            | Expr::StringInterpolation { inferred_type, .. } => inferred_type.as_ref(),
             Expr::Asm(_) => None,
         }
     }
