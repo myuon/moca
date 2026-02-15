@@ -894,7 +894,7 @@ fn rust_text_counting<W: Write>(writer: &mut W) {
     ];
     let mut counts = [0i64; 26];
 
-    for _ in 0..1000 {
+    for _ in 0..10000 {
         for &ch in text.iter() {
             let idx = rust_to_letter_index(ch);
             if idx >= 0 {
@@ -922,8 +922,8 @@ fn rust_text_counting<W: Write>(writer: &mut W) {
 fn rust_quicksort<W: Write>(writer: &mut W) {
     // Same LCG as moca _perf_lcg_next
     let mut seed: i64 = 42;
-    let mut v: Vec<i64> = Vec::with_capacity(1000);
-    for _ in 0..1000 {
+    let mut v: Vec<i64> = Vec::with_capacity(10000);
+    for _ in 0..10000 {
         seed = (seed * 1103515245 + 12345) % 2147483648;
         if seed < 0 {
             seed = -seed;

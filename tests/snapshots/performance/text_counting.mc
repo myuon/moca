@@ -32,7 +32,7 @@ fun count_chars() {
 
     // Count letters across 1000 iterations (case-insensitive, skip non-letters)
     let iter = 0;
-    while iter < 1000 {
+    while iter < 10000 {
         let i = 0;
         while i < len(text) {
             let ch = text[i];
