@@ -395,8 +395,13 @@ const OP_CHANNEL_RECV: u8 = 102;
 const OP_THREAD_JOIN: u8 = 103;
 const OP_HEAP_ALLOC_ARRAY: u8 = 104;
 
+// Indirect heap access (ptr-based layout)
+const OP_HEAP_LOAD2: u8 = 105;
+
 // Closures
 const OP_CALL_INDIRECT: u8 = 106;
+
+const OP_HEAP_STORE2: u8 = 107;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -564,6 +569,8 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
+        Op::HeapLoad2 => w.write_all(&[OP_HEAP_LOAD2])?,
+        Op::HeapStore2 => w.write_all(&[OP_HEAP_STORE2])?,
         // System / Builtins
         Op::Syscall(num, argc) => {
             w.write_all(&[OP_SYSCALL])?;
@@ -732,6 +739,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
+        OP_HEAP_LOAD2 => Op::HeapLoad2,
+        OP_HEAP_STORE2 => Op::HeapStore2,
         // System / Builtins
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
@@ -1156,6 +1165,8 @@ mod tests {
             Op::HeapStore(2),
             Op::HeapLoadDyn,
             Op::HeapStoreDyn,
+            Op::HeapLoad2,
+            Op::HeapStore2,
             // System / Builtins
             Op::Syscall(7, 2),
             Op::GcHint(1024),

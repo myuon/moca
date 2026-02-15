@@ -714,6 +714,18 @@ impl JitCompiler {
                 self.type_stack.pop();
                 self.emit_heap_store_dyn()
             }
+            Op::HeapLoad2 => {
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.type_stack.push(ValueType::I64);
+                self.emit_heap_load2()
+            }
+            Op::HeapStore2 => {
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.type_stack.pop();
+                self.emit_heap_store2()
+            }
 
             // Unsupported operations - fail compilation so VM falls back to interpreter
             _ => Err(format!("Unsupported operation for JIT: {:?}", op)),
@@ -1911,6 +1923,93 @@ impl JitCompiler {
         // Store tag and payload to heap
         asm.str(regs::TMP4, regs::TMP1, 0); // tag
         asm.str(regs::TMP5, regs::TMP1, 8); // payload
+
+        self.stack_depth = self.stack_depth.saturating_sub(3);
+        Ok(())
+    }
+
+    /// Emit HeapLoad2: pop index and ref, load heap[heap[ref][0]][idx], push value.
+    /// Combines HeapLoad(0) + HeapLoadDyn into a single operation.
+    fn emit_heap_load2(&mut self) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+
+        // Pop index from VSTACK
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP2, regs::VSTACK, 8); // index payload
+
+        // Pop ref from VSTACK
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP0, regs::VSTACK, 8); // ref payload (heap word offset)
+
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+
+        // Step 1: Load ptr field (slot 0) from ref
+        // ptr_addr = ref + 1 + 2*0 = ref + 1
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // byte offset
+        asm.add(regs::TMP3, regs::TMP1, regs::TMP0); // TMP3 = heap_base + byte_offset
+        // TMP0 = ptr payload (the inner array reference)
+        asm.ldr(regs::TMP0, regs::TMP3, 8); // payload of slot 0
+
+        // Step 2: Load element at dynamic index from ptr
+        // slot_addr = ptr + 1 + 2*index
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // TMP2 = index * 2
+        asm.add_imm(regs::TMP0, regs::TMP0, 1); // TMP0 = ptr + 1
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP2); // TMP0 = ptr + 1 + 2*index
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // byte offset
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0); // TMP1 = heap_base + byte_offset
+
+        // Load tag and payload
+        asm.ldr(regs::TMP2, regs::TMP1, 0); // tag
+        asm.ldr(regs::TMP3, regs::TMP1, 8); // payload
+
+        // Push value to VSTACK
+        asm.str(regs::TMP2, regs::VSTACK, 0);
+        asm.str(regs::TMP3, regs::VSTACK, 8);
+        asm.add_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+
+        self.stack_depth -= 1; // net: pop 2, push 1
+        Ok(())
+    }
+
+    /// Emit HeapStore2: pop value, index, and ref, store value at heap[heap[ref][0]][idx].
+    /// Combines HeapLoad(0) + HeapStoreDyn into a single operation.
+    fn emit_heap_store2(&mut self) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+
+        // Pop value from VSTACK
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP4, regs::VSTACK, 0); // value tag
+        asm.ldr(regs::TMP5, regs::VSTACK, 8); // value payload
+
+        // Pop index from VSTACK
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP2, regs::VSTACK, 8); // index payload
+
+        // Pop ref from VSTACK
+        asm.sub_imm(regs::VSTACK, regs::VSTACK, VALUE_SIZE);
+        asm.ldr(regs::TMP0, regs::VSTACK, 8); // ref payload
+
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+
+        // Step 1: Load ptr field (slot 0) from ref
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
+        asm.ldr(regs::TMP0, regs::TMP3, 8); // TMP0 = ptr payload
+
+        // Step 2: Store value at dynamic index in ptr
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+
+        // Store tag and payload to heap
+        asm.str(regs::TMP4, regs::TMP1, 0);
+        asm.str(regs::TMP5, regs::TMP1, 8);
 
         self.stack_depth = self.stack_depth.saturating_sub(3);
         Ok(())

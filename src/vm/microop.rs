@@ -378,6 +378,18 @@ pub enum MicroOp {
         idx: VReg,
         src: VReg,
     },
+    /// dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access)
+    HeapLoad2 {
+        dst: VReg,
+        obj: VReg,
+        idx: VReg,
+    },
+    /// heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store)
+    HeapStore2 {
+        obj: VReg,
+        idx: VReg,
+        src: VReg,
+    },
 
     // ========================================
     // Stack Bridge (for Raw op interop)

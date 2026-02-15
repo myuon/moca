@@ -742,6 +742,21 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let obj = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::HeapStoreDyn { obj, idx, src });
             }
+            Op::HeapLoad2 => {
+                // pop index, pop ref → push heap[heap[ref][0]][idx]
+                let idx = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let obj = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapLoad2 { dst, obj, idx });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::HeapStore2 => {
+                // pop value, pop index, pop ref → heap[heap[ref][0]][idx] = value
+                let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let idx = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let obj = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapStore2 { obj, idx, src });
+            }
 
             // ============================================================
             // Raw with PC target remapping

@@ -453,13 +453,12 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if has_ptr_layout {
-                    // Ptr-based layout: load ptr field (slot 0) then store element
-                    // Array<T> layout: [ptr, len], Vec<T> layout: [ptr, len, cap]
+                    // Ptr-based layout: indirect store via ptr field (slot 0)
+                    // HeapStore2 = heap[heap[ref][0]][idx] = val in one op
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(0)); // Load ptr field
                     self.compile_expr(index, ops)?;
                     self.compile_expr(value, ops)?;
-                    ops.push(Op::HeapStoreDyn);
+                    ops.push(Op::HeapStore2);
                 } else {
                     // Struct/string assign: direct HeapStoreDyn
                     self.compile_expr(object, ops)?;
@@ -732,12 +731,11 @@ impl Codegen {
                     .unwrap_or(false);
 
                 if has_ptr_layout {
-                    // Ptr-based layout: load ptr field (slot 0) then access element
-                    // Array<T> layout: [ptr, len], Vec<T> layout: [ptr, len, cap]
+                    // Ptr-based layout: indirect access via ptr field (slot 0)
+                    // HeapLoad2 = heap[heap[ref][0]][idx] in one op
                     self.compile_expr(object, ops)?;
-                    ops.push(Op::HeapLoad(0)); // Load ptr field
                     self.compile_expr(index, ops)?;
-                    ops.push(Op::HeapLoadDyn);
+                    ops.push(Op::HeapLoad2);
                 } else {
                     // Struct/string access: direct HeapLoadDyn
                     self.compile_expr(object, ops)?;
