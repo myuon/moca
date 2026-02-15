@@ -23,8 +23,8 @@ fun print_char(idx: int) {
     if idx == 18 { print_str("?"); return; }
     if idx == 19 { print_str("]"); return; }
     if idx == 20 { print_str("["); return; }
-    if idx == 21 { print_str("}"); return; }
-    if idx == 22 { print_str("{"); return; }
+    if idx == 21 { print_str("}}"); return; }
+    if idx == 22 { print_str("{{"); return; }
     if idx == 23 { print_str("1"); return; }
     if idx == 24 { print_str(")"); return; }
     if idx == 25 { print_str("("); return; }

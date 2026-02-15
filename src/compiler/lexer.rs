@@ -488,15 +488,11 @@ impl<'a> Lexer<'a> {
                 }
                 Some((_, '}')) => {
                     self.advance();
-                    // Check for }} escape
+                    // }} is an escape for literal }, but a lone } is also literal
                     if let Some((_, '}')) = self.peek() {
                         self.advance();
-                        current.push('}');
-                    } else {
-                        return Err(
-                            self.error("unmatched '}' in string (use '}}' for literal '}')")
-                        );
                     }
+                    current.push('}');
                 }
                 Some((_, '\n')) => {
                     return Err(self.error("unterminated string (newline in string)"));
