@@ -938,6 +938,27 @@ fn rust_quicksort<W: Write>(writer: &mut W) {
     }
 }
 
+#[cfg(feature = "jit")]
+fn rust_string_interpolation<W: Write>(writer: &mut W) {
+    fn compute_val(a: i64, b: i64) -> i64 {
+        let mut h = a * 31 + b;
+        h = h * 17 + (a + b) * 7;
+        if h < 0 {
+            h = -h;
+        }
+        h
+    }
+
+    let mut total: i64 = 0;
+    for i in 0..800i64 {
+        let h = compute_val(i, i * 3 + 7);
+        let s = i + h;
+        let line = format!("item[{}]: hash={}, sum={}", i, h, s);
+        total += line.len() as i64;
+    }
+    writeln!(writer, "{}", total).unwrap();
+}
+
 /// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
 fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
@@ -1078,6 +1099,10 @@ fn snapshot_performance() {
     // Test quicksort with Rust reference
     let quicksort_path = perf_dir.join("quicksort.mc");
     run_performance_test(&quicksort_path, |w| rust_quicksort(w));
+
+    // Test string interpolation with Rust reference
+    let string_interp_path = perf_dir.join("string_interpolation.mc");
+    run_performance_test(&string_interp_path, |w| rust_string_interpolation(w));
 }
 
 // ============================================================================
