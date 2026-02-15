@@ -819,6 +819,9 @@ pub fn convert(func: &Function) -> ConvertedFunction {
 
     let temps_count = max_temp - locals_count;
 
+    // ─── Optimization passes ────────────────────────────────────────
+    optimize_micro_ops(&mut micro_ops, &mut pc_map);
+
     ConvertedFunction {
         micro_ops,
         temps_count: temps_count.max(1),
@@ -999,6 +1002,564 @@ fn emit_cmp_f32(
     vstack.push(Vse::Reg(dst));
 }
 
+// ─── Optimization passes ────────────────────────────────────────────
+
+/// Apply peephole optimizations on the MicroOp sequence.
+fn optimize_micro_ops(ops: &mut Vec<MicroOp>, pc_map: &mut [usize]) {
+    fuse_arith_mov(ops, pc_map);
+    copy_propagation(ops, pc_map);
+}
+
+/// After removing instructions (marked by `removed`), fix up all branch targets
+/// and update the pc_map (Op PC → MicroOp PC mapping).
+fn fixup_branch_targets(ops: &mut [MicroOp], removed: &[bool], pc_map: &mut [usize]) {
+    // Build old-to-new PC mapping
+    let mut new_pc = vec![0usize; removed.len() + 1];
+    let mut offset = 0;
+    for i in 0..removed.len() {
+        new_pc[i] = i - offset;
+        if removed[i] {
+            offset += 1;
+        }
+    }
+    new_pc[removed.len()] = removed.len() - offset;
+
+    for op in ops.iter_mut() {
+        match op {
+            MicroOp::Jmp { target, .. }
+            | MicroOp::BrIf { target, .. }
+            | MicroOp::BrIfFalse { target, .. } => {
+                if *target < new_pc.len() {
+                    *target = new_pc[*target];
+                }
+            }
+            MicroOp::Raw {
+                op: Op::TryBegin(handler_pc),
+            } => {
+                if *handler_pc < new_pc.len() {
+                    *handler_pc = new_pc[*handler_pc];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Update pc_map: each entry maps an Op PC to a MicroOp PC
+    for entry in pc_map.iter_mut() {
+        if *entry < new_pc.len() {
+            *entry = new_pc[*entry];
+        }
+    }
+}
+
+/// Remove instructions marked for removal, preserving order.
+fn remove_marked(ops: &mut Vec<MicroOp>, removed: &[bool]) {
+    let mut write = 0;
+    ops.retain(|_| {
+        let keep = !removed[write];
+        write += 1;
+        keep
+    });
+}
+
+/// Optimization #4: Fuse `ArithOp tmp, X, ... ; Mov X, tmp` into `ArithOp X, X, ...`
+///
+/// When an arithmetic instruction writes to a temp, and the very next instruction
+/// is `Mov local, tmp` where `tmp` is not used anywhere else, we can rewrite the
+/// arithmetic to target `local` directly and remove the Mov.
+fn fuse_arith_mov(ops: &mut Vec<MicroOp>, pc_map: &mut [usize]) {
+    let len = ops.len();
+    if len < 2 {
+        return;
+    }
+
+    // Count uses of each vreg (as a source/read operand) across all instructions
+    let mut use_count = vec![0u32; vreg_max(ops) + 1];
+    for op in ops.iter() {
+        for_each_vreg_use(op, |v| use_count[v.0] += 1);
+    }
+
+    let mut removed = vec![false; ops.len()];
+    let mut i = 0;
+    while i + 1 < ops.len() {
+        if removed[i] {
+            i += 1;
+            continue;
+        }
+        // Match: ops[i] is an op with dst=tmp, ops[i+1] is Mov { dst: local, src: tmp }
+        if let MicroOp::Mov {
+            dst: mov_dst,
+            src: mov_src,
+        } = ops[i + 1]
+            && let Some(arith_dst) = get_dst(&ops[i])
+            // tmp must match, and tmp must only be used once (in the Mov)
+            && arith_dst == mov_src
+            && use_count[mov_src.0] == 1
+        {
+            // Rewrite dst to mov_dst
+            set_dst(&mut ops[i], mov_dst);
+            removed[i + 1] = true;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+
+    if removed.iter().any(|&r| r) {
+        fixup_branch_targets(ops, &removed, pc_map);
+        remove_marked(ops, &removed);
+    }
+}
+
+/// Optimization #1: Copy propagation within basic blocks.
+///
+/// For `Mov dst, src` within a basic block, replace subsequent uses of `dst` with `src`
+/// (until `dst` or `src` is reassigned), then remove the dead Mov.
+fn copy_propagation(ops: &mut Vec<MicroOp>, pc_map: &mut [usize]) {
+    // Identify branch targets to determine basic block boundaries
+    let mut is_block_start = vec![false; ops.len() + 1];
+    is_block_start[0] = true;
+    for op in ops.iter() {
+        match op {
+            MicroOp::Jmp { target, .. }
+            | MicroOp::BrIf { target, .. }
+            | MicroOp::BrIfFalse { target, .. } => {
+                if *target < is_block_start.len() {
+                    is_block_start[*target] = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    // Instructions after branches also start new blocks
+    for i in 0..ops.len() {
+        if matches!(
+            ops[i],
+            MicroOp::Jmp { .. } | MicroOp::BrIf { .. } | MicroOp::BrIfFalse { .. }
+        ) && i + 1 < ops.len()
+        {
+            is_block_start[i + 1] = true;
+        }
+    }
+
+    let mut to_remove = vec![false; ops.len()];
+
+    let mut i = 0;
+    while i < ops.len() {
+        if let MicroOp::Mov { dst, src } = ops[i] {
+            if dst == src {
+                to_remove[i] = true;
+                i += 1;
+                continue;
+            }
+
+            // Try to propagate: replace uses of `dst` with `src` in subsequent
+            // instructions within the same basic block
+            let mut j = i + 1;
+            while j < ops.len() && !is_block_start[j] {
+                // If dst or src is redefined, stop propagation
+                if let Some(def) = get_dst(&ops[j])
+                    && (def == dst || def == src)
+                {
+                    break;
+                }
+                // Check for StackPop/Raw which may implicitly define regs
+                if matches!(ops[j], MicroOp::StackPop { .. } | MicroOp::Raw { .. }) {
+                    break;
+                }
+                // Replace uses of dst with src
+                replace_vreg_use(&mut ops[j], dst, src);
+                j += 1;
+            }
+
+            // Check if dst is used anywhere outside the propagation range [i+1, j).
+            // We must check ALL instructions outside that range, without
+            // stopping at redefinitions -- branches can skip over redefinitions
+            // causing a use to read the old value from the Mov.
+            let mut dst_used_elsewhere = false;
+            for (k, op) in ops.iter().enumerate() {
+                // Skip the Mov itself and the propagation range
+                if k == i || (k > i && k < j) {
+                    continue;
+                }
+                let mut found = false;
+                for_each_vreg_use(op, |v| {
+                    if v == dst {
+                        found = true;
+                    }
+                });
+                if found {
+                    dst_used_elsewhere = true;
+                    break;
+                }
+            }
+
+            if !dst_used_elsewhere {
+                to_remove[i] = true;
+            }
+        }
+        i += 1;
+    }
+
+    if to_remove.iter().any(|&r| r) {
+        fixup_branch_targets(ops, &to_remove, pc_map);
+        remove_marked(ops, &to_remove);
+    }
+}
+
+/// Get the maximum VReg index used in any instruction.
+fn vreg_max(ops: &[MicroOp]) -> usize {
+    let mut max = 0;
+    for op in ops {
+        for_each_vreg_use(op, |v| max = max.max(v.0));
+        if let Some(d) = get_dst(op) {
+            max = max.max(d.0);
+        }
+    }
+    max
+}
+
+/// Get the destination (def) VReg of an instruction, if any.
+fn get_dst(op: &MicroOp) -> Option<VReg> {
+    match op {
+        MicroOp::Mov { dst, .. }
+        | MicroOp::ConstI64 { dst, .. }
+        | MicroOp::ConstI32 { dst, .. }
+        | MicroOp::ConstF64 { dst, .. }
+        | MicroOp::ConstF32 { dst, .. }
+        | MicroOp::AddI64 { dst, .. }
+        | MicroOp::AddI64Imm { dst, .. }
+        | MicroOp::SubI64 { dst, .. }
+        | MicroOp::MulI64 { dst, .. }
+        | MicroOp::DivI64 { dst, .. }
+        | MicroOp::RemI64 { dst, .. }
+        | MicroOp::NegI64 { dst, .. }
+        | MicroOp::AddI32 { dst, .. }
+        | MicroOp::SubI32 { dst, .. }
+        | MicroOp::MulI32 { dst, .. }
+        | MicroOp::DivI32 { dst, .. }
+        | MicroOp::RemI32 { dst, .. }
+        | MicroOp::EqzI32 { dst, .. }
+        | MicroOp::AddF64 { dst, .. }
+        | MicroOp::SubF64 { dst, .. }
+        | MicroOp::MulF64 { dst, .. }
+        | MicroOp::DivF64 { dst, .. }
+        | MicroOp::NegF64 { dst, .. }
+        | MicroOp::AddF32 { dst, .. }
+        | MicroOp::SubF32 { dst, .. }
+        | MicroOp::MulF32 { dst, .. }
+        | MicroOp::DivF32 { dst, .. }
+        | MicroOp::NegF32 { dst, .. }
+        | MicroOp::CmpI64 { dst, .. }
+        | MicroOp::CmpI64Imm { dst, .. }
+        | MicroOp::CmpI32 { dst, .. }
+        | MicroOp::CmpF64 { dst, .. }
+        | MicroOp::CmpF32 { dst, .. }
+        | MicroOp::I32WrapI64 { dst, .. }
+        | MicroOp::I64ExtendI32S { dst, .. }
+        | MicroOp::I64ExtendI32U { dst, .. }
+        | MicroOp::F64ConvertI64S { dst, .. }
+        | MicroOp::I64TruncF64S { dst, .. }
+        | MicroOp::F64ConvertI32S { dst, .. }
+        | MicroOp::F32ConvertI32S { dst, .. }
+        | MicroOp::F32ConvertI64S { dst, .. }
+        | MicroOp::I32TruncF32S { dst, .. }
+        | MicroOp::I32TruncF64S { dst, .. }
+        | MicroOp::I64TruncF32S { dst, .. }
+        | MicroOp::F32DemoteF64 { dst, .. }
+        | MicroOp::F64PromoteF32 { dst, .. }
+        | MicroOp::RefEq { dst, .. }
+        | MicroOp::RefIsNull { dst, .. }
+        | MicroOp::RefNull { dst }
+        | MicroOp::HeapLoad { dst, .. }
+        | MicroOp::HeapLoadDyn { dst, .. }
+        | MicroOp::HeapLoad2 { dst, .. }
+        | MicroOp::StackPop { dst } => Some(*dst),
+        MicroOp::Call { ret, .. } | MicroOp::CallIndirect { ret, .. } => *ret,
+        _ => None,
+    }
+}
+
+/// Set the destination VReg of an instruction.
+fn set_dst(op: &mut MicroOp, new_dst: VReg) {
+    match op {
+        MicroOp::Mov { dst, .. }
+        | MicroOp::ConstI64 { dst, .. }
+        | MicroOp::ConstI32 { dst, .. }
+        | MicroOp::ConstF64 { dst, .. }
+        | MicroOp::ConstF32 { dst, .. }
+        | MicroOp::AddI64 { dst, .. }
+        | MicroOp::AddI64Imm { dst, .. }
+        | MicroOp::SubI64 { dst, .. }
+        | MicroOp::MulI64 { dst, .. }
+        | MicroOp::DivI64 { dst, .. }
+        | MicroOp::RemI64 { dst, .. }
+        | MicroOp::NegI64 { dst, .. }
+        | MicroOp::AddI32 { dst, .. }
+        | MicroOp::SubI32 { dst, .. }
+        | MicroOp::MulI32 { dst, .. }
+        | MicroOp::DivI32 { dst, .. }
+        | MicroOp::RemI32 { dst, .. }
+        | MicroOp::EqzI32 { dst, .. }
+        | MicroOp::AddF64 { dst, .. }
+        | MicroOp::SubF64 { dst, .. }
+        | MicroOp::MulF64 { dst, .. }
+        | MicroOp::DivF64 { dst, .. }
+        | MicroOp::NegF64 { dst, .. }
+        | MicroOp::AddF32 { dst, .. }
+        | MicroOp::SubF32 { dst, .. }
+        | MicroOp::MulF32 { dst, .. }
+        | MicroOp::DivF32 { dst, .. }
+        | MicroOp::NegF32 { dst, .. }
+        | MicroOp::CmpI64 { dst, .. }
+        | MicroOp::CmpI64Imm { dst, .. }
+        | MicroOp::CmpI32 { dst, .. }
+        | MicroOp::CmpF64 { dst, .. }
+        | MicroOp::CmpF32 { dst, .. }
+        | MicroOp::I32WrapI64 { dst, .. }
+        | MicroOp::I64ExtendI32S { dst, .. }
+        | MicroOp::I64ExtendI32U { dst, .. }
+        | MicroOp::F64ConvertI64S { dst, .. }
+        | MicroOp::I64TruncF64S { dst, .. }
+        | MicroOp::F64ConvertI32S { dst, .. }
+        | MicroOp::F32ConvertI32S { dst, .. }
+        | MicroOp::F32ConvertI64S { dst, .. }
+        | MicroOp::I32TruncF32S { dst, .. }
+        | MicroOp::I32TruncF64S { dst, .. }
+        | MicroOp::I64TruncF32S { dst, .. }
+        | MicroOp::F32DemoteF64 { dst, .. }
+        | MicroOp::F64PromoteF32 { dst, .. }
+        | MicroOp::RefEq { dst, .. }
+        | MicroOp::RefIsNull { dst, .. }
+        | MicroOp::RefNull { dst }
+        | MicroOp::HeapLoad { dst, .. }
+        | MicroOp::HeapLoadDyn { dst, .. }
+        | MicroOp::HeapLoad2 { dst, .. }
+        | MicroOp::StackPop { dst } => *dst = new_dst,
+        MicroOp::Call { ret, .. } | MicroOp::CallIndirect { ret, .. } => *ret = Some(new_dst),
+        _ => {}
+    }
+}
+
+/// Iterate over all VRegs used (read) by an instruction.
+fn for_each_vreg_use(op: &MicroOp, mut f: impl FnMut(VReg)) {
+    match op {
+        MicroOp::Jmp { .. } => {}
+        MicroOp::BrIf { cond, .. } | MicroOp::BrIfFalse { cond, .. } => f(*cond),
+        MicroOp::Call { args, .. } => {
+            for a in args {
+                f(*a);
+            }
+        }
+        MicroOp::CallIndirect { callee, args, .. } => {
+            f(*callee);
+            for a in args {
+                f(*a);
+            }
+        }
+        MicroOp::Ret { src } => {
+            if let Some(s) = src {
+                f(*s);
+            }
+        }
+        MicroOp::Mov { src, .. } => f(*src),
+        MicroOp::ConstI64 { .. }
+        | MicroOp::ConstI32 { .. }
+        | MicroOp::ConstF64 { .. }
+        | MicroOp::ConstF32 { .. }
+        | MicroOp::RefNull { .. } => {}
+        MicroOp::AddI64 { a, b, .. }
+        | MicroOp::SubI64 { a, b, .. }
+        | MicroOp::MulI64 { a, b, .. }
+        | MicroOp::DivI64 { a, b, .. }
+        | MicroOp::RemI64 { a, b, .. } => {
+            f(*a);
+            f(*b);
+        }
+        MicroOp::AddI64Imm { a, .. } | MicroOp::CmpI64Imm { a, .. } => f(*a),
+        MicroOp::NegI64 { src, .. } => f(*src),
+        MicroOp::AddI32 { a, b, .. }
+        | MicroOp::SubI32 { a, b, .. }
+        | MicroOp::MulI32 { a, b, .. }
+        | MicroOp::DivI32 { a, b, .. }
+        | MicroOp::RemI32 { a, b, .. } => {
+            f(*a);
+            f(*b);
+        }
+        MicroOp::EqzI32 { src, .. } => f(*src),
+        MicroOp::AddF64 { a, b, .. }
+        | MicroOp::SubF64 { a, b, .. }
+        | MicroOp::MulF64 { a, b, .. }
+        | MicroOp::DivF64 { a, b, .. } => {
+            f(*a);
+            f(*b);
+        }
+        MicroOp::NegF64 { src, .. } => f(*src),
+        MicroOp::AddF32 { a, b, .. }
+        | MicroOp::SubF32 { a, b, .. }
+        | MicroOp::MulF32 { a, b, .. }
+        | MicroOp::DivF32 { a, b, .. } => {
+            f(*a);
+            f(*b);
+        }
+        MicroOp::NegF32 { src, .. } => f(*src),
+        MicroOp::CmpI64 { a, b, .. }
+        | MicroOp::CmpI32 { a, b, .. }
+        | MicroOp::CmpF64 { a, b, .. }
+        | MicroOp::CmpF32 { a, b, .. } => {
+            f(*a);
+            f(*b);
+        }
+        MicroOp::RefEq { a, b, .. } => {
+            f(*a);
+            f(*b);
+        }
+        MicroOp::I32WrapI64 { src, .. }
+        | MicroOp::I64ExtendI32S { src, .. }
+        | MicroOp::I64ExtendI32U { src, .. }
+        | MicroOp::F64ConvertI64S { src, .. }
+        | MicroOp::I64TruncF64S { src, .. }
+        | MicroOp::F64ConvertI32S { src, .. }
+        | MicroOp::F32ConvertI32S { src, .. }
+        | MicroOp::F32ConvertI64S { src, .. }
+        | MicroOp::I32TruncF32S { src, .. }
+        | MicroOp::I32TruncF64S { src, .. }
+        | MicroOp::I64TruncF32S { src, .. }
+        | MicroOp::F32DemoteF64 { src, .. }
+        | MicroOp::F64PromoteF32 { src, .. }
+        | MicroOp::RefIsNull { src, .. } => f(*src),
+        MicroOp::HeapLoad { src, .. } => f(*src),
+        MicroOp::HeapLoadDyn { obj, idx, .. } | MicroOp::HeapLoad2 { obj, idx, .. } => {
+            f(*obj);
+            f(*idx);
+        }
+        MicroOp::HeapStore { dst_obj, src, .. } => {
+            f(*dst_obj);
+            f(*src);
+        }
+        MicroOp::HeapStoreDyn { obj, idx, src } | MicroOp::HeapStore2 { obj, idx, src } => {
+            f(*obj);
+            f(*idx);
+            f(*src);
+        }
+        MicroOp::StackPush { src } => f(*src),
+        MicroOp::StackPop { .. } => {}
+        MicroOp::Raw { .. } => {}
+    }
+}
+
+/// Replace uses of `old` vreg with `new` vreg in a single instruction.
+fn replace_vreg_use(op: &mut MicroOp, old: VReg, new: VReg) {
+    let r = |v: &mut VReg| {
+        if *v == old {
+            *v = new;
+        }
+    };
+    match op {
+        MicroOp::Jmp { .. } => {}
+        MicroOp::BrIf { cond, .. } | MicroOp::BrIfFalse { cond, .. } => r(cond),
+        MicroOp::Call { args, .. } => {
+            for a in args {
+                r(a);
+            }
+        }
+        MicroOp::CallIndirect { callee, args, .. } => {
+            r(callee);
+            for a in args {
+                r(a);
+            }
+        }
+        MicroOp::Ret { src } => {
+            if let Some(s) = src {
+                r(s);
+            }
+        }
+        MicroOp::Mov { src, .. } => r(src),
+        MicroOp::ConstI64 { .. }
+        | MicroOp::ConstI32 { .. }
+        | MicroOp::ConstF64 { .. }
+        | MicroOp::ConstF32 { .. }
+        | MicroOp::RefNull { .. } => {}
+        MicroOp::AddI64 { a, b, .. }
+        | MicroOp::SubI64 { a, b, .. }
+        | MicroOp::MulI64 { a, b, .. }
+        | MicroOp::DivI64 { a, b, .. }
+        | MicroOp::RemI64 { a, b, .. } => {
+            r(a);
+            r(b);
+        }
+        MicroOp::AddI64Imm { a, .. } | MicroOp::CmpI64Imm { a, .. } => r(a),
+        MicroOp::NegI64 { src, .. } => r(src),
+        MicroOp::AddI32 { a, b, .. }
+        | MicroOp::SubI32 { a, b, .. }
+        | MicroOp::MulI32 { a, b, .. }
+        | MicroOp::DivI32 { a, b, .. }
+        | MicroOp::RemI32 { a, b, .. } => {
+            r(a);
+            r(b);
+        }
+        MicroOp::EqzI32 { src, .. } => r(src),
+        MicroOp::AddF64 { a, b, .. }
+        | MicroOp::SubF64 { a, b, .. }
+        | MicroOp::MulF64 { a, b, .. }
+        | MicroOp::DivF64 { a, b, .. } => {
+            r(a);
+            r(b);
+        }
+        MicroOp::NegF64 { src, .. } => r(src),
+        MicroOp::AddF32 { a, b, .. }
+        | MicroOp::SubF32 { a, b, .. }
+        | MicroOp::MulF32 { a, b, .. }
+        | MicroOp::DivF32 { a, b, .. } => {
+            r(a);
+            r(b);
+        }
+        MicroOp::NegF32 { src, .. } => r(src),
+        MicroOp::CmpI64 { a, b, .. }
+        | MicroOp::CmpI32 { a, b, .. }
+        | MicroOp::CmpF64 { a, b, .. }
+        | MicroOp::CmpF32 { a, b, .. } => {
+            r(a);
+            r(b);
+        }
+        MicroOp::RefEq { a, b, .. } => {
+            r(a);
+            r(b);
+        }
+        MicroOp::I32WrapI64 { src, .. }
+        | MicroOp::I64ExtendI32S { src, .. }
+        | MicroOp::I64ExtendI32U { src, .. }
+        | MicroOp::F64ConvertI64S { src, .. }
+        | MicroOp::I64TruncF64S { src, .. }
+        | MicroOp::F64ConvertI32S { src, .. }
+        | MicroOp::F32ConvertI32S { src, .. }
+        | MicroOp::F32ConvertI64S { src, .. }
+        | MicroOp::I32TruncF32S { src, .. }
+        | MicroOp::I32TruncF64S { src, .. }
+        | MicroOp::I64TruncF32S { src, .. }
+        | MicroOp::F32DemoteF64 { src, .. }
+        | MicroOp::F64PromoteF32 { src, .. }
+        | MicroOp::RefIsNull { src, .. } => r(src),
+        MicroOp::HeapLoad { src, .. } => r(src),
+        MicroOp::HeapLoadDyn { obj, idx, .. } | MicroOp::HeapLoad2 { obj, idx, .. } => {
+            r(obj);
+            r(idx);
+        }
+        MicroOp::HeapStore { dst_obj, src, .. } => {
+            r(dst_obj);
+            r(src);
+        }
+        MicroOp::HeapStoreDyn { obj, idx, src } | MicroOp::HeapStore2 { obj, idx, src } => {
+            r(obj);
+            r(idx);
+            r(src);
+        }
+        MicroOp::StackPush { src } => r(src),
+        MicroOp::StackPop { .. } => {}
+        MicroOp::Raw { .. } => {}
+    }
+}
+
 /// Emit a unary type conversion: pop 1, push 1.
 fn emit_unary_conv(
     vstack: &mut Vec<Vse>,
@@ -1039,22 +1600,15 @@ mod tests {
     #[test]
     fn test_const_and_local_set() {
         // I64Const(42) is deferred, then materialized by LocalSet
+        // Optimization fuses ConstI64 tmp + Mov local, tmp → ConstI64 local
         let func = make_func(vec![Op::I64Const(42), Op::LocalSet(0)]);
         let converted = convert(&func);
-        // ConstI64 + Mov = 2 MicroOps
-        assert_eq!(converted.micro_ops.len(), 2);
+        assert_eq!(converted.micro_ops.len(), 1);
         assert_eq!(
             converted.micro_ops[0],
             MicroOp::ConstI64 {
-                dst: VReg(2),
-                imm: 42
-            }
-        );
-        assert_eq!(
-            converted.micro_ops[1],
-            MicroOp::Mov {
                 dst: VReg(0),
-                src: VReg(2)
+                imm: 42
             }
         );
     }
@@ -1062,7 +1616,7 @@ mod tests {
     #[test]
     fn test_local_get_and_add() {
         // LocalGet(0) + LocalGet(1) + I64Add → AddI64 directly
-        // LocalSet(0) → Mov
+        // Optimization fuses AddI64 tmp + Mov local, tmp → AddI64 local
         let func = make_func(vec![
             Op::LocalGet(0),
             Op::LocalGet(1),
@@ -1070,20 +1624,13 @@ mod tests {
             Op::LocalSet(0),
         ]);
         let converted = convert(&func);
-        assert_eq!(converted.micro_ops.len(), 2);
+        assert_eq!(converted.micro_ops.len(), 1);
         assert_eq!(
             converted.micro_ops[0],
             MicroOp::AddI64 {
-                dst: VReg(2),
+                dst: VReg(0),
                 a: VReg(0),
                 b: VReg(1)
-            }
-        );
-        assert_eq!(
-            converted.micro_ops[1],
-            MicroOp::Mov {
-                dst: VReg(0),
-                src: VReg(2)
             }
         );
     }
@@ -1125,10 +1672,10 @@ mod tests {
     fn test_jmp_target_remapping() {
         let func = make_func(vec![Op::I64Const(0), Op::LocalSet(0), Op::Jmp(0)]);
         let converted = convert(&func);
-        // ConstI64 + Mov + Jmp = 3 MicroOps
-        assert_eq!(converted.micro_ops.len(), 3);
+        // Optimization fuses ConstI64 + Mov → ConstI64, so ConstI64 + Jmp = 2 MicroOps
+        assert_eq!(converted.micro_ops.len(), 2);
         assert_eq!(
-            converted.micro_ops[2],
+            converted.micro_ops[1],
             MicroOp::Jmp {
                 target: 0,
                 old_pc: 2,
@@ -1202,16 +1749,19 @@ mod tests {
     fn test_raw_result_pop() {
         let func = make_func(vec![Op::HeapAlloc(0), Op::LocalSet(0)]);
         let converted = convert(&func);
-        // Raw, StackPop, Mov
-        assert_eq!(converted.micro_ops.len(), 3);
+        // Optimization fuses StackPop tmp + Mov local, tmp → StackPop local
+        // Raw, StackPop = 2 MicroOps
+        assert_eq!(converted.micro_ops.len(), 2);
         assert!(matches!(
             converted.micro_ops[0],
             MicroOp::Raw {
                 op: Op::HeapAlloc(0)
             }
         ));
-        assert!(matches!(converted.micro_ops[1], MicroOp::StackPop { .. }));
-        assert!(matches!(converted.micro_ops[2], MicroOp::Mov { .. }));
+        assert!(matches!(
+            converted.micro_ops[1],
+            MicroOp::StackPop { dst: VReg(0) }
+        ));
     }
 
     #[test]
@@ -1238,7 +1788,7 @@ mod tests {
         ]);
         let converted = convert(&func);
         // I64Const(1) deferred, I64Const(2) deferred, Drop consumes 2,
-        // LocalSet materializes 1 → ConstI64 + Mov = 2
-        assert_eq!(converted.micro_ops.len(), 2);
+        // LocalSet materializes 1 → ConstI64 + Mov, optimized to ConstI64 = 1
+        assert_eq!(converted.micro_ops.len(), 1);
     }
 }
