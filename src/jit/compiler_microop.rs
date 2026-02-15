@@ -12,7 +12,7 @@ use super::aarch64::{AArch64Assembler, Cond, Reg};
 #[cfg(target_arch = "aarch64")]
 use super::codebuf::CodeBuffer;
 #[cfg(target_arch = "aarch64")]
-use super::compiler::{CompiledCode, VALUE_SIZE, value_tags};
+use super::compiler::{CompiledCode, CompiledLoop, VALUE_SIZE, value_tags};
 #[cfg(target_arch = "aarch64")]
 use super::memory::ExecutableMemory;
 #[cfg(target_arch = "aarch64")]
@@ -137,6 +137,127 @@ impl MicroOpJitCompiler {
         Ok(CompiledCode {
             memory,
             entry_offset: 0,
+            stack_map: HashMap::new(),
+            total_regs: self.total_regs,
+        })
+    }
+
+    /// Compile a loop (MicroOp range) to native AArch64 code.
+    ///
+    /// # Arguments
+    /// * `converted` - The MicroOp-converted function
+    /// * `locals_count` - Number of locals in the function
+    /// * `func_index` - Function index (for self-recursion detection)
+    /// * `loop_start_microop_pc` - MicroOp PC of loop start (backward jump target)
+    /// * `loop_end_microop_pc` - MicroOp PC of backward Jmp instruction
+    /// * `loop_start_op_pc` - Op PC for CompiledLoop fields
+    /// * `loop_end_op_pc` - Op PC for CompiledLoop fields
+    pub fn compile_loop(
+        mut self,
+        converted: &ConvertedFunction,
+        locals_count: usize,
+        func_index: usize,
+        loop_start_microop_pc: usize,
+        loop_end_microop_pc: usize,
+        loop_start_op_pc: usize,
+        loop_end_op_pc: usize,
+    ) -> Result<CompiledLoop, String> {
+        self.total_regs = locals_count + converted.temps_count;
+        self.self_func_index = func_index;
+        self.self_locals_count = locals_count;
+
+        // Emit prologue
+        self.emit_prologue();
+
+        // Epilogue label: one past the loop end
+        let epilogue_label = loop_end_microop_pc + 1;
+
+        // Pre-compute jump targets for peephole optimization safety
+        let jump_targets: HashSet<usize> = converted.micro_ops
+            [loop_start_microop_pc..=loop_end_microop_pc]
+            .iter()
+            .filter_map(|op| match op {
+                MicroOp::Jmp { target, .. } => Some(*target),
+                MicroOp::BrIf { target, .. } => Some(*target),
+                MicroOp::BrIfFalse { target, .. } => Some(*target),
+                _ => None,
+            })
+            .collect();
+
+        // Compile each MicroOp in the loop range
+        let ops = &converted.micro_ops;
+        let mut pc = loop_start_microop_pc;
+        while pc <= loop_end_microop_pc {
+            self.labels.insert(pc, self.buf.len());
+
+            // Peephole: fuse CmpI64/CmpI64Imm + BrIfFalse/BrIf
+            let next_pc = pc + 1;
+            if next_pc <= loop_end_microop_pc && !jump_targets.contains(&next_pc) {
+                // Check if the branch in a fused pair is a loop exit
+                if let Some(fused) =
+                    self.try_fuse_cmp_branch_loop(&ops[pc], &ops[next_pc], loop_end_microop_pc)
+                {
+                    fused?;
+                    self.labels.insert(next_pc, self.buf.len());
+                    pc += 2;
+                    continue;
+                }
+            }
+
+            // Handle loop-specific patterns
+            match &ops[pc] {
+                MicroOp::BrIfFalse { target, .. } if *target > loop_end_microop_pc => {
+                    // Loop exit: branch to epilogue
+                    let cond = match &ops[pc] {
+                        MicroOp::BrIfFalse { cond, .. } => cond,
+                        _ => unreachable!(),
+                    };
+                    self.emit_br_if_false(cond, epilogue_label)?;
+                }
+                MicroOp::BrIf { target, .. } if *target > loop_end_microop_pc => {
+                    // Loop exit: branch to epilogue
+                    let cond = match &ops[pc] {
+                        MicroOp::BrIf { cond, .. } => cond,
+                        _ => unreachable!(),
+                    };
+                    self.emit_br_if(cond, epilogue_label)?;
+                }
+                MicroOp::Jmp { target, .. } if *target == loop_start_microop_pc => {
+                    // Backward branch: jump to loop start
+                    self.emit_jmp(loop_start_microop_pc)?;
+                }
+                MicroOp::Ret { .. } => {
+                    return Err("Loop contains Ret instruction".to_string());
+                }
+                _ => {
+                    self.compile_microop(&ops[pc], pc)?;
+                }
+            }
+
+            pc += 1;
+        }
+
+        // Emit epilogue label and code, then patch forward refs
+        self.labels.insert(epilogue_label, self.buf.len());
+        self.emit_epilogue();
+        self.patch_forward_refs();
+
+        // Allocate executable memory
+        let code = self.buf.into_code();
+        let mut memory = ExecutableMemory::new(code.len())
+            .map_err(|e| format!("Failed to allocate executable memory: {}", e))?;
+        memory
+            .write(0, &code)
+            .map_err(|e| format!("Failed to write code: {}", e))?;
+        memory
+            .make_executable()
+            .map_err(|e| format!("Failed to make memory executable: {}", e))?;
+
+        Ok(CompiledLoop {
+            memory,
+            entry_offset: 0,
+            loop_start_pc: loop_start_op_pc,
+            loop_end_pc: loop_end_op_pc,
             stack_map: HashMap::new(),
             total_regs: self.total_regs,
         })
@@ -480,6 +601,40 @@ impl MicroOpJitCompiler {
         }
 
         Some(self.emit_fused_cmp_branch(load_a, load_b_or_imm, cmp_cond, target, invert))
+    }
+
+    /// Loop-aware version of try_fuse_cmp_branch.
+    /// Redirects loop exit branches (target > loop_end) to the epilogue label.
+    fn try_fuse_cmp_branch_loop(
+        &mut self,
+        cmp_op: &MicroOp,
+        branch_op: &MicroOp,
+        loop_end_microop_pc: usize,
+    ) -> Option<Result<(), String>> {
+        let (cmp_dst, cmp_cond, load_a, load_b_or_imm) = match cmp_op {
+            MicroOp::CmpI64 { dst, a, b, cond } => (dst, cond, a, CmpOperand::Reg(b)),
+            MicroOp::CmpI64Imm { dst, a, imm, cond } => (dst, cond, a, CmpOperand::Imm(*imm)),
+            _ => return None,
+        };
+
+        let (branch_cond_vreg, target, invert) = match branch_op {
+            MicroOp::BrIfFalse { cond, target } => (cond, *target, true),
+            MicroOp::BrIf { cond, target } => (cond, *target, false),
+            _ => return None,
+        };
+
+        if branch_cond_vreg != cmp_dst {
+            return None;
+        }
+
+        // Redirect loop exit branches to epilogue label
+        let resolved_target = if target > loop_end_microop_pc {
+            loop_end_microop_pc + 1 // epilogue label
+        } else {
+            target
+        };
+
+        Some(self.emit_fused_cmp_branch(load_a, load_b_or_imm, cmp_cond, resolved_target, invert))
     }
 
     fn emit_fused_cmp_branch(

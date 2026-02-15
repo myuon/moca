@@ -497,21 +497,40 @@ impl VM {
             return; // Already compiled
         }
 
+        // Convert to MicroOp IR
+        use super::microop_converter;
+        let converted = microop_converter::convert(func);
+
+        // Map Op PCs to MicroOp PCs
+        let loop_start_microop = converted.pc_map[loop_start_pc];
+        let loop_end_microop = converted.pc_map[loop_end_pc];
+
         if self.trace_jit {
             eprintln!(
-                "[JIT] Hot loop detected in '{}' at PC {}..{} (iterations: {})",
-                func.name, loop_start_pc, loop_end_pc, self.jit_threshold
+                "[JIT/MicroOp] Hot loop detected in '{}' at Op PC {}..{} (MicroOp PC {}..{}, iterations: {})",
+                func.name,
+                loop_start_pc,
+                loop_end_pc,
+                loop_start_microop,
+                loop_end_microop,
+                self.jit_threshold
             );
         }
 
-        let compiler = JitCompiler::new();
-        let jit_compiled_funcs: std::collections::HashSet<usize> =
-            self.jit_functions.keys().copied().collect();
-        match compiler.compile_loop(func, loop_start_pc, loop_end_pc, &jit_compiled_funcs) {
+        let compiler = MicroOpJitCompiler::new();
+        match compiler.compile_loop(
+            &converted,
+            func.locals_count,
+            func_index,
+            loop_start_microop,
+            loop_end_microop,
+            loop_start_pc,
+            loop_end_pc,
+        ) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
-                        "[JIT] Compiled loop in '{}' PC {}..{} ({} bytes)",
+                        "[JIT/MicroOp] Compiled loop in '{}' Op PC {}..{} ({} bytes)",
                         func.name,
                         loop_start_pc,
                         loop_end_pc,
@@ -524,7 +543,7 @@ impl VM {
             Err(e) => {
                 if self.trace_jit {
                     eprintln!(
-                        "[JIT] Failed to compile loop in '{}' PC {}..{}: {}",
+                        "[JIT/MicroOp] Failed to compile loop in '{}' Op PC {}..{}: {}",
                         func.name, loop_start_pc, loop_end_pc, e
                     );
                 }
@@ -618,23 +637,34 @@ impl VM {
     ) -> Result<usize, String> {
         let key = (func_index, loop_end_pc);
 
-        // Get the entry point first to avoid borrow conflicts
-        let (entry, loop_end): (
+        // Get the entry point and total_regs first to avoid borrow conflicts
+        let (entry, loop_end, total_regs): (
             unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            usize,
             usize,
         ) = {
             let compiled = self.jit_loops.get(&key).unwrap();
-            (unsafe { compiled.entry_point() }, compiled.loop_end_pc)
+            (
+                unsafe { compiled.entry_point() },
+                compiled.loop_end_pc,
+                compiled.total_regs,
+            )
         };
 
-        // Create JIT context with locals
-        let locals_count = func.locals_count;
-        let mut ctx = JitContext::new(locals_count);
+        // MicroOp JIT uses total_regs (locals + temps), legacy uses locals_count
+        let is_microop_jit = total_regs > 0;
+        let frame_size = if is_microop_jit {
+            total_regs
+        } else {
+            func.locals_count
+        };
 
-        // Copy current locals from VM to JIT context
+        let mut ctx = JitContext::new(frame_size);
+
+        // Copy VRegs from VM stack to JIT context
         let frame = self.frames.last().unwrap();
         let stack_base = frame.stack_base;
-        for i in 0..locals_count {
+        for i in 0..frame_size {
             if stack_base + i < self.stack.len() {
                 ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
             }
@@ -654,22 +684,34 @@ impl VM {
         };
 
         // Execute the JIT loop code
-        let _result: JitReturn = unsafe {
-            entry(
-                &mut call_ctx as *mut JitCallContext as *mut u8,
-                ctx.stack,
-                ctx.locals,
-            )
+        // MicroOp JIT: x0=ctx, x1=frame_base (locals), x2=stack (unused)
+        // Legacy JIT:  x0=ctx, x1=stack, x2=locals
+        let _result: JitReturn = if is_microop_jit {
+            unsafe {
+                entry(
+                    &mut call_ctx as *mut JitCallContext as *mut u8,
+                    ctx.locals,
+                    ctx.stack,
+                )
+            }
+        } else {
+            unsafe {
+                entry(
+                    &mut call_ctx as *mut JitCallContext as *mut u8,
+                    ctx.stack,
+                    ctx.locals,
+                )
+            }
         };
 
         if self.trace_jit {
             eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
         }
 
-        // Copy locals back from JIT context to VM
+        // Copy VRegs back from JIT context to VM stack
         let frame = self.frames.last().unwrap();
         let stack_base = frame.stack_base;
-        for i in 0..locals_count {
+        for i in 0..frame_size {
             if stack_base + i < self.stack.len() {
                 let jit_val = ctx.get_local(i);
                 self.stack[stack_base + i] = jit_val.to_value();
