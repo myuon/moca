@@ -950,7 +950,7 @@ fn rust_string_interpolation<W: Write>(writer: &mut W) {
     }
 
     let mut total: i64 = 0;
-    for i in 0..800i64 {
+    for i in 0..8000i64 {
         let h = compute_val(i, i * 3 + 7);
         let s = i + h;
         let line = format!("item[{}]: hash={}, sum={}", i, h, s);

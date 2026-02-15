@@ -585,8 +585,13 @@ impl Heap {
                 self.set_marked(offset, false);
                 live_bytes += obj_size * 8;
             } else {
-                // Dead object - add to free list
-                self.add_to_free_list(offset, obj_size);
+                // Dead object - add to free list if large enough.
+                // Free blocks need at least 2 words (header + next pointer).
+                // 1-word objects (slot_count=0) cannot hold a next pointer,
+                // so adding them would corrupt adjacent memory.
+                if obj_size >= 2 {
+                    self.add_to_free_list(offset, obj_size);
+                }
             }
 
             offset += obj_size;
