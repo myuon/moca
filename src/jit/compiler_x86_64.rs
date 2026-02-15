@@ -88,6 +88,9 @@ pub struct CompiledLoop {
     pub loop_end_pc: usize,
     /// Stack map for GC (pc_offset -> bitmap of stack slots with refs)
     pub stack_map: HashMap<usize, Vec<bool>>,
+    /// Total number of VRegs (locals + temps) for MicroOp JIT.
+    /// 0 means legacy Op-based JIT.
+    pub total_regs: usize,
 }
 
 impl CompiledLoop {
@@ -390,6 +393,7 @@ impl JitCompiler {
             loop_start_pc,
             loop_end_pc,
             stack_map: self.stack_map,
+            total_regs: 0,
         })
     }
 
