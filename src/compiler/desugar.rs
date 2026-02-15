@@ -36,10 +36,13 @@ impl Desugar {
     /// Array<T> is handled directly in codegen (not desugared) to support chained access.
     fn should_desugar_index(&self, obj_type: &Type) -> bool {
         match obj_type {
-            // Vec<T> and Map<K,V> generic structs should be desugared
-            Type::GenericStruct { name, .. } if name == "Vec" || name == "Map" => true,
-            // Legacy Vector type - also desugar for consistency
-            Type::Vector(_) => true,
+            // Map<K,V> generic structs should be desugared to get/set method calls
+            Type::GenericStruct { name, .. } if name == "Map" => true,
+            // Vec<T> uses ptr-based layout and is handled directly in codegen
+            // with HeapLoad2/HeapStore2 for better performance
+            Type::GenericStruct { name, .. } if name == "Vec" => false,
+            // Legacy Vector type - handled directly in codegen (ptr-based layout)
+            Type::Vector(_) => false,
             // Array, String, and other types should NOT be desugared
             Type::Array(_) | Type::String => false,
             // Struct types should NOT be desugared

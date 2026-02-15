@@ -155,6 +155,10 @@ pub enum Op {
     HeapStore(usize),
     HeapLoadDyn,
     HeapStoreDyn,
+    /// Indirect load: pop idx, pop ref → push heap[heap[ref][0]][idx]
+    HeapLoad2,
+    /// Indirect store: pop val, pop idx, pop ref → heap[heap[ref][0]][idx] = val
+    HeapStore2,
 
     // ========================================
     // System / Builtins
@@ -289,6 +293,8 @@ impl Op {
             Op::HeapStore(_) => "HeapStore",
             Op::HeapLoadDyn => "HeapLoadDyn",
             Op::HeapStoreDyn => "HeapStoreDyn",
+            Op::HeapLoad2 => "HeapLoad2",
+            Op::HeapStore2 => "HeapStore2",
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::PrintDebug => "PrintDebug",

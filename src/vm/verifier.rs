@@ -450,6 +450,8 @@ impl Verifier {
             Op::HeapStore(_) => (2, 0),       // pops ref and value
             Op::HeapLoadDyn => (2, 1),        // pops ref and index, pushes value
             Op::HeapStoreDyn => (3, 0),       // pops ref, index, and value
+            Op::HeapLoad2 => (2, 1), // pops ref and index, pushes value (indirect via slot 0)
+            Op::HeapStore2 => (3, 0), // pops ref, index, and value (indirect via slot 0)
             // System / Builtins
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::GcHint(_) => (0, 0),

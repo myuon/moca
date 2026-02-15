@@ -1694,6 +1694,8 @@ impl<'a> Disassembler<'a> {
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
             Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
+            Op::HeapLoad2 => self.output.push_str("HeapLoad2"),
+            Op::HeapStore2 => self.output.push_str("HeapStore2"),
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
@@ -2116,6 +2118,18 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         )),
         MicroOp::HeapStoreDyn { obj, idx, src } => output.push_str(&format!(
             "HeapStoreDyn {}, {}, {}",
+            format_vreg(obj),
+            format_vreg(idx),
+            format_vreg(src)
+        )),
+        MicroOp::HeapLoad2 { dst, obj, idx } => output.push_str(&format!(
+            "HeapLoad2 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(obj),
+            format_vreg(idx)
+        )),
+        MicroOp::HeapStore2 { obj, idx, src } => output.push_str(&format!(
+            "HeapStore2 {}, {}, {}",
             format_vreg(obj),
             format_vreg(idx),
             format_vreg(src)
