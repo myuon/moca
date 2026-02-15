@@ -9,6 +9,8 @@ use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler::{CompiledCode, CompiledLoop, JitCompiler};
+#[cfg(all(target_arch = "aarch64", feature = "jit"))]
+use crate::jit::compiler_microop::MicroOpJitCompiler;
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
 use crate::jit::compiler_x86_64::{CompiledCode, CompiledLoop, JitCompiler};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
@@ -360,18 +362,23 @@ impl VM {
     }
 
     /// Compile a function to native code (AArch64 with jit feature only).
+    /// Uses MicroOp-based JIT compiler which takes register-based IR as input.
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
         if self.jit_functions.contains_key(&func_index) {
             return; // Already compiled
         }
 
-        let compiler = JitCompiler::new();
-        match compiler.compile(func, func_index) {
+        // Convert to MicroOp IR first
+        use super::microop_converter;
+        let converted = microop_converter::convert(func);
+
+        let compiler = MicroOpJitCompiler::new();
+        match compiler.compile(&converted, func.locals_count, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
-                        "[JIT] Compiled function '{}' ({} bytes)",
+                        "[JIT/MicroOp] Compiled function '{}' ({} bytes)",
                         func.name,
                         compiled.memory.size()
                     );
@@ -381,7 +388,7 @@ impl VM {
             }
             Err(e) => {
                 if self.trace_jit {
-                    eprintln!("[JIT] Failed to compile '{}': {}", func.name, e);
+                    eprintln!("[JIT/MicroOp] Failed to compile '{}': {}", func.name, e);
                 }
             }
         }
@@ -741,8 +748,8 @@ impl VM {
 
     /// Execute a JIT compiled function (AArch64 with jit feature only).
     ///
-    /// AArch64 ABI: Arguments passed in x0-x2, return value in x0/x1.
-    /// Function signature: fn(vm_ctx: *mut u8, stack: *mut JitValue, locals: *mut JitValue) -> JitReturn
+    /// MicroOp-based JIT: x0=ctx, x1=frame_base (VReg array), x2=unused.
+    /// Frame layout: VReg(0..locals_count) = locals, VReg(locals_count..) = temps.
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn execute_jit_function(
         &mut self,
@@ -751,15 +758,23 @@ impl VM {
         func: &Function,
         chunk: &Chunk,
     ) -> Result<Value, String> {
-        // Get the entry point first to avoid borrow conflicts
-        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn = {
+        // Get the entry point and total_regs to avoid borrow conflicts
+        let (entry, total_regs): (
+            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            usize,
+        ) = {
             let compiled = self.jit_functions.get(&func_index).unwrap();
-            unsafe { compiled.entry_point() }
+            (unsafe { compiled.entry_point() }, compiled.total_regs)
         };
 
-        // Create JIT context with locals
-        let locals_count = func.locals_count;
-        let mut ctx = JitContext::new(locals_count);
+        // Allocate frame: total_regs slots (locals + temps)
+        // Use total_regs if MicroOp-based (> 0), otherwise fall back to locals_count
+        let frame_size = if total_regs > 0 {
+            total_regs
+        } else {
+            func.locals_count
+        };
+        let mut ctx = JitContext::new(frame_size);
 
         // Pop arguments from VM stack and push to JIT stack (in reverse order)
         let args: Vec<Value> = (0..argc)
@@ -788,12 +803,12 @@ impl VM {
         };
 
         // Execute the JIT code
-        // Pass call context, stack and locals pointers
+        // MicroOp JIT: x1=frame_base (locals array), x2=unused (stack for compat)
         let result: JitReturn = unsafe {
             entry(
                 &mut call_ctx as *mut JitCallContext as *mut u8,
-                ctx.stack,
                 ctx.locals,
+                ctx.stack,
             )
         };
 
@@ -3552,6 +3567,7 @@ unsafe extern "C" fn jit_call_helper(
         // Get entry point directly from the compiled code
         let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
             unsafe { compiled.entry_point() };
+        let is_microop_jit = compiled.total_regs > 0;
 
         // Use stack-allocated locals (fixed size, supports up to 64 locals)
         const MAX_LOCALS: usize = 64;
@@ -3566,12 +3582,12 @@ unsafe extern "C" fn jit_call_helper(
         let mut stack = [JitValue { tag: 0, payload: 0 }; 256];
 
         // Call JIT function directly with stack-allocated buffers
-        let result = unsafe {
-            entry(
-                ctx as *mut u8, // Same context - recursive calls use same call_helper
-                stack.as_mut_ptr(),
-                locals.as_mut_ptr(),
-            )
+        // MicroOp JIT: x1=frame_base (locals), x2=unused (stack)
+        // Legacy Op JIT: x1=stack, x2=locals
+        let result = if is_microop_jit {
+            unsafe { entry(ctx as *mut u8, locals.as_mut_ptr(), stack.as_mut_ptr()) }
+        } else {
+            unsafe { entry(ctx as *mut u8, stack.as_mut_ptr(), locals.as_mut_ptr()) }
         };
 
         // Only check trace_jit flag if enabled (avoid branch in hot path when disabled)
