@@ -18,7 +18,7 @@ fun string_interp_bench() {
     while i < 800 {
         let h = compute_val(i, i * 3 + 7);
         let s = i + h;
-        let line = "item[{i}]: hash={h}, sum={s}";
+        let line = $"item[{i}]: hash={h}, sum={s}";
         total = total + len(line);
         i = i + 1;
     }

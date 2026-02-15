@@ -77,7 +77,7 @@ if fd >= 0 {
 
     if result >= 0 {
         // Build HTTP POST request with JSON body
-        let body = "{{\"x\":123}}";
+        let body = "{\"x\":123}";
         let headers = "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: " + to_string(len(body)) + "\r\nConnection: close\r\n\r\n";
         let request = headers + body;
         let written = write(fd, request, len(request));

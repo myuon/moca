@@ -272,6 +272,17 @@ impl<'a> Lexer<'a> {
                         return Err(self.error("expected '||'"));
                     }
                 }
+                '$' => {
+                    // $"..." is an interpolated string
+                    let mut chars = self.chars.clone();
+                    chars.next(); // consume '$'
+                    if chars.peek().map(|(_, c)| *c) == Some('"') {
+                        self.advance(); // consume '$'
+                        self.scan_interpolated_string()?
+                    } else {
+                        return Err(self.error("unexpected character '$'"));
+                    }
+                }
                 '"' => self.scan_string()?,
                 '0'..='9' => self.scan_number()?,
                 'a'..='z' | 'A'..='Z' | '_' => self.scan_identifier(),
@@ -423,6 +434,35 @@ impl<'a> Lexer<'a> {
     fn scan_string(&mut self) -> Result<TokenKind, String> {
         self.advance(); // consume opening quote
 
+        let mut value = String::new();
+
+        loop {
+            match self.peek() {
+                None => return Err(self.error("unterminated string")),
+                Some((_, '"')) => {
+                    self.advance();
+                    break;
+                }
+                Some((_, '\\')) => {
+                    let ch = self.scan_escape()?;
+                    value.push(ch);
+                }
+                Some((_, '\n')) => {
+                    return Err(self.error("unterminated string (newline in string)"));
+                }
+                Some((_, ch)) => {
+                    self.advance();
+                    value.push(ch);
+                }
+            }
+        }
+
+        Ok(TokenKind::Str(value))
+    }
+
+    fn scan_interpolated_string(&mut self) -> Result<TokenKind, String> {
+        self.advance(); // consume opening quote
+
         let mut parts: Vec<StringPart> = Vec::new();
         let mut current = String::new();
         let mut has_interpolation = false;
@@ -488,7 +528,7 @@ impl<'a> Lexer<'a> {
                 }
                 Some((_, '}')) => {
                     self.advance();
-                    // }} is an escape for literal }, but a lone } is also literal
+                    // }} is an escape for literal }
                     if let Some((_, '}')) = self.peek() {
                         self.advance();
                     }
