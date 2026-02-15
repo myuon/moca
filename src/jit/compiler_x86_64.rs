@@ -55,6 +55,9 @@ pub struct CompiledCode {
     pub entry_offset: usize,
     /// Stack map for GC (pc_offset -> bitmap of stack slots with refs)
     pub stack_map: HashMap<usize, Vec<bool>>,
+    /// Total number of VRegs (locals + temps) for frame allocation.
+    /// Used by MicroOp-based JIT; 0 for legacy Op-based JIT.
+    pub total_regs: usize,
 }
 
 impl CompiledCode {
@@ -232,6 +235,7 @@ impl JitCompiler {
             memory,
             entry_offset,
             stack_map: self.stack_map,
+            total_regs: 0,
         })
     }
 
