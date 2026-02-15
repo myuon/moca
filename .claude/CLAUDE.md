@@ -25,6 +25,17 @@ gh run view <run-id> --log         # 失敗時のログ確認
 - プッシュ後に `gh pr checks --watch --fail-fast` でCIの完了を待つ
 - failしたら `gh run view` でログを確認し、原因を調査して修正・再プッシュする
 
+## PRマージ
+
+- PRをマージするときは **squash merge ではなく merge commit** を使うこと
+  ```bash
+  gh pr merge <pr-number> --merge --delete-branch
+  ```
+- マージ後は main ブランチに戻って最新を pull すること
+  ```bash
+  git checkout main && git pull
+  ```
+
 ## moca lint
 
 `.mc` ファイルを変更・作成した場合は `moca lint <file>` を実行し、警告があれば修正すること。
