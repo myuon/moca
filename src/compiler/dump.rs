@@ -2135,6 +2135,44 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(src)
         )),
 
+        // String operations
+        MicroOp::StringConst { dst, idx } => {
+            let s = chunk
+                .strings
+                .get(*idx)
+                .map(|s| {
+                    let escaped = s.replace('\n', "\\n").replace('\t', "\\t");
+                    if escaped.len() > 40 {
+                        format!("{}...", &escaped[..40])
+                    } else {
+                        escaped
+                    }
+                })
+                .unwrap_or_else(|| "<?>".to_string());
+            output.push_str(&format!(
+                "StringConst {}, {} ; \"{}\"",
+                format_vreg(dst),
+                idx,
+                s
+            ))
+        }
+        MicroOp::ToString { dst, src } => output.push_str(&format!(
+            "ToString {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::PrintDebug { dst, src } => output.push_str(&format!(
+            "PrintDebug {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::StringConcat { dst, a, b } => output.push_str(&format!(
+            "StringConcat {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),

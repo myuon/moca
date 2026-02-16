@@ -193,6 +193,12 @@ pub struct JitCallContext {
     pub string_cache: *const u64,
     /// Number of entries in the string cache
     pub string_cache_len: u64,
+    /// ToString helper: (ctx, tag, payload) -> JitReturn (returns Ref to string)
+    pub to_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
+    /// PrintDebug helper: (ctx, tag, payload) -> JitReturn (returns same value)
+    pub print_debug_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
+    /// String concat helper: (ctx, ref_a, ref_b) -> JitReturn (returns Ref to new string)
+    pub string_concat_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
 }
 
 /// Type signature for call helper function.

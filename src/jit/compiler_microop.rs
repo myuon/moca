@@ -385,6 +385,16 @@ impl MicroOpJitCompiler {
                 self.emit_call_indirect(callee, args, ret.as_ref())
             }
 
+            // String operations
+            MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
+            MicroOp::ToString { dst, src } => self.emit_to_string(dst, src),
+            MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
+            MicroOp::StringConcat { dst, a, b } => self.emit_string_concat(dst, a, b),
+
+            // Stack bridge (spill/restore across calls)
+            MicroOp::StackPush { src } => self.emit_stack_push(src),
+            MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
+
             _ => Err(format!(
                 "Unsupported MicroOp for JIT: {:?}",
                 std::mem::discriminant(op)
@@ -1438,6 +1448,195 @@ impl MicroOpJitCompiler {
         // Store tag and payload
         asm.str(regs::TMP4, regs::TMP1, 0);
         asm.str(regs::TMP5, regs::TMP1, 8);
+        Ok(())
+    }
+
+    // ==================== String Operations ====================
+
+    /// Emit StringConst: load string from cache (fast path) or call helper (slow path).
+    fn emit_string_const(&mut self, dst: &VReg, string_index: usize) -> Result<(), String> {
+        // Fast path: check string_cache[string_index]
+        // string_cache is at JitCallContext offset 56
+        // Each cache entry is 16 bytes: Option<GcRef> = [discriminant: u64, index: u64]
+
+        // TMP0 = string_cache pointer
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::VM_CTX, 56); // TMP0 = string_cache
+        }
+        // TMP0 = &string_cache[string_index]
+        self.emit_load_imm64((string_index * 16) as i64, regs::TMP3);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP3);
+            // TMP1 = discriminant (0 = None, non-0 = Some)
+            asm.ldr(regs::TMP1, regs::TMP0, 0);
+        }
+
+        // CBZ TMP1, slow_path (cache miss)
+        let cbz_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbz(regs::TMP1, 0); // placeholder
+        }
+
+        // === FAST PATH: cache hit ===
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // TMP1 = cached GcRef.index (offset 8 from entry)
+            asm.ldr(regs::TMP1, regs::TMP0, 8);
+        }
+        // Store TAG_PTR + index to dst
+        self.emit_load_imm64(value_tags::TAG_PTR as i64, regs::TMP0);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+            asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+
+        // B to end (skip slow path)
+        let b_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder
+        }
+
+        // === SLOW PATH: cache miss — call push_string_helper ===
+        let slow_start = self.buf.len();
+        // Patch CBZ
+        {
+            let offset = (slow_start as i32 - cbz_pos as i32) / 4;
+            let code = self.buf.code_mut();
+            let inst = u32::from_le_bytes([
+                code[cbz_pos],
+                code[cbz_pos + 1],
+                code[cbz_pos + 2],
+                code[cbz_pos + 3],
+            ]);
+            let patched = (inst & 0xFF00001F) | (((offset as u32) & 0x7FFFF) << 5);
+            code[cbz_pos..cbz_pos + 4].copy_from_slice(&patched.to_le_bytes());
+        }
+
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Save callee-saved
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            // Args: X0=ctx, X1=string_index
+            asm.mov(Reg::X0, regs::VM_CTX);
+        }
+        self.emit_load_imm64(string_index as i64, Reg::X1);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Load push_string_helper from JitCallContext offset 24
+            asm.ldr(regs::TMP4, regs::VM_CTX, 24);
+            asm.blr(regs::TMP4);
+            // Restore callee-saved
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+            // Result: X0=tag, X1=payload
+            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+
+        // === END ===
+        let end_pos = self.buf.len();
+        // Patch B (unconditional branch)
+        {
+            let offset = (end_pos as i32 - b_pos as i32) / 4;
+            let code = self.buf.code_mut();
+            let patched = 0x14000000 | ((offset as u32) & 0x03FFFFFF);
+            code[b_pos..b_pos + 4].copy_from_slice(&patched.to_le_bytes());
+        }
+
+        Ok(())
+    }
+
+    /// Emit ToString: call to_string_helper(ctx, tag, payload) -> (tag, payload)
+    fn emit_to_string(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Save callee-saved
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            // Args: X0=ctx, X1=tag, X2=payload
+            asm.mov(Reg::X0, regs::VM_CTX);
+            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+            // Load to_string_helper from JitCallContext offset 72
+            asm.ldr(regs::TMP4, regs::VM_CTX, 72);
+            asm.blr(regs::TMP4);
+            // Restore callee-saved
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+            // Store result: X0=tag, X1=payload
+            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+        Ok(())
+    }
+
+    /// Emit PrintDebug: call print_debug_helper(ctx, tag, payload) -> (tag, payload)
+    fn emit_print_debug(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Save callee-saved
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            // Args: X0=ctx, X1=tag, X2=payload
+            asm.mov(Reg::X0, regs::VM_CTX);
+            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+            // Load print_debug_helper from JitCallContext offset 80
+            asm.ldr(regs::TMP4, regs::VM_CTX, 80);
+            asm.blr(regs::TMP4);
+            // Restore callee-saved
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+            // Store result (returns original value): X0=tag, X1=payload
+            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+        Ok(())
+    }
+
+    /// Emit StringConcat: call string_concat_helper(ctx, ref_a, ref_b) -> (tag, payload)
+    fn emit_string_concat(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            // Save callee-saved
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            // Args: X0=ctx, X1=ref_a (payload), X2=ref_b (payload)
+            asm.mov(Reg::X0, regs::VM_CTX);
+            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+            // Load string_concat_helper from JitCallContext offset 88
+            asm.ldr(regs::TMP4, regs::VM_CTX, 88);
+            asm.blr(regs::TMP4);
+            // Restore callee-saved
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+            // Store result: X0=tag, X1=payload
+            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+        Ok(())
+    }
+
+    // ==================== Stack Bridge ====================
+
+    /// Emit StackPush: push a VReg's tag+payload onto the machine stack.
+    fn emit_stack_push(&mut self, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load tag and payload
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // Push both as a pair (tag at lower address, payload at higher)
+        asm.stp_pre(regs::TMP0, regs::TMP1, -16);
+        Ok(())
+    }
+
+    /// Emit StackPop: pop tag+payload from the machine stack into a VReg.
+    fn emit_stack_pop(&mut self, dst: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Pop pair (tag from lower address, payload from higher)
+        asm.ldp_post(regs::TMP0, regs::TMP1, 16);
+        // Store to VReg
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
         Ok(())
     }
 

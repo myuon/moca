@@ -395,6 +395,12 @@ impl MicroOpJitCompiler {
                 self.emit_call_indirect(callee, args, ret.as_ref())
             }
 
+            // String operations
+            MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
+            MicroOp::ToString { dst, src } => self.emit_to_string(dst, src),
+            MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
+            MicroOp::StringConcat { dst, a, b } => self.emit_string_concat(dst, a, b),
+
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1403,6 +1409,161 @@ impl MicroOpJitCompiler {
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
         asm.xor_rr(regs::TMP0, regs::TMP0);
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        Ok(())
+    }
+
+    // ==================== String Operations ====================
+
+    /// Emit StringConst: load string from cache (fast path) or call helper (slow path).
+    fn emit_string_const(&mut self, dst: &VReg, string_index: usize) -> Result<(), String> {
+        // Fast path: check string_cache[string_index]
+        // string_cache is at JitCallContext offset 56
+        // Each cache entry is 16 bytes: Option<GcRef> = [discriminant: u64, index: u64]
+
+        // TMP0 = string_cache pointer
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::VM_CTX, 56);
+            // TMP0 = &string_cache[string_index]
+            asm.add_ri32(regs::TMP0, (string_index * 16) as i32);
+            // TMP1 = discriminant (0 = None, non-0 = Some)
+            asm.mov_rm(regs::TMP1, regs::TMP0, 0);
+            // Check if None
+            asm.test_rr(regs::TMP1, regs::TMP1);
+        }
+
+        // JE to slow path (cache miss)
+        let je_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.je_rel32(0); // placeholder
+        }
+
+        // === FAST PATH: cache hit ===
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // TMP1 = cached GcRef.index (offset 8 from entry)
+            asm.mov_rm(regs::TMP1, regs::TMP0, 8);
+            // Store TAG_PTR + index to dst
+            asm.mov_ri64(regs::TMP0, value_tags::TAG_PTR as i64);
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP1);
+        }
+
+        // JMP to end (skip slow path)
+        let jmp_pos = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // placeholder
+        }
+
+        // === SLOW PATH: cache miss — call push_string_helper ===
+        let slow_start = self.buf.len();
+        // Patch JE
+        {
+            let offset = (slow_start as i32) - (je_pos as i32) - 6;
+            let code = self.buf.code_mut();
+            code[je_pos + 2..je_pos + 6].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Save callee-saved
+            asm.push(regs::VM_CTX);
+            asm.push(regs::FRAME_BASE);
+            // Args: RDI=ctx, RSI=string_index
+            asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+            asm.mov_ri64(Reg::Rsi, string_index as i64);
+            // Load push_string_helper from JitCallContext offset 24
+            asm.mov_rm(regs::TMP4, regs::VM_CTX, 24);
+            asm.call_r(regs::TMP4);
+            // Restore callee-saved
+            asm.pop(regs::FRAME_BASE);
+            asm.pop(regs::VM_CTX);
+            // Update heap_base from context (helper may have triggered GC)
+            // Result: RAX=tag, RDX=payload
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        }
+
+        // === END ===
+        let end_pos = self.buf.len();
+        // Patch JMP
+        {
+            let offset = (end_pos as i32) - (jmp_pos as i32) - 5;
+            let code = self.buf.code_mut();
+            code[jmp_pos + 1..jmp_pos + 5].copy_from_slice(&offset.to_le_bytes());
+        }
+
+        Ok(())
+    }
+
+    /// Emit ToString: call to_string_helper(ctx, tag, payload) -> (tag, payload)
+    fn emit_to_string(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=tag, RDX=payload
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // Load to_string_helper from JitCallContext offset 72
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result (RAX=tag, RDX=payload)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        // Update heap_base (GC may have moved heap)
+        asm.mov_rm(regs::TMP0, regs::VM_CTX, 48);
+        // (heap_base is read fresh each time from VM_CTX, so no update needed here)
+        Ok(())
+    }
+
+    /// Emit PrintDebug: call print_debug_helper(ctx, tag, payload) -> (tag, payload)
+    fn emit_print_debug(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=tag, RDX=payload
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // Load print_debug_helper from JitCallContext offset 80
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 80);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result (returns original value: RAX=tag, RDX=payload)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        Ok(())
+    }
+
+    /// Emit StringConcat: call string_concat_helper(ctx, ref_a, ref_b) -> (tag, payload)
+    fn emit_string_concat(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=ref_a (payload), RDX=ref_b (payload)
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+        // Load string_concat_helper from JitCallContext offset 88
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 88);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result (RAX=tag, RDX=payload)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
         Ok(())
     }
 
