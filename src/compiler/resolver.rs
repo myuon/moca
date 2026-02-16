@@ -293,7 +293,7 @@ impl<'a> Resolver<'a> {
                 "print_debug".to_string(),
                 "len".to_string(),
                 "type_of".to_string(),
-                "to_string".to_string(),
+                "__float_to_string".to_string(),
                 "parse_int".to_string(),
                 // Thread operations
                 "spawn".to_string(),

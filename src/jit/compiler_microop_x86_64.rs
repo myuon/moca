@@ -397,7 +397,7 @@ impl MicroOpJitCompiler {
 
             // String operations
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
-            MicroOp::ToString { dst, src } => self.emit_to_string(dst, src),
+            MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
             // Heap allocation operations
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
@@ -1501,8 +1501,8 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit ToString: call to_string_helper(ctx, tag, payload) -> (tag, payload)
-    fn emit_to_string(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+    /// Emit FloatToString: call float_to_string_helper(ctx, tag, payload) -> (tag, payload)
+    fn emit_float_to_string(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Save callee-saved
         asm.push(regs::VM_CTX);
@@ -1511,7 +1511,7 @@ impl MicroOpJitCompiler {
         asm.mov_rr(Reg::Rdi, regs::VM_CTX);
         asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_tag_offset(src));
         asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(src));
-        // Load to_string_helper from JitCallContext offset 72
+        // Load float_to_string_helper from JitCallContext offset 72
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
         asm.call_r(regs::TMP4);
         // Restore callee-saved

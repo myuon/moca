@@ -118,6 +118,65 @@ fun time_nanos() -> int {
     return __syscall(11);
 }
 
+// ============================================================================
+// Value to String Conversion
+// ============================================================================
+
+// Internal: convert integer to string using digit extraction.
+fun _int_to_string(n: int) -> string {
+    if n == 0 {
+        return "0";
+    }
+    let negative = n < 0;
+    let val = n;
+    if negative {
+        val = -n;
+    }
+
+    // Extract digits in reverse order (max 20 digits for i64 + sign)
+    let buf = __alloc_heap(21);
+    let count = 0;
+    while val > 0 {
+        __heap_store(buf, count, val % 10 + 48);
+        val = val / 10;
+        count = count + 1;
+    }
+    if negative {
+        __heap_store(buf, count, 45);
+        count = count + 1;
+    }
+
+    // Reverse into final buffer
+    let data = __alloc_heap(count);
+    let i = 0;
+    while i < count {
+        __heap_store(data, i, __heap_load(buf, count - 1 - i));
+        i = i + 1;
+    }
+    return __alloc_string(data, count);
+}
+
+// Convert any value to its string representation.
+fun to_string(x: any) -> string {
+    let t = type_of(x);
+    if t == "string" {
+        return x;
+    }
+    if t == "int" {
+        return _int_to_string(x);
+    }
+    if t == "float" {
+        return __float_to_string(x);
+    }
+    if t == "bool" {
+        if x {
+            return "true";
+        }
+        return "false";
+    }
+    return "nil";
+}
+
 // Zero-pad an integer to 2 digits.
 fun _pad2(n: int) -> string {
     if n < 10 {

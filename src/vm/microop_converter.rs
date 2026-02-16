@@ -841,10 +841,10 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::StringConst { dst, idx: *idx });
                 vstack.push(Vse::RegRef(dst));
             }
-            Op::ToString => {
+            Op::FloatToString => {
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::ToString { dst, src });
+                micro_ops.push(MicroOp::FloatToString { dst, src });
                 vstack.push(Vse::RegRef(dst));
             }
             Op::PrintDebug => {

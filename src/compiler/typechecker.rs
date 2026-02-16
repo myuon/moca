@@ -2556,10 +2556,10 @@ impl TypeChecker {
                 }
                 Some(Type::String)
             }
-            "to_string" => {
+            "__float_to_string" => {
                 if args.len() != 1 {
                     self.errors
-                        .push(TypeError::new("to_string expects 1 argument", span));
+                        .push(TypeError::new("__float_to_string expects 1 argument", span));
                 }
                 for arg in args {
                     self.infer_expr(arg, env);
