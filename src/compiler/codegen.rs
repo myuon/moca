@@ -8,6 +8,9 @@ use crate::compiler::types::Type;
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op, ValueType};
 use std::collections::HashMap;
 
+/// Maximum nesting depth for @inline expansion (prevents code explosion).
+const MAX_INLINE_DEPTH: usize = 4;
+
 /// Code generator that compiles resolved AST to bytecode.
 pub struct Codegen {
     functions: Vec<Function>,
@@ -28,10 +31,9 @@ pub struct Codegen {
     inline_functions: Vec<ResolvedFunction>,
     /// Offset applied to local variable slots during inline expansion
     local_offset: usize,
-    /// When inside an inline expansion, collects positions of Jmp placeholders
-    /// that need to be patched to jump to the end of the inlined block.
-    /// None when not inlining.
-    inline_return_patches: Option<Vec<usize>>,
+    /// Stack of return-jump patch lists for nested inline expansion.
+    /// Empty when not inlining; each level pushes a new Vec.
+    inline_return_patches_stack: Vec<Vec<usize>>,
     /// Tracks total locals count for the current function being compiled
     /// (grows as inline expansions add locals)
     current_locals_count: usize,
@@ -57,7 +59,7 @@ impl Codegen {
             function_return_types: Vec::new(),
             inline_functions: Vec::new(),
             local_offset: 0,
-            inline_return_patches: None,
+            inline_return_patches_stack: Vec::new(),
             current_locals_count: 0,
         }
     }
@@ -76,7 +78,7 @@ impl Codegen {
             function_return_types: Vec::new(),
             inline_functions: Vec::new(),
             local_offset: 0,
-            inline_return_patches: None,
+            inline_return_patches_stack: Vec::new(),
             current_locals_count: 0,
         }
     }
@@ -394,14 +396,13 @@ impl Codegen {
 
         // Save codegen state
         let saved_offset = self.local_offset;
-        let saved_patches = self.inline_return_patches.take();
         let saved_local_types = self.current_local_types.clone();
 
         // Allocate local slots for the inlined function at the end of caller's locals
         let inline_offset = self.current_locals_count;
         self.current_locals_count += func.locals_count;
         self.local_offset = inline_offset;
-        self.inline_return_patches = Some(Vec::new());
+        self.inline_return_patches_stack.push(Vec::new());
 
         // Extend current_local_types with the inlined function's local types
         for ty in &func.local_types {
@@ -423,15 +424,14 @@ impl Codegen {
 
         // Patch all return jumps to point to the end of the inline block
         let end_pos = ops.len();
-        if let Some(patches) = &self.inline_return_patches {
-            for &patch_pos in patches {
+        if let Some(patches) = self.inline_return_patches_stack.pop() {
+            for patch_pos in patches {
                 ops[patch_pos] = Op::Jmp(end_pos);
             }
         }
 
         // Restore codegen state
         self.local_offset = saved_offset;
-        self.inline_return_patches = saved_patches;
         self.current_local_types = saved_local_types;
 
         Ok(())
@@ -628,7 +628,7 @@ impl Codegen {
                 } else {
                     ops.push(Op::RefNull); // Return nil for void
                 }
-                if let Some(ref mut patches) = self.inline_return_patches {
+                if let Some(patches) = self.inline_return_patches_stack.last_mut() {
                     // Inside inline expansion: jump to end of inline block
                     patches.push(ops.len());
                     ops.push(Op::Jmp(0)); // Placeholder, patched later
@@ -836,9 +836,8 @@ impl Codegen {
                                     .inline_functions
                                     .get(func_idx)
                                     .is_some_and(|f| f.is_inline)
-                                    && self.inline_return_patches.is_none()
+                                    && self.inline_return_patches_stack.len() < MAX_INLINE_DEPTH
                                 {
-                                    // Only inline when not already inside an inline expansion
                                     self.compile_inline_call(func_idx, 2, ops)?;
                                 } else {
                                     ops.push(Op::Call(func_idx, 2));
@@ -923,8 +922,7 @@ impl Codegen {
                 }
             }
             ResolvedExpr::Call { func_index, args } => {
-                // Check if the target function is @inline (only 1 level, no nested inlining)
-                if self.inline_return_patches.is_none()
+                if self.inline_return_patches_stack.len() < MAX_INLINE_DEPTH
                     && self
                         .inline_functions
                         .get(*func_index)
@@ -1155,8 +1153,7 @@ impl Codegen {
 
                 let total_args = args.len() + 1; // self + args
 
-                // Check if the target method is @inline (only 1 level)
-                if self.inline_return_patches.is_none()
+                if self.inline_return_patches_stack.len() < MAX_INLINE_DEPTH
                     && self
                         .inline_functions
                         .get(*func_index)
@@ -1177,8 +1174,7 @@ impl Codegen {
                     self.compile_expr(arg, ops)?;
                 }
 
-                // Check if the target function is @inline (only 1 level)
-                if self.inline_return_patches.is_none()
+                if self.inline_return_patches_stack.len() < MAX_INLINE_DEPTH
                     && self
                         .inline_functions
                         .get(*func_index)
