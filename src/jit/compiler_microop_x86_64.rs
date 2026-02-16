@@ -399,8 +399,6 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             MicroOp::ToString { dst, src } => self.emit_to_string(dst, src),
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
-            MicroOp::StringConcat { dst, a, b } => self.emit_string_concat(dst, a, b),
-
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1540,28 +1538,6 @@ impl MicroOpJitCompiler {
         asm.pop(regs::FRAME_BASE);
         asm.pop(regs::VM_CTX);
         // Store result (returns original value: RAX=tag, RDX=payload)
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
-        Ok(())
-    }
-
-    /// Emit StringConcat: call string_concat_helper(ctx, ref_a, ref_b) -> (tag, payload)
-    fn emit_string_concat(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
-        let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Save callee-saved
-        asm.push(regs::VM_CTX);
-        asm.push(regs::FRAME_BASE);
-        // Args: RDI=ctx, RSI=ref_a (payload), RDX=ref_b (payload)
-        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-        // Load string_concat_helper from JitCallContext offset 88
-        asm.mov_rm(regs::TMP4, regs::VM_CTX, 88);
-        asm.call_r(regs::TMP4);
-        // Restore callee-saved
-        asm.pop(regs::FRAME_BASE);
-        asm.pop(regs::VM_CTX);
-        // Store result (RAX=tag, RDX=payload)
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
         Ok(())

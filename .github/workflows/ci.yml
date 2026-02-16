@@ -70,6 +70,7 @@ jobs:
 
       - name: Get base branch coverage
         run: |
+          git checkout -- include/moca.h || true
           git checkout ${{ github.base_ref }}
           # Clean to ensure coverage is measured from base branch source
           cargo clean
@@ -86,6 +87,7 @@ jobs:
             gsub(/%/, "", cov)
             print file, cov
           }' > base_coverage.txt
+          git checkout -- include/moca.h || true
           git checkout ${{ github.head_ref }}
           cargo clean
 
@@ -197,11 +199,13 @@ jobs:
 
       - name: Get main branch performance
         run: |
+          git checkout -- include/moca.h || true
           git stash || true
           git checkout ${{ github.base_ref }}
           cargo clean
           cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee main_perf.txt
           cat main_perf.txt
+          git checkout -- include/moca.h || true
           git checkout ${{ github.head_ref }}
           git stash pop || true
 

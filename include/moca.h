@@ -205,6 +205,42 @@ typedef void (*MocaErrorFn)(const char *message,
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /**
  * Get the version string
  */

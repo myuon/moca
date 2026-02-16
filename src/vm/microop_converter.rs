@@ -131,14 +131,8 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                // Promote to string concat if either operand is ref
-                if is_ref(&a) || is_ref(&b) {
-                    let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
-                    let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
-                    micro_ops.push(MicroOp::StringConcat { dst, a, b });
-                    vstack.push(Vse::RegRef(dst));
                 // Promote to float if either operand is float
-                } else if is_float(&a) || is_float(&b) {
+                if is_float(&a) || is_float(&b) {
                     let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
                     let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
                     micro_ops.push(MicroOp::AddF64 { dst, a, b });
@@ -945,10 +939,6 @@ fn mat(
 /// Check if a Vse holds a float value.
 fn is_float(entry: &Vse) -> bool {
     matches!(entry, Vse::RegF64(_) | Vse::ImmF64(_))
-}
-
-fn is_ref(entry: &Vse) -> bool {
-    matches!(entry, Vse::RegRef(_))
 }
 
 /// Pop from vstack and materialize to VReg.
