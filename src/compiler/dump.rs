@@ -2136,6 +2136,19 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(src)
         )),
 
+        // Heap allocation operations
+        MicroOp::HeapAllocDynSimple { dst, size } => output.push_str(&format!(
+            "HeapAllocDynSimple {}, {}",
+            format_vreg(dst),
+            format_vreg(size)
+        )),
+        MicroOp::HeapAllocString { dst, data_ref, len } => output.push_str(&format!(
+            "HeapAllocString {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(data_ref),
+            format_vreg(len)
+        )),
+
         // String operations
         MicroOp::StringConst { dst, idx } => {
             let s = chunk

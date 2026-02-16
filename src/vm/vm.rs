@@ -637,6 +637,8 @@ impl VM {
             string_cache_len: self.string_cache.len() as u64,
             to_string_helper: jit_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
+            heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
+            heap_alloc_string_helper: jit_heap_alloc_string_helper,
         };
 
         // Execute the JIT loop code
@@ -735,6 +737,8 @@ impl VM {
             string_cache_len: self.string_cache.len() as u64,
             to_string_helper: jit_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
+            heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
+            heap_alloc_string_helper: jit_heap_alloc_string_helper,
         };
 
         // Execute the JIT loop code
@@ -832,6 +836,8 @@ impl VM {
             string_cache_len: self.string_cache.len() as u64,
             to_string_helper: jit_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
+            heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
+            heap_alloc_string_helper: jit_heap_alloc_string_helper,
         };
 
         // Execute the JIT code
@@ -911,6 +917,8 @@ impl VM {
             string_cache_len: self.string_cache.len() as u64,
             to_string_helper: jit_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
+            heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
+            heap_alloc_string_helper: jit_heap_alloc_string_helper,
         };
 
         // Execute the JIT code
@@ -1533,6 +1541,26 @@ impl VM {
                     let s = self.value_to_string(&value)?;
                     writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
                     self.stack[sb + dst.0] = value;
+                }
+                MicroOp::HeapAllocDynSimple { dst, size } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let size_val = self.stack[sb + size.0]
+                        .as_i64()
+                        .ok_or("runtime error: HeapAllocDynSimple requires integer size")?
+                        as usize;
+                    let slots = vec![Value::Null; size_val];
+                    let r = self.heap.alloc_slots(slots)?;
+                    self.stack[sb + dst.0] = Value::Ref(r);
+                }
+                MicroOp::HeapAllocString { dst, data_ref, len } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let data_ref_val = self.stack[sb + data_ref.0];
+                    let len_val = self.stack[sb + len.0];
+                    let r = self.heap.alloc_slots_with_kind(
+                        vec![data_ref_val, len_val],
+                        crate::vm::heap::ObjectKind::String,
+                    )?;
+                    self.stack[sb + dst.0] = Value::Ref(r);
                 }
                 MicroOp::Raw { op } => {
                     // Profile if enabled
@@ -3963,6 +3991,70 @@ unsafe extern "C" fn jit_print_debug_helper(
     }
     // Return the original value
     JitReturn { tag, payload }
+}
+
+/// JIT HeapAllocDynSimple helper function.
+/// Allocates `size` null-initialized slots on the heap.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
+    ctx: *mut JitCallContext,
+    size: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("HeapAllocDynSimple");
+
+    let size = size as usize;
+    let slots = vec![Value::Null; size];
+    match vm.heap.alloc_slots(slots) {
+        Ok(r) => {
+            ctx_ref.heap_base = vm.heap.memory_base_ptr();
+            JitReturn {
+                tag: 4, // TAG_PTR
+                payload: r.index as u64,
+            }
+        }
+        Err(_) => JitReturn {
+            tag: 3, // TAG_NIL
+            payload: 0,
+        },
+    }
+}
+
+/// JIT HeapAllocString helper function.
+/// Allocates [data_ref, len] with ObjectKind::String.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_heap_alloc_string_helper(
+    ctx: *mut JitCallContext,
+    data_ref_payload: u64,
+    len_payload: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("HeapAllocString");
+
+    let data_ref_val = Value::Ref(crate::vm::heap::GcRef {
+        index: data_ref_payload as usize,
+    });
+    let len_val = Value::I64(len_payload as i64);
+    match vm.heap.alloc_slots_with_kind(
+        vec![data_ref_val, len_val],
+        crate::vm::heap::ObjectKind::String,
+    ) {
+        Ok(r) => {
+            ctx_ref.heap_base = vm.heap.memory_base_ptr();
+            JitReturn {
+                tag: 4, // TAG_PTR
+                payload: r.index as u64,
+            }
+        }
+        Err(_) => JitReturn {
+            tag: 3, // TAG_NIL
+            payload: 0,
+        },
+    }
 }
 
 enum ControlFlow {
