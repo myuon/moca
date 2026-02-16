@@ -322,6 +322,17 @@ impl MicroOpJitCompiler {
             MicroOp::Call { func_id, args, ret } => self.emit_call(*func_id, args, ret.as_ref()),
             MicroOp::Ret { src } => self.emit_ret(src.as_ref()),
 
+            MicroOp::HeapLoad { dst, src, offset } => self.emit_heap_load(dst, src, *offset),
+            MicroOp::HeapLoadDyn { dst, obj, idx } => self.emit_heap_load_dyn(dst, obj, idx),
+            MicroOp::HeapStore {
+                dst_obj,
+                offset,
+                src,
+            } => self.emit_heap_store(dst_obj, *offset, src),
+            MicroOp::HeapStoreDyn { obj, idx, src } => self.emit_heap_store_dyn(obj, idx, src),
+            MicroOp::HeapLoad2 { dst, obj, idx } => self.emit_heap_load2(dst, obj, idx),
+            MicroOp::HeapStore2 { obj, idx, src } => self.emit_heap_store2(obj, idx, src),
+
             _ => Err(format!(
                 "Unsupported MicroOp for JIT: {:?}",
                 std::mem::discriminant(op)
@@ -875,6 +886,173 @@ impl MicroOpJitCompiler {
         asm.ldp_post(Reg::Fp, Reg::Lr, 16);
         asm.ret();
 
+        Ok(())
+    }
+
+    // ==================== Heap Operations ====================
+
+    /// Emit HeapLoad: dst = heap[src][offset] (static offset field access).
+    fn emit_heap_load(&mut self, dst: &VReg, src: &VReg, offset: usize) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // TMP0 = ref payload (heap word offset)
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP1 = heap_base (JitCallContext offset 48)
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+        // TMP0 = ref_payload + 1 + 2*offset (skip header + slot offset)
+        let slot_offset = (1 + 2 * offset) as u16;
+        asm.add_imm(regs::TMP0, regs::TMP0, slot_offset);
+        // TMP0 = TMP0 * 8 (word to byte offset)
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        // TMP1 = heap_base + byte_offset
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+        // Load tag and payload from heap
+        asm.ldr(regs::TMP2, regs::TMP1, 0); // tag
+        asm.ldr(regs::TMP3, regs::TMP1, 8); // payload
+        // Store to dst VReg
+        asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP3, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// Emit HeapLoadDyn: dst = heap[obj][idx] (dynamic index access).
+    fn emit_heap_load_dyn(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // TMP2 = dynamic index
+        asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        // TMP0 = ref payload
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+        // TMP2 = index * 2
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+        // TMP0 = ref + 1 (skip header)
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        // TMP0 = ref + 1 + 2*index
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+        // TMP0 = byte offset
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        // TMP1 = heap_base + byte_offset
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+        // Load tag and payload
+        asm.ldr(regs::TMP2, regs::TMP1, 0);
+        asm.ldr(regs::TMP3, regs::TMP1, 8);
+        // Store to dst
+        asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP3, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// Emit HeapStore: heap[dst_obj][offset] = src (static offset field store).
+    fn emit_heap_store(&mut self, dst_obj: &VReg, offset: usize, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load value to store
+        asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.ldr(regs::TMP3, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP0 = ref payload
+        asm.ldr(
+            regs::TMP0,
+            regs::FRAME_BASE,
+            Self::vreg_payload_offset(dst_obj),
+        );
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+        // Calculate address
+        let slot_offset = (1 + 2 * offset) as u16;
+        asm.add_imm(regs::TMP0, regs::TMP0, slot_offset);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+        // Store tag and payload to heap
+        asm.str(regs::TMP2, regs::TMP1, 0);
+        asm.str(regs::TMP3, regs::TMP1, 8);
+        Ok(())
+    }
+
+    /// Emit HeapStoreDyn: heap[obj][idx] = src (dynamic index store).
+    fn emit_heap_store_dyn(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load value to store
+        asm.ldr(regs::TMP4, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP2 = dynamic index
+        asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        // TMP0 = ref payload
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+        // Calculate address
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+        // Store tag and payload
+        asm.str(regs::TMP4, regs::TMP1, 0);
+        asm.str(regs::TMP5, regs::TMP1, 8);
+        Ok(())
+    }
+
+    /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
+    fn emit_heap_load2(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // TMP2 = dynamic index
+        asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        // TMP0 = outer ref payload
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+
+        // Step 1: load slot 0 of outer object → inner ref payload
+        // addr = heap_base + (ref + 1) * 8
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
+        // TMP0 = inner ref payload (slot 0 payload at offset +8)
+        asm.ldr(regs::TMP0, regs::TMP3, 8);
+
+        // Step 2: load slot[idx] of inner object
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+
+        // Load tag and payload
+        asm.ldr(regs::TMP2, regs::TMP1, 0);
+        asm.ldr(regs::TMP3, regs::TMP1, 8);
+        // Store to dst
+        asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP3, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
+    fn emit_heap_store2(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load value to store
+        asm.ldr(regs::TMP4, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP2 = dynamic index
+        asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        // TMP0 = outer ref payload
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        // TMP1 = heap_base
+        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+
+        // Step 1: load slot 0 of outer object → inner ref payload
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
+        asm.ldr(regs::TMP0, regs::TMP3, 8);
+
+        // Step 2: store at slot[idx] of inner object
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+        asm.add_imm(regs::TMP0, regs::TMP0, 1);
+        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+        // Store tag and payload
+        asm.str(regs::TMP4, regs::TMP1, 0);
+        asm.str(regs::TMP5, regs::TMP1, 8);
         Ok(())
     }
 
