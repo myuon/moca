@@ -14,6 +14,12 @@ use crate::compiler::ast::{
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
 
+/// A part of a string interpolation with its original type information.
+enum InterpPart {
+    Literal(String),
+    TypedExpr(Box<Expr>, Option<Type>),
+}
+
 /// Counter for generating unique variable names.
 struct Desugar {
     counter: usize,
@@ -622,41 +628,28 @@ impl Desugar {
                 inferred_type,
             },
 
-            // StringInterpolation - desugar to string_join([...]) for 3+ parts,
+            // StringInterpolation - desugar to direct buffer write for 3+ parts,
             // binary Add for 2 parts, or single expr/literal for 0-1 parts.
             Expr::StringInterpolation { parts, span, .. } => {
                 use crate::compiler::ast::StringInterpPart;
                 use crate::compiler::types::Type;
 
-                let exprs: Vec<Expr> = parts
+                // Collect parts with their original types (not wrapped in to_string)
+                let typed_parts: Vec<InterpPart> = parts
                     .into_iter()
                     .map(|part| match part {
-                        StringInterpPart::Literal(s) => Expr::Str {
-                            value: s,
-                            span,
-                            inferred_type: Some(Type::String),
-                        },
+                        StringInterpPart::Literal(s) => InterpPart::Literal(s),
                         StringInterpPart::Expr(expr) => {
                             let expr = self.desugar_expr(*expr);
-                            // If the expression is already a string, no need to wrap in to_string
-                            if expr.inferred_type() == Some(&Type::String) {
-                                expr
-                            } else {
-                                Expr::Call {
-                                    callee: "to_string".to_string(),
-                                    type_args: vec![],
-                                    args: vec![expr],
-                                    span,
-                                    inferred_type: Some(Type::String),
-                                }
-                            }
+                            let ty = expr.inferred_type().cloned();
+                            InterpPart::TypedExpr(Box::new(expr), ty)
                         }
                     })
-                    // Filter out empty string literals
-                    .filter(|e| !matches!(e, Expr::Str { value, .. } if value.is_empty()))
+                    // Filter out empty literals
+                    .filter(|p| !matches!(p, InterpPart::Literal(s) if s.is_empty()))
                     .collect();
 
-                if exprs.is_empty() {
+                if typed_parts.is_empty() {
                     return Expr::Str {
                         value: String::new(),
                         span,
@@ -664,12 +657,32 @@ impl Desugar {
                     };
                 }
 
-                if exprs.len() == 1 {
-                    return exprs.into_iter().next().unwrap();
-                }
+                // Convert to string-typed exprs for 1-2 part cases
+                if typed_parts.len() <= 2 {
+                    let exprs: Vec<Expr> = typed_parts
+                        .into_iter()
+                        .map(|p| match p {
+                            InterpPart::Literal(s) => Expr::Str {
+                                value: s,
+                                span,
+                                inferred_type: Some(Type::String),
+                            },
+                            InterpPart::TypedExpr(expr, Some(Type::String)) => *expr,
+                            InterpPart::TypedExpr(expr, _) => Expr::Call {
+                                callee: "to_string".to_string(),
+                                type_args: vec![],
+                                args: vec![*expr],
+                                span,
+                                inferred_type: Some(Type::String),
+                            },
+                        })
+                        .collect();
 
-                if exprs.len() == 2 {
-                    // For 2 parts, use binary Add (existing string_concat inline)
+                    if exprs.len() == 1 {
+                        return exprs.into_iter().next().unwrap();
+                    }
+
+                    // 2 parts: binary Add (string_concat)
                     let mut result = exprs.into_iter();
                     let first = result.next().unwrap();
                     return result.fold(first, |acc, expr| Expr::Binary {
@@ -681,19 +694,383 @@ impl Desugar {
                     });
                 }
 
-                // 3+ parts: string_join([part0, part1, ...])
-                Expr::Call {
-                    callee: "string_join".to_string(),
-                    type_args: vec![],
-                    args: vec![Expr::Array {
-                        elements: exprs,
-                        span,
-                        inferred_type: Some(Type::Array(Box::new(Type::String))),
-                    }],
-                    span,
-                    inferred_type: Some(Type::String),
+                // 3+ parts: generate inline length-compute + buffer-write code
+                self.desugar_string_interp_direct(typed_parts, span)
+            }
+        }
+    }
+
+    /// Desugar 3+ part string interpolation into direct buffer write.
+    ///
+    /// Generates a Block expression that:
+    /// 1. Evaluates each expression into a temp var
+    /// 2. Pre-converts float expressions to strings (Rust needed for shortest repr)
+    /// 3. Computes total length by summing per-part lengths
+    /// 4. Allocates a single buffer with __alloc_heap(total)
+    /// 5. Writes each part directly into the buffer
+    /// 6. Returns __alloc_string(buf, total)
+    fn desugar_string_interp_direct(&mut self, typed_parts: Vec<InterpPart>, span: Span) -> Expr {
+        use crate::compiler::types::Type;
+
+        let mut stmts: Vec<Statement> = Vec::new();
+
+        // Phase 0: Evaluate expressions into temp vars and pre-convert floats
+        // Each part becomes either:
+        // - PartInfo::Literal { value, len } for string literals
+        // - PartInfo::String { var } for string/float/unknown (already a string ref)
+        // - PartInfo::Int { var } for int values
+        // - PartInfo::Bool { var } for bool values
+        // - PartInfo::Nil for nil values
+        enum PartInfo {
+            Literal(String),
+            String(String), // var name holding a string ref
+            Int(String),    // var name holding an int
+            Bool(String),   // var name holding a bool
+            Nil,
+        }
+
+        let mut part_infos: Vec<PartInfo> = Vec::new();
+
+        for part in typed_parts {
+            match part {
+                InterpPart::Literal(s) => {
+                    part_infos.push(PartInfo::Literal(s));
+                }
+                InterpPart::TypedExpr(expr, ty) => {
+                    let var = self.fresh_var();
+                    let expr = *expr;
+                    match ty.as_ref() {
+                        Some(Type::Int) => {
+                            // let _var = expr;
+                            stmts.push(Statement::Let {
+                                name: var.clone(),
+                                type_annotation: None,
+                                init: expr,
+                                span,
+                                inferred_type: Some(Type::Int),
+                            });
+                            part_infos.push(PartInfo::Int(var));
+                        }
+                        Some(Type::Bool) => {
+                            stmts.push(Statement::Let {
+                                name: var.clone(),
+                                type_annotation: None,
+                                init: expr,
+                                span,
+                                inferred_type: Some(Type::Bool),
+                            });
+                            part_infos.push(PartInfo::Bool(var));
+                        }
+                        Some(Type::Nil) => {
+                            // Just evaluate the expression (for side effects), ignore the value
+                            stmts.push(Statement::Expr { expr, span });
+                            part_infos.push(PartInfo::Nil);
+                        }
+                        Some(Type::String) => {
+                            stmts.push(Statement::Let {
+                                name: var.clone(),
+                                type_annotation: None,
+                                init: expr,
+                                span,
+                                inferred_type: Some(Type::String),
+                            });
+                            part_infos.push(PartInfo::String(var));
+                        }
+                        Some(Type::Float) => {
+                            // Pre-convert float to string: let _var = __float_to_string(expr);
+                            stmts.push(Statement::Let {
+                                name: var.clone(),
+                                type_annotation: None,
+                                init: Expr::Call {
+                                    callee: "__float_to_string".to_string(),
+                                    type_args: vec![],
+                                    args: vec![expr],
+                                    span,
+                                    inferred_type: Some(Type::String),
+                                },
+                                span,
+                                inferred_type: Some(Type::String),
+                            });
+                            part_infos.push(PartInfo::String(var));
+                        }
+                        _ => {
+                            // Unknown type: fallback to to_string
+                            stmts.push(Statement::Let {
+                                name: var.clone(),
+                                type_annotation: None,
+                                init: Expr::Call {
+                                    callee: "to_string".to_string(),
+                                    type_args: vec![],
+                                    args: vec![expr],
+                                    span,
+                                    inferred_type: Some(Type::String),
+                                },
+                                span,
+                                inferred_type: Some(Type::String),
+                            });
+                            part_infos.push(PartInfo::String(var));
+                        }
+                    }
                 }
             }
+        }
+
+        // Phase 1: Build the total length expression
+        // total = lit0_len + _int_digit_count(v0) + lit1_len + len(v1) + ...
+        let mut len_parts: Vec<Expr> = Vec::new();
+        for info in &part_infos {
+            match info {
+                PartInfo::Literal(s) => {
+                    len_parts.push(Expr::Int {
+                        value: s.len() as i64,
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+                PartInfo::String(var) => {
+                    // len(var)
+                    len_parts.push(Expr::Call {
+                        callee: "len".to_string(),
+                        type_args: vec![],
+                        args: vec![Expr::Ident {
+                            name: var.clone(),
+                            span,
+                            inferred_type: Some(Type::String),
+                        }],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+                PartInfo::Int(var) => {
+                    // _int_digit_count(var)
+                    len_parts.push(Expr::Call {
+                        callee: "_int_digit_count".to_string(),
+                        type_args: vec![],
+                        args: vec![Expr::Ident {
+                            name: var.clone(),
+                            span,
+                            inferred_type: Some(Type::Int),
+                        }],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+                PartInfo::Bool(var) => {
+                    // _bool_str_len(var) returns 4 for true, 5 for false
+                    len_parts.push(Expr::Call {
+                        callee: "_bool_str_len".to_string(),
+                        type_args: vec![],
+                        args: vec![Expr::Ident {
+                            name: var.clone(),
+                            span,
+                            inferred_type: Some(Type::Bool),
+                        }],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+                PartInfo::Nil => {
+                    len_parts.push(Expr::Int {
+                        value: 3,
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+            }
+        }
+
+        // Sum all length parts: len_parts[0] + len_parts[1] + ...
+        let total_expr = len_parts
+            .into_iter()
+            .reduce(|acc, e| Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(acc),
+                right: Box::new(e),
+                span,
+                inferred_type: Some(Type::Int),
+            })
+            .unwrap();
+
+        // let __interp_total = <total_expr>;
+        let total_var = self.fresh_var();
+        stmts.push(Statement::Let {
+            name: total_var.clone(),
+            type_annotation: None,
+            init: total_expr,
+            span,
+            inferred_type: Some(Type::Int),
+        });
+
+        // Phase 2: let __interp_buf = __alloc_heap(__interp_total);
+        let buf_var = self.fresh_var();
+        stmts.push(Statement::Let {
+            name: buf_var.clone(),
+            type_annotation: None,
+            init: Expr::Call {
+                callee: "__alloc_heap".to_string(),
+                type_args: vec![],
+                args: vec![Expr::Ident {
+                    name: total_var.clone(),
+                    span,
+                    inferred_type: Some(Type::Int),
+                }],
+                span,
+                inferred_type: None,
+            },
+            span,
+            inferred_type: None,
+        });
+
+        // let __interp_off = 0;
+        let off_var = self.fresh_var();
+        stmts.push(Statement::Let {
+            name: off_var.clone(),
+            type_annotation: None,
+            init: Expr::Int {
+                value: 0,
+                span,
+                inferred_type: Some(Type::Int),
+            },
+            span,
+            inferred_type: Some(Type::Int),
+        });
+
+        // Phase 3: Write each part into the buffer
+        let buf_ident = || Expr::Ident {
+            name: buf_var.clone(),
+            span,
+            inferred_type: None,
+        };
+        let off_ident = || Expr::Ident {
+            name: off_var.clone(),
+            span,
+            inferred_type: Some(Type::Int),
+        };
+
+        for info in &part_infos {
+            let write_expr = match info {
+                PartInfo::Literal(s) => {
+                    // _str_copy_to(buf, off, "literal")
+                    Expr::Call {
+                        callee: "_str_copy_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Str {
+                                value: s.clone(),
+                                span,
+                                inferred_type: Some(Type::String),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+                PartInfo::String(var) => {
+                    // _str_copy_to(buf, off, var)
+                    Expr::Call {
+                        callee: "_str_copy_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Ident {
+                                name: var.clone(),
+                                span,
+                                inferred_type: Some(Type::String),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+                PartInfo::Int(var) => {
+                    // _int_write_to(buf, off, var)
+                    Expr::Call {
+                        callee: "_int_write_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Ident {
+                                name: var.clone(),
+                                span,
+                                inferred_type: Some(Type::Int),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+                PartInfo::Bool(var) => {
+                    // _bool_write_to(buf, off, var)
+                    Expr::Call {
+                        callee: "_bool_write_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Ident {
+                                name: var.clone(),
+                                span,
+                                inferred_type: Some(Type::Bool),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+                PartInfo::Nil => {
+                    // Inline: write 'n', 'i', 'l' bytes
+                    // We use _str_copy_to(buf, off, "nil")
+                    Expr::Call {
+                        callee: "_str_copy_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Str {
+                                value: "nil".to_string(),
+                                span,
+                                inferred_type: Some(Type::String),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+            };
+
+            // __interp_off = <write_expr>;
+            stmts.push(Statement::Assign {
+                name: off_var.clone(),
+                value: write_expr,
+                span,
+            });
+        }
+
+        // Final expression: __alloc_string(buf, total)
+        let final_expr = Expr::Call {
+            callee: "__alloc_string".to_string(),
+            type_args: vec![],
+            args: vec![
+                buf_ident(),
+                Expr::Ident {
+                    name: total_var,
+                    span,
+                    inferred_type: Some(Type::Int),
+                },
+            ],
+            span,
+            inferred_type: Some(Type::String),
+        };
+
+        Expr::Block {
+            statements: stmts,
+            expr: Box::new(final_expr),
+            span,
+            inferred_type: Some(Type::String),
         }
     }
 

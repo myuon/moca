@@ -119,41 +119,101 @@ fun time_nanos() -> int {
 }
 
 // ============================================================================
-// Value to String Conversion
+// Value to String Conversion — Helpers
 // ============================================================================
 
-// Internal: convert integer to string using digit extraction.
-fun _int_to_string(n: int) -> string {
+// Count decimal digits of an integer (no heap allocation).
+fun _int_digit_count(n: int) -> int {
     if n == 0 {
-        return "0";
+        return 1;
+    }
+    let count = 0;
+    let val = n;
+    if val < 0 {
+        count = 1;
+        val = -val;
+    }
+    while val > 0 {
+        val = val / 10;
+        count = count + 1;
+    }
+    return count;
+}
+
+// Write integer digits into buf at offset, return new offset (no heap allocation).
+fun _int_write_to(buf: any, off: int, n: int) -> int {
+    if n == 0 {
+        __heap_store(buf, off, 48);
+        return off + 1;
     }
     let negative = n < 0;
     let val = n;
     if negative {
-        val = -n;
+        val = -val;
     }
-
-    // Extract digits in reverse order (max 20 digits for i64 + sign)
-    let buf = __alloc_heap(21);
-    let count = 0;
-    while val > 0 {
-        __heap_store(buf, count, val % 10 + 48);
-        val = val / 10;
-        count = count + 1;
-    }
+    let dcount = _int_digit_count(n);
     if negative {
-        __heap_store(buf, count, 45);
-        count = count + 1;
+        __heap_store(buf, off, 45);
     }
+    let pos = off + dcount - 1;
+    while val > 0 {
+        __heap_store(buf, pos, val % 10 + 48);
+        val = val / 10;
+        pos = pos - 1;
+    }
+    return off + dcount;
+}
 
-    // Reverse into final buffer
-    let data = __alloc_heap(count);
-    let i = 0;
-    while i < count {
-        __heap_store(data, i, __heap_load(buf, count - 1 - i));
-        i = i + 1;
+// Copy string data into buf at offset, return new offset.
+fun _str_copy_to(buf: any, off: int, s: string) -> int {
+    let ptr = __heap_load(s, 0);
+    let slen = __heap_load(s, 1);
+    let j = 0;
+    while j < slen {
+        __heap_store(buf, off + j, __heap_load(ptr, j));
+        j = j + 1;
     }
-    return __alloc_string(data, count);
+    return off + slen;
+}
+
+// Return string length of a bool ("true"=4, "false"=5).
+fun _bool_str_len(b: bool) -> int {
+    if b {
+        return 4;
+    }
+    return 5;
+}
+
+// Write "true" or "false" into buf at offset, return new offset.
+fun _bool_write_to(buf: any, off: int, b: bool) -> int {
+    if b {
+        __heap_store(buf, off, 116);
+        __heap_store(buf, off + 1, 114);
+        __heap_store(buf, off + 2, 117);
+        __heap_store(buf, off + 3, 101);
+        return off + 4;
+    }
+    __heap_store(buf, off, 102);
+    __heap_store(buf, off + 1, 97);
+    __heap_store(buf, off + 2, 108);
+    __heap_store(buf, off + 3, 115);
+    __heap_store(buf, off + 4, 101);
+    return off + 5;
+}
+
+// ============================================================================
+// Value to String Conversion
+// ============================================================================
+
+// Internal: convert integer to string (single heap allocation).
+fun _int_to_string(n: int) -> string {
+    if n == 0 {
+        return "0";
+    }
+    let dcount = _int_digit_count(n);
+    let data = __alloc_heap(dcount);
+    _int_write_to(data, 0, n);
+    return __alloc_string(data, dcount);
 }
 
 // Convert any value to its string representation.
