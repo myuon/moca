@@ -399,6 +399,11 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             MicroOp::ToString { dst, src } => self.emit_to_string(dst, src),
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
+            // Heap allocation operations
+            MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
+            MicroOp::HeapAllocString { dst, data_ref, len } => {
+                self.emit_heap_alloc_string(dst, data_ref, len)
+            }
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1538,6 +1543,60 @@ impl MicroOpJitCompiler {
         asm.pop(regs::FRAME_BASE);
         asm.pop(regs::VM_CTX);
         // Store result (returns original value: RAX=tag, RDX=payload)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        Ok(())
+    }
+
+    // ==================== Heap Allocation ====================
+
+    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload) -> (tag, payload)
+    fn emit_heap_alloc_dyn_simple(&mut self, dst: &VReg, size: &VReg) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=size (payload only, since size is always i64)
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_payload_offset(size));
+        // Load heap_alloc_dyn_simple_helper from JitCallContext offset 88
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 88);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result (RAX=tag, RDX=payload)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        Ok(())
+    }
+
+    /// Emit HeapAllocString: call helper(ctx, data_ref_payload, len_payload) -> (tag, payload)
+    fn emit_heap_alloc_string(
+        &mut self,
+        dst: &VReg,
+        data_ref: &VReg,
+        len: &VReg,
+    ) -> Result<(), String> {
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=data_ref_payload, RDX=len_payload
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(
+            Reg::Rsi,
+            regs::FRAME_BASE,
+            Self::vreg_payload_offset(data_ref),
+        );
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(len));
+        // Load heap_alloc_string_helper from JitCallContext offset 96
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 96);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result (RAX=tag, RDX=payload)
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
         Ok(())

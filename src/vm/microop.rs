@@ -392,6 +392,23 @@ pub enum MicroOp {
     },
 
     // ========================================
+    // Heap allocation operations
+    // ========================================
+    /// Allocate a heap object with `size` null-initialized slots.
+    /// dst = Ref to newly allocated object.
+    HeapAllocDynSimple {
+        dst: VReg,
+        size: VReg,
+    },
+    /// Allocate a string object: [data_ref, len] with ObjectKind::String.
+    /// dst = Ref to newly allocated string struct.
+    HeapAllocString {
+        dst: VReg,
+        data_ref: VReg,
+        len: VReg,
+    },
+
+    // ========================================
     // String operations
     // ========================================
     /// Load string constant from cache (or allocate via helper).

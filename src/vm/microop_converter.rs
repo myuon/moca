@@ -855,6 +855,23 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             }
 
             // ============================================================
+            // Heap allocation operations
+            // ============================================================
+            Op::HeapAllocDynSimple => {
+                let size = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapAllocDynSimple { dst, size });
+                vstack.push(Vse::RegRef(dst));
+            }
+            Op::HeapAllocString => {
+                let len = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let data_ref = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                micro_ops.push(MicroOp::HeapAllocString { dst, data_ref, len });
+                vstack.push(Vse::RegRef(dst));
+            }
+
+            // ============================================================
             // Raw fallback (everything else)
             // ============================================================
             _ => {
