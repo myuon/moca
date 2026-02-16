@@ -392,6 +392,35 @@ pub enum MicroOp {
     },
 
     // ========================================
+    // String operations
+    // ========================================
+    /// Load string constant from cache (or allocate via helper).
+    /// dst = string_cache[idx] (Ref to heap string)
+    StringConst {
+        dst: VReg,
+        idx: usize,
+    },
+    /// Convert value to string representation.
+    /// dst = to_string(src) (Ref to newly allocated heap string)
+    ToString {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Print value to output and return original value.
+    /// dst = src (after printing src to output)
+    PrintDebug {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Concatenate two strings.
+    /// dst = concat(a, b) (Ref to newly allocated heap string)
+    StringConcat {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+
+    // ========================================
     // Stack Bridge (for Raw op interop)
     // ========================================
     /// Push vreg value onto the operand stack (for Raw ops to consume).

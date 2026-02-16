@@ -635,6 +635,9 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
+            to_string_helper: jit_to_string_helper,
+            print_debug_helper: jit_print_debug_helper,
+            string_concat_helper: jit_string_concat_helper,
         };
 
         // Execute the JIT loop code
@@ -731,6 +734,9 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
+            to_string_helper: jit_to_string_helper,
+            print_debug_helper: jit_print_debug_helper,
+            string_concat_helper: jit_string_concat_helper,
         };
 
         // Execute the JIT loop code
@@ -826,6 +832,9 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
+            to_string_helper: jit_to_string_helper,
+            print_debug_helper: jit_print_debug_helper,
+            string_concat_helper: jit_string_concat_helper,
         };
 
         // Execute the JIT code
@@ -903,6 +912,9 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
+            to_string_helper: jit_to_string_helper,
+            print_debug_helper: jit_print_debug_helper,
+            string_concat_helper: jit_string_concat_helper,
         };
 
         // Execute the JIT code
@@ -1506,6 +1518,32 @@ impl VM {
                         self.stack.push(Value::Null);
                     }
                     self.stack[idx] = val;
+                }
+                MicroOp::StringConst { dst, idx } => {
+                    let r = self.get_or_alloc_string(idx, chunk)?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Ref(r);
+                }
+                MicroOp::ToString { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let s = self.value_to_string(&value)?;
+                    let r = self.heap.alloc_string(s)?;
+                    self.stack[sb + dst.0] = Value::Ref(r);
+                }
+                MicroOp::PrintDebug { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let s = self.value_to_string(&value)?;
+                    writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::StringConcat { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let val_a = self.stack[sb + a.0];
+                    let val_b = self.stack[sb + b.0];
+                    let result = self.add(val_a, val_b)?;
+                    self.stack[sb + dst.0] = result;
                 }
                 MicroOp::Raw { op } => {
                     // Profile if enabled
@@ -3856,6 +3894,100 @@ unsafe extern "C" fn jit_syscall_helper(
     // Call the syscall handler
     match vm.handle_syscall(syscall_num as usize, &vm_args) {
         Ok(result) => {
+            let jit_result = JitValue::from_value(&result);
+            JitReturn {
+                tag: jit_result.tag,
+                payload: jit_result.payload,
+            }
+        }
+        Err(_) => JitReturn {
+            tag: 3, // TAG_NIL
+            payload: 0,
+        },
+    }
+}
+
+/// JIT toString helper function.
+/// Converts a value to its string representation and allocates on heap.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_to_string_helper(
+    ctx: *mut JitCallContext,
+    tag: u64,
+    payload: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("ToString");
+
+    let value = JitValue { tag, payload }.to_value();
+    match vm.value_to_string(&value) {
+        Ok(s) => match vm.heap.alloc_string(s) {
+            Ok(r) => {
+                // Update heap_base in case GC moved the heap
+                ctx_ref.heap_base = vm.heap.memory_base_ptr();
+                JitReturn {
+                    tag: 4, // TAG_PTR
+                    payload: r.index as u64,
+                }
+            }
+            Err(_) => JitReturn {
+                tag: 3, // TAG_NIL
+                payload: 0,
+            },
+        },
+        Err(_) => JitReturn {
+            tag: 3, // TAG_NIL
+            payload: 0,
+        },
+    }
+}
+
+/// JIT printDebug helper function.
+/// Prints a value to output and returns the same value.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_print_debug_helper(
+    ctx: *mut JitCallContext,
+    tag: u64,
+    payload: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("PrintDebug");
+
+    let value = JitValue { tag, payload }.to_value();
+    if let Ok(s) = vm.value_to_string(&value) {
+        let _ = writeln!(vm.output, "{}", s);
+    }
+    // Return the original value
+    JitReturn { tag, payload }
+}
+
+/// JIT string concatenation helper function.
+/// Concatenates two string refs and allocates result on heap.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_string_concat_helper(
+    ctx: *mut JitCallContext,
+    ref_a: u64,
+    ref_b: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("StringConcat");
+
+    let val_a = Value::Ref(GcRef {
+        index: ref_a as usize,
+    });
+    let val_b = Value::Ref(GcRef {
+        index: ref_b as usize,
+    });
+
+    match vm.add(val_a, val_b) {
+        Ok(result) => {
+            // Update heap_base in case GC moved the heap
+            ctx_ref.heap_base = vm.heap.memory_base_ptr();
             let jit_result = JitValue::from_value(&result);
             JitReturn {
                 tag: jit_result.tag,
