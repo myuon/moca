@@ -622,7 +622,8 @@ impl Desugar {
                 inferred_type,
             },
 
-            // StringInterpolation - desugar to to_string(part1) + to_string(part2) + ...
+            // StringInterpolation - desugar to string_join([...]) for 3+ parts,
+            // binary Add for 2 parts, or single expr/literal for 0-1 parts.
             Expr::StringInterpolation { parts, span, .. } => {
                 use crate::compiler::ast::StringInterpPart;
                 use crate::compiler::types::Type;
@@ -651,6 +652,8 @@ impl Desugar {
                             }
                         }
                     })
+                    // Filter out empty string literals
+                    .filter(|e| !matches!(e, Expr::Str { value, .. } if value.is_empty()))
                     .collect();
 
                 if exprs.is_empty() {
@@ -661,15 +664,35 @@ impl Desugar {
                     };
                 }
 
-                let mut result = exprs.into_iter();
-                let first = result.next().unwrap();
-                result.fold(first, |acc, expr| Expr::Binary {
-                    op: BinaryOp::Add,
-                    left: Box::new(acc),
-                    right: Box::new(expr),
+                if exprs.len() == 1 {
+                    return exprs.into_iter().next().unwrap();
+                }
+
+                if exprs.len() == 2 {
+                    // For 2 parts, use binary Add (existing string_concat inline)
+                    let mut result = exprs.into_iter();
+                    let first = result.next().unwrap();
+                    return result.fold(first, |acc, expr| Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(acc),
+                        right: Box::new(expr),
+                        span,
+                        inferred_type: Some(Type::String),
+                    });
+                }
+
+                // 3+ parts: string_join([part0, part1, ...])
+                Expr::Call {
+                    callee: "string_join".to_string(),
+                    type_args: vec![],
+                    args: vec![Expr::Array {
+                        elements: exprs,
+                        span,
+                        inferred_type: Some(Type::Array(Box::new(Type::String))),
+                    }],
                     span,
                     inferred_type: Some(Type::String),
-                })
+                }
             }
         }
     }

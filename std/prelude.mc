@@ -223,6 +223,35 @@ fun string_concat(a: string, b: string) -> string {
     return __alloc_string(data, total);
 }
 
+// Join all strings in an array into a single string.
+// Pre-allocates the result buffer based on total length, then copies all parts.
+@inline
+fun string_join(parts: array<string>) -> string {
+    let n = len(parts);
+    let total = 0;
+    let i = 0;
+    while i < n {
+        total = total + len(parts[i]);
+        i = i + 1;
+    }
+    let data = __alloc_heap(total);
+    let off = 0;
+    i = 0;
+    while i < n {
+        let s = parts[i];
+        let s_ptr = __heap_load(s, 0);
+        let s_len = __heap_load(s, 1);
+        let j = 0;
+        while j < s_len {
+            __heap_store(data, off, __heap_load(s_ptr, j));
+            off = off + 1;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return __alloc_string(data, total);
+}
+
 // ============================================================================
 // High-level I/O Functions
 // ============================================================================
