@@ -123,6 +123,7 @@ fun time_nanos() -> int {
 // ============================================================================
 
 // Count decimal digits of an integer (no heap allocation).
+@inline
 fun _int_digit_count(n: int) -> int {
     if n == 0 {
         return 1;
@@ -141,6 +142,7 @@ fun _int_digit_count(n: int) -> int {
 }
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
+@inline
 fun _int_write_to(buf: any, off: int, n: int) -> int {
     if n == 0 {
         __heap_store(buf, off, 48);
@@ -165,6 +167,7 @@ fun _int_write_to(buf: any, off: int, n: int) -> int {
 }
 
 // Copy string data into buf at offset, return new offset.
+@inline
 fun _str_copy_to(buf: any, off: int, s: string) -> int {
     let ptr = __heap_load(s, 0);
     let slen = __heap_load(s, 1);
@@ -177,6 +180,7 @@ fun _str_copy_to(buf: any, off: int, s: string) -> int {
 }
 
 // Return string length of a bool ("true"=4, "false"=5).
+@inline
 fun _bool_str_len(b: bool) -> int {
     if b {
         return 4;
@@ -185,6 +189,7 @@ fun _bool_str_len(b: bool) -> int {
 }
 
 // Write "true" or "false" into buf at offset, return new offset.
+@inline
 fun _bool_write_to(buf: any, off: int, b: bool) -> int {
     if b {
         __heap_store(buf, off, 116);
