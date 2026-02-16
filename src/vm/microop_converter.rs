@@ -9,6 +9,10 @@ use super::ops::Op;
 enum Vse {
     Reg(VReg),
     ImmI64(i64),
+    /// Float VReg (produced by F64Const, F64 operations, etc.)
+    RegF64(VReg),
+    /// Deferred float immediate (not yet materialized into a VReg)
+    ImmF64(f64),
 }
 
 /// Convert a function's Op bytecode to MicroOp sequence.
@@ -65,12 +69,12 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             Op::F64Const(f) => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::ConstF64 { dst, imm: *f });
-                vstack.push(Vse::Reg(dst));
+                vstack.push(Vse::RegF64(dst));
             }
             Op::F32Const(f) => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
                 micro_ops.push(MicroOp::ConstF32 { dst, imm: *f });
-                vstack.push(Vse::Reg(dst));
+                vstack.push(Vse::RegF64(dst));
             }
             Op::RefNull => {
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
@@ -125,60 +129,87 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                match (a, b) {
-                    (_, Vse::ImmI64(imm)) => {
-                        let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
-                        micro_ops.push(MicroOp::AddI64Imm { dst, a, imm });
+                // Promote to float if either operand is float
+                if is_float(&a) || is_float(&b) {
+                    let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                    let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                    micro_ops.push(MicroOp::AddF64 { dst, a, b });
+                    vstack.push(Vse::RegF64(dst));
+                } else {
+                    match (a, b) {
+                        (_, Vse::ImmI64(imm)) => {
+                            let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                            micro_ops.push(MicroOp::AddI64Imm { dst, a, imm });
+                        }
+                        (Vse::ImmI64(imm), _) => {
+                            // commutative: a + b = b + a
+                            let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                            micro_ops.push(MicroOp::AddI64Imm { dst, a: b, imm });
+                        }
+                        _ => {
+                            let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                            let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                            micro_ops.push(MicroOp::AddI64 { dst, a, b });
+                        }
                     }
-                    (Vse::ImmI64(imm), _) => {
-                        // commutative: a + b = b + a
-                        let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
-                        micro_ops.push(MicroOp::AddI64Imm { dst, a: b, imm });
-                    }
-                    _ => {
-                        let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
-                        let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
-                        micro_ops.push(MicroOp::AddI64 { dst, a, b });
-                    }
+                    vstack.push(Vse::Reg(dst));
                 }
-                vstack.push(Vse::Reg(dst));
             }
             Op::I64Sub => {
                 let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                // a - imm = a + (-imm)
-                if let Vse::ImmI64(imm) = b {
-                    let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
-                    micro_ops.push(MicroOp::AddI64Imm {
-                        dst,
-                        a,
-                        imm: imm.wrapping_neg(),
-                    });
-                } else {
+                if is_float(&a) || is_float(&b) {
                     let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
                     let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
-                    micro_ops.push(MicroOp::SubI64 { dst, a, b });
+                    micro_ops.push(MicroOp::SubF64 { dst, a, b });
+                    vstack.push(Vse::RegF64(dst));
+                } else {
+                    // a - imm = a + (-imm)
+                    if let Vse::ImmI64(imm) = b {
+                        let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        micro_ops.push(MicroOp::AddI64Imm {
+                            dst,
+                            a,
+                            imm: imm.wrapping_neg(),
+                        });
+                    } else {
+                        let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                        micro_ops.push(MicroOp::SubI64 { dst, a, b });
+                    }
+                    vstack.push(Vse::Reg(dst));
                 }
-                vstack.push(Vse::Reg(dst));
             }
             Op::I64Mul => {
-                emit_binop(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    |dst, a, b| MicroOp::MulI64 { dst, a, b },
-                );
+                let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let float = is_float(&a) || is_float(&b);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                if float {
+                    micro_ops.push(MicroOp::MulF64 { dst, a, b });
+                    vstack.push(Vse::RegF64(dst));
+                } else {
+                    micro_ops.push(MicroOp::MulI64 { dst, a, b });
+                    vstack.push(Vse::Reg(dst));
+                }
             }
             Op::I64DivS => {
-                emit_binop(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    |dst, a, b| MicroOp::DivI64 { dst, a, b },
-                );
+                let b = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let a = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let float = is_float(&a) || is_float(&b);
+                let dst = alloc_temp(&mut next_temp, &mut max_temp);
+                let a = mat(a, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let b = mat(b, &mut micro_ops, &mut next_temp, &mut max_temp);
+                if float {
+                    micro_ops.push(MicroOp::DivF64 { dst, a, b });
+                    vstack.push(Vse::RegF64(dst));
+                } else {
+                    micro_ops.push(MicroOp::DivI64 { dst, a, b });
+                    vstack.push(Vse::Reg(dst));
+                }
             }
             Op::I64RemS => {
                 emit_binop(
@@ -190,10 +221,17 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 );
             }
             Op::I64Neg => {
-                let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let entry = pop_entry(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
+                let float = is_float(&entry);
+                let src = mat(entry, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::NegI64 { dst, src });
-                vstack.push(Vse::Reg(dst));
+                if float {
+                    micro_ops.push(MicroOp::NegF64 { dst, src });
+                    vstack.push(Vse::RegF64(dst));
+                } else {
+                    micro_ops.push(MicroOp::NegI64 { dst, src });
+                    vstack.push(Vse::Reg(dst));
+                }
             }
 
             // ============================================================
@@ -853,7 +891,7 @@ fn pop_entry(
     }
 }
 
-/// Materialize a Vse into a VReg, emitting ConstI64 if needed.
+/// Materialize a Vse into a VReg, emitting ConstI64/ConstF64 if needed.
 fn mat(
     entry: Vse,
     micro_ops: &mut Vec<MicroOp>,
@@ -861,13 +899,23 @@ fn mat(
     max_temp: &mut usize,
 ) -> VReg {
     match entry {
-        Vse::Reg(v) => v,
+        Vse::Reg(v) | Vse::RegF64(v) => v,
         Vse::ImmI64(n) => {
             let t = alloc_temp(next_temp, max_temp);
             micro_ops.push(MicroOp::ConstI64 { dst: t, imm: n });
             t
         }
+        Vse::ImmF64(n) => {
+            let t = alloc_temp(next_temp, max_temp);
+            micro_ops.push(MicroOp::ConstF64 { dst: t, imm: n });
+            t
+        }
     }
+}
+
+/// Check if a Vse holds a float value.
+fn is_float(entry: &Vse) -> bool {
+    matches!(entry, Vse::RegF64(_) | Vse::ImmF64(_))
 }
 
 /// Pop from vstack and materialize to VReg.
@@ -922,6 +970,7 @@ fn reverse_cond(cond: CmpCond) -> CmpCond {
 }
 
 /// Emit i64 comparison, using CmpI64Imm when one operand is immediate.
+/// Promotes to CmpF64 if either operand is float.
 fn emit_cmp_i64(
     vstack: &mut Vec<Vse>,
     micro_ops: &mut Vec<MicroOp>,
@@ -933,25 +982,31 @@ fn emit_cmp_i64(
     let b = pop_entry(vstack, micro_ops, next_temp, max_temp);
     let a = pop_entry(vstack, micro_ops, next_temp, max_temp);
     let dst = alloc_temp(next_temp, max_temp);
-    match (a, b) {
-        (_, Vse::ImmI64(imm)) if allow_imm => {
-            let a = mat(a, micro_ops, next_temp, max_temp);
-            micro_ops.push(MicroOp::CmpI64Imm { dst, a, imm, cond });
-        }
-        (Vse::ImmI64(imm), _) if allow_imm => {
-            // imm <cond> b → b <reverse_cond> imm
-            let b = mat(b, micro_ops, next_temp, max_temp);
-            micro_ops.push(MicroOp::CmpI64Imm {
-                dst,
-                a: b,
-                imm,
-                cond: reverse_cond(cond),
-            });
-        }
-        _ => {
-            let a = mat(a, micro_ops, next_temp, max_temp);
-            let b = mat(b, micro_ops, next_temp, max_temp);
-            micro_ops.push(MicroOp::CmpI64 { dst, a, b, cond });
+    if is_float(&a) || is_float(&b) {
+        let a = mat(a, micro_ops, next_temp, max_temp);
+        let b = mat(b, micro_ops, next_temp, max_temp);
+        micro_ops.push(MicroOp::CmpF64 { dst, a, b, cond });
+    } else {
+        match (a, b) {
+            (_, Vse::ImmI64(imm)) if allow_imm => {
+                let a = mat(a, micro_ops, next_temp, max_temp);
+                micro_ops.push(MicroOp::CmpI64Imm { dst, a, imm, cond });
+            }
+            (Vse::ImmI64(imm), _) if allow_imm => {
+                // imm <cond> b → b <reverse_cond> imm
+                let b = mat(b, micro_ops, next_temp, max_temp);
+                micro_ops.push(MicroOp::CmpI64Imm {
+                    dst,
+                    a: b,
+                    imm,
+                    cond: reverse_cond(cond),
+                });
+            }
+            _ => {
+                let a = mat(a, micro_ops, next_temp, max_temp);
+                let b = mat(b, micro_ops, next_temp, max_temp);
+                micro_ops.push(MicroOp::CmpI64 { dst, a, b, cond });
+            }
         }
     }
     vstack.push(Vse::Reg(dst));

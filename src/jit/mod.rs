@@ -22,6 +22,8 @@ pub mod compiler;
 #[cfg(target_arch = "aarch64")]
 pub mod compiler_microop;
 #[cfg(target_arch = "x86_64")]
+pub mod compiler_microop_x86_64;
+#[cfg(target_arch = "x86_64")]
 pub mod compiler_x86_64;
 pub mod marshal;
 mod memory;

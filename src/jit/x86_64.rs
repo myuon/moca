@@ -611,6 +611,33 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(0x2A);
         self.buf.emit_u8(Self::modrm(0b11, xmm, src.code()));
     }
+
+    /// CVTTSD2SI r64, xmm (convert scalar double to signed 64-bit integer, truncated)
+    pub fn cvttsd2si_r64_xmm(&mut self, dst: Reg, xmm: u8) {
+        // F2 REX.W 0F 2C /r - CVTTSD2SI r64, xmm/m64
+        self.buf.emit_u8(0xF2);
+        let rex = 0x48 | dst.rex_r();
+        self.buf.emit_u8(rex);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x2C);
+        self.buf.emit_u8(Self::modrm(0b11, dst.code(), xmm));
+    }
+
+    /// MOVSXD r64, r32 (sign-extend 32-bit to 64-bit)
+    pub fn movsxd(&mut self, dst: Reg, src: Reg) {
+        // REX.W 63 /r - MOVSXD r64, r/m32
+        self.emit_rex_w(dst, src);
+        self.buf.emit_u8(0x63);
+        self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
+    }
+
+    /// MOV r32, r32 (zero-extends to 64-bit)
+    pub fn mov_r32_r32(&mut self, dst: Reg, src: Reg) {
+        // No REX.W prefix — 32-bit mov zero-extends the upper 32 bits
+        self.emit_rex_if_needed(src, dst);
+        self.buf.emit_u8(0x89); // MOV r/m32, r32
+        self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
+    }
 }
 
 #[cfg(test)]
