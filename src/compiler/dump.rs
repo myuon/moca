@@ -2148,8 +2148,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(data_ref),
             format_vreg(len)
         )),
-
-        // String operations
         MicroOp::StringConst { dst, idx } => {
             let s = chunk
                 .strings

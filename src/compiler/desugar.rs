@@ -622,7 +622,8 @@ impl Desugar {
                 inferred_type,
             },
 
-            // StringInterpolation - desugar to to_string(part1) + to_string(part2) + ...
+            // StringInterpolation - desugar to single-allocation concat block for 3+ parts,
+            // or binary Add for 2 parts, or single expr/literal for 0-1 parts.
             Expr::StringInterpolation { parts, span, .. } => {
                 use crate::compiler::ast::StringInterpPart;
                 use crate::compiler::types::Type;
@@ -651,6 +652,8 @@ impl Desugar {
                             }
                         }
                     })
+                    // Filter out empty string literals
+                    .filter(|e| !matches!(e, Expr::Str { value, .. } if value.is_empty()))
                     .collect();
 
                 if exprs.is_empty() {
@@ -661,15 +664,25 @@ impl Desugar {
                     };
                 }
 
-                let mut result = exprs.into_iter();
-                let first = result.next().unwrap();
-                result.fold(first, |acc, expr| Expr::Binary {
-                    op: BinaryOp::Add,
-                    left: Box::new(acc),
-                    right: Box::new(expr),
-                    span,
-                    inferred_type: Some(Type::String),
-                })
+                if exprs.len() == 1 {
+                    return exprs.into_iter().next().unwrap();
+                }
+
+                if exprs.len() == 2 {
+                    // For 2 parts, use binary Add (existing string_concat inline)
+                    let mut result = exprs.into_iter();
+                    let first = result.next().unwrap();
+                    return result.fold(first, |acc, expr| Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(acc),
+                        right: Box::new(expr),
+                        span,
+                        inferred_type: Some(Type::String),
+                    });
+                }
+
+                // 3+ parts: single-allocation concat via block expression
+                self.desugar_string_interp_concat(exprs, span)
             }
         }
     }
@@ -677,6 +690,191 @@ impl Desugar {
     /// Desugar an asm block (no change to the block itself).
     fn desugar_asm_block(&mut self, asm_block: AsmBlock) -> AsmBlock {
         asm_block
+    }
+
+    /// Desugar string interpolation with 3+ parts into a single-allocation concat.
+    ///
+    /// Generates a block expression equivalent to:
+    /// ```text
+    /// {
+    ///     let __si_0 = part0;
+    ///     let __si_1 = part1;
+    ///     ...
+    ///     let __si_total = len(__si_0) + len(__si_1) + ...;
+    ///     let __si_data = __alloc_heap(__si_total);
+    ///     let __si_off = 0;
+    ///     // For each part: copy its character data
+    ///     let __si_p0 = __heap_load(__si_0, 0);   // data pointer
+    ///     let __si_l0 = __heap_load(__si_0, 1);   // length
+    ///     let __si_j = 0;
+    ///     while __si_j < __si_l0 {
+    ///         __heap_store(__si_data, __si_off, __heap_load(__si_p0, __si_j));
+    ///         __si_off = __si_off + 1;
+    ///         __si_j = __si_j + 1;
+    ///     }
+    ///     ... (repeat for each part)
+    ///     __alloc_string(__si_data, __si_total)
+    /// }
+    /// ```
+    fn desugar_string_interp_concat(&mut self, exprs: Vec<Expr>, span: Span) -> Expr {
+        use crate::compiler::types::Type;
+
+        let n = exprs.len();
+        let base = self.counter;
+        self.counter += 1;
+
+        // Helper to make an identifier expression
+        let ident = |name: &str| -> Expr {
+            Expr::Ident {
+                name: name.to_string(),
+                span,
+                inferred_type: None,
+            }
+        };
+        let int_lit = |v: i64| -> Expr {
+            Expr::Int {
+                value: v,
+                span,
+                inferred_type: None,
+            }
+        };
+        let call = |callee: &str, args: Vec<Expr>| -> Expr {
+            Expr::Call {
+                callee: callee.to_string(),
+                type_args: vec![],
+                args,
+                span,
+                inferred_type: None,
+            }
+        };
+        let add = |left: Expr, right: Expr| -> Expr {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+                inferred_type: None,
+            }
+        };
+        let lt = |left: Expr, right: Expr| -> Expr {
+            Expr::Binary {
+                op: BinaryOp::Lt,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+                inferred_type: None,
+            }
+        };
+        let let_stmt = |name: &str, init: Expr| -> Statement {
+            Statement::Let {
+                name: name.to_string(),
+                type_annotation: None,
+                init,
+                span,
+                inferred_type: None,
+            }
+        };
+        let assign_stmt = |name: &str, value: Expr| -> Statement {
+            Statement::Assign {
+                name: name.to_string(),
+                value,
+                span,
+            }
+        };
+        let expr_stmt = |expr: Expr| -> Statement { Statement::Expr { expr, span } };
+
+        let mut statements = Vec::new();
+
+        // Part variable names: __si_{base}_0, __si_{base}_1, ...
+        let part_names: Vec<String> = (0..n).map(|i| format!("__si_{}_{}", base, i)).collect();
+        let total_name = format!("__si_{}_total", base);
+        let data_name = format!("__si_{}_data", base);
+        let off_name = format!("__si_{}_off", base);
+        let j_name = format!("__si_{}_j", base);
+
+        // Step 1: let __si_N_i = part_i; for each part
+        for (i, expr) in exprs.into_iter().enumerate() {
+            statements.push(let_stmt(&part_names[i], expr));
+        }
+
+        // Step 2: let __si_N_total = len(__si_N_0) + len(__si_N_1) + ...;
+        let len_sum = part_names
+            .iter()
+            .map(|name| call("len", vec![ident(name)]))
+            .reduce(&add)
+            .unwrap();
+        statements.push(let_stmt(&total_name, len_sum));
+
+        // Step 3: let __si_N_data = __alloc_heap(__si_N_total);
+        statements.push(let_stmt(
+            &data_name,
+            call("__alloc_heap", vec![ident(&total_name)]),
+        ));
+
+        // Step 4: let __si_N_off = 0;
+        statements.push(let_stmt(&off_name, int_lit(0)));
+
+        // Step 5: For each part, generate copy loop
+        for (i, part_name) in part_names.iter().enumerate() {
+            let ptr_name = format!("__si_{}_p{}", base, i);
+            let len_name = format!("__si_{}_l{}", base, i);
+
+            // let __si_N_pI = __heap_load(__si_N_I, 0);
+            statements.push(let_stmt(
+                &ptr_name,
+                call("__heap_load", vec![ident(part_name), int_lit(0)]),
+            ));
+
+            // let __si_N_lI = __heap_load(__si_N_I, 1);
+            statements.push(let_stmt(
+                &len_name,
+                call("__heap_load", vec![ident(part_name), int_lit(1)]),
+            ));
+
+            // __si_N_j = 0;  (reuse j variable; first time is let, subsequent are assign)
+            if i == 0 {
+                statements.push(let_stmt(&j_name, int_lit(0)));
+            } else {
+                statements.push(assign_stmt(&j_name, int_lit(0)));
+            }
+
+            // while __si_N_j < __si_N_lI { ... }
+            let while_body = vec![
+                // __heap_store(__si_N_data, __si_N_off, __heap_load(__si_N_pI, __si_N_j));
+                expr_stmt(call(
+                    "__heap_store",
+                    vec![
+                        ident(&data_name),
+                        ident(&off_name),
+                        call("__heap_load", vec![ident(&ptr_name), ident(&j_name)]),
+                    ],
+                )),
+                // __si_N_off = __si_N_off + 1;
+                assign_stmt(&off_name, add(ident(&off_name), int_lit(1))),
+                // __si_N_j = __si_N_j + 1;
+                assign_stmt(&j_name, add(ident(&j_name), int_lit(1))),
+            ];
+
+            statements.push(Statement::While {
+                condition: lt(ident(&j_name), ident(&len_name)),
+                body: Block {
+                    statements: while_body,
+                    span,
+                },
+                span,
+            });
+        }
+
+        // Final expression: __alloc_string(__si_N_data, __si_N_total)
+        Expr::Block {
+            statements,
+            expr: Box::new(call(
+                "__alloc_string",
+                vec![ident(&data_name), ident(&total_name)],
+            )),
+            span,
+            inferred_type: Some(Type::String),
+        }
     }
 
     /// Desugar a NewLiteral expression.
