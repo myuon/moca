@@ -419,7 +419,7 @@ pub enum MicroOp {
     },
     /// Convert value to string representation.
     /// dst = to_string(src) (Ref to newly allocated heap string)
-    ToString {
+    FloatToString {
         dst: VReg,
         src: VReg,
     },

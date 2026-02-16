@@ -456,10 +456,10 @@ impl Verifier {
             // System / Builtins
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::GcHint(_) => (0, 0),
-            Op::PrintDebug => (1, 1), // pops value, pushes return value
-            Op::TypeOf => (1, 1),     // pops value, pushes type string
-            Op::ToString => (1, 1),   // pops value, pushes string
-            Op::ParseInt => (1, 1),   // pops string, pushes int
+            Op::PrintDebug => (1, 1),    // pops value, pushes return value
+            Op::TypeOf => (1, 1),        // pops value, pushes type string
+            Op::FloatToString => (1, 1), // pops value, pushes string
+            Op::ParseInt => (1, 1),      // pops string, pushes int
             // Exception handling
             Op::Throw => (1, 0),
             Op::TryBegin(_) => (0, 0),

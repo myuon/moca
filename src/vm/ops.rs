@@ -169,7 +169,7 @@ pub enum Op {
     GcHint(usize),
     PrintDebug,
     TypeOf,
-    ToString,
+    FloatToString,
     ParseInt,
 
     // ========================================
@@ -302,7 +302,7 @@ impl Op {
             Op::GcHint(_) => "GcHint",
             Op::PrintDebug => "PrintDebug",
             Op::TypeOf => "TypeOf",
-            Op::ToString => "ToString",
+            Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",
             Op::Throw => "Throw",
             Op::TryBegin(_) => "TryBegin",

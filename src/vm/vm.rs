@@ -635,7 +635,7 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            to_string_helper: jit_to_string_helper,
+            float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_string_helper: jit_heap_alloc_string_helper,
@@ -735,7 +735,7 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            to_string_helper: jit_to_string_helper,
+            float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_string_helper: jit_heap_alloc_string_helper,
@@ -834,7 +834,7 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            to_string_helper: jit_to_string_helper,
+            float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_string_helper: jit_heap_alloc_string_helper,
@@ -915,7 +915,7 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            to_string_helper: jit_to_string_helper,
+            float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_string_helper: jit_heap_alloc_string_helper,
@@ -1528,7 +1528,7 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
-                MicroOp::ToString { dst, src } => {
+                MicroOp::FloatToString { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let value = self.stack[sb + src.0];
                     let s = self.value_to_string(&value)?;
@@ -2580,7 +2580,7 @@ impl VM {
                 let r = self.heap.alloc_string(type_name.to_string())?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::ToString => {
+            Op::FloatToString => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
                 let r = self.heap.alloc_string(s)?;
@@ -3939,7 +3939,7 @@ unsafe extern "C" fn jit_syscall_helper(
 /// JIT toString helper function.
 /// Converts a value to its string representation and allocates on heap.
 #[cfg(feature = "jit")]
-unsafe extern "C" fn jit_to_string_helper(
+unsafe extern "C" fn jit_float_to_string_helper(
     ctx: *mut JitCallContext,
     tag: u64,
     payload: u64,
@@ -3947,7 +3947,7 @@ unsafe extern "C" fn jit_to_string_helper(
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
 
-    vm.record_opcode("ToString");
+    vm.record_opcode("FloatToString");
 
     let value = JitValue { tag, payload }.to_value();
     match vm.value_to_string(&value) {

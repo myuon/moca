@@ -375,7 +375,7 @@ const OP_SYSCALL: u8 = 86;
 const OP_GC_HINT: u8 = 87;
 const OP_PRINT_DEBUG: u8 = 88;
 const OP_TYPE_OF: u8 = 89;
-const OP_TO_STRING: u8 = 90;
+const OP_FLOAT_TO_STRING: u8 = 90;
 const OP_PARSE_INT: u8 = 91;
 // Exception Handling
 const OP_THROW: u8 = 93;
@@ -585,7 +585,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
-        Op::ToString => w.write_all(&[OP_TO_STRING])?,
+        Op::FloatToString => w.write_all(&[OP_FLOAT_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
         // Exception Handling
         Op::Throw => w.write_all(&[OP_THROW])?,
@@ -749,7 +749,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_PRINT_DEBUG => Op::PrintDebug,
         OP_TYPE_OF => Op::TypeOf,
-        OP_TO_STRING => Op::ToString,
+        OP_FLOAT_TO_STRING => Op::FloatToString,
         OP_PARSE_INT => Op::ParseInt,
         // Exception Handling
         OP_THROW => Op::Throw,
@@ -1176,7 +1176,7 @@ mod tests {
             Op::GcHint(1024),
             Op::PrintDebug,
             Op::TypeOf,
-            Op::ToString,
+            Op::FloatToString,
             Op::ParseInt,
             // Exception Handling
             Op::Throw,

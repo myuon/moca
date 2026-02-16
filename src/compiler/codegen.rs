@@ -156,8 +156,8 @@ impl Codegen {
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
                 "len" | "argc" | "parse_int" => ValueType::I64,
-                "type_of" | "to_string" | "channel" | "recv" | "argv" | "args" | "__alloc_heap"
-                | "__alloc_string" => ValueType::Ref,
+                "type_of" | "__float_to_string" | "channel" | "recv" | "argv" | "args"
+                | "__alloc_heap" | "__alloc_string" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
                 "send" | "join" | "print" | "print_debug" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
@@ -1009,12 +1009,12 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::TypeOf);
                     }
-                    "to_string" => {
+                    "__float_to_string" => {
                         if args.len() != 1 {
-                            return Err("to_string takes exactly 1 argument".to_string());
+                            return Err("__float_to_string takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::ToString);
+                        ops.push(Op::FloatToString);
                     }
                     "parse_int" => {
                         if args.len() != 1 {
@@ -1500,7 +1500,7 @@ impl Codegen {
 
             // Type operations
             "TypeOf" => Ok(Op::TypeOf),
-            "ToString" => Ok(Op::ToString),
+            "FloatToString" => Ok(Op::FloatToString),
             "ParseInt" => Ok(Op::ParseInt),
             // Exception handling
             "Throw" => Ok(Op::Throw),

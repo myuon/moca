@@ -1702,7 +1702,7 @@ impl<'a> Disassembler<'a> {
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::PrintDebug => self.output.push_str("PrintDebug"),
             Op::TypeOf => self.output.push_str("TypeOf"),
-            Op::ToString => self.output.push_str("ToString"),
+            Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),
@@ -2168,7 +2168,7 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
                 s
             ))
         }
-        MicroOp::ToString { dst, src } => output.push_str(&format!(
+        MicroOp::FloatToString { dst, src } => output.push_str(&format!(
             "ToString {}, {}",
             format_vreg(dst),
             format_vreg(src)
