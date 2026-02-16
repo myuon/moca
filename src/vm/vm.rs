@@ -638,7 +638,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_string_helper: jit_heap_alloc_string_helper,
+            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
         };
 
         // Execute the JIT loop code
@@ -738,7 +738,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_string_helper: jit_heap_alloc_string_helper,
+            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
         };
 
         // Execute the JIT loop code
@@ -837,7 +837,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_string_helper: jit_heap_alloc_string_helper,
+            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
         };
 
         // Execute the JIT code
@@ -918,7 +918,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_string_helper: jit_heap_alloc_string_helper,
+            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
         };
 
         // Execute the JIT code
@@ -1552,14 +1552,23 @@ impl VM {
                     let r = self.heap.alloc_slots(slots)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
-                MicroOp::HeapAllocString { dst, data_ref, len } => {
+                MicroOp::HeapAllocTyped {
+                    dst,
+                    data_ref,
+                    len,
+                    kind,
+                } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let data_ref_val = self.stack[sb + data_ref.0];
                     let len_val = self.stack[sb + len.0];
-                    let r = self.heap.alloc_slots_with_kind(
-                        vec![data_ref_val, len_val],
-                        crate::vm::heap::ObjectKind::String,
-                    )?;
+                    let obj_kind = match kind {
+                        1 => crate::vm::heap::ObjectKind::String,
+                        2 => crate::vm::heap::ObjectKind::Array,
+                        _ => crate::vm::heap::ObjectKind::Slots,
+                    };
+                    let r = self
+                        .heap
+                        .alloc_slots_with_kind(vec![data_ref_val, len_val], obj_kind)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
                 MicroOp::Raw { op } => {
@@ -2724,15 +2733,18 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::HeapAllocArray(n) => {
+            Op::HeapAllocArray(n, kind) => {
                 let mut slots = Vec::with_capacity(n);
                 for _ in 0..n {
                     slots.push(self.stack.pop().ok_or("stack underflow")?);
                 }
                 slots.reverse();
-                let r = self
-                    .heap
-                    .alloc_slots_with_kind(slots, crate::vm::heap::ObjectKind::Array)?;
+                let obj_kind = match kind {
+                    1 => crate::vm::heap::ObjectKind::String,
+                    2 => crate::vm::heap::ObjectKind::Array,
+                    _ => crate::vm::heap::ObjectKind::Slots,
+                };
+                let r = self.heap.alloc_slots_with_kind(slots, obj_kind)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::HeapLoad(offset) => {
@@ -2844,16 +2856,7 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::HeapAllocString => {
-                // Pop len, pop data_ref → allocate [data_ref, len] with ObjectKind::String
-                let len_val = self.stack.pop().ok_or("stack underflow")?;
-                let data_ref_val = self.stack.pop().ok_or("stack underflow")?;
-                let r = self.heap.alloc_slots_with_kind(
-                    vec![data_ref_val, len_val],
-                    crate::vm::heap::ObjectKind::String,
-                )?;
-                self.stack.push(Value::Ref(r));
-            }
+            // HeapAllocString removed — use HeapAllocArray(2, 1) instead
             Op::Syscall(syscall_num, argc) => {
                 // Collect arguments from stack
                 let mut args = Vec::with_capacity(argc);
@@ -4022,27 +4025,33 @@ unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     }
 }
 
-/// JIT HeapAllocString helper function.
-/// Allocates [data_ref, len] with ObjectKind::String.
+/// JIT HeapAllocTyped helper function.
+/// Allocates [data_ref, len] with the specified ObjectKind.
 #[cfg(feature = "jit")]
-unsafe extern "C" fn jit_heap_alloc_string_helper(
+unsafe extern "C" fn jit_heap_alloc_typed_helper(
     ctx: *mut JitCallContext,
     data_ref_payload: u64,
     len_payload: u64,
+    kind: u64,
 ) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
 
-    vm.record_opcode("HeapAllocString");
+    vm.record_opcode("HeapAllocTyped");
 
     let data_ref_val = Value::Ref(crate::vm::heap::GcRef {
         index: data_ref_payload as usize,
     });
     let len_val = Value::I64(len_payload as i64);
-    match vm.heap.alloc_slots_with_kind(
-        vec![data_ref_val, len_val],
-        crate::vm::heap::ObjectKind::String,
-    ) {
+    let obj_kind = match kind {
+        1 => crate::vm::heap::ObjectKind::String,
+        2 => crate::vm::heap::ObjectKind::Array,
+        _ => crate::vm::heap::ObjectKind::Slots,
+    };
+    match vm
+        .heap
+        .alloc_slots_with_kind(vec![data_ref_val, len_val], obj_kind)
+    {
         Ok(r) => {
             ctx_ref.heap_base = vm.heap.memory_base_ptr();
             JitReturn {
@@ -4185,13 +4194,13 @@ mod tests {
         // Array<T> struct layout: [ptr, len]
         // ptr points to data array, len is the element count
         let stack = run_code(vec![
-            Op::I64Const(1),       // element 0
-            Op::I64Const(2),       // element 1
-            Op::I64Const(3),       // element 2
-            Op::HeapAlloc(3),      // data array with 3 elements
-            Op::I64Const(3),       // length value
-            Op::HeapAllocArray(2), // Array<T> struct [ptr, len]
-            Op::HeapLoad(1),       // read len field
+            Op::I64Const(1),          // element 0
+            Op::I64Const(2),          // element 1
+            Op::I64Const(3),          // element 2
+            Op::HeapAlloc(3),         // data array with 3 elements
+            Op::I64Const(3),          // length value
+            Op::HeapAllocArray(2, 2), // Array<T> struct [ptr, len]
+            Op::HeapLoad(1),          // read len field
         ])
         .unwrap();
         assert_eq!(stack.len(), 1);

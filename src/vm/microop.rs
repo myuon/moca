@@ -400,12 +400,13 @@ pub enum MicroOp {
         dst: VReg,
         size: VReg,
     },
-    /// Allocate a string object: [data_ref, len] with ObjectKind::String.
-    /// dst = Ref to newly allocated string struct.
-    HeapAllocString {
+    /// Allocate a typed 2-slot object: [data_ref, len] with specified ObjectKind.
+    /// kind: 0=Slots, 1=String, 2=Array.
+    HeapAllocTyped {
         dst: VReg,
         data_ref: VReg,
         len: VReg,
+        kind: u8,
     },
 
     // ========================================

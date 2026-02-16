@@ -863,11 +863,17 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::HeapAllocDynSimple { dst, size });
                 vstack.push(Vse::RegRef(dst));
             }
-            Op::HeapAllocString => {
+            Op::HeapAllocArray(2, kind) if *kind == 1 || *kind == 2 => {
+                // Typed 2-slot alloc (String or Array with ptr+len layout)
                 let len = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let data_ref = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
                 let dst = alloc_temp(&mut next_temp, &mut max_temp);
-                micro_ops.push(MicroOp::HeapAllocString { dst, data_ref, len });
+                micro_ops.push(MicroOp::HeapAllocTyped {
+                    dst,
+                    data_ref,
+                    len,
+                    kind: *kind,
+                });
                 vstack.push(Vse::RegRef(dst));
             }
 
