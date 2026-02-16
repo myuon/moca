@@ -147,12 +147,11 @@ pub enum Op {
     // Heap Operations
     // ========================================
     HeapAlloc(usize),
-    /// Like HeapAlloc but marks the object with ObjectKind::Array for display.
-    HeapAllocArray(usize),
+    /// Like HeapAlloc but marks the object with a specific ObjectKind.
+    /// Second parameter is the kind: 0=Slots, 1=String, 2=Array.
+    HeapAllocArray(usize, u8),
     HeapAllocDyn,
     HeapAllocDynSimple,
-    /// Allocate a string object: pop len, pop data_ref → push [data_ref, len] with ObjectKind::String
-    HeapAllocString,
     HeapLoad(usize),
     HeapStore(usize),
     HeapLoadDyn,
@@ -288,10 +287,9 @@ impl Op {
             Op::Call(_, _) => "Call",
             Op::Ret => "Ret",
             Op::HeapAlloc(_) => "HeapAlloc",
-            Op::HeapAllocArray(_) => "HeapAllocArray",
+            Op::HeapAllocArray(_, _) => "HeapAllocArray",
             Op::HeapAllocDyn => "HeapAllocDyn",
             Op::HeapAllocDynSimple => "HeapAllocDynSimple",
-            Op::HeapAllocString => "HeapAllocString",
             Op::HeapLoad(_) => "HeapLoad",
             Op::HeapStore(_) => "HeapStore",
             Op::HeapLoadDyn => "HeapLoadDyn",

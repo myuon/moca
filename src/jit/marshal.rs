@@ -199,8 +199,9 @@ pub struct JitCallContext {
     pub print_debug_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
     /// HeapAllocDynSimple helper: (ctx, size) -> JitReturn (returns Ref)
     pub heap_alloc_dyn_simple_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
-    /// HeapAllocString helper: (ctx, data_ref_payload, len_payload) -> JitReturn (returns Ref)
-    pub heap_alloc_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
+    /// HeapAllocTyped helper: (ctx, data_ref_payload, len_payload, kind) -> JitReturn (returns Ref)
+    pub heap_alloc_typed_helper:
+        unsafe extern "C" fn(*mut JitCallContext, u64, u64, u64) -> JitReturn,
 }
 
 /// Type signature for call helper function.

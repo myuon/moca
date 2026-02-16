@@ -391,9 +391,12 @@ impl MicroOpJitCompiler {
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
             // Heap allocation operations
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
-            MicroOp::HeapAllocString { dst, data_ref, len } => {
-                self.emit_heap_alloc_string(dst, data_ref, len)
-            }
+            MicroOp::HeapAllocTyped {
+                dst,
+                data_ref,
+                len,
+                kind,
+            } => self.emit_heap_alloc_typed(dst, data_ref, len, *kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1620,18 +1623,19 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit HeapAllocString: call helper(ctx, data_ref_payload, len_payload) -> (tag, payload)
-    fn emit_heap_alloc_string(
+    /// Emit HeapAllocTyped: call helper(ctx, data_ref_payload, len_payload, kind) -> (tag, payload)
+    fn emit_heap_alloc_typed(
         &mut self,
         dst: &VReg,
         data_ref: &VReg,
         len: &VReg,
+        kind: u8,
     ) -> Result<(), String> {
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             // Save callee-saved
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
-            // Args: X0=ctx, X1=data_ref_payload, X2=len_payload
+            // Args: X0=ctx, X1=data_ref_payload, X2=len_payload, X3=kind
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.ldr(
                 Reg::X1,
@@ -1639,7 +1643,8 @@ impl MicroOpJitCompiler {
                 Self::vreg_payload_offset(data_ref),
             );
             asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_payload_offset(len));
-            // Load heap_alloc_string_helper from JitCallContext offset 96
+            asm.movz(Reg::X3, kind as u16, 0);
+            // Load heap_alloc_typed_helper from JitCallContext offset 96
             asm.ldr(regs::TMP4, regs::VM_CTX, 96);
             asm.blr(regs::TMP4);
             // Restore callee-saved

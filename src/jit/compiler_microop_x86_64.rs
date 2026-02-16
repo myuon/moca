@@ -401,9 +401,12 @@ impl MicroOpJitCompiler {
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
             // Heap allocation operations
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
-            MicroOp::HeapAllocString { dst, data_ref, len } => {
-                self.emit_heap_alloc_string(dst, data_ref, len)
-            }
+            MicroOp::HeapAllocTyped {
+                dst,
+                data_ref,
+                len,
+                kind,
+            } => self.emit_heap_alloc_typed(dst, data_ref, len, *kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1571,18 +1574,19 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit HeapAllocString: call helper(ctx, data_ref_payload, len_payload) -> (tag, payload)
-    fn emit_heap_alloc_string(
+    /// Emit HeapAllocTyped: call helper(ctx, data_ref_payload, len_payload, kind) -> (tag, payload)
+    fn emit_heap_alloc_typed(
         &mut self,
         dst: &VReg,
         data_ref: &VReg,
         len: &VReg,
+        kind: u8,
     ) -> Result<(), String> {
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Save callee-saved
         asm.push(regs::VM_CTX);
         asm.push(regs::FRAME_BASE);
-        // Args: RDI=ctx, RSI=data_ref_payload, RDX=len_payload
+        // Args: RDI=ctx, RSI=data_ref_payload, RDX=len_payload, RCX=kind
         asm.mov_rr(Reg::Rdi, regs::VM_CTX);
         asm.mov_rm(
             Reg::Rsi,
@@ -1590,7 +1594,8 @@ impl MicroOpJitCompiler {
             Self::vreg_payload_offset(data_ref),
         );
         asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(len));
-        // Load heap_alloc_string_helper from JitCallContext offset 96
+        asm.mov_ri32(Reg::Rcx, kind as i32);
+        // Load heap_alloc_typed_helper from JitCallContext offset 96
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 96);
         asm.call_r(regs::TMP4);
         // Restore callee-saved

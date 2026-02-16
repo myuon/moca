@@ -173,7 +173,7 @@ pub fn is_safepoint(op: &super::ops::Op, pc: usize) -> bool {
         Op::Call(_, _) => true,
 
         // Heap allocation is also a safepoint
-        Op::HeapAlloc(_) | Op::HeapAllocArray(_) => true,
+        Op::HeapAlloc(_) | Op::HeapAllocArray(_, _) => true,
 
         // Backward jumps are safepoints
         Op::Jmp(target) => *target < pc,

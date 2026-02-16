@@ -728,7 +728,7 @@ impl Codegen {
 
                 // 2. Create Array<T> struct: { ptr: data_ptr, len: n }
                 ops.push(Op::I64Const(n as i64));
-                ops.push(Op::HeapAllocArray(2)); // Array struct with [ptr, len]
+                ops.push(Op::HeapAllocArray(2, 2)); // Array struct with [ptr, len]
             }
             ResolvedExpr::Index {
                 object,
@@ -1100,7 +1100,7 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
-                        ops.push(Op::HeapAllocString);
+                        ops.push(Op::HeapAllocArray(2, 1)); // String struct with [ptr, len]
                     }
                     // CLI argument builtins
                     "argc" => {
@@ -1479,7 +1479,7 @@ impl Codegen {
             }
             "HeapAllocArray" => {
                 let n = self.expect_int_arg(args, 0, op_name)? as usize;
-                Ok(Op::HeapAllocArray(n))
+                Ok(Op::HeapAllocArray(n, 2))
             }
             "HeapAllocDyn" | "AllocHeapDyn" => Ok(Op::HeapAllocDyn),
             "HeapAllocDynSimple" => Ok(Op::HeapAllocDynSimple),

@@ -1687,10 +1687,18 @@ impl<'a> Disassembler<'a> {
 
             // Heap operations
             Op::HeapAlloc(n) => self.output.push_str(&format!("HeapAlloc {}", n)),
-            Op::HeapAllocArray(n) => self.output.push_str(&format!("HeapAllocArray {}", n)),
+            Op::HeapAllocArray(n, kind) => {
+                let kind_str = match kind {
+                    0 => "Slots",
+                    1 => "String",
+                    2 => "Array",
+                    _ => "Unknown",
+                };
+                self.output
+                    .push_str(&format!("HeapAllocArray {} ({})", n, kind_str));
+            }
             Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
             Op::HeapAllocDynSimple => self.output.push_str("HeapAllocDynSimple"),
-            Op::HeapAllocString => self.output.push_str("HeapAllocString"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
@@ -2142,12 +2150,26 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(dst),
             format_vreg(size)
         )),
-        MicroOp::HeapAllocString { dst, data_ref, len } => output.push_str(&format!(
-            "HeapAllocString {}, {}, {}",
-            format_vreg(dst),
-            format_vreg(data_ref),
-            format_vreg(len)
-        )),
+        MicroOp::HeapAllocTyped {
+            dst,
+            data_ref,
+            len,
+            kind,
+        } => {
+            let kind_str = match kind {
+                0 => "Slots",
+                1 => "String",
+                2 => "Array",
+                _ => "Unknown",
+            };
+            output.push_str(&format!(
+                "HeapAllocTyped {}, {}, {} ({})",
+                format_vreg(dst),
+                format_vreg(data_ref),
+                format_vreg(len),
+                kind_str
+            ));
+        }
         MicroOp::StringConst { dst, idx } => {
             let s = chunk
                 .strings
