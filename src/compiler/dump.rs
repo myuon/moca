@@ -1690,6 +1690,7 @@ impl<'a> Disassembler<'a> {
             Op::HeapAllocArray(n) => self.output.push_str(&format!("HeapAllocArray {}", n)),
             Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
             Op::HeapAllocDynSimple => self.output.push_str("HeapAllocDynSimple"),
+            Op::HeapAllocString => self.output.push_str("HeapAllocString"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
@@ -2166,13 +2167,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(dst),
             format_vreg(src)
         )),
-        MicroOp::StringConcat { dst, a, b } => output.push_str(&format!(
-            "StringConcat {}, {}, {}",
-            format_vreg(dst),
-            format_vreg(a),
-            format_vreg(b)
-        )),
-
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),

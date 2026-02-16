@@ -2622,6 +2622,18 @@ impl TypeChecker {
                 }
                 Some(Type::Any) // Returns a reference (opaque)
             }
+            "__alloc_string" => {
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        "__alloc_string expects 2 arguments (data_ref, len)",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Any) // Returns a string reference
+            }
             // CLI argument operations
             "argc" => {
                 if !args.is_empty() {

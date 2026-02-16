@@ -402,6 +402,7 @@ const OP_HEAP_LOAD2: u8 = 105;
 const OP_CALL_INDIRECT: u8 = 106;
 
 const OP_HEAP_STORE2: u8 = 107;
+const OP_HEAP_ALLOC_STRING: u8 = 108;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -559,6 +560,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapAllocDyn => w.write_all(&[OP_HEAP_ALLOC_DYN])?,
         Op::HeapAllocDynSimple => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
+        Op::HeapAllocString => w.write_all(&[OP_HEAP_ALLOC_STRING])?,
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -735,6 +737,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_ALLOC_ARRAY => Op::HeapAllocArray(read_u32(r)? as usize),
         OP_HEAP_ALLOC_DYN => Op::HeapAllocDyn,
         OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple,
+        OP_HEAP_ALLOC_STRING => Op::HeapAllocString,
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
@@ -1161,6 +1164,7 @@ mod tests {
             Op::HeapAlloc(5),
             Op::HeapAllocDyn,
             Op::HeapAllocDynSimple,
+            Op::HeapAllocString,
             Op::HeapLoad(1),
             Op::HeapStore(2),
             Op::HeapLoadDyn,

@@ -389,8 +389,6 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             MicroOp::ToString { dst, src } => self.emit_to_string(dst, src),
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
-            MicroOp::StringConcat { dst, a, b } => self.emit_string_concat(dst, a, b),
-
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1588,28 +1586,6 @@ impl MicroOpJitCompiler {
             // Restore callee-saved
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
             // Store result (returns original value): X0=tag, X1=payload
-            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
-            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
-        }
-        Ok(())
-    }
-
-    /// Emit StringConcat: call string_concat_helper(ctx, ref_a, ref_b) -> (tag, payload)
-    fn emit_string_concat(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            // Save callee-saved
-            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
-            // Args: X0=ctx, X1=ref_a (payload), X2=ref_b (payload)
-            asm.mov(Reg::X0, regs::VM_CTX);
-            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-            // Load string_concat_helper from JitCallContext offset 88
-            asm.ldr(regs::TMP4, regs::VM_CTX, 88);
-            asm.blr(regs::TMP4);
-            // Restore callee-saved
-            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
-            // Store result: X0=tag, X1=payload
             asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
             asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
         }

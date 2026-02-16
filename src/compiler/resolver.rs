@@ -307,6 +307,7 @@ impl<'a> Resolver<'a> {
                 "__heap_load".to_string(),
                 "__heap_store".to_string(),
                 "__alloc_heap".to_string(),
+                "__alloc_string".to_string(),
                 // CLI argument operations
                 "argc".to_string(),
                 "argv".to_string(),
@@ -582,7 +583,15 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        let method_type_map = Self::collect_var_types(&method.body.statements);
+        let mut method_type_map = Self::collect_var_types(&method.body.statements);
+        // Add parameter types
+        for param in &method.params {
+            if param.name != "self"
+                && let Some(ty) = self.type_from_annotation(&param.type_annotation)
+            {
+                method_type_map.insert(param.name.clone(), ty);
+            }
+        }
         let body = self.resolve_statements(method.body.statements, &mut scope)?;
 
         // Function name: {Type}::{method} for methods, {type}_{func} for associated functions on builtin types
@@ -626,7 +635,13 @@ impl<'a> Resolver<'a> {
             scope.declare_with_type(param.name.clone(), false, struct_name);
         }
 
-        let fn_type_map = Self::collect_var_types(&fn_def.body.statements);
+        let mut fn_type_map = Self::collect_var_types(&fn_def.body.statements);
+        // Add parameter types so codegen can infer correct ValueTypes
+        for param in &fn_def.params {
+            if let Some(ty) = self.type_from_annotation(&param.type_annotation) {
+                fn_type_map.insert(param.name.clone(), ty);
+            }
+        }
         let body = self.resolve_statements(fn_def.body.statements, &mut scope)?;
         let local_types = Self::build_local_types(&scope, &fn_type_map);
 
@@ -649,6 +664,45 @@ impl<'a> Resolver<'a> {
             local_types,
             is_inline,
         })
+    }
+
+    /// Convert a type annotation to a Type for use in local_types.
+    fn type_from_annotation(
+        &self,
+        type_annotation: &Option<crate::compiler::types::TypeAnnotation>,
+    ) -> Option<Type> {
+        use crate::compiler::types::TypeAnnotation;
+        match type_annotation {
+            Some(TypeAnnotation::Named(name)) => match name.as_str() {
+                "int" => Some(Type::Int),
+                "float" => Some(Type::Float),
+                "bool" => Some(Type::Bool),
+                "string" => Some(Type::String),
+                "nil" => Some(Type::Nil),
+                _ => {
+                    if self.structs.contains_key(name) {
+                        Some(Type::Struct {
+                            name: name.clone(),
+                            fields: Vec::new(),
+                        })
+                    } else {
+                        None
+                    }
+                }
+            },
+            Some(TypeAnnotation::Array(_)) => Some(Type::Array(Box::new(Type::Any))),
+            Some(TypeAnnotation::Vec(_)) => Some(Type::Vector(Box::new(Type::Any))),
+            Some(TypeAnnotation::Map(_, _)) => {
+                Some(Type::Map(Box::new(Type::Any), Box::new(Type::Any)))
+            }
+            Some(TypeAnnotation::Nullable(inner)) => {
+                let inner_ty = self
+                    .type_from_annotation(&Some(*inner.clone()))
+                    .unwrap_or(Type::Any);
+                Some(Type::Nullable(Box::new(inner_ty)))
+            }
+            _ => None,
+        }
     }
 
     /// Extract struct name from a type annotation (for function parameters).

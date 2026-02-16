@@ -412,14 +412,6 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
-    /// Concatenate two strings.
-    /// dst = concat(a, b) (Ref to newly allocated heap string)
-    StringConcat {
-        dst: VReg,
-        a: VReg,
-        b: VReg,
-    },
-
     // ========================================
     // Stack Bridge (for Raw op interop)
     // ========================================

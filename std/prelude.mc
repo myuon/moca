@@ -199,6 +199,31 @@ fun time_format(epoch_secs: int) -> string {
 }
 
 // ============================================================================
+// String Operations
+// ============================================================================
+
+// Concatenate two strings by copying character data into a new string.
+@inline
+fun string_concat(a: string, b: string) -> string {
+    let a_ptr = __heap_load(a, 0);
+    let a_len = __heap_load(a, 1);
+    let b_ptr = __heap_load(b, 0);
+    let b_len = __heap_load(b, 1);
+    let total = a_len + b_len;
+    let data = __alloc_heap(total);
+    let i = 0;
+    while i < a_len {
+        __heap_store(data, i, __heap_load(a_ptr, i));
+        i = i + 1;
+    }
+    while i < total {
+        __heap_store(data, i, __heap_load(b_ptr, i - a_len));
+        i = i + 1;
+    }
+    return __alloc_string(data, total);
+}
+
+// ============================================================================
 // High-level I/O Functions
 // ============================================================================
 

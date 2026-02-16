@@ -100,7 +100,21 @@ impl Codegen {
         }
     }
 
-    /// Infer the ValueType of a resolved expression.
+    fn infer_index_element_type(object_type: &Option<Type>) -> ValueType {
+        match object_type {
+            Some(Type::String) => ValueType::I64, // string[i] returns char code (int)
+            Some(Type::Array(elem)) | Some(Type::Vector(elem)) => Self::type_to_value_type(elem),
+            Some(Type::GenericStruct {
+                name, type_args, ..
+            }) if name == "Vec" && !type_args.is_empty() => Self::type_to_value_type(&type_args[0]),
+            Some(Type::GenericStruct {
+                name, type_args, ..
+            }) if name == "Map" && type_args.len() >= 2 => Self::type_to_value_type(&type_args[1]),
+            Some(Type::Map(_, val)) => Self::type_to_value_type(val),
+            _ => ValueType::I64, // fallback
+        }
+    }
+
     fn infer_expr_type(&self, expr: &ResolvedExpr) -> ValueType {
         match expr {
             ResolvedExpr::Int(_) => ValueType::I64,
@@ -110,11 +124,11 @@ impl Codegen {
             ResolvedExpr::Nil => ValueType::Ref,
             ResolvedExpr::Local(slot) => self
                 .current_local_types
-                .get(*slot)
+                .get(*slot + self.local_offset)
                 .copied()
                 .unwrap_or(ValueType::I64),
             ResolvedExpr::Array { .. } => ValueType::Ref,
-            ResolvedExpr::Index { .. } => ValueType::I64, // Most common; TODO: improve
+            ResolvedExpr::Index { object_type, .. } => Self::infer_index_element_type(object_type),
             ResolvedExpr::Field { .. } => ValueType::I64, // Most common; TODO: improve
             ResolvedExpr::Unary { op, operand } => match op {
                 UnaryOp::Neg => self.infer_expr_type(operand),
@@ -143,7 +157,8 @@ impl Codegen {
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
                 "len" | "argc" | "parse_int" => ValueType::I64,
                 "type_of" | "to_string" | "channel" | "recv" | "argv" | "args" | "__alloc_heap"
-                | "__heap_load" => ValueType::Ref,
+                | "__alloc_string" => ValueType::Ref,
+                "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
                 "send" | "join" | "print" | "print_debug" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
             },
@@ -814,7 +829,24 @@ impl Codegen {
                         ValueType::F64 => ops.push(Op::F64Add),
                         ValueType::I32 => ops.push(Op::I32Add),
                         ValueType::F32 => ops.push(Op::F32Add),
-                        _ => ops.push(Op::I64Add), // fallback
+                        ValueType::Ref => {
+                            // String concatenation: call string_concat(a, b)
+                            if let Some(&func_idx) = self.function_indices.get("string_concat") {
+                                if self
+                                    .inline_functions
+                                    .get(func_idx)
+                                    .is_some_and(|f| f.is_inline)
+                                    && self.inline_return_patches.is_none()
+                                {
+                                    // Only inline when not already inside an inline expansion
+                                    self.compile_inline_call(func_idx, 2, ops)?;
+                                } else {
+                                    ops.push(Op::Call(func_idx, 2));
+                                }
+                            } else {
+                                ops.push(Op::I64Add); // fallback if no stdlib
+                            }
+                        }
                     },
                     BinaryOp::Sub => match self.infer_expr_type(left) {
                         ValueType::I64 => ops.push(Op::I64Sub),
@@ -1061,6 +1093,16 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::HeapAllocDynSimple);
+                    }
+                    "__alloc_string" => {
+                        // __alloc_string(data_ref, len) -> string object [data_ref, len]
+                        if args.len() != 2 {
+                            return Err("__alloc_string takes exactly 2 arguments (data_ref, len)"
+                                .to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::HeapAllocString);
                     }
                     // CLI argument builtins
                     "argc" => {

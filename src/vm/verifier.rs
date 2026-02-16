@@ -446,6 +446,7 @@ impl Verifier {
             Op::HeapAllocArray(n) => (*n, 1), // pops n slots, pushes ref (Array kind)
             Op::HeapAllocDyn => (1, 1),       // pops size + size values, pushes ref (simplified)
             Op::HeapAllocDynSimple => (1, 1), // pops size, pushes ref (null-initialized)
+            Op::HeapAllocString => (2, 1),    // pops data_ref and len, pushes string ref
             Op::HeapLoad(_) => (1, 1),        // pops ref, pushes value
             Op::HeapStore(_) => (2, 0),       // pops ref and value
             Op::HeapLoadDyn => (2, 1),        // pops ref and index, pushes value

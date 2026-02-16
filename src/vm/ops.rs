@@ -151,6 +151,8 @@ pub enum Op {
     HeapAllocArray(usize),
     HeapAllocDyn,
     HeapAllocDynSimple,
+    /// Allocate a string object: pop len, pop data_ref → push [data_ref, len] with ObjectKind::String
+    HeapAllocString,
     HeapLoad(usize),
     HeapStore(usize),
     HeapLoadDyn,
@@ -289,6 +291,7 @@ impl Op {
             Op::HeapAllocArray(_) => "HeapAllocArray",
             Op::HeapAllocDyn => "HeapAllocDyn",
             Op::HeapAllocDynSimple => "HeapAllocDynSimple",
+            Op::HeapAllocString => "HeapAllocString",
             Op::HeapLoad(_) => "HeapLoad",
             Op::HeapStore(_) => "HeapStore",
             Op::HeapLoadDyn => "HeapLoadDyn",
