@@ -87,6 +87,7 @@ jobs:
             gsub(/%/, "", cov)
             print file, cov
           }' > base_coverage.txt
+          git checkout -- include/moca.h || true
           git checkout ${{ github.head_ref }}
           cargo clean
 
@@ -204,6 +205,7 @@ jobs:
           cargo clean
           cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee main_perf.txt
           cat main_perf.txt
+          git checkout -- include/moca.h || true
           git checkout ${{ github.head_ref }}
           git stash pop || true
 
