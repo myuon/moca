@@ -622,8 +622,8 @@ impl Desugar {
                 inferred_type,
             },
 
-            // StringInterpolation - desugar to single-allocation concat block for 3+ parts,
-            // or binary Add for 2 parts, or single expr/literal for 0-1 parts.
+            // StringInterpolation - desugar to string_join([...]) for 3+ parts,
+            // binary Add for 2 parts, or single expr/literal for 0-1 parts.
             Expr::StringInterpolation { parts, span, .. } => {
                 use crate::compiler::ast::StringInterpPart;
                 use crate::compiler::types::Type;
@@ -681,8 +681,18 @@ impl Desugar {
                     });
                 }
 
-                // 3+ parts: single-allocation concat via block expression
-                self.desugar_string_interp_concat(exprs, span)
+                // 3+ parts: string_join([part0, part1, ...])
+                Expr::Call {
+                    callee: "string_join".to_string(),
+                    type_args: vec![],
+                    args: vec![Expr::Array {
+                        elements: exprs,
+                        span,
+                        inferred_type: Some(Type::Array(Box::new(Type::String))),
+                    }],
+                    span,
+                    inferred_type: Some(Type::String),
+                }
             }
         }
     }
@@ -690,164 +700,6 @@ impl Desugar {
     /// Desugar an asm block (no change to the block itself).
     fn desugar_asm_block(&mut self, asm_block: AsmBlock) -> AsmBlock {
         asm_block
-    }
-
-    /// Desugar string interpolation with 3+ parts into a single-allocation concat block.
-    ///
-    /// Uses only builtins (`__heap_load`, `__heap_store`, `__alloc_heap`, `__alloc_string`, `len`)
-    /// so it works without stdlib.
-    fn desugar_string_interp_concat(&mut self, exprs: Vec<Expr>, span: Span) -> Expr {
-        use crate::compiler::types::Type;
-
-        let n = exprs.len();
-        let base = self.counter;
-        self.counter += 1;
-
-        let ident = |name: &str| -> Expr {
-            Expr::Ident {
-                name: name.to_string(),
-                span,
-                inferred_type: None,
-            }
-        };
-        let int_lit = |v: i64| -> Expr {
-            Expr::Int {
-                value: v,
-                span,
-                inferred_type: None,
-            }
-        };
-        let call = |callee: &str, args: Vec<Expr>| -> Expr {
-            Expr::Call {
-                callee: callee.to_string(),
-                type_args: vec![],
-                args,
-                span,
-                inferred_type: None,
-            }
-        };
-        let add = |left: Expr, right: Expr| -> Expr {
-            Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-                inferred_type: None,
-            }
-        };
-        let lt = |left: Expr, right: Expr| -> Expr {
-            Expr::Binary {
-                op: BinaryOp::Lt,
-                left: Box::new(left),
-                right: Box::new(right),
-                span,
-                inferred_type: None,
-            }
-        };
-        let let_stmt = |name: &str, init: Expr| -> Statement {
-            Statement::Let {
-                name: name.to_string(),
-                type_annotation: None,
-                init,
-                span,
-                inferred_type: None,
-            }
-        };
-        let assign_stmt = |name: &str, value: Expr| -> Statement {
-            Statement::Assign {
-                name: name.to_string(),
-                value,
-                span,
-            }
-        };
-        let expr_stmt = |expr: Expr| -> Statement { Statement::Expr { expr, span } };
-
-        let mut statements = Vec::new();
-
-        // Variable names
-        let part_names: Vec<String> = (0..n).map(|i| format!("__si_{}_{}", base, i)).collect();
-        let total_name = format!("__si_{}_total", base);
-        let data_name = format!("__si_{}_data", base);
-        let off_name = format!("__si_{}_off", base);
-        let j_name = format!("__si_{}_j", base);
-
-        // let __si_N_i = part_i;
-        for (i, expr) in exprs.into_iter().enumerate() {
-            statements.push(let_stmt(&part_names[i], expr));
-        }
-
-        // let __si_N_total = len(__si_N_0) + len(__si_N_1) + ...;
-        let len_sum = part_names
-            .iter()
-            .map(|name| call("len", vec![ident(name)]))
-            .reduce(&add)
-            .unwrap();
-        statements.push(let_stmt(&total_name, len_sum));
-
-        // let __si_N_data = __alloc_heap(__si_N_total);
-        statements.push(let_stmt(
-            &data_name,
-            call("__alloc_heap", vec![ident(&total_name)]),
-        ));
-
-        // let __si_N_off = 0;
-        statements.push(let_stmt(&off_name, int_lit(0)));
-
-        // For each part: copy data via while loop
-        for (i, part_name) in part_names.iter().enumerate() {
-            let ptr_name = format!("__si_{}_p{}", base, i);
-            let len_name = format!("__si_{}_l{}", base, i);
-
-            // let __si_N_pI = __heap_load(__si_N_I, 0);
-            statements.push(let_stmt(
-                &ptr_name,
-                call("__heap_load", vec![ident(part_name), int_lit(0)]),
-            ));
-            // let __si_N_lI = __heap_load(__si_N_I, 1);
-            statements.push(let_stmt(
-                &len_name,
-                call("__heap_load", vec![ident(part_name), int_lit(1)]),
-            ));
-
-            // First iteration: let j = 0; subsequent: j = 0;
-            if i == 0 {
-                statements.push(let_stmt(&j_name, int_lit(0)));
-            } else {
-                statements.push(assign_stmt(&j_name, int_lit(0)));
-            }
-
-            // while j < len { heap_store(data, off, heap_load(ptr, j)); off++; j++; }
-            statements.push(Statement::While {
-                condition: lt(ident(&j_name), ident(&len_name)),
-                body: Block {
-                    statements: vec![
-                        expr_stmt(call(
-                            "__heap_store",
-                            vec![
-                                ident(&data_name),
-                                ident(&off_name),
-                                call("__heap_load", vec![ident(&ptr_name), ident(&j_name)]),
-                            ],
-                        )),
-                        assign_stmt(&off_name, add(ident(&off_name), int_lit(1))),
-                        assign_stmt(&j_name, add(ident(&j_name), int_lit(1))),
-                    ],
-                    span,
-                },
-                span,
-            });
-        }
-
-        // __alloc_string(__si_N_data, __si_N_total)
-        Expr::Block {
-            statements,
-            expr: Box::new(call(
-                "__alloc_string",
-                vec![ident(&data_name), ident(&total_name)],
-            )),
-            span,
-            inferred_type: Some(Type::String),
-        }
     }
 
     /// Desugar a NewLiteral expression.

@@ -223,10 +223,10 @@ fun string_concat(a: string, b: string) -> string {
     return __alloc_string(data, total);
 }
 
-// Join all strings in a vec into a single string.
+// Join all strings in an array into a single string.
 // Pre-allocates the result buffer based on total length, then copies all parts.
-fun string_join(parts: vec<string>) -> string {
-    let n = parts.len();
+fun string_join(parts: array<string>) -> string {
+    let n = len(parts);
     let total = 0;
     let i = 0;
     while i < n {
