@@ -225,6 +225,7 @@ fun string_concat(a: string, b: string) -> string {
 
 // Join all strings in an array into a single string.
 // Pre-allocates the result buffer based on total length, then copies all parts.
+@inline
 fun string_join(parts: array<string>) -> string {
     let n = len(parts);
     let total = 0;
