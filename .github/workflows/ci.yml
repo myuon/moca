@@ -76,8 +76,8 @@ jobs:
         run: |
           git checkout -- include/moca.h || true
           git checkout ${{ github.base_ref }}
-          # Clean to ensure coverage is measured from base branch source
-          cargo clean
+          # Clean profraw files only to avoid full rebuild; source changes trigger incremental recompilation
+          cargo llvm-cov clean --profraw-only
           cargo llvm-cov --no-report --ignore-run-fail > /dev/null 2>&1
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
             file = $1
@@ -93,7 +93,7 @@ jobs:
           }' > base_coverage.txt
           git checkout -- include/moca.h || true
           git checkout ${{ github.head_ref }}
-          cargo clean
+          cargo llvm-cov clean --profraw-only
 
       - name: Generate coverage report with diff
         run: |
