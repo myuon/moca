@@ -333,6 +333,58 @@ impl MicroOpJitCompiler {
             MicroOp::HeapLoad2 { dst, obj, idx } => self.emit_heap_load2(dst, obj, idx),
             MicroOp::HeapStore2 { obj, idx, src } => self.emit_heap_store2(obj, idx, src),
 
+            // f64 ALU
+            MicroOp::ConstF64 { dst, imm } => self.emit_const_f64(dst, *imm),
+            MicroOp::AddF64 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Add),
+            MicroOp::SubF64 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Sub),
+            MicroOp::MulF64 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Mul),
+            MicroOp::DivF64 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Div),
+            MicroOp::NegF64 { dst, src } => self.emit_neg_f64(dst, src),
+            MicroOp::CmpF64 { dst, a, b, cond } => self.emit_cmp_f64(dst, a, b, cond),
+
+            // f32 ALU (stored as f64 in frame slots)
+            MicroOp::ConstF32 { dst, imm } => self.emit_const_f64(dst, *imm as f64),
+            MicroOp::AddF32 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Add),
+            MicroOp::SubF32 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Sub),
+            MicroOp::MulF32 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Mul),
+            MicroOp::DivF32 { dst, a, b } => self.emit_binop_f64(dst, a, b, FpBinOp::Div),
+            MicroOp::NegF32 { dst, src } => self.emit_neg_f64(dst, src),
+            MicroOp::CmpF32 { dst, a, b, cond } => self.emit_cmp_f64(dst, a, b, cond),
+
+            // i32 ALU (widened to i64 in frame slots)
+            MicroOp::AddI32 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::Add),
+            MicroOp::SubI32 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::Sub),
+            MicroOp::MulI32 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::Mul),
+            MicroOp::DivI32 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::Div),
+            MicroOp::RemI32 { dst, a, b } => self.emit_rem_i64(dst, a, b),
+            MicroOp::EqzI32 { dst, src } => self.emit_eqz(dst, src),
+            MicroOp::CmpI32 { dst, a, b, cond } => self.emit_cmp_i64(dst, a, b, cond),
+
+            // Type conversions
+            MicroOp::I32WrapI64 { dst, src } => self.emit_mov(dst, src),
+            MicroOp::I64ExtendI32S { dst, src } => self.emit_i64_extend_i32s(dst, src),
+            MicroOp::I64ExtendI32U { dst, src } => self.emit_i64_extend_i32u(dst, src),
+            MicroOp::F64ConvertI64S { dst, src } => self.emit_f64_convert_i64s(dst, src),
+            MicroOp::I64TruncF64S { dst, src } => self.emit_i64_trunc_f64s(dst, src),
+            MicroOp::F64ConvertI32S { dst, src } => self.emit_f64_convert_i64s(dst, src),
+            MicroOp::F32ConvertI32S { dst, src } => self.emit_f64_convert_i64s(dst, src),
+            MicroOp::F32ConvertI64S { dst, src } => self.emit_f64_convert_i64s(dst, src),
+            MicroOp::I32TruncF32S { dst, src } => self.emit_i64_trunc_f64s(dst, src),
+            MicroOp::I32TruncF64S { dst, src } => self.emit_i64_trunc_f64s(dst, src),
+            MicroOp::I64TruncF32S { dst, src } => self.emit_i64_trunc_f64s(dst, src),
+            MicroOp::F32DemoteF64 { dst, src } => self.emit_mov(dst, src),
+            MicroOp::F64PromoteF32 { dst, src } => self.emit_mov(dst, src),
+
+            // Ref ops
+            MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
+            MicroOp::RefIsNull { dst, src } => self.emit_ref_is_null(dst, src),
+            MicroOp::RefNull { dst } => self.emit_ref_null(dst),
+
+            // Indirect call
+            MicroOp::CallIndirect { callee, args, ret } => {
+                self.emit_call_indirect(callee, args, ret.as_ref())
+            }
+
             _ => Err(format!(
                 "Unsupported MicroOp for JIT: {:?}",
                 std::mem::discriminant(op)
@@ -471,15 +523,7 @@ impl MicroOpJitCompiler {
     }
 
     fn invert_cond(cond: Cond) -> Cond {
-        match cond {
-            Cond::Eq => Cond::Ne,
-            Cond::Ne => Cond::Eq,
-            Cond::Lt => Cond::Ge,
-            Cond::Ge => Cond::Lt,
-            Cond::Gt => Cond::Le,
-            Cond::Le => Cond::Gt,
-            other => other,
-        }
+        cond.invert()
     }
 
     fn emit_cmp_i64(
@@ -866,6 +910,111 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
+    // ==================== CallIndirect ====================
+
+    fn emit_call_indirect(
+        &mut self,
+        callee: &VReg,
+        args: &[VReg],
+        ret: Option<&VReg>,
+    ) -> Result<(), String> {
+        let argc = args.len();
+
+        // Step 1: Resolve func_index from callee's heap object slot 0.
+        // callee payload = ref index into heap.
+        // func_index = heap[callee][0].payload
+        // Address: heap_base + (ref_payload + 1 + 2*0) * 8 + 8
+        //        = heap_base + (ref_payload + 1) * 8 + 8
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(
+                regs::TMP0,
+                regs::FRAME_BASE,
+                Self::vreg_payload_offset(callee),
+            );
+            asm.ldr(regs::TMP1, regs::VM_CTX, 48); // heap_base
+            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // byte offset
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // TMP1 now points to slot 0 tag; slot 0 payload is at +8
+            asm.ldr(regs::TMP4, regs::TMP1, 8); // func_index in TMP4
+        }
+
+        // Step 2: Allocate space on native stack for args array
+        let args_size = argc * VALUE_SIZE as usize;
+        let args_aligned = (args_size + 15) & !15;
+
+        if args_aligned > 0 {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(Reg::Sp, Reg::Sp, args_aligned as u16);
+        }
+
+        // Step 3: Copy args from frame slots to native stack
+        for (i, arg) in args.iter().enumerate() {
+            let sp_tag_offset = (i * VALUE_SIZE as usize) as u16;
+            let sp_payload_offset = sp_tag_offset + 8;
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
+            asm.str(regs::TMP0, Reg::Sp, sp_tag_offset);
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
+            asm.str(regs::TMP0, Reg::Sp, sp_payload_offset);
+        }
+
+        // Step 4: Save callee-saved registers (TMP4 = func_index is caller-saved, save it too)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            asm.stp_pre(Reg::X21, Reg::X22, -16);
+        }
+
+        // Step 5: Set up call arguments: x0=ctx, x1=func_index, x2=argc, x3=args_ptr
+        // TMP4 (x9) still holds func_index
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+            asm.mov(Reg::X1, regs::TMP4); // func_index
+        }
+        self.emit_load_imm64(argc as i64, Reg::X2);
+        // x3 = sp + 32 (args are below the saved registers)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.add_imm(Reg::X3, Reg::Sp, 32);
+        }
+
+        // Step 6: Load call_helper from JitCallContext offset 16 and call
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 16);
+            asm.blr(regs::TMP4);
+        }
+
+        // Step 7: Restore callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(Reg::X21, Reg::X22, 16);
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+        }
+
+        // Deallocate args space
+        if args_aligned > 0 {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.add_imm(Reg::Sp, Reg::Sp, args_aligned as u16);
+        }
+
+        // Store return value (x0=tag, x1=payload) into ret vreg
+        if let Some(ret_vreg) = ret {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg));
+            asm.str(
+                Reg::X1,
+                regs::FRAME_BASE,
+                Self::vreg_payload_offset(ret_vreg),
+            );
+        }
+
+        Ok(())
+    }
+
     // ==================== Return ====================
 
     fn emit_ret(&mut self, src: Option<&VReg>) -> Result<(), String> {
@@ -886,6 +1035,242 @@ impl MicroOpJitCompiler {
         asm.ldp_post(Reg::Fp, Reg::Lr, 16);
         asm.ret();
 
+        Ok(())
+    }
+
+    // ==================== f64 / f32 ALU ====================
+
+    fn emit_const_f64(&mut self, dst: &VReg, imm: f64) -> Result<(), String> {
+        // Store TAG_FLOAT
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov_imm(regs::TMP0, value_tags::TAG_FLOAT as u16);
+            asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        }
+        // Store f64 bits as payload
+        self.emit_load_imm64(imm.to_bits() as i64, regs::TMP0);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+        Ok(())
+    }
+
+    fn emit_binop_f64(
+        &mut self,
+        dst: &VReg,
+        a: &VReg,
+        b: &VReg,
+        op: FpBinOp,
+    ) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load payloads (f64 bits) into GP regs, then move to FP regs
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+        // FMOV D0, X0; FMOV D1, X1
+        asm.fmov_d_x(0, regs::TMP0);
+        asm.fmov_d_x(1, regs::TMP1);
+        // Perform FP operation
+        match op {
+            FpBinOp::Add => asm.fadd_d(0, 0, 1),
+            FpBinOp::Sub => asm.fsub_d(0, 0, 1),
+            FpBinOp::Mul => asm.fmul_d(0, 0, 1),
+            FpBinOp::Div => asm.fdiv_d(0, 0, 1),
+        }
+        // FMOV X0, D0 (result bits back to GP)
+        asm.fmov_x_d(regs::TMP0, 0);
+        // Store TAG_FLOAT + result
+        asm.mov_imm(regs::TMP1, value_tags::TAG_FLOAT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    fn emit_neg_f64(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.fmov_d_x(0, regs::TMP0);
+        asm.fneg_d(0, 0);
+        asm.fmov_x_d(regs::TMP0, 0);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_FLOAT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// Map CmpCond to AArch64 condition code for floating-point comparisons.
+    /// After FCMP, the NZCV flags use different conditions than integer CMP:
+    /// - Lt → Mi (negative flag)
+    /// - Le → Ls (lower or same, unsigned)
+    /// - Gt, Ge, Eq, Ne work the same
+    fn fp_cmp_cond_to_aarch64(cond: &CmpCond) -> Cond {
+        match cond {
+            CmpCond::Eq => Cond::Eq,
+            CmpCond::Ne => Cond::Ne,
+            CmpCond::LtS => Cond::Mi,
+            CmpCond::LeS => Cond::Ls,
+            CmpCond::GtS => Cond::Gt,
+            CmpCond::GeS => Cond::Ge,
+        }
+    }
+
+    fn emit_cmp_f64(
+        &mut self,
+        dst: &VReg,
+        a: &VReg,
+        b: &VReg,
+        cond: &CmpCond,
+    ) -> Result<(), String> {
+        let aarch64_cond = Self::fp_cmp_cond_to_aarch64(cond);
+        let inv = Self::invert_cond(aarch64_cond);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Load payloads into FP regs
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+        asm.fmov_d_x(0, regs::TMP0);
+        asm.fmov_d_x(1, regs::TMP1);
+        // FCMP D0, D1
+        asm.fcmp_d(0, 1);
+        // CSINC TMP0, XZR, XZR, inv_cond → TMP0 = 1 if cond, 0 otherwise
+        let inst = 0x9A9F07E0 | ((inv as u32) << 12) | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        // Store as TAG_INT (comparisons produce i64 0/1)
+        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    // ==================== i32 extras ====================
+
+    fn emit_eqz(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.cmp_imm(regs::TMP0, 0);
+        // CSINC TMP0, XZR, XZR, NE → TMP0 = 1 if EQ (i.e., src==0), 0 otherwise
+        let inv = Cond::Ne; // invert of Eq
+        let inst = 0x9A9F07E0 | ((inv as u32) << 12) | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    // ==================== Type Conversions ====================
+
+    /// Sign-extend i32 to i64: SXTW Xd, Wn
+    fn emit_i64_extend_i32s(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // SXTW X0, W0: encoded as SBFM X0, X0, #0, #31
+        // SBFM Xd, Xn, #immr, #imms = 0x93400000 | (imms << 10) | (immr << 16) | (Xn << 5) | Xd
+        // immr=0, imms=31
+        let inst = 0x93400000
+            | (31 << 10)
+            | (0 << 16)
+            | ((regs::TMP0.code() as u32) << 5)
+            | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// Zero-extend i32 to i64: AND Xd, Xn, #0xFFFFFFFF
+    fn emit_i64_extend_i32u(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        }
+        // UBFM Xd, Xn, #0, #31 (same as UXTW)
+        // Encoding: 0xD3400000 | (imms << 10) | (immr << 16) | (Xn << 5) | Xd
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            let inst = 0xD3400000
+                | (31 << 10)
+                | (0 << 16)
+                | ((regs::TMP0.code() as u32) << 5)
+                | (regs::TMP0.code() as u32);
+            asm.emit_raw(inst);
+            asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+            asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+            asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        }
+        Ok(())
+    }
+
+    /// Convert signed i64 to f64: SCVTF Dd, Xn
+    fn emit_f64_convert_i64s(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // SCVTF D0, X0
+        asm.scvtf_d_x(0, regs::TMP0);
+        // FMOV X0, D0 (get bits back to GP)
+        asm.fmov_x_d(regs::TMP0, 0);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_FLOAT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// Truncate f64 to signed i64: FCVTZS Xd, Dn
+    fn emit_i64_trunc_f64s(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // FMOV D0, X0
+        asm.fmov_d_x(0, regs::TMP0);
+        // FCVTZS X0, D0: encoding = 0x9E780000 | (Dn << 5) | Xd
+        let inst = 0x9E780000 | ((0u32) << 5) | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    // ==================== Ref Operations ====================
+
+    /// RefEq: dst = (a == b) as i64, comparing both tag and payload
+    fn emit_ref_eq(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        // Compare payloads (reference identity)
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+        asm.cmp(regs::TMP0, regs::TMP1);
+        // CSINC TMP0, XZR, XZR, NE → TMP0 = 1 if EQ
+        let inv = Cond::Ne;
+        let inst = 0x9A9F07E0 | ((inv as u32) << 12) | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// RefIsNull: dst = (src.tag == TAG_NIL) as i64
+    fn emit_ref_is_null(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        asm.cmp_imm(regs::TMP0, value_tags::TAG_NIL as u16);
+        // CSINC TMP0, XZR, XZR, NE → TMP0 = 1 if EQ (tag == TAG_NIL)
+        let inv = Cond::Ne;
+        let inst = 0x9A9F07E0 | ((inv as u32) << 12) | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        asm.mov_imm(regs::TMP1, value_tags::TAG_INT as u16);
+        asm.str(regs::TMP1, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
+        Ok(())
+    }
+
+    /// RefNull: dst = null ref (TAG_NIL, payload=0)
+    fn emit_ref_null(&mut self, dst: &VReg) -> Result<(), String> {
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.mov_imm(regs::TMP0, value_tags::TAG_NIL as u16);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(dst));
+        asm.mov_imm(regs::TMP0, 0);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(dst));
         Ok(())
     }
 
@@ -1131,6 +1516,14 @@ impl Default for MicroOpJitCompiler {
 /// Binary operation type for integer ALU.
 #[cfg(target_arch = "aarch64")]
 enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+#[cfg(target_arch = "aarch64")]
+enum FpBinOp {
     Add,
     Sub,
     Mul,
