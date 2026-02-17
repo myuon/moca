@@ -91,23 +91,54 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 vstack.push(Vse::Reg(VReg(*slot)));
             }
             Op::LocalSet(slot) => {
+                let dst_local = VReg(*slot);
+
+                // === Dst forwarding optimization ===
+                // If vstack top is a temp produced by the last micro_op,
+                // patch that op's dst to write directly to the target local.
+                if let Some(Vse::Reg(temp) | Vse::RegF64(temp) | Vse::RegRef(temp)) =
+                    vstack.last().copied()
+                    && temp.0 >= locals_count
+                    && !micro_ops.is_empty()
+                    && !vstack[..vstack.len() - 1].iter().any(|e| {
+                        matches!(e, Vse::Reg(v) | Vse::RegF64(v) | Vse::RegRef(v) if *v == temp)
+                    })
+                    && !vstack[..vstack.len() - 1].iter().any(|e| {
+                        matches!(e, Vse::Reg(v) | Vse::RegF64(v) | Vse::RegRef(v) if *v == dst_local)
+                    })
+                {
+                    let last_idx = micro_ops.len() - 1;
+                    if let Some(old_dst) = try_patch_dst(&mut micro_ops[last_idx], dst_local) {
+                        if old_dst == temp {
+                            vstack.pop();
+                            continue;
+                        } else {
+                            // Unexpected: revert patch
+                            try_patch_dst(&mut micro_ops[last_idx], old_dst);
+                        }
+                    }
+                }
+
+                // === Normal path (patch not applicable) ===
                 let src = pop_vreg(&mut vstack, &mut micro_ops, &mut next_temp, &mut max_temp);
-                let dst = VReg(*slot);
-                if src != dst {
+                if src != dst_local {
                     // Materialize any vstack references to this local before overwriting
                     for entry in vstack.iter_mut() {
                         if let Vse::Reg(v) = entry
-                            && *v == dst
+                            && *v == dst_local
                         {
                             let temp = alloc_temp(&mut next_temp, &mut max_temp);
                             micro_ops.push(MicroOp::Mov {
                                 dst: temp,
-                                src: dst,
+                                src: dst_local,
                             });
                             *entry = Vse::Reg(temp);
                         }
                     }
-                    micro_ops.push(MicroOp::Mov { dst, src });
+                    micro_ops.push(MicroOp::Mov {
+                        dst: dst_local,
+                        src,
+                    });
                 }
             }
 
@@ -1100,6 +1131,70 @@ fn emit_cmp_f32(
     vstack.push(Vse::Reg(dst));
 }
 
+/// Try to patch the dst field of a MicroOp to `new_dst`.
+/// Returns `Some(old_dst)` if the op is a patchable arithmetic/comparison/conversion op,
+/// or `None` if the op is not patchable.
+fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
+    match mop {
+        // Binary i64
+        MicroOp::AddI64 { dst, .. }
+        | MicroOp::AddI64Imm { dst, .. }
+        | MicroOp::SubI64 { dst, .. }
+        | MicroOp::MulI64 { dst, .. }
+        | MicroOp::DivI64 { dst, .. }
+        | MicroOp::RemI64 { dst, .. }
+        // Binary i32
+        | MicroOp::AddI32 { dst, .. }
+        | MicroOp::SubI32 { dst, .. }
+        | MicroOp::MulI32 { dst, .. }
+        | MicroOp::DivI32 { dst, .. }
+        | MicroOp::RemI32 { dst, .. }
+        // Binary f64
+        | MicroOp::AddF64 { dst, .. }
+        | MicroOp::SubF64 { dst, .. }
+        | MicroOp::MulF64 { dst, .. }
+        | MicroOp::DivF64 { dst, .. }
+        // Binary f32
+        | MicroOp::AddF32 { dst, .. }
+        | MicroOp::SubF32 { dst, .. }
+        | MicroOp::MulF32 { dst, .. }
+        | MicroOp::DivF32 { dst, .. }
+        // Comparisons
+        | MicroOp::CmpI64 { dst, .. }
+        | MicroOp::CmpI64Imm { dst, .. }
+        | MicroOp::CmpI32 { dst, .. }
+        | MicroOp::CmpF64 { dst, .. }
+        | MicroOp::CmpF32 { dst, .. }
+        // Ref binary
+        | MicroOp::RefEq { dst, .. }
+        // Unary ops
+        | MicroOp::NegI64 { dst, .. }
+        | MicroOp::NegF64 { dst, .. }
+        | MicroOp::NegF32 { dst, .. }
+        | MicroOp::EqzI32 { dst, .. }
+        | MicroOp::RefIsNull { dst, .. }
+        // Type conversions
+        | MicroOp::I32WrapI64 { dst, .. }
+        | MicroOp::I64ExtendI32S { dst, .. }
+        | MicroOp::I64ExtendI32U { dst, .. }
+        | MicroOp::F64ConvertI64S { dst, .. }
+        | MicroOp::I64TruncF64S { dst, .. }
+        | MicroOp::F64ConvertI32S { dst, .. }
+        | MicroOp::F32ConvertI32S { dst, .. }
+        | MicroOp::F32ConvertI64S { dst, .. }
+        | MicroOp::I32TruncF32S { dst, .. }
+        | MicroOp::I32TruncF64S { dst, .. }
+        | MicroOp::I64TruncF32S { dst, .. }
+        | MicroOp::F32DemoteF64 { dst, .. }
+        | MicroOp::F64PromoteF32 { dst, .. } => {
+            let old = *dst;
+            *dst = new_dst;
+            Some(old)
+        }
+        _ => None,
+    }
+}
+
 /// Emit a unary type conversion: pop 1, push 1.
 fn emit_unary_conv(
     vstack: &mut Vec<Vse>,
@@ -1162,8 +1257,8 @@ mod tests {
 
     #[test]
     fn test_local_get_and_add() {
-        // LocalGet(0) + LocalGet(1) + I64Add → AddI64 directly
-        // LocalSet(0) → Mov
+        // LocalGet(0) + LocalGet(1) + I64Add + LocalSet(0)
+        // → dst forwarding: AddI64 writes directly to v0 (no Mov)
         let func = make_func(vec![
             Op::LocalGet(0),
             Op::LocalGet(1),
@@ -1171,20 +1266,78 @@ mod tests {
             Op::LocalSet(0),
         ]);
         let converted = convert(&func);
-        assert_eq!(converted.micro_ops.len(), 2);
+        assert_eq!(converted.micro_ops.len(), 1);
         assert_eq!(
             converted.micro_ops[0],
             MicroOp::AddI64 {
-                dst: VReg(2),
+                dst: VReg(0),
                 a: VReg(0),
                 b: VReg(1)
             }
         );
+    }
+
+    #[test]
+    fn test_dst_forwarding_add_imm() {
+        // LocalGet(0) + I64Const(1) + I64Add + LocalSet(0)
+        // → dst forwarding: AddI64Imm writes directly to VReg(0)
+        let func = make_func(vec![
+            Op::LocalGet(0),
+            Op::I64Const(1),
+            Op::I64Add,
+            Op::LocalSet(0),
+        ]);
+        let converted = convert(&func);
+        assert_eq!(converted.micro_ops.len(), 1);
         assert_eq!(
-            converted.micro_ops[1],
-            MicroOp::Mov {
+            converted.micro_ops[0],
+            MicroOp::AddI64Imm {
                 dst: VReg(0),
-                src: VReg(2)
+                a: VReg(0),
+                imm: 1
+            }
+        );
+    }
+
+    #[test]
+    fn test_dst_forwarding_not_applied_when_vstack_has_ref() {
+        // LocalGet(0) + LocalGet(0) + I64Const(1) + I64Add + LocalSet(0)
+        // vstack still has a reference to VReg(0) below the temp,
+        // so dst forwarding should NOT apply (condition 4)
+        let func = make_func(vec![
+            Op::LocalGet(0),
+            Op::LocalGet(0),
+            Op::I64Const(1),
+            Op::I64Add,
+            Op::LocalSet(0),
+        ]);
+        let converted = convert(&func);
+        // AddI64Imm(temp) + Mov(v0←temp) remain, plus vstack still has v0
+        assert!(converted.micro_ops.len() >= 2);
+        assert!(matches!(
+            converted.micro_ops.last(),
+            Some(MicroOp::Mov { .. })
+        ));
+    }
+
+    #[test]
+    fn test_dst_forwarding_to_different_local() {
+        // LocalGet(0) + LocalGet(1) + I64Add + LocalSet(1)
+        // → dst forwarding: AddI64 writes directly to VReg(1)
+        let func = make_func(vec![
+            Op::LocalGet(0),
+            Op::LocalGet(1),
+            Op::I64Add,
+            Op::LocalSet(1),
+        ]);
+        let converted = convert(&func);
+        assert_eq!(converted.micro_ops.len(), 1);
+        assert_eq!(
+            converted.micro_ops[0],
+            MicroOp::AddI64 {
+                dst: VReg(1),
+                a: VReg(0),
+                b: VReg(1)
             }
         );
     }
