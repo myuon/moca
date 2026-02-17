@@ -400,6 +400,26 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // Check for exponent (e.g., 1e10, 3.14e-5, 2E+3)
+        if let Some((_, ch)) = self.peek()
+            && (ch == 'e' || ch == 'E')
+        {
+            is_float = true;
+            self.advance(); // consume 'e'/'E'
+            if let Some((_, ch)) = self.peek()
+                && (ch == '+' || ch == '-')
+            {
+                self.advance(); // consume sign
+            }
+            while let Some((_, ch)) = self.peek() {
+                if ch.is_ascii_digit() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
         let end = self.peek().map(|(i, _)| i).unwrap_or(self.source.len());
         let num_str = &self.source[start..end];
 
@@ -765,6 +785,19 @@ mod tests {
         assert_eq!(tokens[0].kind, TokenKind::Float(3.14));
         assert_eq!(tokens[1].kind, TokenKind::Float(0.5));
         assert_eq!(tokens[2].kind, TokenKind::Float(42.0));
+    }
+
+    #[test]
+    fn test_float_scientific_notation() {
+        let source = "1e10 2.5e-3 1E308 5e-324 1.7976931348623157e308";
+        let mut lexer = Lexer::new("test.mc", source);
+        let tokens = lexer.scan_tokens().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Float(1e10));
+        assert_eq!(tokens[1].kind, TokenKind::Float(2.5e-3));
+        assert_eq!(tokens[2].kind, TokenKind::Float(1E308));
+        assert_eq!(tokens[3].kind, TokenKind::Float(5e-324));
+        assert_eq!(tokens[4].kind, TokenKind::Float(1.7976931348623157e308));
     }
 
     #[test]
