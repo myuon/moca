@@ -413,6 +413,7 @@ const OP_I64_SHR_S: u8 = 114;
 const OP_I64_SHR_U: u8 = 115;
 const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
+const OP_HEAP_OFFSET_REF: u8 = 118;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -591,6 +592,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
         Op::HeapLoad2 => w.write_all(&[OP_HEAP_LOAD2])?,
         Op::HeapStore2 => w.write_all(&[OP_HEAP_STORE2])?,
+        Op::HeapOffsetRef => w.write_all(&[OP_HEAP_OFFSET_REF])?,
         // System / Builtins
         Op::Syscall(num, argc) => {
             w.write_all(&[OP_SYSCALL])?;
@@ -773,6 +775,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
         OP_HEAP_LOAD2 => Op::HeapLoad2,
         OP_HEAP_STORE2 => Op::HeapStore2,
+        OP_HEAP_OFFSET_REF => Op::HeapOffsetRef,
         // System / Builtins
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
@@ -1200,6 +1203,7 @@ mod tests {
             Op::HeapStoreDyn,
             Op::HeapLoad2,
             Op::HeapStore2,
+            Op::HeapOffsetRef,
             // System / Builtins
             Op::Syscall(7, 2),
             Op::GcHint(1024),

@@ -160,7 +160,9 @@ impl Codegen {
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
                 "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
                 "type_of" | "__float_to_string" | "channel" | "recv" | "argv" | "args"
-                | "__alloc_heap" | "__alloc_string" | "__null_ptr" => ValueType::Ref,
+                | "__alloc_heap" | "__alloc_string" | "__null_ptr" | "__ptr_offset" => {
+                    ValueType::Ref
+                }
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
                 "send" | "join" | "print" | "print_debug" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
@@ -1147,6 +1149,17 @@ impl Codegen {
                             return Err("__null_ptr takes 0 arguments".to_string());
                         }
                         ops.push(Op::RefNull);
+                    }
+                    "__ptr_offset" => {
+                        // __ptr_offset(ptr, offset) -> ptr with slot_offset += offset
+                        if args.len() != 2 {
+                            return Err(
+                                "__ptr_offset takes exactly 2 arguments (ptr, offset)".to_string()
+                            );
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::HeapOffsetRef);
                     }
                     "__alloc_string" => {
                         // __alloc_string(data_ref, len) -> string object [data_ref, len]

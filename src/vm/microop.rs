@@ -451,6 +451,12 @@ pub enum MicroOp {
         idx: VReg,
         src: VReg,
     },
+    /// dst = ref with slot_offset += offset
+    HeapOffsetRef {
+        dst: VReg,
+        src: VReg,
+        offset: VReg,
+    },
 
     // ========================================
     // Heap allocation operations

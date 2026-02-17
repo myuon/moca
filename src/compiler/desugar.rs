@@ -543,15 +543,31 @@ impl Desugar {
                 span,
                 object_type,
                 inferred_type,
-            } => Expr::MethodCall {
-                object: Box::new(self.desugar_expr(*object)),
-                method,
-                type_args,
-                args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
-                span,
-                object_type,
-                inferred_type,
-            },
+            } => {
+                // Desugar ptr<T>.offset(n) to __ptr_offset(ptr, n)
+                if let Some(Type::Ptr(_)) = &object_type
+                    && method == "offset"
+                {
+                    let mut builtin_args = vec![self.desugar_expr(*object)];
+                    builtin_args.extend(args.into_iter().map(|e| self.desugar_expr(e)));
+                    return Expr::Call {
+                        callee: "__ptr_offset".to_string(),
+                        type_args: vec![],
+                        args: builtin_args,
+                        span,
+                        inferred_type,
+                    };
+                }
+                Expr::MethodCall {
+                    object: Box::new(self.desugar_expr(*object)),
+                    method,
+                    type_args,
+                    args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                    span,
+                    object_type,
+                    inferred_type,
+                }
+            }
 
             // Associated function call - desugar arguments
             Expr::AssociatedFunctionCall {
