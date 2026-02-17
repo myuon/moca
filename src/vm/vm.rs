@@ -371,12 +371,26 @@ impl VM {
             return; // Already compiled
         }
 
+        // Build map of already-compiled functions for direct call generation.
+        let compiled_fns: HashMap<usize, (u64, usize)> = self
+            .jit_functions
+            .iter()
+            .map(|(&idx, compiled)| {
+                let entry: unsafe extern "C" fn(
+                    *mut u8,
+                    *mut JitValue,
+                    *mut JitValue,
+                ) -> JitReturn = unsafe { compiled.entry_point() };
+                (idx, (entry as usize as u64, compiled.total_regs))
+            })
+            .collect();
+
         // Convert to MicroOp IR first
         use super::microop_converter;
         let converted = microop_converter::convert(func);
 
         let compiler = MicroOpJitCompiler::new();
-        match compiler.compile(&converted, func.locals_count, func_index) {
+        match compiler.compile(&converted, func.locals_count, func_index, compiled_fns) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -410,12 +424,26 @@ impl VM {
             return; // Already compiled
         }
 
+        // Build map of already-compiled functions for direct call generation.
+        let compiled_fns: HashMap<usize, (u64, usize)> = self
+            .jit_functions
+            .iter()
+            .map(|(&idx, compiled)| {
+                let entry: unsafe extern "C" fn(
+                    *mut u8,
+                    *mut JitValue,
+                    *mut JitValue,
+                ) -> JitReturn = unsafe { compiled.entry_point() };
+                (idx, (entry as usize as u64, compiled.total_regs))
+            })
+            .collect();
+
         // Convert to MicroOp IR first
         use super::microop_converter;
         let converted = microop_converter::convert(func);
 
         let compiler = MicroOpJitCompiler::new();
-        match compiler.compile(&converted, func.locals_count, func_index) {
+        match compiler.compile(&converted, func.locals_count, func_index, compiled_fns) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(

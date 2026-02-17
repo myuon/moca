@@ -53,6 +53,8 @@ pub struct MicroOpJitCompiler {
     self_func_index: usize,
     /// Number of locals in the function.
     self_locals_count: usize,
+    /// Already JIT-compiled functions: func_index → (entry_point_addr, total_regs).
+    compiled_functions: HashMap<usize, (u64, usize)>,
 }
 
 /// Kind of forward reference for patching.
@@ -77,6 +79,7 @@ impl MicroOpJitCompiler {
             total_regs: 0,
             self_func_index: 0,
             self_locals_count: 0,
+            compiled_functions: HashMap::new(),
         }
     }
 
@@ -86,7 +89,9 @@ impl MicroOpJitCompiler {
         converted: &ConvertedFunction,
         locals_count: usize,
         func_index: usize,
+        compiled_functions: HashMap<usize, (u64, usize)>,
     ) -> Result<CompiledCode, String> {
+        self.compiled_functions = compiled_functions;
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
@@ -959,11 +964,106 @@ impl MicroOpJitCompiler {
         args: &[VReg],
         ret: Option<&VReg>,
     ) -> Result<(), String> {
-        let argc = args.len();
-
         if func_id == self.self_func_index {
             return self.emit_call_self(args, ret);
         }
+
+        // If callee is already JIT-compiled, emit a direct call with compile-time constants.
+        // Otherwise fall back to call_helper.
+        if let Some(&(entry_addr, total_regs)) = self.compiled_functions.get(&func_id) {
+            return self.emit_call_direct(entry_addr, total_regs, args, ret);
+        }
+
+        self.emit_call_via_helper(func_id, args, ret)
+    }
+
+    /// Emit a direct JIT→JIT call to a function whose entry point and frame size are known
+    /// at compile time. This avoids the overhead of going through call_helper.
+    fn emit_call_direct(
+        &mut self,
+        entry_addr: u64,
+        callee_total_regs: usize,
+        args: &[VReg],
+        ret: Option<&VReg>,
+    ) -> Result<(), String> {
+        let argc = args.len();
+        let frame_size = callee_total_regs * VALUE_SIZE as usize;
+        let frame_aligned = (frame_size + 15) & !15;
+
+        // Save callee-saved registers
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.push(regs::VM_CTX);
+            asm.push(regs::FRAME_BASE);
+        }
+
+        // Allocate frame on native stack
+        if frame_aligned > 0 {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.sub_ri32(Reg::Rsp, frame_aligned as i32);
+        }
+
+        // Copy args from current frame to new frame on stack
+        for (i, arg) in args.iter().enumerate().take(argc) {
+            let new_tag_offset = (i * VALUE_SIZE as usize) as i32;
+            let new_payload_offset = new_tag_offset + 8;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
+            asm.mov_mr(Reg::Rsp, new_tag_offset, regs::TMP0);
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
+            asm.mov_mr(Reg::Rsp, new_payload_offset, regs::TMP0);
+        }
+
+        // Set up arguments: RDI=ctx, RSI=new_frame(rsp), RDX=unused
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+            asm.mov_rr(Reg::Rsi, Reg::Rsp);
+            asm.mov_rr(Reg::Rdx, Reg::Rsp); // unused but match signature
+        }
+
+        // Load entry point as immediate into R11 and call
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_ri64(Reg::R11, entry_addr as i64);
+            asm.call_r(Reg::R11);
+        }
+
+        // Deallocate frame
+        if frame_aligned > 0 {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.add_ri32(Reg::Rsp, frame_aligned as i32);
+        }
+
+        // Restore callee-saved
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.pop(regs::FRAME_BASE);
+            asm.pop(regs::VM_CTX);
+        }
+
+        // Store return value (RAX=tag, RDX=payload)
+        if let Some(ret_vreg) = ret {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg), Reg::Rax);
+            asm.mov_mr(
+                regs::FRAME_BASE,
+                Self::vreg_payload_offset(ret_vreg),
+                Reg::Rdx,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Emit a call to a function through call_helper (slow path for non-JIT-compiled callees).
+    fn emit_call_via_helper(
+        &mut self,
+        func_id: usize,
+        args: &[VReg],
+        ret: Option<&VReg>,
+    ) -> Result<(), String> {
+        let argc = args.len();
 
         // Allocate space on native stack for args array
         let args_size = argc * VALUE_SIZE as usize;
@@ -985,25 +1085,24 @@ impl MicroOpJitCompiler {
             asm.mov_mr(Reg::Rsp, sp_payload_offset, regs::TMP0);
         }
 
-        // Save callee-saved registers (VM_CTX, FRAME_BASE)
+        // Save callee-saved registers
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.push(regs::VM_CTX);
             asm.push(regs::FRAME_BASE);
         }
 
-        // Set up call arguments: RDI=ctx, RSI=func_id, RDX=argc, RCX=args_ptr
+        // Set up call arguments: RDI=ctx, RSI=func_index, RDX=argc, RCX=args_ptr
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_rr(Reg::Rdi, regs::VM_CTX);
             asm.mov_ri64(Reg::Rsi, func_id as i64);
             asm.mov_ri64(Reg::Rdx, argc as i64);
-            // RCX = rsp + 16 (args are below the 2 pushed registers)
             asm.mov_rr(Reg::Rcx, Reg::Rsp);
-            asm.add_ri32(Reg::Rcx, 16);
+            asm.add_ri32(Reg::Rcx, 16); // skip 2 pushed registers
         }
 
-        // Load call_helper from JitCallContext offset 16
+        // Load call_helper from JitCallContext offset 16 and call
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_rm(regs::TMP4, regs::VM_CTX, 16);
@@ -1023,7 +1122,7 @@ impl MicroOpJitCompiler {
             asm.add_ri32(Reg::Rsp, args_aligned as i32);
         }
 
-        // Store return value (RAX=tag, RDX=payload) into ret vreg
+        // Store return value (RAX=tag, RDX=payload)
         if let Some(ret_vreg) = ret {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg), Reg::Rax);
