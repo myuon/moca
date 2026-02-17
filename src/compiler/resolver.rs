@@ -308,6 +308,7 @@ impl<'a> Resolver<'a> {
                 "__heap_store".to_string(),
                 "__alloc_heap".to_string(),
                 "__alloc_string".to_string(),
+                "__null_ptr".to_string(),
                 // 128-bit multiply high
                 "__umul128_hi".to_string(),
                 // CLI argument operations

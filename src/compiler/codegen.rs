@@ -96,7 +96,8 @@ impl Codegen {
             | Type::Struct { .. }
             | Type::GenericStruct { .. }
             | Type::Object(_)
-            | Type::Nullable(_) => ValueType::Ref,
+            | Type::Nullable(_)
+            | Type::Ptr(_) => ValueType::Ref,
             Type::Nil => ValueType::Ref,
             _ => ValueType::I64, // Default to I64 for unknown types
         }
@@ -159,7 +160,7 @@ impl Codegen {
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
                 "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
                 "type_of" | "__float_to_string" | "channel" | "recv" | "argv" | "args"
-                | "__alloc_heap" | "__alloc_string" => ValueType::Ref,
+                | "__alloc_heap" | "__alloc_string" | "__null_ptr" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
                 "send" | "join" | "print" | "print_debug" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
@@ -1139,6 +1140,13 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::HeapAllocDynSimple);
+                    }
+                    "__null_ptr" => {
+                        // __null_ptr() -> null pointer (0 as Ref)
+                        if !args.is_empty() {
+                            return Err("__null_ptr takes 0 arguments".to_string());
+                        }
+                        ops.push(Op::RefNull);
                     }
                     "__alloc_string" => {
                         // __alloc_string(data_ref, len) -> string object [data_ref, len]

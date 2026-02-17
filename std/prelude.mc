@@ -143,7 +143,7 @@ fun _int_digit_count(n: int) -> int {
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
 @inline
-fun _int_write_to(buf: any, off: int, n: int) -> int {
+fun _int_write_to(buf: ptr<int>, off: int, n: int) -> int {
     if n == 0 {
         __heap_store(buf, off, 48);
         return off + 1;
@@ -168,7 +168,7 @@ fun _int_write_to(buf: any, off: int, n: int) -> int {
 
 // Copy string data into buf at offset, return new offset.
 @inline
-fun _str_copy_to(buf: any, off: int, s: string) -> int {
+fun _str_copy_to(buf: ptr<int>, off: int, s: string) -> int {
     let ptr = __heap_load(s, 0);
     let slen = __heap_load(s, 1);
     let j = 0;
@@ -190,7 +190,7 @@ fun _bool_str_len(b: bool) -> int {
 
 // Write "true" or "false" into buf at offset, return new offset.
 @inline
-fun _bool_write_to(buf: any, off: int, b: bool) -> int {
+fun _bool_write_to(buf: ptr<int>, off: int, b: bool) -> int {
     if b {
         __heap_store(buf, off, 116);
         __heap_store(buf, off + 1, 114);
@@ -520,7 +520,7 @@ fun _ryu_formatted_length(mantissa: int, exponent: int, length: int, kk: int) ->
     return kk + 2;
 }
 
-fun _ryu_write_to(buf: any, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
+fun _ryu_write_to(buf: ptr<int>, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
     let pos = off;
     if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
     if kk <= 0 {
@@ -581,7 +581,7 @@ fun _float_digit_count(f: float) -> int {
     return sign + _ryu_formatted_length(mantissa, exponent, length, kk);
 }
 
-fun _float_write_to(buf: any, off: int, f: float) -> int {
+fun _float_write_to(buf: ptr<int>, off: int, f: float) -> int {
     let bits = __float_bits(f);
     let sign = _ushr(bits, 63);
     let ieee_exp = _ushr(bits, 52) & 2047;
@@ -1015,21 +1015,21 @@ fun str_index_of(haystack: string, needle: string) -> int {
 // ============================================================================
 
 // Array<T> - Fixed-length array implementation.
-// Layout: [ptr, len]
+// Layout: [data, len]
 struct Array<T> {
-    ptr: int,
+    data: ptr<T>,
     len: int
 }
 
 impl<T> Array<T> {
     // Get a value at the specified index
     fun get(self, index: int) -> T {
-        return __heap_load(self.ptr, index);
+        return __heap_load(self.data, index);
     }
 
     // Set a value at the specified index
     fun set(self, index: int, value: T) {
-        __heap_store(self.ptr, index, value);
+        __heap_store(self.data, index, value);
     }
 
     // Get the length of the array
@@ -1043,9 +1043,9 @@ impl<T> Array<T> {
 // ============================================================================
 
 // Vec<T> - Generic vector (dynamic array) implementation.
-// Layout: [ptr, len, cap]
+// Layout: [data, len, cap]
 struct Vec<T> {
-    ptr: int,
+    data: ptr<T>,
     len: int,
     cap: int
 }
@@ -1053,12 +1053,12 @@ struct Vec<T> {
 impl<T> Vec<T> {
     // Create a new empty vector.
     fun `new`() -> Vec<T> {
-        return Vec<T> { ptr: 0, len: 0, cap: 0 };
+        return Vec<T> { data: __null_ptr(), len: 0, cap: 0 };
     }
 
     // Create a vector with pre-set capacity.
     fun with_capacity(cap: int) -> Vec<T> {
-        return Vec<T> { ptr: 0, len: 0, cap: cap };
+        return Vec<T> { data: __null_ptr(), len: 0, cap: cap };
     }
 
     // Create an uninitialized vector with specified length (for desugar).
@@ -1066,10 +1066,10 @@ impl<T> Vec<T> {
     // Elements are uninitialized and must be set before use.
     fun uninit(cap: int) -> Vec<T> {
         if cap == 0 {
-            return Vec<T> { ptr: 0, len: 0, cap: 0 };
+            return Vec<T> { data: __null_ptr(), len: 0, cap: 0 };
         }
-        let data = __alloc_heap(cap);
-        return Vec<T> { ptr: data, len: cap, cap: cap };
+        let d = __alloc_heap(cap);
+        return Vec<T> { data: d, len: cap, cap: cap };
     }
 
     // Push a value to the end of the vector
@@ -1082,23 +1082,23 @@ impl<T> Vec<T> {
             }
             let new_data = __alloc_heap(new_cap);
 
-            // Copy old data if ptr is not null
-            if self.ptr != 0 {
+            // Copy old data if data is not null
+            if self.data != __null_ptr() {
                 let i = 0;
                 while i < self.len {
-                    let val = __heap_load(self.ptr, i);
+                    let val = __heap_load(self.data, i);
                     __heap_store(new_data, i, val);
                     i = i + 1;
                 }
             }
 
             // Update vector header
-            self.ptr = new_data;
+            self.data = new_data;
             self.cap = new_cap;
         }
 
-        // Store the value at ptr[len]
-        __heap_store(self.ptr, self.len, value);
+        // Store the value at data[len]
+        __heap_store(self.data, self.len, value);
         // Increment len
         self.len = self.len + 1;
     }
@@ -1111,7 +1111,7 @@ impl<T> Vec<T> {
         }
 
         self.len = self.len - 1;
-        let value = __heap_load(self.ptr, self.len);
+        let value = __heap_load(self.data, self.len);
 
         return value;
     }
@@ -1119,13 +1119,13 @@ impl<T> Vec<T> {
     // Get a value at the specified index
     @inline
     fun get(self, index: int) -> T {
-        return __heap_load(self.ptr, index);
+        return __heap_load(self.data, index);
     }
 
     // Set a value at the specified index
     @inline
     fun set(self, index: int, value: T) {
-        __heap_store(self.ptr, index, value);
+        __heap_store(self.data, index, value);
     }
 
     // Get the length of the vector
@@ -1138,12 +1138,12 @@ impl<T> Vec<T> {
 impl vec {
     // Create a new empty vector.
     fun `new`() -> vec<any> {
-        return Vec<any> { ptr: 0, len: 0, cap: 0 };
+        return Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
     }
 
     // Create a vector with pre-set capacity.
     fun with_capacity(cap: int) -> vec<any> {
-        return Vec<any> { ptr: 0, len: 0, cap: cap };
+        return Vec<any> { data: __null_ptr(), len: 0, cap: cap };
     }
 }
 
@@ -1157,7 +1157,7 @@ impl vec {
 struct HashMapEntry {
     hm_key: any,
     hm_value: any,
-    hm_next: int
+    hm_next: ptr<any>
 }
 
 // Map<K, V> - Generic hash map implementation.
@@ -1166,7 +1166,7 @@ struct HashMapEntry {
 // hm_size: number of entries in the map
 // hm_capacity: number of buckets
 struct Map<K, V> {
-    hm_buckets: int,
+    hm_buckets: ptr<any>,
     hm_size: int,
     hm_capacity: int
 }
@@ -1314,23 +1314,23 @@ fun _vec_push_internal(v: Vec<any>, value) {
         }
         let new_data = __alloc_heap(new_cap);
 
-        // Copy old data if ptr is not null
-        if v.ptr != 0 {
+        // Copy old data if data is not null
+        if v.data != __null_ptr() {
             let i = 0;
             while i < v.len {
-                let val = __heap_load(v.ptr, i);
+                let val = __heap_load(v.data, i);
                 __heap_store(new_data, i, val);
                 i = i + 1;
             }
         }
 
         // Update vector header
-        v.ptr = new_data;
+        v.data = new_data;
         v.cap = new_cap;
     }
 
-    // Store the value at ptr[len]
-    __heap_store(v.ptr, v.len, value);
+    // Store the value at data[len]
+    __heap_store(v.data, v.len, value);
     // Increment len
     v.len = v.len + 1;
 }
@@ -1512,7 +1512,7 @@ impl<K, V> Map<K, V> {
 
     // Get all keys from the map as a vector (works for any key type)
     fun keys(self) -> vec<any> {
-        let result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
+        let result: Vec<any> = Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
         let i = 0;
         while i < self.hm_capacity {
             let entry_ptr = __heap_load(self.hm_buckets, i);
@@ -1528,7 +1528,7 @@ impl<K, V> Map<K, V> {
 
     // Get all values from the map as a vector
     fun values(self) -> vec<any> {
-        let result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
+        let result: Vec<any> = Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
         let i = 0;
         while i < self.hm_capacity {
             let entry_ptr = __heap_load(self.hm_buckets, i);

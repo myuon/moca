@@ -81,6 +81,7 @@ impl Substitution {
                     ty.clone()
                 }
             }
+            Type::Ptr(elem) => Type::Ptr(Box::new(self.apply(elem))),
             Type::Array(elem) => Type::Array(Box::new(self.apply(elem))),
             Type::Vector(elem) => Type::Vector(Box::new(self.apply(elem))),
             Type::Map(key, value) => {
@@ -309,6 +310,15 @@ impl TypeChecker {
                 ))
             }
             TypeAnnotation::Generic { name, type_args } => {
+                // Handle ptr<T>
+                if name == "ptr" {
+                    if type_args.len() != 1 {
+                        return Err(TypeError::new("ptr expects exactly 1 type argument", span));
+                    }
+                    let elem = self.resolve_type_annotation(&type_args[0], span)?;
+                    return Ok(Type::Ptr(Box::new(elem)));
+                }
+
                 // Look up struct definition
                 if let Some(struct_info) = self.structs.get(name).cloned() {
                     // Check type argument count
@@ -374,6 +384,9 @@ impl TypeChecker {
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
+
+            // Ptr<T> unification
+            (Type::Ptr(a), Type::Ptr(b)) => self.unify(a, b, span),
 
             // Any type unifies with any other type
             // any ~ T -> T (any adapts to the other type)
@@ -2642,7 +2655,18 @@ impl TypeChecker {
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
-                Some(Type::Any) // Returns a reference (opaque)
+                // Returns a raw heap pointer with fresh type variable
+                let elem = self.fresh_var();
+                Some(Type::Ptr(Box::new(elem)))
+            }
+            "__null_ptr" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("__null_ptr expects 0 arguments", span));
+                }
+                // Returns a null pointer with fresh type variable
+                let elem = self.fresh_var();
+                Some(Type::Ptr(Box::new(elem)))
             }
             "__umul128_hi" => {
                 if args.len() != 2 {
