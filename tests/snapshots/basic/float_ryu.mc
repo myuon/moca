@@ -50,3 +50,23 @@ test_float(2.5);
 test_float(12.34);
 test_float(123.456);
 test_float(1234.5678);
+
+// Edge cases: large kk (kk > 16)
+test_float(100000000000000000.0);
+test_float(99999999999999980.0);
+test_float(12345678901234568.0);
+test_float(999999999999999900000.0);
+
+// Edge cases: small kk (kk <= -5)
+test_float(0.0000001);
+test_float(0.0000123);
+test_float(0.000001);
+test_float(0.00000099);
+test_float(0.000000000000001);
+
+// Also test to_string for floats
+print("to_string: " + to_string(3.14));
+print("to_string: " + to_string(0.0));
+print("to_string: " + to_string(100000000000000000.0));
+print("to_string: " + to_string(0.0000001));
+print("to_string: " + to_string(-42.5));
