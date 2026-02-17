@@ -2644,6 +2644,16 @@ impl TypeChecker {
                 }
                 Some(Type::Any) // Returns a reference (opaque)
             }
+            "__umul128_hi" => {
+                if args.len() != 2 {
+                    self.errors
+                        .push(TypeError::new("__umul128_hi expects 2 arguments", span));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Int)
+            }
             "__alloc_string" => {
                 if args.len() != 2 {
                     self.errors.push(TypeError::new(

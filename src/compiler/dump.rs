@@ -1616,6 +1616,7 @@ impl<'a> Disassembler<'a> {
             Op::I64Xor => self.output.push_str("I64Xor"),
             Op::I64Shl => self.output.push_str("I64Shl"),
             Op::I64ShrS => self.output.push_str("I64ShrS"),
+            Op::I64ShrU => self.output.push_str("I64ShrU"),
 
             // f32 Arithmetic
             Op::F32Add => self.output.push_str("F32Add"),
@@ -1681,6 +1682,7 @@ impl<'a> Disassembler<'a> {
             Op::I64TruncF32S => self.output.push_str("I64TruncF32S"),
             Op::F32DemoteF64 => self.output.push_str("F32DemoteF64"),
             Op::F64PromoteF32 => self.output.push_str("F64PromoteF32"),
+            Op::F64ReinterpretAsI64 => self.output.push_str("F64ReinterpretAsI64"),
 
             // Control flow
             Op::Jmp(target) => self.output.push_str(&format!("Jmp {}", target)),
@@ -1727,6 +1729,7 @@ impl<'a> Disassembler<'a> {
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
+            Op::UMul128Hi => self.output.push_str("UMul128Hi"),
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),
             Op::TryBegin(target) => self.output.push_str(&format!("TryBegin {}", target)),
@@ -1969,6 +1972,24 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(a),
             imm
         )),
+        MicroOp::ShrU64 { dst, a, b } => output.push_str(&format!(
+            "ShrU64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::ShrU64Imm { dst, a, imm } => output.push_str(&format!(
+            "ShrU64Imm {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            imm
+        )),
+        MicroOp::UMul128Hi { dst, a, b } => output.push_str(&format!(
+            "UMul128Hi {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
 
         // i32 ALU
         MicroOp::AddI32 { dst, a, b } => output.push_str(&format!(
@@ -2119,7 +2140,8 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         | MicroOp::I32TruncF64S { dst, src }
         | MicroOp::I64TruncF32S { dst, src }
         | MicroOp::F32DemoteF64 { dst, src }
-        | MicroOp::F64PromoteF32 { dst, src } => {
+        | MicroOp::F64PromoteF32 { dst, src }
+        | MicroOp::F64ReinterpretAsI64 { dst, src } => {
             // Use Debug name of the variant
             let name = match mop {
                 MicroOp::I32WrapI64 { .. } => "I32WrapI64",
@@ -2135,6 +2157,7 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
                 MicroOp::I64TruncF32S { .. } => "I64TruncF32S",
                 MicroOp::F32DemoteF64 { .. } => "F32DemoteF64",
                 MicroOp::F64PromoteF32 { .. } => "F64PromoteF32",
+                MicroOp::F64ReinterpretAsI64 { .. } => "F64ReinterpretAsI64",
                 _ => unreachable!(),
             };
             output.push_str(&format!(

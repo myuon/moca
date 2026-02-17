@@ -651,6 +651,58 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 }
                 vstack.push(Vse::Reg(dst));
             }
+            Op::I64ShrU => {
+                let b = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let a = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                match b {
+                    Vse::ImmI64(imm) => {
+                        let a = mat(
+                            a,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        micro_ops.push(MicroOp::ShrU64Imm { dst, a, imm });
+                    }
+                    _ => {
+                        let a = mat(
+                            a,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        let b = mat(
+                            b,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        micro_ops.push(MicroOp::ShrU64 { dst, a, b });
+                    }
+                }
+                vstack.push(Vse::Reg(dst));
+            }
             Op::I64Neg => {
                 let entry = pop_entry(
                     &mut vstack,
@@ -1256,6 +1308,15 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 ValueType::F64,
                 |dst, src| MicroOp::F64PromoteF32 { dst, src },
             ),
+            Op::F64ReinterpretAsI64 => emit_unary_conv(
+                &mut vstack,
+                &mut micro_ops,
+                &mut next_temp,
+                &mut max_temp,
+                &mut vreg_types,
+                ValueType::I64,
+                |dst, src| MicroOp::F64ReinterpretAsI64 { dst, src },
+            ),
 
             // ============================================================
             // Control Flow → native MicroOps
@@ -1596,6 +1657,30 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::FloatToString { dst, src });
                 vstack.push(Vse::RegRef(dst));
             }
+            Op::UMul128Hi => {
+                let b = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let a = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::UMul128Hi { dst, a, b });
+                vstack.push(Vse::Reg(dst));
+            }
             Op::PrintDebug => {
                 let src = pop_vreg(
                     &mut vstack,
@@ -1935,6 +2020,9 @@ fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
         | MicroOp::ShlI64Imm { dst, .. }
         | MicroOp::ShrI64 { dst, .. }
         | MicroOp::ShrI64Imm { dst, .. }
+        | MicroOp::ShrU64 { dst, .. }
+        | MicroOp::ShrU64Imm { dst, .. }
+        | MicroOp::UMul128Hi { dst, .. }
         // Binary i32
         | MicroOp::AddI32 { dst, .. }
         | MicroOp::SubI32 { dst, .. }
@@ -1978,7 +2066,8 @@ fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
         | MicroOp::I32TruncF64S { dst, .. }
         | MicroOp::I64TruncF32S { dst, .. }
         | MicroOp::F32DemoteF64 { dst, .. }
-        | MicroOp::F64PromoteF32 { dst, .. } => {
+        | MicroOp::F64PromoteF32 { dst, .. }
+        | MicroOp::F64ReinterpretAsI64 { dst, .. } => {
             let old = *dst;
             *dst = new_dst;
             Some(old)

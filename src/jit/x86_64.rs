@@ -400,6 +400,20 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(imm);
     }
 
+    /// SHR r64, CL (logical right shift by CL register)
+    pub fn shr_cl(&mut self, dst: Reg) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xD3); // SHR r/m64, CL
+        self.buf.emit_u8(Self::modrm(0b11, 5, dst.code()));
+    }
+
+    /// MUL r/m64 (unsigned multiply: RDX:RAX = RAX * r/m64)
+    pub fn mul_r(&mut self, src: Reg) {
+        self.emit_rex_w_single(src);
+        self.buf.emit_u8(0xF7); // MUL r/m64
+        self.buf.emit_u8(Self::modrm(0b11, 4, src.code()));
+    }
+
     /// XOR r64, r64
     pub fn xor_rr(&mut self, dst: Reg, src: Reg) {
         self.emit_rex_w(src, dst);

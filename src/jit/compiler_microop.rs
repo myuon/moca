@@ -344,6 +344,9 @@ impl MicroOpJitCompiler {
                 | MicroOp::ShlI64Imm { dst, .. }
                 | MicroOp::ShrI64 { dst, .. }
                 | MicroOp::ShrI64Imm { dst, .. }
+                | MicroOp::ShrU64 { dst, .. }
+                | MicroOp::ShrU64Imm { dst, .. }
+                | MicroOp::UMul128Hi { dst, .. }
                 | MicroOp::AddI32 { dst, .. }
                 | MicroOp::SubI32 { dst, .. }
                 | MicroOp::MulI32 { dst, .. }
@@ -361,7 +364,8 @@ impl MicroOpJitCompiler {
                 | MicroOp::I32TruncF64S { dst, .. }
                 | MicroOp::I64TruncF32S { dst, .. }
                 | MicroOp::RefEq { dst, .. }
-                | MicroOp::RefIsNull { dst, .. } => {
+                | MicroOp::RefIsNull { dst, .. }
+                | MicroOp::F64ReinterpretAsI64 { dst, .. } => {
                     record(&mut vreg_tags, dst.0, value_tags::TAG_INT);
                 }
                 MicroOp::AddF64 { dst, .. }
@@ -486,6 +490,9 @@ impl MicroOpJitCompiler {
             MicroOp::ShlI64Imm { dst, a, imm } => self.emit_shl_i64_imm(dst, a, *imm),
             MicroOp::ShrI64 { dst, a, b } => self.emit_shr_i64(dst, a, b),
             MicroOp::ShrI64Imm { dst, a, imm } => self.emit_shr_i64_imm(dst, a, *imm),
+            MicroOp::ShrU64 { dst, a, b } => self.emit_shr_u64(dst, a, b),
+            MicroOp::ShrU64Imm { dst, a, imm } => self.emit_shr_u64_imm(dst, a, *imm),
+            MicroOp::UMul128Hi { dst, a, b } => self.emit_umul128_hi(dst, a, b),
 
             MicroOp::CmpI64 { dst, a, b, cond } => self.emit_cmp_i64(dst, a, b, cond),
             MicroOp::CmpI64Imm { dst, a, imm, cond } => self.emit_cmp_i64_imm(dst, a, *imm, cond),
@@ -549,6 +556,7 @@ impl MicroOpJitCompiler {
             MicroOp::I64TruncF32S { dst, src } => self.emit_i64_trunc_f64s(dst, src),
             MicroOp::F32DemoteF64 { dst, src } => self.emit_mov(dst, src),
             MicroOp::F64PromoteF32 { dst, src } => self.emit_mov(dst, src),
+            MicroOp::F64ReinterpretAsI64 { dst, src } => self.emit_mov(dst, src),
 
             // Ref ops
             MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
@@ -724,6 +732,47 @@ impl MicroOpJitCompiler {
             | ((regs::TMP0.code() as u32) << 5)
             | (regs::TMP0.code() as u32);
         asm.emit_raw(inst);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shr_u64(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.lsrv(regs::TMP0, regs::TMP0, regs::TMP1);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shr_u64_imm(&mut self, dst: &VReg, a: &VReg, imm: i64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.lsr_imm(regs::TMP0, regs::TMP0, (imm as u8) & 63);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_umul128_hi(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.umulh(regs::TMP0, regs::TMP0, regs::TMP1);
         asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
         drop(asm);
         if let Some(off) = shadow {

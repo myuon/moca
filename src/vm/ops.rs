@@ -57,6 +57,7 @@ pub enum Op {
     I64Xor,
     I64Shl,
     I64ShrS,
+    I64ShrU,
 
     // ========================================
     // f32 Arithmetic
@@ -138,6 +139,7 @@ pub enum Op {
     I64TruncF32S,
     F32DemoteF64,
     F64PromoteF32,
+    F64ReinterpretAsI64,
 
     // ========================================
     // Control Flow
@@ -175,6 +177,7 @@ pub enum Op {
     TypeOf,
     FloatToString,
     ParseInt,
+    UMul128Hi,
 
     // ========================================
     // Exception Handling
@@ -242,6 +245,7 @@ impl Op {
             Op::I64Xor => "I64Xor",
             Op::I64Shl => "I64Shl",
             Op::I64ShrS => "I64ShrS",
+            Op::I64ShrU => "I64ShrU",
             Op::F32Add => "F32Add",
             Op::F32Sub => "F32Sub",
             Op::F32Mul => "F32Mul",
@@ -291,6 +295,7 @@ impl Op {
             Op::I64TruncF32S => "I64TruncF32S",
             Op::F32DemoteF64 => "F32DemoteF64",
             Op::F64PromoteF32 => "F64PromoteF32",
+            Op::F64ReinterpretAsI64 => "F64ReinterpretAsI64",
             Op::Jmp(_) => "Jmp",
             Op::BrIf(_) => "BrIf",
             Op::BrIfFalse(_) => "BrIfFalse",
@@ -312,6 +317,7 @@ impl Op {
             Op::TypeOf => "TypeOf",
             Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",
+            Op::UMul128Hi => "UMul128Hi",
             Op::Throw => "Throw",
             Op::TryBegin(_) => "TryBegin",
             Op::TryEnd => "TryEnd",

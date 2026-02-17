@@ -171,6 +171,24 @@ pub enum MicroOp {
         a: VReg,
         imm: i64,
     },
+    /// dst = (a as u64) >> b (i64 logical right shift)
+    ShrU64 {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+    /// dst = (a as u64) >> imm (i64 immediate logical right shift)
+    ShrU64Imm {
+        dst: VReg,
+        a: VReg,
+        imm: i64,
+    },
+    /// dst = ((a as u64) * (b as u64)) >> 64 (unsigned 128-bit multiply high)
+    UMul128Hi {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
 
     // ========================================
     // i32 ALU
@@ -366,6 +384,11 @@ pub enum MicroOp {
     },
     /// dst = src as f64 (promote f32)
     F64PromoteF32 {
+        dst: VReg,
+        src: VReg,
+    },
+    /// dst = reinterpret_bits(src: f64) as i64 (bitcast, not value conversion)
+    F64ReinterpretAsI64 {
         dst: VReg,
         src: VReg,
     },
