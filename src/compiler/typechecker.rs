@@ -1562,6 +1562,28 @@ impl TypeChecker {
                         Type::Bool
                     }
 
+                    // Bitwise: int -> int
+                    BinaryOp::BitwiseAnd
+                    | BinaryOp::BitwiseOr
+                    | BinaryOp::BitwiseXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr => {
+                        if self.unify(&left_type, &Type::Int, *span).is_ok()
+                            && self.unify(&right_type, &Type::Int, *span).is_ok()
+                        {
+                            Type::Int
+                        } else {
+                            self.errors.push(TypeError::new(
+                                format!(
+                                    "bitwise operations require integer operands, got `{}` and `{}`",
+                                    left_type, right_type
+                                ),
+                                *span,
+                            ));
+                            Type::Int
+                        }
+                    }
+
                     // Logical: bool -> bool
                     BinaryOp::And | BinaryOp::Or => {
                         if let Err(e) = self.unify(&left_type, &Type::Bool, *span) {

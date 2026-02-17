@@ -52,6 +52,11 @@ pub enum Op {
     I64DivS,
     I64RemS,
     I64Neg, // [i64] → [i64] (0 - x)
+    I64And,
+    I64Or,
+    I64Xor,
+    I64Shl,
+    I64ShrS,
 
     // ========================================
     // f32 Arithmetic
@@ -232,6 +237,11 @@ impl Op {
             Op::I64DivS => "I64DivS",
             Op::I64RemS => "I64RemS",
             Op::I64Neg => "I64Neg",
+            Op::I64And => "I64And",
+            Op::I64Or => "I64Or",
+            Op::I64Xor => "I64Xor",
+            Op::I64Shl => "I64Shl",
+            Op::I64ShrS => "I64ShrS",
             Op::F32Add => "F32Add",
             Op::F32Sub => "F32Sub",
             Op::F32Mul => "F32Mul",

@@ -337,6 +337,13 @@ impl MicroOpJitCompiler {
                 | MicroOp::RemI64 { dst, .. }
                 | MicroOp::NegI64 { dst, .. }
                 | MicroOp::AddI64Imm { dst, .. }
+                | MicroOp::AndI64 { dst, .. }
+                | MicroOp::OrI64 { dst, .. }
+                | MicroOp::XorI64 { dst, .. }
+                | MicroOp::ShlI64 { dst, .. }
+                | MicroOp::ShlI64Imm { dst, .. }
+                | MicroOp::ShrI64 { dst, .. }
+                | MicroOp::ShrI64Imm { dst, .. }
                 | MicroOp::AddI32 { dst, .. }
                 | MicroOp::SubI32 { dst, .. }
                 | MicroOp::MulI32 { dst, .. }
@@ -472,6 +479,13 @@ impl MicroOpJitCompiler {
             MicroOp::RemI64 { dst, a, b } => self.emit_rem_i64(dst, a, b),
             MicroOp::NegI64 { dst, src } => self.emit_neg_i64(dst, src),
             MicroOp::AddI64Imm { dst, a, imm } => self.emit_add_i64_imm(dst, a, *imm),
+            MicroOp::AndI64 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::And),
+            MicroOp::OrI64 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::Or),
+            MicroOp::XorI64 { dst, a, b } => self.emit_binop_i64(dst, a, b, BinOp::Xor),
+            MicroOp::ShlI64 { dst, a, b } => self.emit_shl_i64(dst, a, b),
+            MicroOp::ShlI64Imm { dst, a, imm } => self.emit_shl_i64_imm(dst, a, *imm),
+            MicroOp::ShrI64 { dst, a, b } => self.emit_shr_i64(dst, a, b),
+            MicroOp::ShrI64Imm { dst, a, imm } => self.emit_shr_i64_imm(dst, a, *imm),
 
             MicroOp::CmpI64 { dst, a, b, cond } => self.emit_cmp_i64(dst, a, b, cond),
             MicroOp::CmpI64Imm { dst, a, imm, cond } => self.emit_cmp_i64_imm(dst, a, *imm, cond),
@@ -612,6 +626,9 @@ impl MicroOpJitCompiler {
             BinOp::Sub => asm.sub(regs::TMP0, regs::TMP0, regs::TMP1),
             BinOp::Mul => asm.mul(regs::TMP0, regs::TMP0, regs::TMP1),
             BinOp::Div => asm.sdiv(regs::TMP0, regs::TMP0, regs::TMP1),
+            BinOp::And => asm.and(regs::TMP0, regs::TMP0, regs::TMP1),
+            BinOp::Or => asm.orr(regs::TMP0, regs::TMP0, regs::TMP1),
+            BinOp::Xor => asm.eor(regs::TMP0, regs::TMP0, regs::TMP1),
         }
         asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
         drop(asm);
@@ -645,6 +662,66 @@ impl MicroOpJitCompiler {
         let inst = 0xCB000000
             | ((regs::TMP0.code() as u32) << 16)
             | (31 << 5)
+            | (regs::TMP0.code() as u32);
+        asm.emit_raw(inst);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shl_i64(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.lslv(regs::TMP0, regs::TMP0, regs::TMP1);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shl_i64_imm(&mut self, dst: &VReg, a: &VReg, imm: i64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.lsl_imm(regs::TMP0, regs::TMP0, (imm as u8) & 63);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shr_i64(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.ldr(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.asrv(regs::TMP0, regs::TMP0, regs::TMP1);
+        asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
+        drop(asm);
+        if let Some(off) = shadow {
+            self.emit_shadow_update(off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shr_i64_imm(&mut self, dst: &VReg, a: &VReg, imm: i64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = AArch64Assembler::new(&mut self.buf);
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        // ASR Xd, Xn, #shift → SBFM Xd, Xn, #shift, #63
+        let shift = (imm as u32) & 63;
+        let inst = 0x9340FC00
+            | (shift << 16)
+            | ((regs::TMP0.code() as u32) << 5)
             | (regs::TMP0.code() as u32);
         asm.emit_raw(inst);
         asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
@@ -2009,6 +2086,9 @@ enum BinOp {
     Sub,
     Mul,
     Div,
+    And,
+    Or,
+    Xor,
 }
 
 #[cfg(target_arch = "aarch64")]

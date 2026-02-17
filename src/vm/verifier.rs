@@ -385,7 +385,16 @@ impl Verifier {
             Op::I32Eqz => (1, 1),
 
             // i64 binary arithmetic: pop 2, push 1
-            Op::I64Add | Op::I64Sub | Op::I64Mul | Op::I64DivS | Op::I64RemS => (2, 1),
+            Op::I64Add
+            | Op::I64Sub
+            | Op::I64Mul
+            | Op::I64DivS
+            | Op::I64RemS
+            | Op::I64And
+            | Op::I64Or
+            | Op::I64Xor
+            | Op::I64Shl
+            | Op::I64ShrS => (2, 1),
 
             // i64 unary: pop 1, push 1
             Op::I64Neg => (1, 1),

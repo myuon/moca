@@ -1701,6 +1701,46 @@ impl VM {
                     let v = self.stack[sb + src.0].as_i64().ok_or("expected integer")?;
                     self.stack[sb + dst.0] = Value::I64(-v);
                 }
+                MicroOp::AndI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va & vb);
+                }
+                MicroOp::OrI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va | vb);
+                }
+                MicroOp::XorI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va ^ vb);
+                }
+                MicroOp::ShlI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va << (vb as u32 & 63));
+                }
+                MicroOp::ShlI64Imm { dst, a, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va << (imm as u32 & 63));
+                }
+                MicroOp::ShrI64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va >> (vb as u32 & 63));
+                }
+                MicroOp::ShrI64Imm { dst, a, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(va >> (imm as u32 & 63));
+                }
 
                 // ========================================
                 // i32 ALU
@@ -2154,6 +2194,31 @@ impl VM {
                     _ => return Err("runtime error: cannot negate non-numeric value".to_string()),
                 };
                 self.stack.push(result);
+            }
+            Op::I64And => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                self.stack.push(Value::I64(a & b));
+            }
+            Op::I64Or => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                self.stack.push(Value::I64(a | b));
+            }
+            Op::I64Xor => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                self.stack.push(Value::I64(a ^ b));
+            }
+            Op::I64Shl => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                self.stack.push(Value::I64(a << (b as u32 & 63)));
+            }
+            Op::I64ShrS => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                self.stack.push(Value::I64(a >> (b as u32 & 63)));
             }
 
             // ========================================

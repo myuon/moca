@@ -404,6 +404,13 @@ const OP_CALL_INDIRECT: u8 = 106;
 const OP_HEAP_STORE2: u8 = 107;
 // 108 was OP_HEAP_ALLOC_STRING, now unused (merged into HeapAllocArray with kind)
 
+// Bitwise operations
+const OP_I64_AND: u8 = 110;
+const OP_I64_OR: u8 = 111;
+const OP_I64_XOR: u8 = 112;
+const OP_I64_SHL: u8 = 113;
+const OP_I64_SHR_S: u8 = 114;
+
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
         // Constants
@@ -463,6 +470,11 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::I64DivS => w.write_all(&[OP_I64_DIV_S])?,
         Op::I64RemS => w.write_all(&[OP_I64_REM_S])?,
         Op::I64Neg => w.write_all(&[OP_I64_NEG])?,
+        Op::I64And => w.write_all(&[OP_I64_AND])?,
+        Op::I64Or => w.write_all(&[OP_I64_OR])?,
+        Op::I64Xor => w.write_all(&[OP_I64_XOR])?,
+        Op::I64Shl => w.write_all(&[OP_I64_SHL])?,
+        Op::I64ShrS => w.write_all(&[OP_I64_SHR_S])?,
 
         // f32 Arithmetic
         Op::F32Add => w.write_all(&[OP_F32_ADD])?,
@@ -655,6 +667,11 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_I64_DIV_S => Op::I64DivS,
         OP_I64_REM_S => Op::I64RemS,
         OP_I64_NEG => Op::I64Neg,
+        OP_I64_AND => Op::I64And,
+        OP_I64_OR => Op::I64Or,
+        OP_I64_XOR => Op::I64Xor,
+        OP_I64_SHL => Op::I64Shl,
+        OP_I64_SHR_S => Op::I64ShrS,
 
         // f32 Arithmetic
         OP_F32_ADD => Op::F32Add,

@@ -443,6 +443,11 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    Shl,
+    Shr,
 }
 
 /// An element in a new literal.

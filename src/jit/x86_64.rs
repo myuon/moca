@@ -378,6 +378,28 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(imm);
     }
 
+    /// SHL r64, CL (left shift by CL register)
+    pub fn shl_cl(&mut self, dst: Reg) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xD3); // SHL r/m64, CL
+        self.buf.emit_u8(Self::modrm(0b11, 4, dst.code()));
+    }
+
+    /// SAR r64, CL (arithmetic right shift by CL register)
+    pub fn sar_cl(&mut self, dst: Reg) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xD3); // SAR r/m64, CL
+        self.buf.emit_u8(Self::modrm(0b11, 7, dst.code()));
+    }
+
+    /// SAR r64, imm8 (arithmetic right shift by immediate)
+    pub fn sar_ri(&mut self, dst: Reg, imm: u8) {
+        self.emit_rex_w_single(dst);
+        self.buf.emit_u8(0xC1); // SAR r/m64, imm8
+        self.buf.emit_u8(Self::modrm(0b11, 7, dst.code()));
+        self.buf.emit_u8(imm);
+    }
+
     /// XOR r64, r64
     pub fn xor_rr(&mut self, dst: Reg, src: Reg) {
         self.emit_rex_w(src, dst);

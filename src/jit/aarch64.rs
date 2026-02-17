@@ -276,6 +276,26 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// LSLV Xd, Xn, Xm (variable left shift)
+    pub fn lslv(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        // 1001 1010 110m mmmm 0010 00nn nnnd dddd
+        let inst = 0x9AC02000
+            | ((rm.code() as u32) << 16)
+            | ((rn.code() as u32) << 5)
+            | (rd.code() as u32);
+        self.emit_raw(inst);
+    }
+
+    /// ASRV Xd, Xn, Xm (variable arithmetic right shift)
+    pub fn asrv(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        // 1001 1010 110m mmmm 0010 10nn nnnd dddd
+        let inst = 0x9AC02800
+            | ((rm.code() as u32) << 16)
+            | ((rn.code() as u32) << 5)
+            | (rd.code() as u32);
+        self.emit_raw(inst);
+    }
+
     // ==================== Loads and Stores ====================
 
     /// LDR Xt, [Xn, #imm12] (load 64-bit, unsigned offset)

@@ -704,13 +704,67 @@ impl<'a> Parser<'a> {
     }
 
     fn and_expr(&mut self) -> Result<Expr, String> {
-        let mut left = self.eq_expr()?;
+        let mut left = self.bitwise_or_expr()?;
 
         while self.match_token(&TokenKind::AndAnd) {
             let span = left.span();
-            let right = self.eq_expr()?;
+            let right = self.bitwise_or_expr()?;
             left = Expr::Binary {
                 op: BinaryOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+                inferred_type: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn bitwise_or_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.bitwise_xor_expr()?;
+
+        while self.match_token(&TokenKind::Pipe) {
+            let span = left.span();
+            let right = self.bitwise_xor_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::BitwiseOr,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+                inferred_type: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn bitwise_xor_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.bitwise_and_expr()?;
+
+        while self.match_token(&TokenKind::Caret) {
+            let span = left.span();
+            let right = self.bitwise_and_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::BitwiseXor,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+                inferred_type: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn bitwise_and_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.eq_expr()?;
+
+        while self.match_token(&TokenKind::Ampersand) {
+            let span = left.span();
+            let right = self.eq_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::BitwiseAnd,
                 left: Box::new(left),
                 right: Box::new(right),
                 span,
@@ -748,7 +802,7 @@ impl<'a> Parser<'a> {
     }
 
     fn cmp_expr(&mut self) -> Result<Expr, String> {
-        let mut left = self.add_expr()?;
+        let mut left = self.shift_expr()?;
 
         loop {
             let op = if self.match_token(&TokenKind::Lt) {
@@ -759,6 +813,32 @@ impl<'a> Parser<'a> {
                 BinaryOp::Gt
             } else if self.match_token(&TokenKind::Ge) {
                 BinaryOp::Ge
+            } else {
+                break;
+            };
+
+            let span = left.span();
+            let right = self.shift_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+                inferred_type: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn shift_expr(&mut self) -> Result<Expr, String> {
+        let mut left = self.add_expr()?;
+
+        loop {
+            let op = if self.match_token(&TokenKind::LtLt) {
+                BinaryOp::Shl
+            } else if self.match_token(&TokenKind::GtGt) {
+                BinaryOp::Shr
             } else {
                 break;
             };
@@ -1602,6 +1682,19 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                TokenKind::GtGt => {
+                    // '>>' closes two levels of generics (e.g. Pair<Option<int>, Option<string>>)
+                    depth -= 2;
+                    offset += 1;
+                    if depth <= 0
+                        && let Some(next) = self.tokens.get(self.current + offset)
+                    {
+                        return matches!(
+                            next.kind,
+                            TokenKind::LParen | TokenKind::ColonColon | TokenKind::LBrace
+                        );
+                    }
+                }
                 TokenKind::Comma => {
                     // Multiple type args
                     offset += 1;
@@ -1641,6 +1734,15 @@ impl<'a> Parser<'a> {
     fn expect(&mut self, kind: &TokenKind) -> Result<(), String> {
         if self.check(kind) {
             self.advance();
+            Ok(())
+        } else if *kind == TokenKind::Gt && self.check(&TokenKind::GtGt) {
+            // Split '>>' into '>' + '>' for nested generic types like Vec<Vec<int>>
+            // Replace current GtGt with Gt (the remaining one) and don't advance.
+            let span = self.peek().unwrap().span;
+            self.tokens[self.current] = Token {
+                kind: TokenKind::Gt,
+                span,
+            };
             Ok(())
         } else {
             Err(self.error(&format!("expected {:?}", kind)))

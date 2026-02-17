@@ -433,6 +433,11 @@ impl<'a> AstPrinter<'a> {
                     BinaryOp::Ge => ">=",
                     BinaryOp::And => "&&",
                     BinaryOp::Or => "||",
+                    BinaryOp::BitwiseAnd => "&",
+                    BinaryOp::BitwiseOr => "|",
+                    BinaryOp::BitwiseXor => "^",
+                    BinaryOp::Shl => "<<",
+                    BinaryOp::Shr => ">>",
                 };
                 self.write(&format!("{}Binary: {}", prefix, op_str));
                 self.write_type_suffix(expr);
@@ -1178,6 +1183,11 @@ impl ResolvedProgramPrinter {
                     BinaryOp::Ge => ">=",
                     BinaryOp::And => "&&",
                     BinaryOp::Or => "||",
+                    BinaryOp::BitwiseAnd => "&",
+                    BinaryOp::BitwiseOr => "|",
+                    BinaryOp::BitwiseXor => "^",
+                    BinaryOp::Shl => "<<",
+                    BinaryOp::Shr => ">>",
                 };
                 self.write(&format!("{}Binary({})", prefix, op_str));
                 self.newline();
@@ -1601,6 +1611,11 @@ impl<'a> Disassembler<'a> {
             Op::I64DivS => self.output.push_str("I64DivS"),
             Op::I64RemS => self.output.push_str("I64RemS"),
             Op::I64Neg => self.output.push_str("I64Neg"),
+            Op::I64And => self.output.push_str("I64And"),
+            Op::I64Or => self.output.push_str("I64Or"),
+            Op::I64Xor => self.output.push_str("I64Xor"),
+            Op::I64Shl => self.output.push_str("I64Shl"),
+            Op::I64ShrS => self.output.push_str("I64ShrS"),
 
             // f32 Arithmetic
             Op::F32Add => self.output.push_str("F32Add"),
@@ -1911,6 +1926,48 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             "NegI64 {}, {}",
             format_vreg(dst),
             format_vreg(src)
+        )),
+        MicroOp::AndI64 { dst, a, b } => output.push_str(&format!(
+            "AndI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::OrI64 { dst, a, b } => output.push_str(&format!(
+            "OrI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::XorI64 { dst, a, b } => output.push_str(&format!(
+            "XorI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::ShlI64 { dst, a, b } => output.push_str(&format!(
+            "ShlI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::ShlI64Imm { dst, a, imm } => output.push_str(&format!(
+            "ShlI64Imm {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            imm
+        )),
+        MicroOp::ShrI64 { dst, a, b } => output.push_str(&format!(
+            "ShrI64 {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
+        MicroOp::ShrI64Imm { dst, a, imm } => output.push_str(&format!(
+            "ShrI64Imm {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            imm
         )),
 
         // i32 ALU

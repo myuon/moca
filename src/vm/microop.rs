@@ -134,6 +134,43 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
+    AndI64 {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+    OrI64 {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+    XorI64 {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+    ShlI64 {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+    /// dst = a << imm (i64 immediate left shift)
+    ShlI64Imm {
+        dst: VReg,
+        a: VReg,
+        imm: i64,
+    },
+    ShrI64 {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
+    /// dst = a >> imm (i64 immediate arithmetic right shift)
+    ShrI64Imm {
+        dst: VReg,
+        a: VReg,
+        imm: i64,
+    },
 
     // ========================================
     // i32 ALU
