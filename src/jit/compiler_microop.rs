@@ -54,6 +54,9 @@ pub struct MicroOpJitCompiler {
     self_func_index: usize,
     /// Number of locals in the function.
     self_locals_count: usize,
+    /// Already JIT-compiled functions: func_index → (entry_point_addr, total_regs).
+    /// Used to generate direct calls instead of going through call_helper.
+    compiled_functions: HashMap<usize, (u64, usize)>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -66,6 +69,7 @@ impl MicroOpJitCompiler {
             total_regs: 0,
             self_func_index: 0,
             self_locals_count: 0,
+            compiled_functions: HashMap::new(),
         }
     }
 
@@ -75,7 +79,9 @@ impl MicroOpJitCompiler {
         converted: &ConvertedFunction,
         locals_count: usize,
         func_index: usize,
+        compiled_functions: HashMap<usize, (u64, usize)>,
     ) -> Result<CompiledCode, String> {
+        self.compiled_functions = compiled_functions;
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
@@ -771,15 +777,111 @@ impl MicroOpJitCompiler {
         args: &[VReg],
         ret: Option<&VReg>,
     ) -> Result<(), String> {
-        let argc = args.len();
-
         if func_id == self.self_func_index {
             return self.emit_call_self(args, ret);
         }
 
+        // If callee is already JIT-compiled, emit a direct call with compile-time constants.
+        // Otherwise fall back to call_helper.
+        if let Some(&(entry_addr, total_regs)) = self.compiled_functions.get(&func_id) {
+            return self.emit_call_direct(entry_addr, total_regs, args, ret);
+        }
+
+        self.emit_call_via_helper(func_id, args, ret)
+    }
+
+    /// Emit a direct JIT→JIT call to a function whose entry point and frame size are known
+    /// at compile time. This avoids the overhead of going through call_helper.
+    fn emit_call_direct(
+        &mut self,
+        entry_addr: u64,
+        callee_total_regs: usize,
+        args: &[VReg],
+        ret: Option<&VReg>,
+    ) -> Result<(), String> {
+        let argc = args.len();
+        let frame_size = callee_total_regs * VALUE_SIZE as usize;
+        let frame_aligned = (frame_size + 15) & !15;
+
+        // Save callee-saved registers
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            asm.stp_pre(Reg::X21, Reg::X22, -16);
+        }
+
+        // Allocate frame on native stack
+        if frame_aligned > 0 {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.sub_imm(Reg::Sp, Reg::Sp, frame_aligned as u16);
+        }
+
+        // Copy args from current frame to new frame on stack
+        for i in 0..argc {
+            let arg = &args[i];
+            let new_tag_offset = (i * VALUE_SIZE as usize) as u16;
+            let new_payload_offset = new_tag_offset + 8;
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
+            asm.str(regs::TMP0, Reg::Sp, new_tag_offset);
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
+            asm.str(regs::TMP0, Reg::Sp, new_payload_offset);
+        }
+
+        // Set up arguments: x0=ctx, x1=new_frame(sp), x2=unused
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.mov(Reg::X0, regs::VM_CTX);
+            asm.mov(Reg::X1, Reg::Sp); // new frame base
+            asm.mov(Reg::X2, Reg::Sp); // unused but match signature
+        }
+
+        // Load entry point as immediate into TMP4 and call
+        self.emit_load_imm64(entry_addr as i64, regs::TMP4);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.blr(regs::TMP4);
+        }
+
+        // Deallocate frame
+        if frame_aligned > 0 {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.add_imm(Reg::Sp, Reg::Sp, frame_aligned as u16);
+        }
+
+        // Restore callee-saved
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldp_post(Reg::X21, Reg::X22, 16);
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+        }
+
+        // Store return value (x0=tag, x1=payload)
+        if let Some(ret_vreg) = ret {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg));
+            asm.str(
+                Reg::X1,
+                regs::FRAME_BASE,
+                Self::vreg_payload_offset(ret_vreg),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Emit a call to a function through call_helper (slow path for non-JIT-compiled callees).
+    fn emit_call_via_helper(
+        &mut self,
+        func_id: usize,
+        args: &[VReg],
+        ret: Option<&VReg>,
+    ) -> Result<(), String> {
+        let argc = args.len();
+
         // Allocate space on native stack for args array
         let args_size = argc * VALUE_SIZE as usize;
-        let args_aligned = (args_size + 15) & !15; // 16-byte align
+        let args_aligned = (args_size + 15) & !15;
 
         if args_aligned > 0 {
             let mut asm = AArch64Assembler::new(&mut self.buf);
@@ -791,7 +893,6 @@ impl MicroOpJitCompiler {
             let sp_tag_offset = (i * VALUE_SIZE as usize) as u16;
             let sp_payload_offset = sp_tag_offset + 8;
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            // Load from frame
             asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
             asm.str(regs::TMP0, Reg::Sp, sp_tag_offset);
             asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
