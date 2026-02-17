@@ -207,6 +207,411 @@ fun _bool_write_to(buf: any, off: int, b: bool) -> int {
 }
 
 // ============================================================================
+// ============================================================================
+// Ryu Float-to-String Algorithm
+// ============================================================================
+
+fun __float_bits(f: float) -> int {
+    return asm(f) -> i64 { __emit("F64ReinterpretAsI64"); };
+}
+fun _ushr(a: int, b: int) -> int {
+    return asm(a, b) -> i64 { __emit("I64ShrU"); };
+}
+
+fun _ryu_init_tables() -> array<int> {
+    return [
+        // POW5_TABLE[0..25]
+        1, 5, 25, 125, 625, 3125, 15625, 78125, 390625, 1953125,
+        9765625, 48828125, 244140625, 1220703125, 6103515625,
+        30517578125, 152587890625, 762939453125, 3814697265625,
+        19073486328125, 95367431640625, 476837158203125, 2384185791015625,
+        11920928955078125, 59604644775390625, 298023223876953125,
+        // DOUBLE_POW5_SPLIT2[26..51]: 13 pairs (lo, hi)
+        0, 1152921504606846976,
+        0, 1490116119384765625,
+        1032610780636961552, 1925929944387235853,
+        7910200175544436838, 1244603055572228341,
+        -1504838264676837686, 1608611746708759036,
+        -5421850118411349444, 2079081953128979843,
+        6607496772837067824, 1343575221513417750,
+        -1113817083813899013, 1736530273035216783,
+        -5409364890226003632, 2244412773384604712,
+        1605989338741628675, 1450417759929778918,
+        -8816519005292960336, 1874621017369538693,
+        665883850346957067, 1211445438634777304,
+        -3514853404985837908, 1565756531257009982,
+        // DOUBLE_POW5_INV_SPLIT2[52..81]: 15 pairs (lo, hi)
+        1, 2305843009213693952,
+        5955668970331000884, 1784059615882449851,
+        8982663654677661702, 1380349269358112757,
+        7286864317269821294, 2135987035920910082,
+        7005857020398200553, 1652639921975621497,
+        -481418970354774919, 1278668206209430417,
+        8928596168509315048, 1978643211784836272,
+        -8371072500651252758, 1530901034580419511,
+        597001226353042382, 1184477304306571148,
+        1527430471115325346, 1832889850782397517,
+        -5913534206540532074, 1418129833677084982,
+        5577825024675947042, 2194449627517475473,
+        -7439769533505684065, 1697873161311732311,
+        -8133250842069730034, 1313665730009899186,
+        -5745727253942878843, 2032799256770390445,
+        // POW5_OFFSETS[82..102]
+        0, 0, 0, 0,
+        1073741824, 1500076437, 1431590229, 1448432917,
+        1091896580, 1079333904, 1146442053, 1146111296,
+        1163220304, 1073758208, 2521039936, 1431721317,
+        1413824581, 1075134801, 1431671125, 1363170645,
+        261,
+        // POW5_INV_OFFSETS[103..121]
+        1414808916, 67458373, 268701696, 4195348,
+        1073807360, 1091917141, 1108, 65604,
+        1073741824, 1140850753, 1346716752, 1431634004,
+        1365595476, 1073758208, 16777217, 66816,
+        1364284433, 89478484, 0
+    ];
+}
+
+fun _ryu_log10_pow2(e: int) -> int { return _ushr(e * 78913, 18); }
+fun _ryu_log10_pow5(e: int) -> int { return _ushr(e * 732923, 20); }
+fun _ryu_pow5bits(e: int) -> int { return _ushr(e * 1217359, 19) + 1; }
+
+fun _ryu_multiple_of_pow5(v: int, p: int) -> bool {
+    let val = v;
+    let i = 0;
+    while i < p {
+        if val % 5 != 0 { return false; }
+        val = val / 5;
+        i = i + 1;
+    }
+    return true;
+}
+
+fun _ryu_multiple_of_pow2(v: int, p: int) -> bool {
+    return (v & ((1 << p) - 1)) == 0;
+}
+
+fun _ryu_u64_lt(a: int, b: int) -> bool {
+    let sa = _ushr(a, 63);
+    let sb = _ushr(b, 63);
+    if sa != sb { return sa < sb; }
+    return a < b;
+}
+
+fun _ryu_compute_pow5(tbl: array<int>, i: int, out: array<int>) {
+    let base = i / 26;
+    let base2 = base * 26;
+    let offset = i - base2;
+    let mul_lo = tbl[26 + base * 2];
+    let mul_hi = tbl[26 + base * 2 + 1];
+    if offset == 0 {
+        out[0] = mul_lo;
+        out[1] = mul_hi;
+        return;
+    }
+    let m = tbl[offset];
+    let b0_lo = m * mul_lo;
+    let b0_hi = __umul128_hi(m, mul_lo);
+    let b2_lo = m * mul_hi;
+    let b2_hi = __umul128_hi(m, mul_hi);
+    let delta = _ryu_pow5bits(i) - _ryu_pow5bits(base2);
+    let s = 64 - delta;
+    let correction = _ushr(tbl[82 + i / 16], (i % 16) * 2) & 3;
+    let lo = _ushr(b0_lo, delta) | (b0_hi << s);
+    let hi = _ushr(b0_hi, delta);
+    let mid = b2_lo << s;
+    let sum_lo = lo + mid;
+    let carry = 0;
+    if _ryu_u64_lt(sum_lo, lo) { carry = 1; }
+    let sum_lo2 = sum_lo + correction;
+    if _ryu_u64_lt(sum_lo2, sum_lo) { carry = carry + 1; }
+    let sum_hi = hi + (_ushr(b2_lo, delta) | (b2_hi << s)) + carry;
+    out[0] = sum_lo2;
+    out[1] = sum_hi;
+}
+
+fun _ryu_compute_inv_pow5(tbl: array<int>, i: int, out: array<int>) {
+    let base = (i + 25) / 26;
+    let base2 = base * 26;
+    let offset = base2 - i;
+    let mul_lo = tbl[52 + base * 2];
+    let mul_hi = tbl[52 + base * 2 + 1];
+    if offset == 0 {
+        out[0] = mul_lo;
+        out[1] = mul_hi;
+        return;
+    }
+    let m = tbl[offset];
+    let b0_lo = m * (mul_lo - 1);
+    let b0_hi = __umul128_hi(m, mul_lo - 1);
+    let b2_lo = m * mul_hi;
+    let b2_hi = __umul128_hi(m, mul_hi);
+    let delta = _ryu_pow5bits(base2) - _ryu_pow5bits(i);
+    let s = 64 - delta;
+    let correction = 1 + (_ushr(tbl[103 + i / 16], (i % 16) * 2) & 3);
+    let lo = _ushr(b0_lo, delta) | (b0_hi << s);
+    let hi = _ushr(b0_hi, delta);
+    let mid = b2_lo << s;
+    let sum_lo = lo + mid;
+    let carry = 0;
+    if _ryu_u64_lt(sum_lo, lo) { carry = 1; }
+    let sum_lo2 = sum_lo + correction;
+    if _ryu_u64_lt(sum_lo2, sum_lo) { carry = carry + 1; }
+    let sum_hi = hi + (_ushr(b2_lo, delta) | (b2_hi << s)) + carry;
+    out[0] = sum_lo2;
+    out[1] = sum_hi;
+}
+
+
+fun _ryu_mul_shift_64(m: int, mul_lo: int, mul_hi: int, j: int) -> int {
+    let b0_hi = __umul128_hi(m, mul_lo);
+    let b2 = m * mul_hi;
+    let b2_hi = __umul128_hi(m, mul_hi);
+    let sum = b0_hi + b2;
+    if _ryu_u64_lt(sum, b0_hi) { b2_hi = b2_hi + 1; }
+    let shift = j - 64;
+    return _ushr(sum, shift) | (b2_hi << (64 - shift));
+}
+
+
+
+
+
+fun _ryu_decimal_length17(v: int) -> int {
+    if v >= 10000000000000000 { return 17; }
+    if v >= 1000000000000000 { return 16; }
+    if v >= 100000000000000 { return 15; }
+    if v >= 10000000000000 { return 14; }
+    if v >= 1000000000000 { return 13; }
+    if v >= 100000000000 { return 12; }
+    if v >= 10000000000 { return 11; }
+    if v >= 1000000000 { return 10; }
+    if v >= 100000000 { return 9; }
+    if v >= 10000000 { return 8; }
+    if v >= 1000000 { return 7; }
+    if v >= 100000 { return 6; }
+    if v >= 10000 { return 5; }
+    if v >= 1000 { return 4; }
+    if v >= 100 { return 3; }
+    if v >= 10 { return 2; }
+    return 1;
+}
+
+fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: array<int>) {
+    let e2: int = 0;
+    let m2: int = 0;
+    if ieee_exponent == 0 {
+        e2 = 1 - 1023 - 52 - 2;
+        m2 = ieee_mantissa;
+    } else {
+        e2 = ieee_exponent - 1023 - 52 - 2;
+        m2 = (1 << 52) | ieee_mantissa;
+    }
+    let even = (m2 & 1) == 0;
+    let accept_bounds = even;
+    let mv = 4 * m2;
+    let mm_shift = 0;
+    if ieee_mantissa != 0 || ieee_exponent <= 1 { mm_shift = 1; }
+    let mp = mv + 2;
+    let mm = mv - 1 - mm_shift;
+    let vr: int = 0;
+    let vp: int = 0;
+    let vm: int = 0;
+    let e10: int = 0;
+    let vm_is_trailing_zeros = false;
+    let vr_is_trailing_zeros = false;
+    let last_removed_digit = 0;
+    let tbl = _ryu_init_tables();
+    let scratch: array<int> = [0, 0];
+    if e2 >= 0 {
+        let q = _ryu_log10_pow2(e2);
+        if e2 > 3 { q = q - 1; }
+        e10 = q;
+        let k = 125 + _ryu_pow5bits(q) - 1;
+        let i = 0 - e2 + q + k;
+        _ryu_compute_inv_pow5(tbl, q, scratch);
+        let mul_lo = scratch[0];
+        let mul_hi = scratch[1];
+        vr = _ryu_mul_shift_64(mv, mul_lo, mul_hi, i);
+        vp = _ryu_mul_shift_64(mp, mul_lo, mul_hi, i);
+        vm = _ryu_mul_shift_64(mm, mul_lo, mul_hi, i);
+        if q <= 21 {
+            if mv % 5 == 0 {
+                vr_is_trailing_zeros = _ryu_multiple_of_pow5(mv, q);
+            } else if accept_bounds {
+                vm_is_trailing_zeros = _ryu_multiple_of_pow5(mm, q);
+            } else {
+                if _ryu_multiple_of_pow5(mp, q) { vp = vp - 1; }
+            }
+        }
+    } else {
+        let q = _ryu_log10_pow5(0 - e2);
+        if (0 - e2) > 1 { q = q - 1; }
+        e10 = q + e2;
+        let i = 0 - e2 - q;
+        let k = _ryu_pow5bits(i) - 125;
+        let j = q - k;
+        _ryu_compute_pow5(tbl, i, scratch);
+        let mul_lo = scratch[0];
+        let mul_hi = scratch[1];
+        vr = _ryu_mul_shift_64(mv, mul_lo, mul_hi, j);
+        vp = _ryu_mul_shift_64(mp, mul_lo, mul_hi, j);
+        vm = _ryu_mul_shift_64(mm, mul_lo, mul_hi, j);
+        if q <= 1 {
+            vr_is_trailing_zeros = true;
+            if accept_bounds {
+                vm_is_trailing_zeros = mm_shift == 1;
+            } else {
+                vp = vp - 1;
+            }
+        } else if q < 63 {
+            vr_is_trailing_zeros = _ryu_multiple_of_pow2(mv, q);
+        }
+    }
+    let removed = 0;
+    if vm_is_trailing_zeros || vr_is_trailing_zeros {
+        while vp / 10 > vm / 10 {
+            vm_is_trailing_zeros = vm_is_trailing_zeros && (vm % 10 == 0);
+            vr_is_trailing_zeros = vr_is_trailing_zeros && (last_removed_digit == 0);
+            last_removed_digit = vr % 10;
+            vr = vr / 10; vp = vp / 10; vm = vm / 10;
+            removed = removed + 1;
+        }
+        if vm_is_trailing_zeros {
+            while vm % 10 == 0 {
+                vr_is_trailing_zeros = vr_is_trailing_zeros && (last_removed_digit == 0);
+                last_removed_digit = vr % 10;
+                vr = vr / 10; vp = vp / 10; vm = vm / 10;
+                removed = removed + 1;
+            }
+        }
+        if vr_is_trailing_zeros && last_removed_digit == 5 && vr % 2 == 0 {
+            last_removed_digit = 4;
+        }
+        if (vr == vm && (!accept_bounds || !vm_is_trailing_zeros)) || last_removed_digit >= 5 {
+            vr = vr + 1;
+        }
+    } else {
+        let round_up = false;
+        let vpDiv100 = vp / 100;
+        let vmDiv100 = vm / 100;
+        if vpDiv100 > vmDiv100 {
+            let vrDiv100 = vr / 100;
+            round_up = (vr - 100 * vrDiv100) >= 50;
+            vr = vrDiv100; vp = vpDiv100; vm = vmDiv100;
+            removed = removed + 2;
+        }
+        while vp / 10 > vm / 10 {
+            let vrDiv10 = vr / 10;
+            round_up = (vr - 10 * vrDiv10) >= 5;
+            vr = vrDiv10; vp = vp / 10; vm = vm / 10;
+            removed = removed + 1;
+        }
+        if vr == vm || round_up { vr = vr + 1; }
+    }
+    out[0] = vr;
+    out[1] = e10 + removed;
+}
+
+
+fun _ryu_formatted_length(mantissa: int, exponent: int, length: int, kk: int) -> int {
+    if kk <= 0 { return 2 + (0 - kk) + length; }
+    if kk < length { return length + 1; }
+    return kk + 2;
+}
+
+fun _ryu_write_to(buf: any, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
+    let pos = off;
+    if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
+    if kk <= 0 {
+        __heap_store(buf, pos, 48); __heap_store(buf, pos + 1, 46);
+        pos = pos + 2;
+        let z = 0;
+        while z < 0 - kk { __heap_store(buf, pos, 48); pos = pos + 1; z = z + 1; }
+        let val = mantissa;
+        let i = length - 1;
+        while i >= 0 {
+            __heap_store(buf, pos + i, val % 10 + 48);
+            val = val / 10; i = i - 1;
+        }
+        pos = pos + length;
+    } else if kk < length {
+        let val = mantissa;
+        let i = length - 1;
+        while i >= 0 {
+            let wi = i;
+            if i >= kk { wi = i + 1; }
+            __heap_store(buf, pos + wi, val % 10 + 48);
+            val = val / 10; i = i - 1;
+        }
+        __heap_store(buf, pos + kk, 46);
+        pos = pos + length + 1;
+    } else {
+        let val = mantissa;
+        let i = length - 1;
+        while i >= 0 {
+            __heap_store(buf, pos + i, val % 10 + 48);
+            val = val / 10; i = i - 1;
+        }
+        pos = pos + length;
+        let z = 0;
+        while z < kk - length { __heap_store(buf, pos, 48); pos = pos + 1; z = z + 1; }
+        __heap_store(buf, pos, 46); __heap_store(buf, pos + 1, 48);
+        pos = pos + 2;
+    }
+    return pos;
+}
+
+fun _float_digit_count(f: float) -> int {
+    let bits = __float_bits(f);
+    let sign = _ushr(bits, 63);
+    let ieee_exp = _ushr(bits, 52) & 2047;
+    let ieee_mant = bits & 4503599627370495;
+    if ieee_exp == 0 && ieee_mant == 0 { return 3 + sign; }
+    if ieee_exp == 2047 {
+        if ieee_mant != 0 { return 3; }
+        return 3 + sign;
+    }
+    let scratch: array<int> = [0, 0];
+    _ryu_d2d(ieee_mant, ieee_exp, scratch);
+    let mantissa = scratch[0];
+    let exponent = scratch[1];
+    let length = _ryu_decimal_length17(mantissa);
+    let kk = length + exponent;
+    return sign + _ryu_formatted_length(mantissa, exponent, length, kk);
+}
+
+fun _float_write_to(buf: any, off: int, f: float) -> int {
+    let bits = __float_bits(f);
+    let sign = _ushr(bits, 63);
+    let ieee_exp = _ushr(bits, 52) & 2047;
+    let ieee_mant = bits & 4503599627370495;
+    if ieee_exp == 0 && ieee_mant == 0 {
+        let pos = off;
+        if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
+        __heap_store(buf, pos, 48); __heap_store(buf, pos + 1, 46); __heap_store(buf, pos + 2, 48);
+        return pos + 3;
+    }
+    if ieee_exp == 2047 {
+        if ieee_mant != 0 {
+            __heap_store(buf, off, 78); __heap_store(buf, off + 1, 97); __heap_store(buf, off + 2, 78);
+            return off + 3;
+        }
+        let pos = off;
+        if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
+        __heap_store(buf, pos, 105); __heap_store(buf, pos + 1, 110); __heap_store(buf, pos + 2, 102);
+        return pos + 3;
+    }
+    let scratch: array<int> = [0, 0];
+    _ryu_d2d(ieee_mant, ieee_exp, scratch);
+    let mantissa = scratch[0];
+    let exponent = scratch[1];
+    let length = _ryu_decimal_length17(mantissa);
+    let kk = length + exponent;
+    return _ryu_write_to(buf, off, mantissa, exponent, length, kk, sign);
+}
+
+
 // Value to String Conversion
 // ============================================================================
 
@@ -231,7 +636,10 @@ fun to_string(x: any) -> string {
         return _int_to_string(x);
     }
     if t == "float" {
-        return __float_to_string(x);
+        let dcount = _float_digit_count(x);
+        let data = __alloc_heap(dcount);
+        _float_write_to(data, 0, x);
+        return __alloc_string(data, dcount);
     }
     if t == "bool" {
         if x {
