@@ -487,6 +487,170 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     |dst, a, b| MicroOp::RemI64 { dst, a, b },
                 );
             }
+            Op::I64And => {
+                let b = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let a = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                let a = mat(
+                    a,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let b = mat(
+                    b,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                micro_ops.push(MicroOp::AndI64 { dst, a, b });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::I64Or => {
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                    |dst, a, b| MicroOp::OrI64 { dst, a, b },
+                );
+            }
+            Op::I64Xor => {
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                    |dst, a, b| MicroOp::XorI64 { dst, a, b },
+                );
+            }
+            Op::I64Shl => {
+                let b = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let a = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                match b {
+                    Vse::ImmI64(imm) => {
+                        let a = mat(
+                            a,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        micro_ops.push(MicroOp::ShlI64Imm { dst, a, imm });
+                    }
+                    _ => {
+                        let a = mat(
+                            a,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        let b = mat(
+                            b,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        micro_ops.push(MicroOp::ShlI64 { dst, a, b });
+                    }
+                }
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::I64ShrS => {
+                let b = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let a = pop_entry(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                match b {
+                    Vse::ImmI64(imm) => {
+                        let a = mat(
+                            a,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        micro_ops.push(MicroOp::ShrI64Imm { dst, a, imm });
+                    }
+                    _ => {
+                        let a = mat(
+                            a,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        let b = mat(
+                            b,
+                            &mut micro_ops,
+                            &mut next_temp,
+                            &mut max_temp,
+                            &mut vreg_types,
+                        );
+                        micro_ops.push(MicroOp::ShrI64 { dst, a, b });
+                    }
+                }
+                vstack.push(Vse::Reg(dst));
+            }
             Op::I64Neg => {
                 let entry = pop_entry(
                     &mut vstack,
@@ -1764,6 +1928,13 @@ fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
         | MicroOp::MulI64 { dst, .. }
         | MicroOp::DivI64 { dst, .. }
         | MicroOp::RemI64 { dst, .. }
+        | MicroOp::AndI64 { dst, .. }
+        | MicroOp::OrI64 { dst, .. }
+        | MicroOp::XorI64 { dst, .. }
+        | MicroOp::ShlI64 { dst, .. }
+        | MicroOp::ShlI64Imm { dst, .. }
+        | MicroOp::ShrI64 { dst, .. }
+        | MicroOp::ShrI64Imm { dst, .. }
         // Binary i32
         | MicroOp::AddI32 { dst, .. }
         | MicroOp::SubI32 { dst, .. }

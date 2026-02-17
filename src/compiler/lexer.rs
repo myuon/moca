@@ -57,6 +57,11 @@ pub enum TokenKind {
     Ge,
     AndAnd,
     OrOr,
+    Ampersand, // &
+    Pipe,      // |
+    Caret,     // ^
+    LtLt,      // <<
+    GtGt,      // >>
     Bang,
     Eq,
     Dot,
@@ -244,6 +249,8 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     if self.match_char('=') {
                         TokenKind::Le
+                    } else if self.match_char('<') {
+                        TokenKind::LtLt
                     } else {
                         TokenKind::Lt
                     }
@@ -252,6 +259,8 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     if self.match_char('=') {
                         TokenKind::Ge
+                    } else if self.match_char('>') {
+                        TokenKind::GtGt
                     } else {
                         TokenKind::Gt
                     }
@@ -261,7 +270,7 @@ impl<'a> Lexer<'a> {
                     if self.match_char('&') {
                         TokenKind::AndAnd
                     } else {
-                        return Err(self.error("expected '&&'"));
+                        TokenKind::Ampersand
                     }
                 }
                 '|' => {
@@ -269,8 +278,12 @@ impl<'a> Lexer<'a> {
                     if self.match_char('|') {
                         TokenKind::OrOr
                     } else {
-                        return Err(self.error("expected '||'"));
+                        TokenKind::Pipe
                     }
+                }
+                '^' => {
+                    self.advance();
+                    TokenKind::Caret
                 }
                 '$' => {
                     // $"..." is an interpolated string

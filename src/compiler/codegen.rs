@@ -918,6 +918,46 @@ impl Codegen {
                         ValueType::F32 => ops.push(Op::F32Ge),
                         _ => ops.push(Op::I64GeS),
                     },
+                    BinaryOp::BitwiseAnd => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64And),
+                        _ => {
+                            return Err(
+                                "bitwise AND is only supported for integer types".to_string()
+                            );
+                        }
+                    },
+                    BinaryOp::BitwiseOr => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Or),
+                        _ => {
+                            return Err(
+                                "bitwise OR is only supported for integer types".to_string()
+                            );
+                        }
+                    },
+                    BinaryOp::BitwiseXor => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Xor),
+                        _ => {
+                            return Err(
+                                "bitwise XOR is only supported for integer types".to_string()
+                            );
+                        }
+                    },
+                    BinaryOp::Shl => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64Shl),
+                        _ => {
+                            return Err(
+                                "left shift is only supported for integer types".to_string()
+                            );
+                        }
+                    },
+                    BinaryOp::Shr => match self.infer_expr_type(left) {
+                        ValueType::I64 => ops.push(Op::I64ShrS),
+                        _ => {
+                            return Err(
+                                "right shift is only supported for integer types".to_string()
+                            );
+                        }
+                    },
                     BinaryOp::And | BinaryOp::Or => unreachable!(),
                 }
             }
