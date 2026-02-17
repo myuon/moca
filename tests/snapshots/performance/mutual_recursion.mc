@@ -15,7 +15,7 @@ fun is_odd(n: int) -> int {
 
 let sum = 0;
 let i = 0;
-while i < 20000 {
+while i < 160000 {
     sum = sum + is_even(i % 200);
     i = i + 1;
 }

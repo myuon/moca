@@ -25,6 +25,7 @@ pub mod compiler_microop;
 pub mod compiler_microop_x86_64;
 #[cfg(target_arch = "x86_64")]
 pub mod compiler_x86_64;
+pub mod function_table;
 pub mod marshal;
 mod memory;
 pub mod stackmap;

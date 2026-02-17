@@ -1,10 +1,10 @@
-// Benchmark: 3000x3000 nested loop
+// Benchmark: 8000x8000 nested loop
 fun nested_loop() {
     let sum = 0;
     let i = 0;
-    while i < 3000 {
+    while i < 8000 {
         let j = 0;
-        while j < 3000 {
+        while j < 8000 {
             sum = sum + i * j;
             j = j + 1;
         }
