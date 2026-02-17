@@ -1,3 +1,4 @@
+use super::ValueType;
 use super::ops::Op;
 
 /// Virtual register index into a frame's register file.
@@ -462,4 +463,7 @@ pub struct ConvertedFunction {
     /// old Op PC → new MicroOp PC mapping (length = original code.len() + 1).
     /// Used to translate JIT loop exit PCs back to MicroOp space.
     pub pc_map: Vec<usize>,
+    /// Static type for each vreg slot (locals + temps).
+    /// Used by JIT to reconstruct tags at boundaries (Ret, HeapStore, call_helper).
+    pub vreg_types: Vec<ValueType>,
 }
