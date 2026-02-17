@@ -123,6 +123,9 @@ impl MicroOpJitCompiler {
                 | MicroOp::ShlI64Imm { dst, .. }
                 | MicroOp::ShrI64 { dst, .. }
                 | MicroOp::ShrI64Imm { dst, .. }
+                | MicroOp::ShrU64 { dst, .. }
+                | MicroOp::ShrU64Imm { dst, .. }
+                | MicroOp::UMul128Hi { dst, .. }
                 | MicroOp::CmpI64 { dst, .. }
                 | MicroOp::CmpI64Imm { dst, .. }
                 | MicroOp::AddI32 { dst, .. }
@@ -134,6 +137,7 @@ impl MicroOpJitCompiler {
                 | MicroOp::CmpI32 { dst, .. }
                 | MicroOp::RefEq { dst, .. }
                 | MicroOp::RefIsNull { dst, .. }
+                | MicroOp::F64ReinterpretAsI64 { dst, .. }
                 | MicroOp::I32WrapI64 { dst, .. }
                 | MicroOp::I64ExtendI32S { dst, .. }
                 | MicroOp::I64ExtendI32U { dst, .. }
@@ -513,6 +517,9 @@ impl MicroOpJitCompiler {
             MicroOp::ShlI64Imm { dst, a, imm } => self.emit_shl_i64_imm(dst, a, *imm),
             MicroOp::ShrI64 { dst, a, b } => self.emit_shr_i64(dst, a, b),
             MicroOp::ShrI64Imm { dst, a, imm } => self.emit_shr_i64_imm(dst, a, *imm),
+            MicroOp::ShrU64 { dst, a, b } => self.emit_shr_u64(dst, a, b),
+            MicroOp::ShrU64Imm { dst, a, imm } => self.emit_shr_u64_imm(dst, a, *imm),
+            MicroOp::UMul128Hi { dst, a, b } => self.emit_umul128_hi(dst, a, b),
 
             MicroOp::CmpI64 { dst, a, b, cond } => self.emit_cmp_i64(dst, a, b, cond),
             MicroOp::CmpI64Imm { dst, a, imm, cond } => self.emit_cmp_i64_imm(dst, a, *imm, cond),
@@ -576,6 +583,7 @@ impl MicroOpJitCompiler {
             MicroOp::I64TruncF32S { dst, src } => self.emit_i64_trunc_f64s(dst, src),
             MicroOp::F32DemoteF64 { dst, src } => self.emit_mov(dst, src),
             MicroOp::F64PromoteF32 { dst, src } => self.emit_mov(dst, src),
+            MicroOp::F64ReinterpretAsI64 { dst, src } => self.emit_mov(dst, src),
 
             // Ref ops
             MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
@@ -728,6 +736,48 @@ impl MicroOpJitCompiler {
         asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
         asm.sar_ri(regs::TMP0, (imm as u8) & 63);
         asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shr_u64(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        // TMP1 = RCX, so loading b into TMP1 puts shift count in CL
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.shr_cl(regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_shr_u64_imm(&mut self, dst: &VReg, a: &VReg, imm: i64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.shr_ri(regs::TMP0, (imm as u8) & 63);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
+        Ok(())
+    }
+
+    fn emit_umul128_hi(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // MUL r/m64: RDX:RAX = RAX * r/m64
+        // TMP0 = RAX, TMP2 = RDX
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.mul_r(regs::TMP1);
+        // High 64 bits are in RDX (TMP2)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP2);
         if let Some(off) = shadow {
             Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
         }

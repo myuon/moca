@@ -296,6 +296,26 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// LSRV Xd, Xn, Xm (variable logical right shift)
+    pub fn lsrv(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        // 1001 1010 110m mmmm 0010 01nn nnnd dddd
+        let inst = 0x9AC02400
+            | ((rm.code() as u32) << 16)
+            | ((rn.code() as u32) << 5)
+            | (rd.code() as u32);
+        self.emit_raw(inst);
+    }
+
+    /// UMULH Xd, Xn, Xm (unsigned multiply high: upper 64 bits of 64×64→128)
+    pub fn umulh(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        // 1001 1011 110m mmmm 0111 11nn nnnd dddd
+        let inst = 0x9BC07C00
+            | ((rm.code() as u32) << 16)
+            | ((rn.code() as u32) << 5)
+            | (rd.code() as u32);
+        self.emit_raw(inst);
+    }
+
     // ==================== Loads and Stores ====================
 
     /// LDR Xt, [Xn, #imm12] (load 64-bit, unsigned offset)

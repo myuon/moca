@@ -1741,6 +1741,24 @@ impl VM {
                     let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
                     self.stack[sb + dst.0] = Value::I64(va >> (imm as u32 & 63));
                 }
+                MicroOp::ShrU64 { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(((va as u64) >> (vb as u32 & 63)) as i64);
+                }
+                MicroOp::ShrU64Imm { dst, a, imm } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    self.stack[sb + dst.0] = Value::I64(((va as u64) >> (imm as u32 & 63)) as i64);
+                }
+                MicroOp::UMul128Hi { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
+                    let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
+                    let result = ((va as u64 as u128) * (vb as u64 as u128)) >> 64;
+                    self.stack[sb + dst.0] = Value::I64(result as i64);
+                }
 
                 // ========================================
                 // i32 ALU
@@ -2001,6 +2019,11 @@ impl VM {
                     let v = self.stack[sb + src.0].as_f64().ok_or("expected float")? as f32;
                     self.stack[sb + dst.0] = Value::F64(v as f64);
                 }
+                MicroOp::F64ReinterpretAsI64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let f = self.stack[sb + src.0].as_f64().ok_or("expected float")?;
+                    self.stack[sb + dst.0] = Value::I64(i64::from_ne_bytes(f.to_ne_bytes()));
+                }
 
                 // ========================================
                 // Ref operations
@@ -2219,6 +2242,12 @@ impl VM {
                 let b = self.pop_int()?;
                 let a = self.pop_int()?;
                 self.stack.push(Value::I64(a >> (b as u32 & 63)));
+            }
+            Op::I64ShrU => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                self.stack
+                    .push(Value::I64(((a as u64) >> (b as u32 & 63)) as i64));
             }
 
             // ========================================
@@ -2494,6 +2523,11 @@ impl VM {
                 let a = self.pop_float()? as f32;
                 self.stack.push(Value::F64(a as f64));
             }
+            Op::F64ReinterpretAsI64 => {
+                let f = self.pop_float()?;
+                self.stack
+                    .push(Value::I64(i64::from_ne_bytes(f.to_ne_bytes())));
+            }
             Op::Jmp(target) => {
                 // Get frame info without holding mutable borrow
                 let (current_pc, func_index) = {
@@ -2697,6 +2731,12 @@ impl VM {
                     .parse()
                     .map_err(|_| format!("runtime error: cannot parse '{}' as int", s))?;
                 self.stack.push(Value::I64(n));
+            }
+            Op::UMul128Hi => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                let result = ((a as u64 as u128) * (b as u64 as u128)) >> 64;
+                self.stack.push(Value::I64(result as i64));
             }
             Op::Throw => {
                 let value = self.stack.pop().ok_or("stack underflow")?;

@@ -157,7 +157,7 @@ impl Codegen {
             ResolvedExpr::AssociatedFunctionCall { .. } => ValueType::Ref,
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
-                "len" | "argc" | "parse_int" => ValueType::I64,
+                "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
                 "type_of" | "__float_to_string" | "channel" | "recv" | "argv" | "args"
                 | "__alloc_heap" | "__alloc_string" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
@@ -1061,6 +1061,14 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ParseInt);
                     }
+                    "__umul128_hi" => {
+                        if args.len() != 2 {
+                            return Err("__umul128_hi takes exactly 2 arguments".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        ops.push(Op::UMul128Hi);
+                    }
                     // Thread builtins
                     "spawn" => {
                         // spawn is handled specially in resolver as SpawnFunc
@@ -1408,6 +1416,13 @@ impl Codegen {
             "I64DivS" | "Div" => Ok(Op::I64DivS),
             "I64RemS" | "Mod" => Ok(Op::I64RemS),
             "I64Neg" | "Neg" => Ok(Op::I64Neg),
+            "I64And" => Ok(Op::I64And),
+            "I64Or" => Ok(Op::I64Or),
+            "I64Xor" => Ok(Op::I64Xor),
+            "I64Shl" => Ok(Op::I64Shl),
+            "I64ShrS" => Ok(Op::I64ShrS),
+            "I64ShrU" => Ok(Op::I64ShrU),
+            "UMul128Hi" => Ok(Op::UMul128Hi),
 
             // ========================
             // f32 Arithmetic
@@ -1489,6 +1504,7 @@ impl Codegen {
             "I64TruncF32S" => Ok(Op::I64TruncF32S),
             "F32DemoteF64" => Ok(Op::F32DemoteF64),
             "F64PromoteF32" => Ok(Op::F64PromoteF32),
+            "F64ReinterpretAsI64" => Ok(Op::F64ReinterpretAsI64),
 
             // ========================
             // Control Flow

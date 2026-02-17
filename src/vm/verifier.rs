@@ -394,7 +394,9 @@ impl Verifier {
             | Op::I64Or
             | Op::I64Xor
             | Op::I64Shl
-            | Op::I64ShrS => (2, 1),
+            | Op::I64ShrS
+            | Op::I64ShrU
+            | Op::UMul128Hi => (2, 1),
 
             // i64 unary: pop 1, push 1
             Op::I64Neg => (1, 1),
@@ -440,7 +442,8 @@ impl Verifier {
             | Op::I32TruncF64S
             | Op::I64TruncF32S
             | Op::F32DemoteF64
-            | Op::F64PromoteF32 => (1, 1),
+            | Op::F64PromoteF32
+            | Op::F64ReinterpretAsI64 => (1, 1),
 
             // Control flow
             Op::Jmp(_) => (0, 0),

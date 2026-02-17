@@ -410,6 +410,9 @@ const OP_I64_OR: u8 = 111;
 const OP_I64_XOR: u8 = 112;
 const OP_I64_SHL: u8 = 113;
 const OP_I64_SHR_S: u8 = 114;
+const OP_I64_SHR_U: u8 = 115;
+const OP_F64_REINTERPRET_AS_I64: u8 = 116;
+const OP_UMUL128_HI: u8 = 117;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -475,6 +478,9 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::I64Xor => w.write_all(&[OP_I64_XOR])?,
         Op::I64Shl => w.write_all(&[OP_I64_SHL])?,
         Op::I64ShrS => w.write_all(&[OP_I64_SHR_S])?,
+        Op::I64ShrU => w.write_all(&[OP_I64_SHR_U])?,
+        Op::F64ReinterpretAsI64 => w.write_all(&[OP_F64_REINTERPRET_AS_I64])?,
+        Op::UMul128Hi => w.write_all(&[OP_UMUL128_HI])?,
 
         // f32 Arithmetic
         Op::F32Add => w.write_all(&[OP_F32_ADD])?,
@@ -672,6 +678,9 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_I64_XOR => Op::I64Xor,
         OP_I64_SHL => Op::I64Shl,
         OP_I64_SHR_S => Op::I64ShrS,
+        OP_I64_SHR_U => Op::I64ShrU,
+        OP_F64_REINTERPRET_AS_I64 => Op::F64ReinterpretAsI64,
+        OP_UMUL128_HI => Op::UMul128Hi,
 
         // f32 Arithmetic
         OP_F32_ADD => Op::F32Add,
