@@ -5,10 +5,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
-use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value};
+use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value, ValueType};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
-use crate::jit::compiler::{CompiledCode, CompiledLoop, JitCompiler};
+use crate::jit::compiler::{CompiledCode, CompiledLoop};
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler_microop::MicroOpJitCompiler;
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
@@ -18,7 +18,7 @@ use crate::jit::compiler_x86_64::{CompiledCode, CompiledLoop};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
 use crate::jit::function_table::JitFunctionTable;
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
-use crate::jit::marshal::{JitCallContext, JitContext, JitReturn, JitValue};
+use crate::jit::marshal::{JitCallContext, JitReturn, JitValue};
 
 /// A call frame for the VM.
 #[derive(Debug)]
@@ -393,11 +393,8 @@ impl VM {
                     );
                 }
                 // Update function table with entry point for direct call dispatch
-                let entry: unsafe extern "C" fn(
-                    *mut u8,
-                    *mut JitValue,
-                    *mut JitValue,
-                ) -> JitReturn = unsafe { compiled.entry_point() };
+                let entry: unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn =
+                    unsafe { compiled.entry_point() };
                 self.jit_function_table.update(
                     func_index,
                     entry as usize as u64,
@@ -422,6 +419,7 @@ impl VM {
 
     /// Compile a function to native code (x86-64 with jit feature only).
     /// Uses MicroOp-based JIT compiler which takes register-based IR as input.
+    /// Frame layout: unboxed, 8B per VReg slot (payload only).
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
         if self.jit_functions.contains_key(&func_index) {
@@ -443,11 +441,8 @@ impl VM {
                     );
                 }
                 // Update function table with entry point for direct call dispatch
-                let entry: unsafe extern "C" fn(
-                    *mut u8,
-                    *mut JitValue,
-                    *mut JitValue,
-                ) -> JitReturn = unsafe { compiled.entry_point() };
+                let entry: unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn =
+                    unsafe { compiled.entry_point() };
                 self.jit_function_table.update(
                     func_index,
                     entry as usize as u64,
@@ -607,7 +602,27 @@ impl VM {
         }
     }
 
+    /// Convert a u64 payload back to a VM Value using type information.
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+    fn payload_to_value(payload: u64, ty: ValueType) -> Value {
+        match ty {
+            ValueType::I32 => Value::I64(payload as i32 as i64),
+            ValueType::I64 => Value::I64(payload as i64),
+            ValueType::F32 | ValueType::F64 => Value::F64(f64::from_bits(payload)),
+            ValueType::Ref => {
+                if payload == 0 {
+                    Value::Null
+                } else {
+                    Value::Ref(GcRef {
+                        index: payload as usize,
+                    })
+                }
+            }
+        }
+    }
+
     /// Execute a JIT compiled loop (x86-64 with jit feature only).
+    /// MicroOp JIT uses unboxed frames (8B/slot, payload only).
     ///
     /// Returns the PC to continue from after the loop (loop_end_pc + 1).
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
@@ -620,9 +635,8 @@ impl VM {
     ) -> Result<usize, String> {
         let key = (func_index, loop_end_pc);
 
-        // Get the entry point and total_regs first to avoid borrow conflicts
         let (entry, loop_end, total_regs): (
-            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn,
             usize,
             usize,
         ) = {
@@ -634,26 +648,28 @@ impl VM {
             )
         };
 
-        // MicroOp JIT uses total_regs (locals + temps), legacy uses locals_count
-        let is_microop_jit = total_regs > 0;
-        let frame_size = if is_microop_jit {
+        let frame_regs = if total_regs > 0 {
             total_regs
         } else {
             func.locals_count
         };
 
-        let mut ctx = JitContext::new(frame_size);
+        // Allocate frame with shadow tag space (payload + shadow, 8B per slot each)
+        let mut jit_frame = vec![0u64; frame_regs * 2];
 
-        // Copy VRegs from VM stack to JIT context
-        let frame = self.frames.last().unwrap();
-        let stack_base = frame.stack_base;
-        for i in 0..frame_size {
+        // Copy VRegs from VM stack to JIT frame (payload only)
+        let vm_frame = self.frames.last().unwrap();
+        let stack_base = vm_frame.stack_base;
+        for (i, slot) in jit_frame
+            .iter_mut()
+            .enumerate()
+            .take(frame_regs.min(func.locals_count))
+        {
             if stack_base + i < self.stack.len() {
-                ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
+                *slot = JitValue::from_value(&self.stack[stack_base + i]).payload;
             }
         }
 
-        // Set up JitCallContext for runtime calls from JIT code
         let mut call_ctx = JitCallContext {
             vm: self as *mut VM as *mut u8,
             chunk: chunk as *const Chunk as *const u8,
@@ -671,46 +687,33 @@ impl VM {
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
-        // Execute the JIT loop code
-        // MicroOp JIT: RDI=ctx, RSI=frame_base (locals), RDX=stack (unused)
-        // Legacy JIT:  RDI=ctx, RSI=stack, RDX=locals
-        let _result: JitReturn = if is_microop_jit {
-            unsafe {
-                entry(
-                    &mut call_ctx as *mut JitCallContext as *mut u8,
-                    ctx.locals,
-                    ctx.stack,
-                )
-            }
-        } else {
-            unsafe {
-                entry(
-                    &mut call_ctx as *mut JitCallContext as *mut u8,
-                    ctx.stack,
-                    ctx.locals,
-                )
-            }
+        let _result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                jit_frame.as_mut_ptr(),
+                jit_frame.as_mut_ptr(), // unused
+            )
         };
 
         if self.trace_jit {
             eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
         }
 
-        // Copy VRegs back from JIT context to VM stack
-        let frame = self.frames.last().unwrap();
-        let stack_base = frame.stack_base;
-        for i in 0..frame_size {
+        // Copy locals back from JIT frame to VM stack using type info
+        let vm_frame = self.frames.last().unwrap();
+        let stack_base = vm_frame.stack_base;
+        for (i, &payload) in jit_frame.iter().enumerate().take(func.locals_count) {
             if stack_base + i < self.stack.len() {
-                let jit_val = ctx.get_local(i);
-                self.stack[stack_base + i] = jit_val.to_value();
+                let ty = func.local_types.get(i).copied().unwrap_or(ValueType::I64);
+                self.stack[stack_base + i] = Self::payload_to_value(payload, ty);
             }
         }
 
-        // Return the PC to continue from (after the loop)
         Ok(loop_end + 1)
     }
 
     /// Execute a JIT compiled loop (AArch64 with jit feature only).
+    /// MicroOp JIT uses unboxed frames (8B/slot, payload only).
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn execute_jit_loop(
         &mut self,
@@ -721,9 +724,8 @@ impl VM {
     ) -> Result<usize, String> {
         let key = (func_index, loop_end_pc);
 
-        // Get the entry point and total_regs first to avoid borrow conflicts
         let (entry, loop_end, total_regs): (
-            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn,
             usize,
             usize,
         ) = {
@@ -735,26 +737,28 @@ impl VM {
             )
         };
 
-        // MicroOp JIT uses total_regs (locals + temps), legacy uses locals_count
-        let is_microop_jit = total_regs > 0;
-        let frame_size = if is_microop_jit {
+        let frame_size = if total_regs > 0 {
             total_regs
         } else {
             func.locals_count
         };
 
-        let mut ctx = JitContext::new(frame_size);
+        // Allocate frame: payload + shadow tags (8B per slot, doubled for shadow area)
+        let mut jit_frame = vec![0u64; frame_size * 2];
 
-        // Copy VRegs from VM stack to JIT context
-        let frame = self.frames.last().unwrap();
-        let stack_base = frame.stack_base;
-        for i in 0..frame_size {
+        // Copy VRegs from VM stack to JIT frame (payload only)
+        let vm_frame = self.frames.last().unwrap();
+        let stack_base = vm_frame.stack_base;
+        for (i, slot) in jit_frame
+            .iter_mut()
+            .enumerate()
+            .take(frame_size.min(func.locals_count))
+        {
             if stack_base + i < self.stack.len() {
-                ctx.set_local(i, JitValue::from_value(&self.stack[stack_base + i]));
+                *slot = JitValue::from_value(&self.stack[stack_base + i]).payload;
             }
         }
 
-        // Set up JitCallContext for runtime calls from JIT code
         let mut call_ctx = JitCallContext {
             vm: self as *mut VM as *mut u8,
             chunk: chunk as *const Chunk as *const u8,
@@ -772,48 +776,34 @@ impl VM {
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
-        // Execute the JIT loop code
-        // MicroOp JIT: x0=ctx, x1=frame_base (locals), x2=stack (unused)
-        // Legacy JIT:  x0=ctx, x1=stack, x2=locals
-        let _result: JitReturn = if is_microop_jit {
-            unsafe {
-                entry(
-                    &mut call_ctx as *mut JitCallContext as *mut u8,
-                    ctx.locals,
-                    ctx.stack,
-                )
-            }
-        } else {
-            unsafe {
-                entry(
-                    &mut call_ctx as *mut JitCallContext as *mut u8,
-                    ctx.stack,
-                    ctx.locals,
-                )
-            }
+        let _result: JitReturn = unsafe {
+            entry(
+                &mut call_ctx as *mut JitCallContext as *mut u8,
+                jit_frame.as_mut_ptr(),
+                jit_frame.as_mut_ptr(), // unused
+            )
         };
 
         if self.trace_jit {
             eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
         }
 
-        // Copy VRegs back from JIT context to VM stack
-        let frame = self.frames.last().unwrap();
-        let stack_base = frame.stack_base;
-        for i in 0..frame_size {
+        // Copy locals back from JIT frame to VM stack using type info
+        let vm_frame = self.frames.last().unwrap();
+        let stack_base = vm_frame.stack_base;
+        for (i, &payload) in jit_frame.iter().enumerate().take(func.locals_count) {
             if stack_base + i < self.stack.len() {
-                let jit_val = ctx.get_local(i);
-                self.stack[stack_base + i] = jit_val.to_value();
+                let ty = func.local_types.get(i).copied().unwrap_or(ValueType::I64);
+                self.stack[stack_base + i] = Self::payload_to_value(payload, ty);
             }
         }
 
-        // Return the PC to continue from (after the loop)
         Ok(loop_end + 1)
     }
 
     /// Execute a JIT compiled function (x86-64 with jit feature only).
     ///
-    /// MicroOp-based JIT: RDI=ctx, RSI=frame_base (VReg array), RDX=unused.
+    /// MicroOp-based JIT: RDI=ctx, RSI=frame_base (u64 payload array, 8B/slot), RDX=unused.
     /// Frame layout: VReg(0..locals_count) = locals, VReg(locals_count..) = temps.
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
     fn execute_jit_function(
@@ -825,23 +815,22 @@ impl VM {
     ) -> Result<Value, String> {
         // Get the entry point and total_regs to avoid borrow conflicts
         let (entry, total_regs): (
-            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn,
             usize,
         ) = {
             let compiled = self.jit_functions.get(&func_index).unwrap();
             (unsafe { compiled.entry_point() }, compiled.total_regs)
         };
 
-        // Allocate frame: total_regs slots (locals + temps)
-        // Use total_regs if MicroOp-based (> 0), otherwise fall back to locals_count
-        let frame_size = if total_regs > 0 {
+        // Allocate frame: total_regs * 2 slots (payload + shadow tags, 8 bytes per slot)
+        let frame_regs = if total_regs > 0 {
             total_regs
         } else {
             func.locals_count
         };
-        let mut ctx = JitContext::new(frame_size);
+        let mut frame = vec![0u64; frame_regs * 2];
 
-        // Pop arguments from VM stack and push to JIT stack (in reverse order)
+        // Pop arguments from VM stack and write payloads to frame
         let args: Vec<Value> = (0..argc)
             .map(|_| self.stack.pop().unwrap())
             .collect::<Vec<_>>()
@@ -849,9 +838,8 @@ impl VM {
             .rev()
             .collect();
 
-        // Set up arguments as locals (arguments are the first locals)
         for (i, arg) in args.iter().enumerate() {
-            ctx.set_local(i, JitValue::from_value(arg));
+            frame[i] = JitValue::from_value(arg).payload;
         }
 
         // Set up JitCallContext for runtime calls from JIT code
@@ -873,12 +861,11 @@ impl VM {
         };
 
         // Execute the JIT code
-        // MicroOp JIT: RSI=frame_base (locals array), RDX=unused (stack for compat)
         let result: JitReturn = unsafe {
             entry(
                 &mut call_ctx as *mut JitCallContext as *mut u8,
-                ctx.locals,
-                ctx.stack,
+                frame.as_mut_ptr(),
+                frame.as_mut_ptr(), // unused
             )
         };
 
@@ -889,13 +876,13 @@ impl VM {
             );
         }
 
-        // Convert return value to VM Value
+        // Convert return value to VM Value (tag+payload from return registers)
         Ok(result.to_value())
     }
 
     /// Execute a JIT compiled function (AArch64 with jit feature only).
     ///
-    /// MicroOp-based JIT: x0=ctx, x1=frame_base (VReg array), x2=unused.
+    /// MicroOp-based JIT: x0=ctx, x1=frame_base (u64 payload array, 8B/slot), x2=unused.
     /// Frame layout: VReg(0..locals_count) = locals, VReg(locals_count..) = temps.
     #[cfg(all(target_arch = "aarch64", feature = "jit"))]
     fn execute_jit_function(
@@ -907,23 +894,22 @@ impl VM {
     ) -> Result<Value, String> {
         // Get the entry point and total_regs to avoid borrow conflicts
         let (entry, total_regs): (
-            unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn,
+            unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn,
             usize,
         ) = {
             let compiled = self.jit_functions.get(&func_index).unwrap();
             (unsafe { compiled.entry_point() }, compiled.total_regs)
         };
 
-        // Allocate frame: total_regs slots (locals + temps)
-        // Use total_regs if MicroOp-based (> 0), otherwise fall back to locals_count
+        // Allocate frame: total_regs slots (8 bytes per slot, payload only)
         let frame_size = if total_regs > 0 {
             total_regs
         } else {
             func.locals_count
         };
-        let mut ctx = JitContext::new(frame_size);
+        let mut frame = vec![0u64; frame_size];
 
-        // Pop arguments from VM stack and push to JIT stack (in reverse order)
+        // Pop arguments from VM stack and write payloads to frame
         let args: Vec<Value> = (0..argc)
             .map(|_| self.stack.pop().unwrap())
             .collect::<Vec<_>>()
@@ -931,9 +917,8 @@ impl VM {
             .rev()
             .collect();
 
-        // Set up arguments as locals (arguments are the first locals)
         for (i, arg) in args.iter().enumerate() {
-            ctx.set_local(i, JitValue::from_value(arg));
+            frame[i] = JitValue::from_value(arg).payload;
         }
 
         // Set up JitCallContext for runtime calls from JIT code
@@ -955,12 +940,11 @@ impl VM {
         };
 
         // Execute the JIT code
-        // MicroOp JIT: x1=frame_base (locals array), x2=unused (stack for compat)
         let result: JitReturn = unsafe {
             entry(
                 &mut call_ctx as *mut JitCallContext as *mut u8,
-                ctx.locals,
-                ctx.stack,
+                frame.as_mut_ptr(),
+                frame.as_mut_ptr(), // unused
             )
         };
 
@@ -971,7 +955,7 @@ impl VM {
             );
         }
 
-        // Convert return value to VM Value
+        // Convert return value to VM Value (tag+payload from return registers)
         Ok(result.to_value())
     }
 
@@ -3773,46 +3757,60 @@ unsafe extern "C" fn jit_call_helper(
 
     // FAST PATH: If target function is JIT compiled, call directly with stack allocation
     // This avoids heap allocations and VM stack operations for recursive JIT calls.
-    // Combine is_jit_compiled check and entry point lookup into single HashMap access.
     if let Some(compiled) = vm.jit_functions.get(&func_index) {
-        // Get entry point directly from the compiled code
-        let entry: unsafe extern "C" fn(*mut u8, *mut JitValue, *mut JitValue) -> JitReturn =
-            unsafe { compiled.entry_point() };
-        let is_microop_jit = compiled.total_regs > 0;
+        // AArch64: unboxed frame (8B per slot, payload only)
+        #[cfg(target_arch = "aarch64")]
+        {
+            let entry: unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn =
+                unsafe { compiled.entry_point() };
 
-        // Use stack-allocated locals (fixed size, supports up to 64 locals)
-        const MAX_LOCALS: usize = 64;
-        let mut locals = [JitValue { tag: 3, payload: 0 }; MAX_LOCALS];
+            const MAX_LOCALS: usize = 64;
+            let mut frame = [0u64; MAX_LOCALS];
 
-        // Copy arguments to locals (arguments are the first `argc` locals)
-        for (i, local) in locals.iter_mut().take(argc).enumerate() {
-            *local = unsafe { *args.add(i) };
+            for (i, slot) in frame.iter_mut().take(argc).enumerate() {
+                *slot = unsafe { (*args.add(i)).payload };
+            }
+
+            let result = unsafe { entry(ctx as *mut u8, frame.as_mut_ptr(), frame.as_mut_ptr()) };
+
+            #[cfg(debug_assertions)]
+            if vm.trace_jit {
+                eprintln!(
+                    "[JIT] Executed function '{}', result: tag={}, payload={}",
+                    func.name, result.tag, result.payload
+                );
+            }
+
+            ctx_ref.heap_base = vm.heap.memory_base_ptr();
+            return result;
         }
 
-        // Use stack-allocated value stack
-        let mut stack = [JitValue { tag: 0, payload: 0 }; 256];
+        // x86_64: unboxed frame (8B per slot, payload + shadow tags)
+        #[cfg(target_arch = "x86_64")]
+        {
+            let entry: unsafe extern "C" fn(*mut u8, *mut u64, *mut u64) -> JitReturn =
+                unsafe { compiled.entry_point() };
 
-        // Call JIT function directly with stack-allocated buffers
-        // MicroOp JIT: x1=frame_base (locals), x2=unused (stack)
-        // Legacy Op JIT: x1=stack, x2=locals
-        let result = if is_microop_jit {
-            unsafe { entry(ctx as *mut u8, locals.as_mut_ptr(), stack.as_mut_ptr()) }
-        } else {
-            unsafe { entry(ctx as *mut u8, stack.as_mut_ptr(), locals.as_mut_ptr()) }
-        };
+            const MAX_LOCALS: usize = 128; // 64 payloads + 64 shadow tags
+            let mut frame = [0u64; MAX_LOCALS];
 
-        // Only check trace_jit flag if enabled (avoid branch in hot path when disabled)
-        #[cfg(debug_assertions)]
-        if vm.trace_jit {
-            eprintln!(
-                "[JIT] Executed function '{}', result: tag={}, payload={}",
-                func.name, result.tag, result.payload
-            );
+            for (i, slot) in frame.iter_mut().take(argc).enumerate() {
+                *slot = unsafe { (*args.add(i)).payload };
+            }
+
+            let result = unsafe { entry(ctx as *mut u8, frame.as_mut_ptr(), frame.as_mut_ptr()) };
+
+            #[cfg(debug_assertions)]
+            if vm.trace_jit {
+                eprintln!(
+                    "[JIT] Executed function '{}', result: tag={}, payload={}",
+                    func.name, result.tag, result.payload
+                );
+            }
+
+            ctx_ref.heap_base = vm.heap.memory_base_ptr();
+            return result;
         }
-
-        // Update heap_base in case the called function grew the heap
-        ctx_ref.heap_base = vm.heap.memory_base_ptr();
-        return result;
     }
 
     // SLOW PATH: Execute via interpreter

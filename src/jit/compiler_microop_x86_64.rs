@@ -4,17 +4,19 @@
 //! native x86-64 code using a frame-slot model where each VReg maps to
 //! a fixed offset from the frame base pointer (FRAME_BASE register).
 //!
-//! Frame layout:
-//!   VReg(n) → [FRAME_BASE + n * 16]  (tag at +0, payload at +8)
+//! Frame layout (unboxed):
+//!   VReg(n) → [FRAME_BASE + n * 8]  (payload only, 8 bytes per slot)
 
 #[cfg(target_arch = "x86_64")]
 use super::codebuf::CodeBuffer;
 #[cfg(target_arch = "x86_64")]
-use super::compiler_x86_64::{CompiledCode, CompiledLoop, VALUE_SIZE, value_tags};
+use super::compiler_x86_64::{CompiledCode, CompiledLoop, value_tags};
 #[cfg(target_arch = "x86_64")]
 use super::memory::ExecutableMemory;
 #[cfg(target_arch = "x86_64")]
 use super::x86_64::{Cond, Reg, X86_64Assembler};
+#[cfg(target_arch = "x86_64")]
+use crate::vm::ValueType;
 #[cfg(target_arch = "x86_64")]
 use crate::vm::microop::{CmpCond, ConvertedFunction, MicroOp, VReg};
 #[cfg(target_arch = "x86_64")]
@@ -27,7 +29,7 @@ mod regs {
 
     /// JitCallContext pointer (callee-saved).
     pub const VM_CTX: Reg = Reg::R12;
-    /// Frame base pointer: VReg(n) is at [FRAME_BASE + n*16] (callee-saved).
+    /// Frame base pointer: VReg(n) is at [FRAME_BASE + n*8] (callee-saved).
     pub const FRAME_BASE: Reg = Reg::R13;
 
     // Temporaries (caller-saved)
@@ -53,6 +55,11 @@ pub struct MicroOpJitCompiler {
     self_func_index: usize,
     /// Number of locals in the function.
     self_locals_count: usize,
+    /// Static type for each VReg (used to reconstruct tags at boundaries).
+    vreg_types: Vec<ValueType>,
+    /// VRegs that need unconditional shadow tag updates because they are written
+    /// with multiple different tag types across different MicroOps.
+    shadow_conflict_vregs: HashSet<usize>,
 }
 
 /// Kind of forward reference for patching.
@@ -77,7 +84,157 @@ impl MicroOpJitCompiler {
             total_regs: 0,
             self_func_index: 0,
             self_locals_count: 0,
+            vreg_types: Vec::new(),
+            shadow_conflict_vregs: HashSet::new(),
         }
+    }
+
+    /// Pre-scan MicroOps to find VRegs that are written with different shadow tag types.
+    /// These VRegs need unconditional shadow updates at every write, because
+    /// `emit_shadow_init` + `needs_shadow_update` can't handle the case where
+    /// a previous operation in a different basic block changed the shadow tag.
+    fn compute_shadow_conflicts(ops: &[MicroOp]) -> HashSet<usize> {
+        // Map: VReg index → set of tags written to it
+        let mut vreg_tags: HashMap<usize, HashSet<u64>> = HashMap::new();
+
+        fn record(map: &mut HashMap<usize, HashSet<u64>>, vreg: usize, tag: u64) {
+            map.entry(vreg).or_default().insert(tag);
+        }
+
+        for op in ops {
+            match op {
+                MicroOp::ConstI64 { dst, .. } | MicroOp::ConstI32 { dst, .. } => {
+                    record(&mut vreg_tags, dst.0, value_tags::TAG_INT);
+                }
+                MicroOp::ConstF64 { dst, .. } | MicroOp::ConstF32 { dst, .. } => {
+                    record(&mut vreg_tags, dst.0, value_tags::TAG_FLOAT);
+                }
+                MicroOp::AddI64 { dst, .. }
+                | MicroOp::SubI64 { dst, .. }
+                | MicroOp::MulI64 { dst, .. }
+                | MicroOp::DivI64 { dst, .. }
+                | MicroOp::RemI64 { dst, .. }
+                | MicroOp::NegI64 { dst, .. }
+                | MicroOp::AddI64Imm { dst, .. }
+                | MicroOp::CmpI64 { dst, .. }
+                | MicroOp::CmpI64Imm { dst, .. }
+                | MicroOp::AddI32 { dst, .. }
+                | MicroOp::SubI32 { dst, .. }
+                | MicroOp::MulI32 { dst, .. }
+                | MicroOp::DivI32 { dst, .. }
+                | MicroOp::RemI32 { dst, .. }
+                | MicroOp::EqzI32 { dst, .. }
+                | MicroOp::CmpI32 { dst, .. }
+                | MicroOp::RefEq { dst, .. }
+                | MicroOp::RefIsNull { dst, .. }
+                | MicroOp::I32WrapI64 { dst, .. }
+                | MicroOp::I64ExtendI32S { dst, .. }
+                | MicroOp::I64ExtendI32U { dst, .. }
+                | MicroOp::I64TruncF64S { dst, .. }
+                | MicroOp::I32TruncF32S { dst, .. }
+                | MicroOp::I32TruncF64S { dst, .. }
+                | MicroOp::I64TruncF32S { dst, .. }
+                | MicroOp::CmpF64 { dst, .. }
+                | MicroOp::CmpF32 { dst, .. } => {
+                    record(&mut vreg_tags, dst.0, value_tags::TAG_INT);
+                }
+                MicroOp::AddF64 { dst, .. }
+                | MicroOp::SubF64 { dst, .. }
+                | MicroOp::MulF64 { dst, .. }
+                | MicroOp::DivF64 { dst, .. }
+                | MicroOp::NegF64 { dst, .. }
+                | MicroOp::AddF32 { dst, .. }
+                | MicroOp::SubF32 { dst, .. }
+                | MicroOp::MulF32 { dst, .. }
+                | MicroOp::DivF32 { dst, .. }
+                | MicroOp::NegF32 { dst, .. }
+                | MicroOp::F64ConvertI64S { dst, .. }
+                | MicroOp::F64ConvertI32S { dst, .. }
+                | MicroOp::F32ConvertI32S { dst, .. }
+                | MicroOp::F32ConvertI64S { dst, .. }
+                | MicroOp::F32DemoteF64 { dst, .. }
+                | MicroOp::F64PromoteF32 { dst, .. } => {
+                    record(&mut vreg_tags, dst.0, value_tags::TAG_FLOAT);
+                }
+                MicroOp::RefNull { dst } => {
+                    record(&mut vreg_tags, dst.0, value_tags::TAG_NIL);
+                }
+                // These read tags from heap/call/stack — they're dynamic, always correct
+                // Don't count them as a specific tag (they always write the correct shadow)
+                MicroOp::HeapLoad { dst, .. }
+                | MicroOp::HeapLoadDyn { dst, .. }
+                | MicroOp::HeapLoad2 { dst, .. }
+                | MicroOp::StackPop { dst }
+                | MicroOp::FloatToString { dst, .. }
+                | MicroOp::PrintDebug { dst, .. }
+                | MicroOp::HeapAllocDynSimple { dst, .. }
+                | MicroOp::HeapAllocTyped { dst, .. }
+                | MicroOp::StringConst { dst, .. } => {
+                    // These always write the correct shadow tag directly
+                    // Mark with a sentinel tag (u64::MAX) to indicate "dynamic"
+                    record(&mut vreg_tags, dst.0, u64::MAX);
+                }
+                MicroOp::Call { ret: Some(ret), .. }
+                | MicroOp::CallIndirect { ret: Some(ret), .. } => {
+                    record(&mut vreg_tags, ret.0, u64::MAX);
+                }
+                // Mov copies shadow from src → doesn't set a specific tag
+                // Other non-value-producing ops
+                _ => {}
+            }
+        }
+
+        // VRegs with more than one distinct tag type need unconditional updates
+        vreg_tags
+            .into_iter()
+            .filter(|(_, tags)| tags.len() > 1)
+            .map(|(vreg, _)| vreg)
+            .collect()
+    }
+
+    /// Convert a ValueType to the corresponding JIT tag constant.
+    fn value_type_to_tag(ty: &ValueType) -> u64 {
+        match ty {
+            ValueType::I32 | ValueType::I64 => value_tags::TAG_INT,
+            ValueType::F32 | ValueType::F64 => value_tags::TAG_FLOAT,
+            ValueType::Ref => value_tags::TAG_PTR,
+        }
+    }
+
+    /// Check if a shadow tag update is needed for `dst` with `expected_tag`.
+    /// Returns `Some(shadow_offset)` if:
+    /// - The VReg's `vreg_types` entry doesn't match the expected tag, OR
+    /// - The VReg is in `shadow_conflict_vregs` (written with multiple tag types across MicroOps)
+    ///
+    /// Returns `None` if the shadow is guaranteed to already have the correct tag.
+    fn needs_shadow_update(&self, dst: &VReg, expected_tag: u64) -> Option<i32> {
+        // If this VReg has conflicting shadow writes, always update
+        if self.shadow_conflict_vregs.contains(&dst.0) {
+            return Some(self.shadow_tag_offset(dst));
+        }
+        let static_tag = self
+            .vreg_types
+            .get(dst.0)
+            .map(Self::value_type_to_tag)
+            .unwrap_or(value_tags::TAG_INT);
+        if static_tag != expected_tag {
+            Some(self.shadow_tag_offset(dst))
+        } else {
+            None
+        }
+    }
+
+    /// Emit a shadow tag update for `dst` if its `vreg_types` entry doesn't match `expected_tag`.
+    /// This handles the case where temp VRegs are reused across different types —
+    /// `emit_shadow_init` sets the tag from `vreg_types` (which records the LAST allocation type),
+    /// but at runtime the VReg may hold a value of a different type.
+    /// Only emits code when there's a type mismatch, so the common case has zero overhead.
+    ///
+    /// Can be called while an assembler is borrowed by using the asm parameter,
+    /// or after dropping any existing assembler by passing a freshly created one.
+    fn emit_shadow_update(asm: &mut X86_64Assembler, shadow_off: i32, tag: u64) {
+        asm.mov_ri64(regs::TMP0, tag as i64);
+        asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
     }
 
     /// Compile a MicroOp function to native x86-64 code.
@@ -90,9 +247,12 @@ impl MicroOpJitCompiler {
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
+        self.vreg_types = converted.vreg_types.clone();
+        self.shadow_conflict_vregs = Self::compute_shadow_conflicts(&converted.micro_ops);
 
-        // Emit prologue
+        // Emit prologue and shadow tag initialization
         self.emit_prologue();
+        self.emit_shadow_init();
 
         // Pre-compute jump targets for peephole optimization safety
         let jump_targets: HashSet<usize> = converted
@@ -169,9 +329,12 @@ impl MicroOpJitCompiler {
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
+        self.vreg_types = converted.vreg_types.clone();
+        self.shadow_conflict_vregs = Self::compute_shadow_conflicts(&converted.micro_ops);
 
-        // Emit prologue
+        // Emit prologue and shadow tag initialization
         self.emit_prologue();
+        self.emit_shadow_init();
 
         // Epilogue label: one past the loop end
         let epilogue_label = loop_end_microop_pc + 1;
@@ -263,14 +426,16 @@ impl MicroOpJitCompiler {
         })
     }
 
-    /// Byte offset of a VReg's tag field from FRAME_BASE.
-    fn vreg_tag_offset(vreg: &VReg) -> i32 {
-        (vreg.0 * VALUE_SIZE as usize) as i32
+    /// Byte offset of a VReg's slot from FRAME_BASE (8 bytes per slot, payload only).
+    fn vreg_offset(vreg: &VReg) -> i32 {
+        (vreg.0 * 8) as i32
     }
 
-    /// Byte offset of a VReg's payload field from FRAME_BASE.
-    fn vreg_payload_offset(vreg: &VReg) -> i32 {
-        (vreg.0 * VALUE_SIZE as usize + 8) as i32
+    /// Byte offset of a VReg's shadow tag from FRAME_BASE.
+    /// Shadow tags are stored after all payload slots: [total_regs * 8 + vreg.0 * 8].
+    /// Used by HeapLoad to save the runtime tag, and HeapStore to restore it.
+    fn shadow_tag_offset(&self, vreg: &VReg) -> i32 {
+        ((self.total_regs + vreg.0) * 8) as i32
     }
 
     // ==================== Prologue / Epilogue ====================
@@ -292,6 +457,19 @@ impl MicroOpJitCompiler {
         // Set up context registers: RDI=ctx, RSI=frame_base
         asm.mov_rr(regs::VM_CTX, Reg::Rdi);
         asm.mov_rr(regs::FRAME_BASE, Reg::Rsi);
+    }
+
+    /// Initialize the shadow tag area from vreg_types.
+    /// This sets up default tags so that HeapStore can always read from shadow,
+    /// even if the VReg was not produced by a HeapLoad.
+    fn emit_shadow_init(&mut self) {
+        for i in 0..self.vreg_types.len() {
+            let tag = Self::value_type_to_tag(&self.vreg_types[i]);
+            let shadow_off = ((self.total_regs + i) * 8) as i32;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_ri64(regs::TMP0, tag as i64);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
+        }
     }
 
     fn emit_epilogue(&mut self) {
@@ -421,13 +599,13 @@ impl MicroOpJitCompiler {
     // ==================== Constants ====================
 
     fn emit_const_i64(&mut self, dst: &VReg, imm: i64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Store TAG_INT
-        asm.mov_ri64(regs::TMP0, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
-        // Store immediate value
         asm.mov_ri64(regs::TMP0, imm);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
@@ -437,166 +615,82 @@ impl MicroOpJitCompiler {
         if dst == src {
             return Ok(());
         }
+        let src_shadow = self.shadow_tag_offset(src);
+        let dst_shadow = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Copy tag
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
         // Copy payload
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        // Copy shadow tag
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, src_shadow);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow, regs::TMP0);
         Ok(())
     }
 
     // ==================== i64 ALU ====================
 
     fn emit_binop_i64(&mut self, dst: &VReg, a: &VReg, b: &VReg, op: BinOp) -> Result<(), String> {
-        // Polymorphic: check tag of operand `a` to dispatch int vs float.
-        // Load tag of `a`
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(a));
-            asm.cmp_ri32(regs::TMP0, value_tags::TAG_FLOAT as i32);
-        }
-        // JE to float path (offset patched below)
-        let je_patch_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.je_rel32(0); // placeholder offset
-        }
-
-        // === Integer path ===
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-            asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-            match op {
-                BinOp::Add => asm.add_rr(regs::TMP0, regs::TMP1),
-                BinOp::Sub => asm.sub_rr(regs::TMP0, regs::TMP1),
-                BinOp::Mul => asm.imul_rr(regs::TMP0, regs::TMP1),
-                BinOp::Div => {
-                    asm.cqo();
-                    asm.idiv(regs::TMP1);
-                }
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        match op {
+            BinOp::Add => asm.add_rr(regs::TMP0, regs::TMP1),
+            BinOp::Sub => asm.sub_rr(regs::TMP0, regs::TMP1),
+            BinOp::Mul => asm.imul_rr(regs::TMP0, regs::TMP1),
+            BinOp::Div => {
+                asm.cqo();
+                asm.idiv(regs::TMP1);
             }
-            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
         }
-        // JMP over float path
-        let jmp_patch_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.jmp_rel32(0); // placeholder
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
         }
-
-        // === Float path ===
-        let float_path_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-            asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-            asm.movq_xmm_r64(0, regs::TMP0);
-            asm.movq_xmm_r64(1, regs::TMP1);
-            match op {
-                BinOp::Add => asm.addsd(0, 1),
-                BinOp::Sub => asm.subsd(0, 1),
-                BinOp::Mul => asm.mulsd(0, 1),
-                BinOp::Div => asm.divsd(0, 1),
-            }
-            asm.movq_r64_xmm(regs::TMP0, 0);
-            asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
-        }
-        let end_pos = self.buf.len();
-
-        // Patch JE offset: target = float_path_pos, from = je_patch_pos + 6 (JE rel32 = 6 bytes)
-        let je_offset = (float_path_pos as i32) - (je_patch_pos as i32 + 6);
-        self.patch_i32(je_patch_pos + 2, je_offset);
-
-        // Patch JMP offset: target = end_pos, from = jmp_patch_pos + 5 (JMP rel32 = 5 bytes)
-        let jmp_offset = (end_pos as i32) - (jmp_patch_pos as i32 + 5);
-        self.patch_i32(jmp_patch_pos + 1, jmp_offset);
-
         Ok(())
     }
 
     fn emit_rem_i64(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // TMP0 (RAX) = a, TMP1 (RCX) = b
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-        // CQO + IDIV: remainder is in RDX (TMP2)
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
         asm.cqo();
         asm.idiv(regs::TMP1);
-        // Store TAG_INT + remainder (RDX)
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP2);
+        // Remainder is in RDX (TMP2)
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP2);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     fn emit_neg_i64(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
-        // Polymorphic: check tag for int vs float negation.
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-            asm.cmp_ri32(regs::TMP0, value_tags::TAG_FLOAT as i32);
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
+        asm.neg(regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
         }
-        let je_patch_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.je_rel32(0);
-        }
-
-        // === Integer negation ===
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
-            asm.neg(regs::TMP0);
-            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
-        }
-        let jmp_patch_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.jmp_rel32(0);
-        }
-
-        // === Float negation (XOR sign bit) ===
-        let float_path_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
-            asm.mov_ri64(regs::TMP1, i64::MIN); // 0x8000000000000000 sign bit mask
-            asm.xor_rr(regs::TMP0, regs::TMP1);
-            asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
-        }
-        let end_pos = self.buf.len();
-
-        let je_offset = (float_path_pos as i32) - (je_patch_pos as i32 + 6);
-        self.patch_i32(je_patch_pos + 2, je_offset);
-        let jmp_offset = (end_pos as i32) - (jmp_patch_pos as i32 + 5);
-        self.patch_i32(jmp_patch_pos + 1, jmp_offset);
-
         Ok(())
     }
 
     fn emit_add_i64_imm(&mut self, dst: &VReg, a: &VReg, imm: i64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
         if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
             asm.add_ri32(regs::TMP0, imm as i32);
         } else {
             asm.mov_ri64(regs::TMP1, imm);
             asm.add_rr(regs::TMP0, regs::TMP1);
         }
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
@@ -635,68 +729,18 @@ impl MicroOpJitCompiler {
         b: &VReg,
         cond: &CmpCond,
     ) -> Result<(), String> {
-        // Polymorphic: check tag of operand `a` to dispatch int vs float comparison.
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(a));
-            asm.cmp_ri32(regs::TMP0, value_tags::TAG_FLOAT as i32);
+        let x86_cond = Self::cmp_cond_to_x86(cond);
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.cmp_rr(regs::TMP0, regs::TMP1);
+        asm.setcc(x86_cond, regs::TMP0);
+        asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
         }
-        // JE to float path
-        let je_patch_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.je_rel32(0);
-        }
-
-        // === Integer comparison path ===
-        {
-            let x86_cond = Self::cmp_cond_to_x86(cond);
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-            asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-            asm.cmp_rr(regs::TMP0, regs::TMP1);
-            asm.setcc(x86_cond, regs::TMP0);
-            asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        }
-        // JMP over float path
-        let jmp_patch_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.jmp_rel32(0);
-        }
-
-        // === Float comparison path ===
-        let float_path_pos = self.buf.len();
-        {
-            let fp_cond = Self::fp_cmp_cond_to_x86(cond);
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-            asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-            asm.movq_xmm_r64(0, regs::TMP0);
-            asm.movq_xmm_r64(1, regs::TMP1);
-            asm.ucomisd(0, 1);
-            asm.setcc(fp_cond, regs::TMP0);
-            asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        }
-
-        // === Merge: store result (same for both paths) ===
-        let end_pos = self.buf.len();
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            // CmpI64 produces a bool (TAG_INT with 0 or 1)
-            asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
-        }
-
-        // Patch JE: je_patch_pos + 6 → float_path_pos
-        let je_offset = (float_path_pos as i32) - (je_patch_pos as i32 + 6);
-        self.patch_i32(je_patch_pos + 2, je_offset);
-
-        // Patch JMP: jmp_patch_pos + 5 → end_pos
-        let jmp_offset = (end_pos as i32) - (jmp_patch_pos as i32 + 5);
-        self.patch_i32(jmp_patch_pos + 1, jmp_offset);
-
         Ok(())
     }
 
@@ -708,8 +752,9 @@ impl MicroOpJitCompiler {
         cond: &CmpCond,
     ) -> Result<(), String> {
         let x86_cond = Self::cmp_cond_to_x86(cond);
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
         if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
             asm.cmp_ri32(regs::TMP0, imm as i32);
         } else {
@@ -718,9 +763,10 @@ impl MicroOpJitCompiler {
         }
         asm.setcc(x86_cond, regs::TMP0);
         asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
@@ -729,11 +775,7 @@ impl MicroOpJitCompiler {
     fn emit_br_if_false(&mut self, cond: &VReg, target: usize) -> Result<(), String> {
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(
-                regs::TMP0,
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(cond),
-            );
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(cond));
             asm.test_rr(regs::TMP0, regs::TMP0);
         }
 
@@ -747,11 +789,7 @@ impl MicroOpJitCompiler {
     fn emit_br_if(&mut self, cond: &VReg, target: usize) -> Result<(), String> {
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(
-                regs::TMP0,
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(cond),
-            );
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(cond));
             asm.test_rr(regs::TMP0, regs::TMP0);
         }
 
@@ -835,108 +873,34 @@ impl MicroOpJitCompiler {
         target: usize,
         invert: bool,
     ) -> Result<(), String> {
-        // For register-register comparison (CmpI64), need polymorphic dispatch
-        // since the operands may be floats. CmpI64Imm is always integer.
-        if let CmpOperand::Reg(b_vreg) = b {
-            // Check tag of operand `a`
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(a));
-                asm.cmp_ri32(regs::TMP0, value_tags::TAG_FLOAT as i32);
-            }
-            // JE to float comparison path
-            let je_patch_pos = self.buf.len();
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.je_rel32(0);
-            }
-
-            // === Integer comparison + branch ===
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-                asm.mov_rm(
-                    regs::TMP1,
-                    regs::FRAME_BASE,
-                    Self::vreg_payload_offset(b_vreg),
-                );
-                asm.cmp_rr(regs::TMP0, regs::TMP1);
-            }
-            let mut int_cond = Self::cmp_cond_to_x86(cond);
-            if invert {
-                int_cond = int_cond.invert();
-            }
-            let current = self.buf.len();
-            self.forward_refs.push((current, target, RefKind::Jcc));
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.jcc_rel32(int_cond, 0);
-            }
-            // JMP over float path
-            let jmp_patch_pos = self.buf.len();
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.jmp_rel32(0);
-            }
-
-            // === Float comparison + branch ===
-            let float_path_pos = self.buf.len();
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-                asm.mov_rm(
-                    regs::TMP1,
-                    regs::FRAME_BASE,
-                    Self::vreg_payload_offset(b_vreg),
-                );
-                asm.movq_xmm_r64(0, regs::TMP0);
-                asm.movq_xmm_r64(1, regs::TMP1);
-                asm.ucomisd(0, 1);
-            }
-            let mut fp_cond = Self::fp_cmp_cond_to_x86(cond);
-            if invert {
-                fp_cond = fp_cond.invert();
-            }
-            let current_fp = self.buf.len();
-            self.forward_refs.push((current_fp, target, RefKind::Jcc));
-            {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.jcc_rel32(fp_cond, 0);
-            }
-
-            let end_pos = self.buf.len();
-
-            // Patch JE: target float_path_pos
-            let je_offset = (float_path_pos as i32) - (je_patch_pos as i32 + 6);
-            self.patch_i32(je_patch_pos + 2, je_offset);
-
-            // Patch JMP: target end_pos
-            let jmp_offset = (end_pos as i32) - (jmp_patch_pos as i32 + 5);
-            self.patch_i32(jmp_patch_pos + 1, jmp_offset);
-
-            return Ok(());
-        }
-
-        // CmpI64Imm path: always integer
+        // Load operand a
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
         }
-        if let CmpOperand::Imm(imm) = b {
-            if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+
+        // Compare with operand b
+        match b {
+            CmpOperand::Reg(b_vreg) => {
                 let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.cmp_ri32(regs::TMP0, imm as i32);
-            } else {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                asm.mov_ri64(regs::TMP1, imm);
+                asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b_vreg));
                 asm.cmp_rr(regs::TMP0, regs::TMP1);
+            }
+            CmpOperand::Imm(imm) => {
+                if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+                    let mut asm = X86_64Assembler::new(&mut self.buf);
+                    asm.cmp_ri32(regs::TMP0, imm as i32);
+                } else {
+                    let mut asm = X86_64Assembler::new(&mut self.buf);
+                    asm.mov_ri64(regs::TMP1, imm);
+                    asm.cmp_rr(regs::TMP0, regs::TMP1);
+                }
             }
         }
 
         // Determine branch condition
         let mut x86_cond = Self::cmp_cond_to_x86(cond);
         if invert {
-            // BrIfFalse: branch when condition is FALSE
             x86_cond = x86_cond.invert();
         }
 
@@ -998,12 +962,12 @@ impl MicroOpJitCompiler {
         }
 
         // === Fast path: direct call via table ===
-        // Load total_regs from table, compute frame size
+        // Load total_regs from table, compute frame size (16 bytes per VReg: payload + shadow tag)
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             // TMP4 still has table base
             asm.mov_rm(regs::TMP4, regs::TMP4, table_entry_offset + 8); // total_regs
-            asm.shl_ri(regs::TMP4, 4); // * 16 (VALUE_SIZE)
+            asm.shl_ri(regs::TMP4, 4); // * 16 (payload + shadow tag)
             asm.add_ri32(regs::TMP4, 15);
             asm.and_ri32(regs::TMP4, -16); // 16-byte align → TMP4 = frame_aligned
         }
@@ -1023,15 +987,12 @@ impl MicroOpJitCompiler {
             asm.push(regs::TMP4); // padding to keep 16-byte alignment
         }
 
-        // Copy args from caller frame to new frame on stack (at RSP+16, past 2 pushed values)
+        // Copy args (payload only, 8B/slot) from caller frame to new frame on stack (at RSP+16)
         for (i, arg) in args.iter().enumerate().take(argc) {
-            let new_tag_offset = (i * VALUE_SIZE as usize) as i32 + 16;
-            let new_payload_offset = new_tag_offset + 8;
+            let new_offset = (i * 8) as i32 + 16;
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
-            asm.mov_mr(Reg::Rsp, new_tag_offset, regs::TMP0);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
-            asm.mov_mr(Reg::Rsp, new_payload_offset, regs::TMP0);
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(arg));
+            asm.mov_mr(Reg::Rsp, new_offset, regs::TMP0);
         }
 
         // Set up arguments: RDI=ctx, RSI=new_frame(rsp+16), RDX=unused
@@ -1064,15 +1025,12 @@ impl MicroOpJitCompiler {
             asm.pop(regs::VM_CTX);
         }
 
-        // Store return value (RAX=tag, RDX=payload)
+        // Store return value: payload (RDX) to frame, tag (RAX) to shadow
         if let Some(ret_vreg) = ret {
+            let shadow_off = self.shadow_tag_offset(ret_vreg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg), Reg::Rax);
-            asm.mov_mr(
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(ret_vreg),
-                Reg::Rdx,
-            );
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
 
         // jmp done (skip slow path)
@@ -1082,11 +1040,11 @@ impl MicroOpJitCompiler {
             asm.jmp_rel32(0); // placeholder
         }
 
-        // === Slow path: call_helper ===
+        // === Slow path: call_helper (needs 16B/arg with tag reconstruction) ===
         let slow_path_offset = self.buf.len();
 
-        // Allocate space on native stack for args array
-        let args_size = argc * VALUE_SIZE as usize;
+        // Allocate space on native stack for args array (16B per arg for JitValue)
+        let args_size = argc * 16;
         let args_aligned = (args_size + 15) & !15;
 
         if args_aligned > 0 {
@@ -1094,14 +1052,15 @@ impl MicroOpJitCompiler {
             asm.sub_ri32(Reg::Rsp, args_aligned as i32);
         }
 
-        // Copy args from frame slots to native stack
+        // Copy args with tag from shadow area (set by HeapLoad, or initialized from vreg_types)
         for (i, arg) in args.iter().enumerate() {
-            let sp_tag_offset = (i * VALUE_SIZE as usize) as i32;
+            let sp_tag_offset = (i * 16) as i32;
             let sp_payload_offset = sp_tag_offset + 8;
+            let shadow_off = self.shadow_tag_offset(arg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, shadow_off);
             asm.mov_mr(Reg::Rsp, sp_tag_offset, regs::TMP0);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(arg));
             asm.mov_mr(Reg::Rsp, sp_payload_offset, regs::TMP0);
         }
 
@@ -1142,15 +1101,12 @@ impl MicroOpJitCompiler {
             asm.add_ri32(Reg::Rsp, args_aligned as i32);
         }
 
-        // Store return value (RAX=tag, RDX=payload)
+        // Store return value: payload (RDX) to frame, tag (RAX) to shadow
         if let Some(ret_vreg) = ret {
+            let shadow_off = self.shadow_tag_offset(ret_vreg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg), Reg::Rax);
-            asm.mov_mr(
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(ret_vreg),
-                Reg::Rdx,
-            );
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
 
         let done_offset = self.buf.len();
@@ -1176,8 +1132,8 @@ impl MicroOpJitCompiler {
 
     fn emit_call_self(&mut self, args: &[VReg], ret: Option<&VReg>) -> Result<(), String> {
         let argc = args.len();
-        // Allocate new frame on native stack for callee locals
-        let frame_size = self.total_regs * VALUE_SIZE as usize;
+        // Allocate new frame on native stack for callee (payload + shadow tags, 16B per VReg)
+        let frame_size = self.total_regs * 16;
         let frame_aligned = (frame_size + 15) & !15;
 
         // Save callee-saved registers first
@@ -1193,15 +1149,12 @@ impl MicroOpJitCompiler {
             asm.sub_ri32(Reg::Rsp, frame_aligned as i32);
         }
 
-        // Copy args from current frame to new frame on stack
+        // Copy args (payload only, 8B/slot) from current frame to new frame
         for (i, arg) in args.iter().enumerate().take(argc) {
-            let new_tag_offset = (i * VALUE_SIZE as usize) as i32;
-            let new_payload_offset = new_tag_offset + 8;
+            let new_offset = (i * 8) as i32;
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
-            asm.mov_mr(Reg::Rsp, new_tag_offset, regs::TMP0);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
-            asm.mov_mr(Reg::Rsp, new_payload_offset, regs::TMP0);
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(arg));
+            asm.mov_mr(Reg::Rsp, new_offset, regs::TMP0);
         }
 
         // Set up arguments: RDI=ctx, RSI=new_frame(rsp), RDX=unused
@@ -1209,12 +1162,10 @@ impl MicroOpJitCompiler {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_rr(Reg::Rdi, regs::VM_CTX);
             asm.mov_rr(Reg::Rsi, Reg::Rsp);
-            asm.mov_rr(Reg::Rdx, Reg::Rsp); // unused but match signature
+            asm.mov_rr(Reg::Rdx, Reg::Rsp);
         }
 
         // CALL to function entry (offset 0)
-        // Calculate relative offset: target is 0, current position is buf.len()
-        // CALL rel32 is 5 bytes, offset = target - (current + 5)
         let call_site = self.buf.len();
         let rel_offset = -(call_site as i32 + 5);
         {
@@ -1235,15 +1186,12 @@ impl MicroOpJitCompiler {
             asm.pop(regs::VM_CTX);
         }
 
-        // Store return value (RAX=tag, RDX=payload)
+        // Store return value: payload (RDX) to frame, tag (RAX) to shadow
         if let Some(ret_vreg) = ret {
+            let shadow_off = self.shadow_tag_offset(ret_vreg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg), Reg::Rax);
-            asm.mov_mr(
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(ret_vreg),
-                Reg::Rdx,
-            );
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
 
         Ok(())
@@ -1264,11 +1212,7 @@ impl MicroOpJitCompiler {
         // Address: heap_base + (ref_payload + 1) * 8 + 8
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(
-                regs::TMP0,
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(callee),
-            );
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(callee));
             asm.mov_rm(regs::TMP1, regs::VM_CTX, 48); // heap_base
             asm.add_ri32(regs::TMP0, 1); // skip header
             asm.shl_ri(regs::TMP0, 3); // byte offset
@@ -1277,8 +1221,8 @@ impl MicroOpJitCompiler {
             asm.mov_rm(regs::TMP4, regs::TMP1, 8); // func_index in TMP4 (R8)
         }
 
-        // Step 2: Allocate space on native stack for args array
-        let args_size = argc * VALUE_SIZE as usize;
+        // Step 2: Allocate space on native stack for args array (16B per arg for JitValue)
+        let args_size = argc * 16;
         let args_aligned = (args_size + 15) & !15;
 
         if args_aligned > 0 {
@@ -1286,14 +1230,15 @@ impl MicroOpJitCompiler {
             asm.sub_ri32(Reg::Rsp, args_aligned as i32);
         }
 
-        // Step 3: Copy args from frame slots to native stack
+        // Step 3: Copy args with tag from shadow area
         for (i, arg) in args.iter().enumerate() {
-            let sp_tag_offset = (i * VALUE_SIZE as usize) as i32;
+            let sp_tag_offset = (i * 16) as i32;
             let sp_payload_offset = sp_tag_offset + 8;
+            let shadow_off = self.shadow_tag_offset(arg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, shadow_off);
             asm.mov_mr(Reg::Rsp, sp_tag_offset, regs::TMP0);
-            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(arg));
+            asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(arg));
             asm.mov_mr(Reg::Rsp, sp_payload_offset, regs::TMP0);
         }
 
@@ -1335,15 +1280,12 @@ impl MicroOpJitCompiler {
             asm.add_ri32(Reg::Rsp, args_aligned as i32);
         }
 
-        // Store return value (RAX=tag, RDX=payload) into ret vreg
+        // Store return value: payload (RDX) to frame, tag (RAX) to shadow
         if let Some(ret_vreg) = ret {
+            let shadow_off = self.shadow_tag_offset(ret_vreg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg), Reg::Rax);
-            asm.mov_mr(
-                regs::FRAME_BASE,
-                Self::vreg_payload_offset(ret_vreg),
-                Reg::Rdx,
-            );
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
 
         Ok(())
@@ -1353,10 +1295,12 @@ impl MicroOpJitCompiler {
 
     fn emit_ret(&mut self, src: Option<&VReg>) -> Result<(), String> {
         if let Some(vreg) = src {
+            // Read tag from shadow area, payload from frame
+            let shadow_off = self.shadow_tag_offset(vreg);
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            // RAX = tag, RDX = payload
-            asm.mov_rm(Reg::Rax, regs::FRAME_BASE, Self::vreg_tag_offset(vreg));
-            asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(vreg));
+            // RAX = tag (from shadow), RDX = payload (from frame)
+            asm.mov_rm(Reg::Rax, regs::FRAME_BASE, shadow_off);
+            asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(vreg));
         } else {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_ri64(Reg::Rax, value_tags::TAG_NIL as i64);
@@ -1380,13 +1324,13 @@ impl MicroOpJitCompiler {
     // ==================== f64 / f32 ALU ====================
 
     fn emit_const_f64(&mut self, dst: &VReg, imm: f64) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_FLOAT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Store TAG_FLOAT
-        asm.mov_ri64(regs::TMP0, value_tags::TAG_FLOAT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
-        // Store f64 bits as payload
         asm.mov_ri64(regs::TMP0, imm.to_bits() as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_FLOAT);
+        }
         Ok(())
     }
 
@@ -1397,38 +1341,36 @@ impl MicroOpJitCompiler {
         b: &VReg,
         op: FpBinOp,
     ) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_FLOAT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Load payloads (f64 bits) into GP regs, then move to XMM regs
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
-        asm.movq_xmm_r64(0, regs::TMP0); // XMM0 = a
-        asm.movq_xmm_r64(1, regs::TMP1); // XMM1 = b
-        // Perform FP operation
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+        asm.movq_xmm_r64(0, regs::TMP0);
+        asm.movq_xmm_r64(1, regs::TMP1);
         match op {
             FpBinOp::Add => asm.addsd(0, 1),
             FpBinOp::Sub => asm.subsd(0, 1),
             FpBinOp::Mul => asm.mulsd(0, 1),
             FpBinOp::Div => asm.divsd(0, 1),
         }
-        // Move result back to GP
         asm.movq_r64_xmm(regs::TMP0, 0);
-        // Store TAG_FLOAT + result
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_FLOAT);
+        }
         Ok(())
     }
 
     fn emit_neg_f64(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_FLOAT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
-        // XOR sign bit: flip bit 63
-        asm.mov_ri64(regs::TMP1, i64::MIN); // 0x8000000000000000
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
+        asm.mov_ri64(regs::TMP1, i64::MIN); // 0x8000000000000000 sign bit mask
         asm.xor_rr(regs::TMP0, regs::TMP1);
-        // Store TAG_FLOAT + result
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_FLOAT);
+        }
         Ok(())
     }
 
@@ -1440,33 +1382,35 @@ impl MicroOpJitCompiler {
         cond: &CmpCond,
     ) -> Result<(), String> {
         let x86_cond = Self::fp_cmp_cond_to_x86(cond);
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Load payloads into XMM regs
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
         asm.movq_xmm_r64(0, regs::TMP0);
         asm.movq_xmm_r64(1, regs::TMP1);
         asm.ucomisd(0, 1);
         asm.setcc(x86_cond, regs::TMP0);
         asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        // Store as TAG_INT
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     // ==================== i32 extras ====================
 
     fn emit_eqz(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.test_rr(regs::TMP0, regs::TMP0);
         asm.setcc(Cond::E, regs::TMP0);
         asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
@@ -1474,84 +1418,98 @@ impl MicroOpJitCompiler {
 
     /// Sign-extend i32 to i64: MOVSXD r64, r32
     fn emit_i64_extend_i32s(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.movsxd(regs::TMP0, regs::TMP0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     /// Zero-extend i32 to i64: MOV r32, r32 (clears upper 32 bits)
     fn emit_i64_extend_i32u(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
-        // MOV r32, r32 zero-extends to 64-bit
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.mov_r32_r32(regs::TMP0, regs::TMP0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     /// Convert signed i64 to f64: CVTSI2SD xmm, r64
     fn emit_f64_convert_i64s(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_FLOAT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.cvtsi2sd_xmm_r64(0, regs::TMP0);
         asm.movq_r64_xmm(regs::TMP0, 0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_FLOAT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_FLOAT);
+        }
         Ok(())
     }
 
     /// Truncate f64 to signed i64: CVTTSD2SI r64, xmm
     fn emit_i64_trunc_f64s(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.movq_xmm_r64(0, regs::TMP0);
         asm.cvttsd2si_r64_xmm(regs::TMP0, 0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     // ==================== Ref Operations ====================
 
     fn emit_ref_eq(&mut self, dst: &VReg, a: &VReg, b: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(a));
-        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_payload_offset(b));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(a));
+        asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
         asm.cmp_rr(regs::TMP0, regs::TMP1);
         asm.setcc(Cond::E, regs::TMP0);
         asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     fn emit_ref_is_null(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
+        // In unboxed frames, null ref has payload == 0 (heap offset 0 is reserved)
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.cmp_ri32(regs::TMP0, value_tags::TAG_NIL as i32);
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
+        asm.test_rr(regs::TMP0, regs::TMP0);
         asm.setcc(Cond::E, regs::TMP0);
         asm.movzx_r64_r8(regs::TMP0, regs::TMP0);
-        asm.mov_ri64(regs::TMP1, value_tags::TAG_INT as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP1);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+        }
         Ok(())
     }
 
     fn emit_ref_null(&mut self, dst: &VReg) -> Result<(), String> {
+        let shadow = self.needs_shadow_update(dst, value_tags::TAG_NIL);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        asm.mov_ri64(regs::TMP0, value_tags::TAG_NIL as i64);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
         asm.xor_rr(regs::TMP0, regs::TMP0);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
+        if let Some(off) = shadow {
+            Self::emit_shadow_update(&mut asm, off, value_tags::TAG_NIL);
+        }
         Ok(())
     }
 
@@ -1583,14 +1541,15 @@ impl MicroOpJitCompiler {
         }
 
         // === FAST PATH: cache hit ===
+        let shadow_off = self.shadow_tag_offset(dst);
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             // TMP1 = cached GcRef.index (offset 8 from entry)
             asm.mov_rm(regs::TMP1, regs::TMP0, 8);
-            // Store TAG_PTR + index to dst
-            asm.mov_ri64(regs::TMP0, value_tags::TAG_PTR as i64);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP1);
+            // Store payload to frame, TAG_PTR to shadow
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP1);
+            asm.mov_ri64(regs::TMP1, value_tags::TAG_PTR as i64);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
         }
 
         // JMP to end (skip slow path)
@@ -1623,10 +1582,9 @@ impl MicroOpJitCompiler {
             // Restore callee-saved
             asm.pop(regs::FRAME_BASE);
             asm.pop(regs::VM_CTX);
-            // Update heap_base from context (helper may have triggered GC)
-            // Result: RAX=tag, RDX=payload
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
-            asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+            // Result: RAX=tag, RDX=payload — store both
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
 
         // === END ===
@@ -1643,48 +1601,49 @@ impl MicroOpJitCompiler {
 
     /// Emit FloatToString: call float_to_string_helper(ctx, tag, payload) -> (tag, payload)
     fn emit_float_to_string(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let src_shadow_off = self.shadow_tag_offset(src);
+        let dst_shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Save callee-saved
         asm.push(regs::VM_CTX);
         asm.push(regs::FRAME_BASE);
-        // Args: RDI=ctx, RSI=tag, RDX=payload
+        // Args: RDI=ctx, RSI=tag(from shadow), RDX=payload
         asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, src_shadow_off);
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(src));
         // Load float_to_string_helper from JitCallContext offset 72
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
         asm.call_r(regs::TMP4);
         // Restore callee-saved
         asm.pop(regs::FRAME_BASE);
         asm.pop(regs::VM_CTX);
-        // Store result (RAX=tag, RDX=payload)
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
-        // Update heap_base (GC may have moved heap)
-        asm.mov_rm(regs::TMP0, regs::VM_CTX, 48);
-        // (heap_base is read fresh each time from VM_CTX, so no update needed here)
+        // Store result: payload (RDX) to frame, tag (RAX) to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
         Ok(())
     }
 
     /// Emit PrintDebug: call print_debug_helper(ctx, tag, payload) -> (tag, payload)
     fn emit_print_debug(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let src_shadow_off = self.shadow_tag_offset(src);
+        let dst_shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Save callee-saved
         asm.push(regs::VM_CTX);
         asm.push(regs::FRAME_BASE);
-        // Args: RDI=ctx, RSI=tag, RDX=payload
+        // Args: RDI=ctx, RSI=tag(from shadow), RDX=payload
         asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, src_shadow_off);
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(src));
         // Load print_debug_helper from JitCallContext offset 80
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 80);
         asm.call_r(regs::TMP4);
         // Restore callee-saved
         asm.pop(regs::FRAME_BASE);
         asm.pop(regs::VM_CTX);
-        // Store result (returns original value: RAX=tag, RDX=payload)
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        // Store result: payload (RDX) to frame, tag (RAX) to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
         Ok(())
     }
 
@@ -1692,22 +1651,23 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapAllocDynSimple: call helper(ctx, size_payload) -> (tag, payload)
     fn emit_heap_alloc_dyn_simple(&mut self, dst: &VReg, size: &VReg) -> Result<(), String> {
+        let dst_shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Save callee-saved
         asm.push(regs::VM_CTX);
         asm.push(regs::FRAME_BASE);
-        // Args: RDI=ctx, RSI=size (payload only, since size is always i64)
+        // Args: RDI=ctx, RSI=size (payload only)
         asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_payload_offset(size));
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_offset(size));
         // Load heap_alloc_dyn_simple_helper from JitCallContext offset 88
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 88);
         asm.call_r(regs::TMP4);
         // Restore callee-saved
         asm.pop(regs::FRAME_BASE);
         asm.pop(regs::VM_CTX);
-        // Store result (RAX=tag, RDX=payload)
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        // Store result: payload (RDX) to frame, tag (RAX) to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
         Ok(())
     }
 
@@ -1719,18 +1679,15 @@ impl MicroOpJitCompiler {
         len: &VReg,
         kind: u8,
     ) -> Result<(), String> {
+        let dst_shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Save callee-saved
         asm.push(regs::VM_CTX);
         asm.push(regs::FRAME_BASE);
         // Args: RDI=ctx, RSI=data_ref_payload, RDX=len_payload, RCX=kind
         asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rm(
-            Reg::Rsi,
-            regs::FRAME_BASE,
-            Self::vreg_payload_offset(data_ref),
-        );
-        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_payload_offset(len));
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_offset(data_ref));
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(len));
         asm.mov_ri32(Reg::Rcx, kind as i32);
         // Load heap_alloc_typed_helper from JitCallContext offset 96
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 96);
@@ -1738,46 +1695,51 @@ impl MicroOpJitCompiler {
         // Restore callee-saved
         asm.pop(regs::FRAME_BASE);
         asm.pop(regs::VM_CTX);
-        // Store result (RAX=tag, RDX=payload)
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), Reg::Rax);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), Reg::Rdx);
+        // Store result: payload (RDX) to frame, tag (RAX) to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
         Ok(())
     }
 
     // ==================== Stack Bridge ====================
 
-    /// Emit StackPush: push a VReg's tag+payload onto the machine stack.
-    /// Used to spill values across function calls.
+    /// Emit StackPush: push tag+payload onto the machine stack for cross-call spill.
+    /// Tag is read from shadow area.
     fn emit_stack_push(&mut self, src: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(src);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // Push payload first (stack grows down, so payload will be at higher address after pop)
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.push(regs::TMP0);
-        // Push tag second (will be popped first)
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(src));
+        // Push tag second (from shadow area)
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, shadow_off);
         asm.push(regs::TMP0);
         Ok(())
     }
 
     /// Emit StackPop: pop tag+payload from the machine stack into a VReg.
+    /// Tag is saved to shadow area; payload is stored to frame.
     fn emit_stack_pop(&mut self, dst: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Pop tag first (was pushed second)
+        // Pop tag first (save to shadow)
         asm.pop(regs::TMP0);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP0);
-        // Pop payload second (was pushed first)
+        asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
+        // Pop payload second (store to frame)
         asm.pop(regs::TMP0);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP0);
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP0);
         Ok(())
     }
 
     // ==================== Heap Operations ====================
 
     /// Emit HeapLoad: dst = heap[src][offset] (static offset field access).
+    /// Stores payload to frame and tag to shadow area (for HeapStore to recover).
     fn emit_heap_load(&mut self, dst: &VReg, src: &VReg, offset: usize) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // TMP0 = ref payload (heap word offset)
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         // TMP1 = heap_base (JitCallContext offset 48)
         asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
         // TMP0 = ref_payload + 1 + 2*offset (skip header + slot offset)
@@ -1788,21 +1750,23 @@ impl MicroOpJitCompiler {
         // TMP1 = heap_base + byte_offset
         asm.add_rr(regs::TMP1, regs::TMP0);
         // Load tag and payload from heap
-        asm.mov_rm(regs::TMP2, regs::TMP1, 0); // tag
-        asm.mov_rm(regs::TMP3, regs::TMP1, 8); // payload
-        // Store to dst VReg
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP2);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP3);
+        asm.mov_rm(regs::TMP0, regs::TMP1, 0); // tag
+        asm.mov_rm(regs::TMP2, regs::TMP1, 8); // payload
+        // Store payload to frame, tag to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP2);
+        asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
         Ok(())
     }
 
     /// Emit HeapLoadDyn: dst = heap[obj][idx] (dynamic index access).
+    /// Stores payload to frame and tag to shadow area.
     fn emit_heap_load_dyn(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // TMP2 = dynamic index
-        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         // TMP0 = ref payload
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         // TMP1 = heap_base
         asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
         // TMP2 = index * 2
@@ -1815,27 +1779,25 @@ impl MicroOpJitCompiler {
         asm.shl_ri(regs::TMP0, 3);
         // TMP1 = heap_base + byte_offset
         asm.add_rr(regs::TMP1, regs::TMP0);
-        // Load tag and payload
-        asm.mov_rm(regs::TMP2, regs::TMP1, 0);
-        asm.mov_rm(regs::TMP3, regs::TMP1, 8);
-        // Store to dst
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP2);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP3);
+        // Load tag and payload from heap
+        asm.mov_rm(regs::TMP0, regs::TMP1, 0); // tag
+        asm.mov_rm(regs::TMP2, regs::TMP1, 8); // payload
+        // Store payload to frame, tag to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP2);
+        asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
         Ok(())
     }
 
     /// Emit HeapStore: heap[dst_obj][offset] = src (static offset field store).
+    /// Reads tag from shadow area (set by HeapLoad); stores tag+payload to heap.
     fn emit_heap_store(&mut self, dst_obj: &VReg, offset: usize, src: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(src);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Load value to store
-        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.mov_rm(regs::TMP3, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP2 = tag (from shadow), TMP3 = payload
+        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, shadow_off);
+        asm.mov_rm(regs::TMP3, regs::FRAME_BASE, Self::vreg_offset(src));
         // TMP0 = ref payload
-        asm.mov_rm(
-            regs::TMP0,
-            regs::FRAME_BASE,
-            Self::vreg_payload_offset(dst_obj),
-        );
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst_obj));
         // TMP1 = heap_base
         asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
         // Calculate address
@@ -1850,15 +1812,17 @@ impl MicroOpJitCompiler {
     }
 
     /// Emit HeapStoreDyn: heap[obj][idx] = src (dynamic index store).
+    /// Reads tag from shadow area (set by HeapLoad); stores tag+payload to heap.
     fn emit_heap_store_dyn(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(src);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Load value to store
-        asm.mov_rm(regs::TMP4, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.mov_rm(regs::TMP5, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP4 = tag (from shadow), TMP5 = payload
+        asm.mov_rm(regs::TMP4, regs::FRAME_BASE, shadow_off);
+        asm.mov_rm(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
         // TMP2 = dynamic index
-        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         // TMP0 = ref payload
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         // TMP1 = heap_base
         asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
         // Calculate address
@@ -1867,24 +1831,25 @@ impl MicroOpJitCompiler {
         asm.add_rr(regs::TMP0, regs::TMP2);
         asm.shl_ri(regs::TMP0, 3);
         asm.add_rr(regs::TMP1, regs::TMP0);
-        // Store tag and payload
+        // Store tag and payload to heap
         asm.mov_mr(regs::TMP1, 0, regs::TMP4);
         asm.mov_mr(regs::TMP1, 8, regs::TMP5);
         Ok(())
     }
 
     /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
+    /// Stores payload to frame and tag to shadow area.
     fn emit_heap_load2(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(dst);
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // TMP2 = dynamic index
-        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         // TMP0 = outer ref payload
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         // TMP1 = heap_base
         asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
 
         // Step 1: load slot 0 of outer object → inner ref payload
-        // addr = heap_base + (ref + 1) * 8
         asm.add_ri32(regs::TMP0, 1);
         asm.shl_ri(regs::TMP0, 3);
         asm.mov_rr(regs::TMP3, regs::TMP1);
@@ -1899,25 +1864,27 @@ impl MicroOpJitCompiler {
         asm.shl_ri(regs::TMP0, 3);
         asm.add_rr(regs::TMP1, regs::TMP0);
 
-        // Load tag and payload
-        asm.mov_rm(regs::TMP2, regs::TMP1, 0);
-        asm.mov_rm(regs::TMP3, regs::TMP1, 8);
-        // Store to dst
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_tag_offset(dst), regs::TMP2);
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_payload_offset(dst), regs::TMP3);
+        // Load tag and payload from heap
+        asm.mov_rm(regs::TMP0, regs::TMP1, 0); // tag
+        asm.mov_rm(regs::TMP2, regs::TMP1, 8); // payload
+        // Store payload to frame, tag to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP2);
+        asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
         Ok(())
     }
 
     /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
+    /// Reads tag from shadow area (set by HeapLoad); stores tag+payload to heap.
     fn emit_heap_store2(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+        let shadow_off = self.shadow_tag_offset(src);
         let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Load value to store
-        asm.mov_rm(regs::TMP4, regs::FRAME_BASE, Self::vreg_tag_offset(src));
-        asm.mov_rm(regs::TMP5, regs::FRAME_BASE, Self::vreg_payload_offset(src));
+        // TMP4 = tag (from shadow), TMP5 = payload
+        asm.mov_rm(regs::TMP4, regs::FRAME_BASE, shadow_off);
+        asm.mov_rm(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
         // TMP2 = dynamic index
-        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_payload_offset(idx));
+        asm.mov_rm(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         // TMP0 = outer ref payload
-        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_payload_offset(obj));
+        asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         // TMP1 = heap_base
         asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
 
@@ -1934,7 +1901,7 @@ impl MicroOpJitCompiler {
         asm.add_rr(regs::TMP0, regs::TMP2);
         asm.shl_ri(regs::TMP0, 3);
         asm.add_rr(regs::TMP1, regs::TMP0);
-        // Store tag and payload
+        // Store tag and payload to heap
         asm.mov_mr(regs::TMP1, 0, regs::TMP4);
         asm.mov_mr(regs::TMP1, 8, regs::TMP5);
         Ok(())
