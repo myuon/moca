@@ -218,69 +218,57 @@ fun _ushr(a: int, b: int) -> int {
     return asm(a, b) -> i64 { __emit("I64ShrU"); };
 }
 
-fun _ryu_init_tables() -> int {
-    let t = __alloc_heap(122);
-    __heap_store(t, 0, 1); __heap_store(t, 1, 5); __heap_store(t, 2, 25);
-    __heap_store(t, 3, 125); __heap_store(t, 4, 625); __heap_store(t, 5, 3125);
-    __heap_store(t, 6, 15625); __heap_store(t, 7, 78125); __heap_store(t, 8, 390625);
-    __heap_store(t, 9, 1953125); __heap_store(t, 10, 9765625);
-    __heap_store(t, 11, 48828125); __heap_store(t, 12, 244140625);
-    __heap_store(t, 13, 1220703125); __heap_store(t, 14, 6103515625);
-    __heap_store(t, 15, 30517578125); __heap_store(t, 16, 152587890625);
-    __heap_store(t, 17, 762939453125); __heap_store(t, 18, 3814697265625);
-    __heap_store(t, 19, 19073486328125); __heap_store(t, 20, 95367431640625);
-    __heap_store(t, 21, 476837158203125); __heap_store(t, 22, 2384185791015625);
-    __heap_store(t, 23, 11920928955078125); __heap_store(t, 24, 59604644775390625);
-    __heap_store(t, 25, 298023223876953125);
-    __heap_store(t, 26, 0); __heap_store(t, 27, 1152921504606846976);
-    __heap_store(t, 28, 0); __heap_store(t, 29, 1490116119384765625);
-    __heap_store(t, 30, -8348190176440827810); __heap_store(t, 31, 1925929944387235853);
-    __heap_store(t, 32, 4611686018427387904); __heap_store(t, 33, 1244603055572228341);
-    __heap_store(t, 34, 5764607523034234880); __heap_store(t, 35, 1608814547684324678);
-    __heap_store(t, 36, -4571245012761118720); __heap_store(t, 37, 2079069489450364813);
-    __heap_store(t, 38, 7538076532543384870); __heap_store(t, 39, 1343258441691080898);
-    __heap_store(t, 40, -7220581618967330885); __heap_store(t, 41, 1735821744285404923);
-    __heap_store(t, 42, -462871200701666566); __heap_store(t, 43, 1122814971899498360);
-    __heap_store(t, 44, -578585949596264789); __heap_store(t, 45, 1451241230564497900);
-    __heap_store(t, 46, 9034175601856389702); __heap_store(t, 47, 1876046781852714957);
-    __heap_store(t, 48, 1067793323042722499); __heap_store(t, 49, 1213367002709820504);
-    __heap_store(t, 50, -7865664649425837375); __heap_store(t, 51, 1568474350624963821);
-    __heap_store(t, 52, 0); __heap_store(t, 53, 1152921504606846976);
-    __heap_store(t, 54, 6402373705728000); __heap_store(t, 55, 1262657080855249539);
-    __heap_store(t, 56, 7312459873072865071); __heap_store(t, 57, 1382718304758498738);
-    __heap_store(t, 58, -4694347530018119975); __heap_store(t, 59, 1514371272488768796);
-    __heap_store(t, 60, 1666656638849498849); __heap_store(t, 61, 1658505523744362717);
-    __heap_store(t, 62, 8369758071042432367); __heap_store(t, 63, 1816247459199399272);
-    __heap_store(t, 64, 3261960026815429028); __heap_store(t, 65, 1989166747966865588);
-    __heap_store(t, 66, 2380058509792882112); __heap_store(t, 67, 1091021389449498684);
-    __heap_store(t, 68, -2935838563418649107); __heap_store(t, 69, 1194432422949498957);
-    __heap_store(t, 70, -5765859789502667107); __heap_store(t, 71, 1307699768914898044);
-    __heap_store(t, 72, 5765860022775629440); __heap_store(t, 73, 1432164813926975917);
-    __heap_store(t, 74, -5003554827901093218); __heap_store(t, 75, 1569267160938389918);
-    __heap_store(t, 76, -9168009514513816717); __heap_store(t, 77, 1718585810662422655);
-    __heap_store(t, 78, 4706903218098498729); __heap_store(t, 79, 1881835668622222700);
-    __heap_store(t, 80, -3295319313456862707); __heap_store(t, 81, 1032317504907307879);
-    __heap_store(t, 82, 0); __heap_store(t, 83, 0);
-    __heap_store(t, 84, 0); __heap_store(t, 85, 0);
-    __heap_store(t, 86, 1073741824); __heap_store(t, 87, 1500076437);
-    __heap_store(t, 88, 1431655765); __heap_store(t, 89, 1448432917);
-    __heap_store(t, 90, 1431655509); __heap_store(t, 91, 2573811968);
-    __heap_store(t, 92, 1363759429); __heap_store(t, 93, 268451924);
-    __heap_store(t, 94, 1431650629); __heap_store(t, 95, 18874644);
-    __heap_store(t, 96, 1431655424); __heap_store(t, 97, 91510101);
-    __heap_store(t, 98, 335807508); __heap_store(t, 99, 1431650324);
-    __heap_store(t, 100, 16645); __heap_store(t, 101, 66560);
-    __heap_store(t, 102, 64);
-    __heap_store(t, 103, 1414808916); __heap_store(t, 104, 67458373);
-    __heap_store(t, 105, 268701696); __heap_store(t, 106, 4195348);
-    __heap_store(t, 107, 1073807360); __heap_store(t, 108, 1091917141);
-    __heap_store(t, 109, 1108); __heap_store(t, 110, 65604);
-    __heap_store(t, 111, 1073741824); __heap_store(t, 112, 1140850753);
-    __heap_store(t, 113, 1346716752); __heap_store(t, 114, 1431393621);
-    __heap_store(t, 115, 1414878485); __heap_store(t, 116, 1342521428);
-    __heap_store(t, 117, 1431654484); __heap_store(t, 118, 89473365);
-    __heap_store(t, 119, 0); __heap_store(t, 120, 0); __heap_store(t, 121, 0);
-    return t;
+fun _ryu_init_tables() -> array<int> {
+    return [
+        // POW5_TABLE[0..25]
+        1, 5, 25, 125, 625, 3125, 15625, 78125, 390625, 1953125,
+        9765625, 48828125, 244140625, 1220703125, 6103515625,
+        30517578125, 152587890625, 762939453125, 3814697265625,
+        19073486328125, 95367431640625, 476837158203125, 2384185791015625,
+        11920928955078125, 59604644775390625, 298023223876953125,
+        // DOUBLE_POW5_SPLIT2[26..51]: 13 pairs (lo, hi)
+        0, 1152921504606846976,
+        0, 1490116119384765625,
+        -8348190176440827810, 1925929944387235853,
+        4611686018427387904, 1244603055572228341,
+        5764607523034234880, 1608814547684324678,
+        -4571245012761118720, 2079069489450364813,
+        7538076532543384870, 1343258441691080898,
+        -7220581618967330885, 1735821744285404923,
+        -462871200701666566, 1122814971899498360,
+        -578585949596264789, 1451241230564497900,
+        9034175601856389702, 1876046781852714957,
+        1067793323042722499, 1213367002709820504,
+        -7865664649425837375, 1568474350624963821,
+        // DOUBLE_POW5_INV_SPLIT2[52..81]: 15 pairs (lo, hi)
+        0, 1152921504606846976,
+        6402373705728000, 1262657080855249539,
+        7312459873072865071, 1382718304758498738,
+        -4694347530018119975, 1514371272488768796,
+        1666656638849498849, 1658505523744362717,
+        8369758071042432367, 1816247459199399272,
+        3261960026815429028, 1989166747966865588,
+        2380058509792882112, 1091021389449498684,
+        -2935838563418649107, 1194432422949498957,
+        -5765859789502667107, 1307699768914898044,
+        5765860022775629440, 1432164813926975917,
+        -5003554827901093218, 1569267160938389918,
+        -9168009514513816717, 1718585810662422655,
+        4706903218098498729, 1881835668622222700,
+        -3295319313456862707, 1032317504907307879,
+        // POW5_OFFSETS[82..102]
+        0, 0, 0, 0,
+        1073741824, 1500076437, 1431655765, 1448432917,
+        1431655509, 2573811968, 1363759429, 268451924,
+        1431650629, 18874644, 1431655424, 91510101,
+        335807508, 1431650324, 16645, 66560, 64,
+        // POW5_INV_OFFSETS[103..121]
+        1414808916, 67458373, 268701696, 4195348,
+        1073807360, 1091917141, 1108, 65604,
+        1073741824, 1140850753, 1346716752, 1431393621,
+        1414878485, 1342521428, 1431654484, 89473365,
+        0, 0, 0
+    ];
 }
 
 fun _ryu_log10_pow2(e: int) -> int { return _ushr(e * 78913, 18); }
@@ -309,25 +297,25 @@ fun _ryu_u64_lt(a: int, b: int) -> bool {
     return a < b;
 }
 
-fun _ryu_compute_pow5(tbl: int, i: int, out: int) {
+fun _ryu_compute_pow5(tbl: array<int>, i: int, out: array<int>) {
     let base = i / 26;
     let base2 = base * 26;
     let offset = i - base2;
-    let mul_lo = __heap_load(tbl, 26 + base * 2);
-    let mul_hi = __heap_load(tbl, 26 + base * 2 + 1);
+    let mul_lo = tbl[26 + base * 2];
+    let mul_hi = tbl[26 + base * 2 + 1];
     if offset == 0 {
-        __heap_store(out, 0, mul_lo);
-        __heap_store(out, 1, mul_hi);
+        out[0] = mul_lo;
+        out[1] = mul_hi;
         return;
     }
-    let m = __heap_load(tbl, offset);
+    let m = tbl[offset];
     let b0_lo = m * mul_lo;
     let b0_hi = __umul128_hi(m, mul_lo);
     let b2_lo = m * mul_hi;
     let b2_hi = __umul128_hi(m, mul_hi);
     let delta = _ryu_pow5bits(i) - _ryu_pow5bits(base2);
     let s = 64 - delta;
-    let correction = _ushr(__heap_load(tbl, 82 + i / 16), (i % 16) * 2) & 3;
+    let correction = _ushr(tbl[82 + i / 16], (i % 16) * 2) & 3;
     let lo = _ushr(b0_lo, delta) | (b0_hi << s);
     let hi = _ushr(b0_hi, delta);
     let mid = b2_lo << s;
@@ -337,29 +325,29 @@ fun _ryu_compute_pow5(tbl: int, i: int, out: int) {
     let sum_lo2 = sum_lo + correction;
     if _ryu_u64_lt(sum_lo2, sum_lo) { carry = carry + 1; }
     let sum_hi = hi + (_ushr(b2_lo, delta) | (b2_hi << s)) + carry;
-    __heap_store(out, 0, sum_lo2);
-    __heap_store(out, 1, sum_hi);
+    out[0] = sum_lo2;
+    out[1] = sum_hi;
 }
 
-fun _ryu_compute_inv_pow5(tbl: int, i: int, out: int) {
+fun _ryu_compute_inv_pow5(tbl: array<int>, i: int, out: array<int>) {
     let base = (i + 25) / 26;
     let base2 = base * 26;
     let offset = base2 - i;
-    let mul_lo = __heap_load(tbl, 52 + base * 2);
-    let mul_hi = __heap_load(tbl, 52 + base * 2 + 1);
+    let mul_lo = tbl[52 + base * 2];
+    let mul_hi = tbl[52 + base * 2 + 1];
     if offset == 0 {
-        __heap_store(out, 0, mul_lo);
-        __heap_store(out, 1, mul_hi);
+        out[0] = mul_lo;
+        out[1] = mul_hi;
         return;
     }
-    let m = __heap_load(tbl, offset);
+    let m = tbl[offset];
     let b0_lo = m * (mul_lo - 1);
     let b0_hi = __umul128_hi(m, mul_lo - 1);
     let b2_lo = m * mul_hi;
     let b2_hi = __umul128_hi(m, mul_hi);
     let delta = _ryu_pow5bits(base2) - _ryu_pow5bits(i);
     let s = 64 - delta;
-    let correction = 1 + (_ushr(__heap_load(tbl, 103 + i / 16), (i % 16) * 2) & 3);
+    let correction = 1 + (_ushr(tbl[103 + i / 16], (i % 16) * 2) & 3);
     let lo = _ushr(b0_lo, delta) | (b0_hi << s);
     let hi = _ushr(b0_hi, delta);
     let mid = b2_lo << s;
@@ -369,8 +357,8 @@ fun _ryu_compute_inv_pow5(tbl: int, i: int, out: int) {
     let sum_lo2 = sum_lo + correction;
     if _ryu_u64_lt(sum_lo2, sum_lo) { carry = carry + 1; }
     let sum_hi = hi + (_ushr(b2_lo, delta) | (b2_hi << s)) + carry;
-    __heap_store(out, 0, sum_lo2);
-    __heap_store(out, 1, sum_hi);
+    out[0] = sum_lo2;
+    out[1] = sum_hi;
 }
 
 
@@ -408,7 +396,7 @@ fun _ryu_decimal_length17(v: int) -> int {
     return 1;
 }
 
-fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: int) {
+fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: array<int>) {
     let e2: int = 0;
     let m2: int = 0;
     if ieee_exponent == 0 {
@@ -433,7 +421,7 @@ fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: int) {
     let vr_is_trailing_zeros = false;
     let last_removed_digit = 0;
     let tbl = _ryu_init_tables();
-    let scratch = __alloc_heap(2);
+    let scratch: array<int> = [0, 0];
     if e2 >= 0 {
         let q = _ryu_log10_pow2(e2);
         if e2 > 3 { q = q - 1; }
@@ -441,8 +429,8 @@ fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: int) {
         let k = 125 + _ryu_pow5bits(q) - 1;
         let i = 0 - e2 + q + k;
         _ryu_compute_inv_pow5(tbl, q, scratch);
-        let mul_lo = __heap_load(scratch, 0);
-        let mul_hi = __heap_load(scratch, 1);
+        let mul_lo = scratch[0];
+        let mul_hi = scratch[1];
         vr = _ryu_mul_shift_64(mv, mul_lo, mul_hi, i);
         vp = _ryu_mul_shift_64(mp, mul_lo, mul_hi, i);
         vm = _ryu_mul_shift_64(mm, mul_lo, mul_hi, i);
@@ -463,8 +451,8 @@ fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: int) {
         let k = _ryu_pow5bits(i) - 125;
         let j = q - k;
         _ryu_compute_pow5(tbl, i, scratch);
-        let mul_lo = __heap_load(scratch, 0);
-        let mul_hi = __heap_load(scratch, 1);
+        let mul_lo = scratch[0];
+        let mul_hi = scratch[1];
         vr = _ryu_mul_shift_64(mv, mul_lo, mul_hi, j);
         vp = _ryu_mul_shift_64(mp, mul_lo, mul_hi, j);
         vm = _ryu_mul_shift_64(mm, mul_lo, mul_hi, j);
@@ -520,8 +508,8 @@ fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: int) {
         }
         if vr == vm || round_up { vr = vr + 1; }
     }
-    __heap_store(out, 0, vr);
-    __heap_store(out, 1, e10 + removed);
+    out[0] = vr;
+    out[1] = e10 + removed;
 }
 
 
@@ -580,10 +568,10 @@ fun _float_digit_count(f: float) -> int {
     let ieee_mant = bits & 4503599627370495;
     if ieee_exp == 0 && ieee_mant == 0 { return 3 + sign; }
     if ieee_exp == 2047 { return len(__float_to_string(f)); }
-    let scratch = __alloc_heap(2);
+    let scratch: array<int> = [0, 0];
     _ryu_d2d(ieee_mant, ieee_exp, scratch);
-    let mantissa = __heap_load(scratch, 0);
-    let exponent = __heap_load(scratch, 1);
+    let mantissa = scratch[0];
+    let exponent = scratch[1];
     let length = _ryu_decimal_length17(mantissa);
     let kk = length + exponent;
     if kk > -5 && kk <= 16 { return sign + _ryu_formatted_length(mantissa, exponent, length, kk); }
@@ -602,10 +590,10 @@ fun _float_write_to(buf: any, off: int, f: float) -> int {
         return pos + 3;
     }
     if ieee_exp == 2047 { return _str_copy_to(buf, off, __float_to_string(f)); }
-    let scratch = __alloc_heap(2);
+    let scratch: array<int> = [0, 0];
     _ryu_d2d(ieee_mant, ieee_exp, scratch);
-    let mantissa = __heap_load(scratch, 0);
-    let exponent = __heap_load(scratch, 1);
+    let mantissa = scratch[0];
+    let exponent = scratch[1];
     let length = _ryu_decimal_length17(mantissa);
     let kk = length + exponent;
     if kk > -5 && kk <= 16 { return _ryu_write_to(buf, off, mantissa, exponent, length, kk, sign); }
