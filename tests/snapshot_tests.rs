@@ -768,7 +768,7 @@ const PERF_MEASUREMENT_RUNS: usize = 3;
 #[cfg(feature = "jit")]
 fn rust_sum_loop<W: Write>(writer: &mut W) {
     let mut sum: i64 = 0;
-    for i in 1..=10_000_000 {
+    for i in 1..=70_000_000 {
         sum += i;
     }
     writeln!(writer, "{}", sum).unwrap();
@@ -894,7 +894,7 @@ fn rust_text_counting<W: Write>(writer: &mut W) {
     ];
     let mut counts = [0i64; 26];
 
-    for _ in 0..10000 {
+    for _ in 0..40000 {
         for &ch in text.iter() {
             let idx = rust_to_letter_index(ch);
             if idx >= 0 {
@@ -922,13 +922,13 @@ fn rust_text_counting<W: Write>(writer: &mut W) {
 fn rust_quicksort<W: Write>(writer: &mut W) {
     // Same LCG as moca _perf_lcg_next
     let mut seed: i64 = 42;
-    let mut v: Vec<i64> = Vec::with_capacity(10000);
-    for _ in 0..10000 {
+    let mut v: Vec<i64> = Vec::with_capacity(100000);
+    for _ in 0..100000 {
         seed = (seed * 1103515245 + 12345) % 2147483648;
         if seed < 0 {
             seed = -seed;
         }
-        v.push(seed % 10000);
+        v.push(seed % 100000);
     }
 
     v.sort();
@@ -950,7 +950,7 @@ fn rust_string_interpolation<W: Write>(writer: &mut W) {
     }
 
     let mut total: i64 = 0;
-    for i in 0..8000i64 {
+    for i in 0..100000i64 {
         let h = compute_val(i, i * 3 + 7);
         let s = i + h;
         let line = format!("item[{}]: hash={}, sum={}", i, h, s);
@@ -1073,12 +1073,12 @@ fn snapshot_performance() {
     // Test nested_loop with Rust reference
     let nested_loop_path = perf_dir.join("nested_loop.mc");
     run_performance_test(&nested_loop_path, |w| {
-        rust_nested_loop(std::hint::black_box(3000), w)
+        rust_nested_loop(std::hint::black_box(8000), w)
     });
 
     // Test mandelbrot with Rust reference
     let mandelbrot_path = perf_dir.join("mandelbrot.mc");
-    run_performance_test(&mandelbrot_path, |w| rust_mandelbrot(5000, w));
+    run_performance_test(&mandelbrot_path, |w| rust_mandelbrot(30000, w));
 
     // Test fibonacci with Rust reference
     let fibonacci_path = perf_dir.join("fibonacci.mc");
@@ -1089,7 +1089,7 @@ fn snapshot_performance() {
     // Test mutual recursion (is_even/is_odd) with Rust reference
     let mutual_recursion_path = perf_dir.join("mutual_recursion.mc");
     run_performance_test(&mutual_recursion_path, |w| {
-        rust_mutual_recursion(std::hint::black_box(20000), w)
+        rust_mutual_recursion(std::hint::black_box(160000), w)
     });
 
     // Test text character counting with Rust reference

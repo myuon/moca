@@ -15,7 +15,7 @@ fun compute_val(a: int, b: int) -> int {
 fun string_interp_bench() {
     let total = 0;
     let i = 0;
-    while i < 8000 {
+    while i < 100000 {
         let h = compute_val(i, i * 3 + 7);
         let s = i + h;
         let line = $"item[{i}]: hash={h}, sum={s}";

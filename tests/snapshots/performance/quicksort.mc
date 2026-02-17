@@ -1,4 +1,4 @@
-// Benchmark: quicksort 10000 random integers
+// Benchmark: quicksort 100000 random integers
 // Uses LCG for deterministic random number generation.
 
 // JIT-compilable: pure integer arithmetic LCG
@@ -12,13 +12,13 @@ fun _perf_lcg_next(seed: int) -> int {
 }
 
 fun quicksort_benchmark() {
-    // Generate 10000 random integers using LCG
+    // Generate 100000 random integers using LCG
     let v: Vec<int> = Vec<int> { ptr: 0, len: 0, cap: 0 };
     let seed = 42;
     let i = 0;
-    while i < 10000 {
+    while i < 100000 {
         seed = _perf_lcg_next(seed);
-        v.push(seed % 10000);
+        v.push(seed % 100000);
         i = i + 1;
     }
 
@@ -27,7 +27,7 @@ fun quicksort_benchmark() {
 
     // Print all sorted elements
     i = 0;
-    while i < 10000 {
+    while i < 100000 {
         print(v[i]);
         i = i + 1;
     }
