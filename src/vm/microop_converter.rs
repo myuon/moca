@@ -121,7 +121,13 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // Locals → direct VReg push / materialize-on-write
             // ============================================================
             Op::LocalGet(slot) => {
-                vstack.push(Vse::Reg(VReg(*slot)));
+                let vreg = VReg(*slot);
+                let vse = match func.local_types.get(*slot).copied() {
+                    Some(ValueType::F64) => Vse::RegF64(vreg),
+                    Some(ValueType::Ref) => Vse::RegRef(vreg),
+                    _ => Vse::Reg(vreg),
+                };
+                vstack.push(vse);
             }
             Op::LocalSet(slot) => {
                 let dst_local = VReg(*slot);
