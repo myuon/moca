@@ -205,6 +205,435 @@ fun _bool_write_to(buf: any, off: int, b: bool) -> int {
     __heap_store(buf, off + 4, 101);
     return off + 5;
 }
+// ============================================================================
+// Ryū Float-to-String Algorithm (small-table variant)
+// ============================================================================
+
+fun __float_bits(f: float) -> int {
+    return asm(f) -> i64 { __emit("F64ReinterpretAsI64"); };
+}
+
+fun _ushr(a: int, b: int) -> int {
+    return asm(a, b) -> i64 { __emit("I64ShrU"); };
+}
+
+fun _ryu_init_tables() -> any {
+    let t = __alloc_heap(122);
+    // POW5_TABLE[0..25]: 5^0 to 5^25
+    __heap_store(t,0,1); __heap_store(t,1,5); __heap_store(t,2,25);
+    __heap_store(t,3,125); __heap_store(t,4,625); __heap_store(t,5,3125);
+    __heap_store(t,6,15625); __heap_store(t,7,78125); __heap_store(t,8,390625);
+    __heap_store(t,9,1953125); __heap_store(t,10,9765625); __heap_store(t,11,48828125);
+    __heap_store(t,12,244140625); __heap_store(t,13,1220703125);
+    __heap_store(t,14,6103515625); __heap_store(t,15,30517578125);
+    __heap_store(t,16,152587890625); __heap_store(t,17,762939453125);
+    __heap_store(t,18,3814697265625); __heap_store(t,19,19073486328125);
+    __heap_store(t,20,95367431640625); __heap_store(t,21,476837158203125);
+    __heap_store(t,22,2384185791015625); __heap_store(t,23,11920928955078125);
+    __heap_store(t,24,59604644775390625); __heap_store(t,25,298023223876953125);
+    // POW5_SPLIT2[26..51]: 13 pairs (lo,hi) as signed i64
+    __heap_store(t,26,0); __heap_store(t,27,1152921504606846976);
+    __heap_store(t,28,-7223908370955425134); __heap_store(t,29,-8853848516026515162);
+    __heap_store(t,30,-3568635172189921753); __heap_store(t,31,-4189650263691053020);
+    __heap_store(t,32,3625398284769498014); __heap_store(t,33,3554688514096498024);
+    __heap_store(t,34,-1476679131561661624); __heap_store(t,35,5283433569277737076);
+    __heap_store(t,36,-7631735058311528466); __heap_store(t,37,7868525783428396486);
+    __heap_store(t,38,-8528876524004621755); __heap_store(t,39,-6740506994600123138);
+    __heap_store(t,40,4605455178938165498); __heap_store(t,41,-1027938213994559681);
+    __heap_store(t,42,6008075072439971914); __heap_store(t,43,7548553918904924084);
+    __heap_store(t,44,-4102637418172145158); __heap_store(t,45,-7213803641606926340);
+    __heap_store(t,46,7575759273815509908); __heap_store(t,47,-1722669030691053250);
+    __heap_store(t,48,-3970642069010055503); __heap_store(t,49,5927763005277732332);
+    __heap_store(t,50,-4956814764194052727); __heap_store(t,51,8825803476071960986);
+    // POW5_INV_SPLIT2[52..81]: 15 pairs (lo,hi)
+    __heap_store(t,52,1); __heap_store(t,53,2305843009213693952);
+    __heap_store(t,54,-2305843012971790335); __heap_store(t,55,-5567738156146622464);
+    __heap_store(t,56,-6213888201173885668); __heap_store(t,57,-1284516915195063296);
+    __heap_store(t,58,6201178692345082498); __heap_store(t,59,-4158559090945170261);
+    __heap_store(t,60,-7254225975262562077); __heap_store(t,61,8281667310765498833);
+    __heap_store(t,62,1769268654204451614); __heap_store(t,63,-6348055399953265118);
+    __heap_store(t,64,-6740456879318514219); __heap_store(t,65,-8398764997956605587);
+    __heap_store(t,66,7787833440655774722); __heap_store(t,67,-3579486043297582698);
+    __heap_store(t,68,-446534404210855534); __heap_store(t,69,8674744045498913886);
+    __heap_store(t,70,-6328951324179739042); __heap_store(t,71,-5573530969998930011);
+    __heap_store(t,72,-940830014496297276); __heap_store(t,73,-8875147563295688663);
+    __heap_store(t,74,2424738667735869803); __heap_store(t,75,-4231447285132330089);
+    __heap_store(t,76,-6001749366677147995); __heap_store(t,77,-7914990185705146028);
+    __heap_store(t,78,-3287316516557436360); __heap_store(t,79,7817993809479699388);
+    __heap_store(t,80,6137792018746498284); __heap_store(t,81,-6833333212945535978);
+    // POW5_OFFSETS[82..102]: 21 entries (u32 as i64)
+    __heap_store(t,82,0); __heap_store(t,83,0); __heap_store(t,84,0); __heap_store(t,85,0);
+    __heap_store(t,86,1073741824); __heap_store(t,87,1500076437);
+    __heap_store(t,88,1431590229); __heap_store(t,89,1452623188);
+    __heap_store(t,90,1431672137); __heap_store(t,91,2483306496);
+    __heap_store(t,92,1363432793); __heap_store(t,93,268789073);
+    __heap_store(t,94,1435849812); __heap_store(t,95,18911316);
+    __heap_store(t,96,1431388160); __heap_store(t,97,91640853);
+    __heap_store(t,98,335824208); __heap_store(t,99,1431371860);
+    __heap_store(t,100,4198405); __heap_store(t,101,1052672); __heap_store(t,102,64);
+    // POW5_INV_OFFSETS[103..121]: 19 entries (u32 as i64)
+    __heap_store(t,103,1414808916); __heap_store(t,104,67458373);
+    __heap_store(t,105,268780820); __heap_store(t,106,1431590229);
+    __heap_store(t,107,1620); __heap_store(t,108,1364284433);
+    __heap_store(t,109,1426412820); __heap_store(t,110,16389);
+    __heap_store(t,111,5325892); __heap_store(t,112,21);
+    __heap_store(t,113,16782672); __heap_store(t,114,256);
+    __heap_store(t,115,1077936388); __heap_store(t,116,65536);
+    __heap_store(t,117,256); __heap_store(t,118,0);
+    __heap_store(t,119,1409548288); __heap_store(t,120,65792); __heap_store(t,121,4096);
+    return t;
+}
+
+fun _ryu_ensure_tables() -> any {
+    return _ryu_init_tables();
+}
+
+fun _ryu_log10_pow2(e: int) -> int { return _ushr(e * 78913, 18); }
+fun _ryu_log10_pow5(e: int) -> int { return _ushr(e * 732923, 20); }
+fun _ryu_pow5bits(e: int) -> int { return _ushr(e * 1217359, 19) + 1; }
+
+fun _ryu_multiple_of_pow5(v: int, p: int) -> bool {
+    let val = v;
+    let i = 0;
+    while i < p {
+        if val - (val / 5) * 5 != 0 { return false; }
+        val = val / 5;
+        i = i + 1;
+    }
+    return true;
+}
+
+fun _ryu_multiple_of_pow2(v: int, p: int) -> bool {
+    return (v & ((1 << p) - 1)) == 0;
+}
+
+fun _ryu_mul_shift_64(m: int, mul_lo: int, mul_hi: int, j: int) -> int {
+    let hi1 = __umul128_hi(m, mul_hi);
+    let low1_hi = __umul128_hi(m, mul_lo);
+    let sum = low1_hi + (m * mul_hi);
+    // Unsigned carry detection
+    if _ushr(sum, 63) < _ushr(low1_hi, 63) {
+        hi1 = hi1 + 1;
+    } else if _ushr(sum, 63) == _ushr(low1_hi, 63) && sum != low1_hi {
+        if (sum & 9223372036854775807) < (low1_hi & 9223372036854775807) {
+            hi1 = hi1 + 1;
+        }
+    }
+    let shift = j - 64;
+    return _ushr(sum, shift) | (hi1 << (64 - shift));
+}
+
+fun _ryu_compute_pow5(tbl: any, i: int, out: any) -> int {
+    let base = i / 26;
+    let base2 = base * 2;
+    let offset = i - base * 26;
+    let mul_lo = __heap_load(tbl, 26 + base2);
+    let mul_hi = __heap_load(tbl, 27 + base2);
+    if offset == 0 {
+        __heap_store(out, 0, mul_lo);
+        __heap_store(out, 1, mul_hi);
+        return 0;
+    }
+    let m = __heap_load(tbl, offset);
+    let hi1 = __umul128_hi(m, mul_hi);
+    let tmp = __umul128_hi(m, mul_lo);
+    let mid = tmp + (m * mul_hi);
+    let carry = 0;
+    if _ushr(mid, 63) < _ushr(tmp, 63) {
+        carry = 1;
+    } else if _ushr(mid, 63) == _ushr(tmp, 63) && mid != tmp {
+        if (mid & 9223372036854775807) < (tmp & 9223372036854775807) {
+            carry = 1;
+        }
+    }
+    let result_hi = hi1 + carry;
+    let delta = _ryu_pow5bits(i) - _ryu_pow5bits(base * 26);
+    __heap_store(out, 0, _ushr(mid, delta) | (result_hi << (64 - delta)));
+    __heap_store(out, 1, _ushr(result_hi, delta));
+    return 0;
+}
+
+fun _ryu_compute_inv_pow5(tbl: any, i: int, out: any) -> int {
+    let base = (i + 25) / 26;
+    let base2 = base * 2;
+    let base_i = base * 26;
+    let offset = base_i - i;
+    let mul_lo = __heap_load(tbl, 52 + base2);
+    let mul_hi = __heap_load(tbl, 53 + base2);
+    if offset == 0 {
+        __heap_store(out, 0, mul_lo + 1);
+        __heap_store(out, 1, mul_hi);
+        return 0;
+    }
+    let m = __heap_load(tbl, offset);
+    let hi1 = __umul128_hi(m, mul_hi);
+    let tmp = __umul128_hi(m, mul_lo - 1);
+    let mid = tmp + (m * mul_hi);
+    let carry = 0;
+    if _ushr(mid, 63) < _ushr(tmp, 63) {
+        carry = 1;
+    } else if _ushr(mid, 63) == _ushr(tmp, 63) && mid != tmp {
+        if (mid & 9223372036854775807) < (tmp & 9223372036854775807) {
+            carry = 1;
+        }
+    }
+    let result_hi = hi1 + carry;
+    let delta = _ryu_pow5bits(base_i) - _ryu_pow5bits(i);
+    __heap_store(out, 0, (_ushr(mid, delta) | (result_hi << (64 - delta))) + 1);
+    __heap_store(out, 1, _ushr(result_hi, delta));
+    return 0;
+}
+
+fun _ryu_decimal_length17(v: int) -> int {
+    if v >= 10000000000000000 { return 17; }
+    if v >= 1000000000000000 { return 16; }
+    if v >= 100000000000000 { return 15; }
+    if v >= 10000000000000 { return 14; }
+    if v >= 1000000000000 { return 13; }
+    if v >= 100000000000 { return 12; }
+    if v >= 10000000000 { return 11; }
+    if v >= 1000000000 { return 10; }
+    if v >= 100000000 { return 9; }
+    if v >= 10000000 { return 8; }
+    if v >= 1000000 { return 7; }
+    if v >= 100000 { return 6; }
+    if v >= 10000 { return 5; }
+    if v >= 1000 { return 4; }
+    if v >= 100 { return 3; }
+    if v >= 10 { return 2; }
+    return 1;
+}
+
+// Core Ryū: IEEE 754 double → (mantissa, exponent) shortest representation
+fun _ryu_d2d(ieee_mantissa: int, ieee_exponent: int, out: any) -> int {
+    let tbl = _ryu_ensure_tables();
+    let e2 = 0;
+    let m2 = 0;
+    if ieee_exponent == 0 {
+        e2 = 1 - 1023 - 52;
+        m2 = ieee_mantissa;
+    } else {
+        e2 = ieee_exponent - 1023 - 52;
+        m2 = (1 << 52) | ieee_mantissa;
+    }
+    let even = (m2 & 1) == 0;
+    let accept_bounds = even;
+    let mv = m2 * 4;
+    let mm_shift = 0;
+    if ieee_mantissa != 0 || ieee_exponent <= 1 { mm_shift = 1; }
+    let mp = mv + 2;
+    let mm = mv - 1 - mm_shift;
+    let vr = 0;
+    let vp = 0;
+    let vm = 0;
+    let e10 = 0;
+    let vm_is_trailing = false;
+    let vr_is_trailing = false;
+    let last_removed_digit = 0;
+    let scratch = __alloc_heap(2);
+
+    if e2 >= 0 {
+        let q = _ryu_log10_pow2(e2);
+        if q > 21 { q = 21; }
+        e10 = q;
+        let k = 59 + _ryu_pow5bits(q) - 1;
+        let i = 0 - e2 + q + k;
+        _ryu_compute_inv_pow5(tbl, q, scratch);
+        let mul_lo = __heap_load(scratch, 0);
+        let mul_hi = __heap_load(scratch, 1);
+        vr = _ryu_mul_shift_64(mv, mul_lo, mul_hi, i);
+        vp = _ryu_mul_shift_64(mp, mul_lo, mul_hi, i);
+        vm = _ryu_mul_shift_64(mm, mul_lo, mul_hi, i);
+        if q <= 21 {
+            if mv - (mv / 5) * 5 == 0 {
+                vr_is_trailing = _ryu_multiple_of_pow5(mv, q);
+            } else if accept_bounds {
+                vm_is_trailing = _ryu_multiple_of_pow5(mm, q);
+            } else {
+                if _ryu_multiple_of_pow5(mp, q) {
+                    vp = vp - 1;
+                }
+            }
+        }
+    } else {
+        let q = _ryu_log10_pow5(0 - e2);
+        e10 = q + e2;
+        let i = 0 - e2 - q;
+        let k = _ryu_pow5bits(i) - 59;
+        let j = q - k;
+        _ryu_compute_pow5(tbl, i, scratch);
+        let mul_lo = __heap_load(scratch, 0);
+        let mul_hi = __heap_load(scratch, 1);
+        vr = _ryu_mul_shift_64(mv, mul_lo, mul_hi, j);
+        vp = _ryu_mul_shift_64(mp, mul_lo, mul_hi, j);
+        vm = _ryu_mul_shift_64(mm, mul_lo, mul_hi, j);
+        if q <= 1 {
+            vr_is_trailing = true;
+            if accept_bounds {
+                vm_is_trailing = (mm_shift == 1);
+            } else {
+                vp = vp - 1;
+            }
+        } else if q < 63 {
+            vr_is_trailing = _ryu_multiple_of_pow2(mv, q - 1);
+        }
+    }
+
+    // Step 4: find shortest
+    let removed = 0;
+    let output = vr;
+    if vm_is_trailing || vr_is_trailing {
+        // Loop: while vp/10 > vm/10
+        while vp / 10 > vm / 10 {
+            vm_is_trailing = vm_is_trailing && ((vm - (vm / 10) * 10) == 0);
+            vr_is_trailing = vr_is_trailing && (last_removed_digit == 0);
+            last_removed_digit = vr - (vr / 10) * 10;
+            vr = vr / 10;
+            vp = vp / 10;
+            vm = vm / 10;
+            removed = removed + 1;
+        }
+        if vm_is_trailing {
+            // Loop: while vm % 10 == 0
+            while (vm - (vm / 10) * 10) == 0 {
+                vr_is_trailing = vr_is_trailing && (last_removed_digit == 0);
+                last_removed_digit = vr - (vr / 10) * 10;
+                vr = vr / 10;
+                vp = vp / 10;
+                vm = vm / 10;
+                removed = removed + 1;
+            }
+        }
+        if vr_is_trailing && (last_removed_digit == 5) && ((vr & 1) == 0) {
+            last_removed_digit = 4;
+        }
+        output = vr;
+        if (vr == vm && !(accept_bounds && vm_is_trailing)) || last_removed_digit >= 5 {
+            output = output + 1;
+        }
+    } else {
+        let round_up = false;
+        // Loop: while vp/100 > vm/100
+        while vp / 100 > vm / 100 {
+            round_up = (vr - (vr / 100) * 100) >= 50;
+            vr = vr / 100;
+            vp = vp / 100;
+            vm = vm / 100;
+            removed = removed + 2;
+        }
+        // Loop: while vp/10 > vm/10
+        while vp / 10 > vm / 10 {
+            round_up = (vr - (vr / 10) * 10) >= 5;
+            vr = vr / 10;
+            vp = vp / 10;
+            vm = vm / 10;
+            removed = removed + 1;
+        }
+        output = vr;
+        if vr == vm || round_up {
+            output = output + 1;
+        }
+    }
+    __heap_store(out, 0, output);
+    __heap_store(out, 1, e10 + removed);
+    return 0;
+}
+
+// --- Float formatting ---
+fun _ryu_formatted_length(mantissa: int, exponent: int, olength: int, kk: int, sign: int) -> int {
+    if kk <= 0 { return sign + 2 + (0 - kk) + olength; }
+    if kk < olength { return sign + olength + 1; }
+    return sign + kk + 2;
+}
+
+fun _ryu_write_to(buf: any, off: int, mantissa: int, exponent: int, olength: int, kk: int, sign: int) -> int {
+    let pos = off;
+    if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
+    let digits = __alloc_heap(17);
+    let val = mantissa;
+    let i = olength - 1;
+    while i >= 0 {
+        __heap_store(digits, i, (val - (val / 10) * 10) + 48);
+        val = val / 10;
+        i = i - 1;
+    }
+    if kk <= 0 {
+        __heap_store(buf, pos, 48); __heap_store(buf, pos + 1, 46);
+        pos = pos + 2;
+        let z = 0;
+        while z < 0 - kk { __heap_store(buf, pos, 48); pos = pos + 1; z = z + 1; }
+        let j = 0;
+        while j < olength { __heap_store(buf, pos + j, __heap_load(digits, j)); j = j + 1; }
+        pos = pos + olength;
+    } else if kk < olength {
+        let j = 0;
+        while j < kk { __heap_store(buf, pos + j, __heap_load(digits, j)); j = j + 1; }
+        __heap_store(buf, pos + kk, 46);
+        j = kk;
+        while j < olength { __heap_store(buf, pos + j + 1, __heap_load(digits, j)); j = j + 1; }
+        pos = pos + olength + 1;
+    } else {
+        let j = 0;
+        while j < olength { __heap_store(buf, pos + j, __heap_load(digits, j)); j = j + 1; }
+        pos = pos + olength;
+        let z = 0;
+        while z < kk - olength { __heap_store(buf, pos, 48); pos = pos + 1; z = z + 1; }
+        __heap_store(buf, pos, 46); __heap_store(buf, pos + 1, 48);
+        pos = pos + 2;
+    }
+    return pos;
+}
+
+fun _float_digit_count(f: float) -> int {
+    let bits = __float_bits(f);
+    let sign = _ushr(bits, 63);
+    let ieee_exp = _ushr(bits, 52) & 2047;
+    let ieee_mant = bits & 4503599627370495;
+    if ieee_exp == 0 && ieee_mant == 0 { return 3 + sign; }
+    if ieee_exp == 2047 { return len(__float_to_string(f)); }
+    let scratch = __alloc_heap(2);
+    _ryu_d2d(ieee_mant, ieee_exp, scratch);
+    let mantissa = __heap_load(scratch, 0);
+    let exponent = __heap_load(scratch, 1);
+    let olength = _ryu_decimal_length17(mantissa);
+    let kk = olength + exponent;
+    if kk > -5 && kk <= 16 {
+        return _ryu_formatted_length(mantissa, exponent, olength, kk, sign);
+    }
+    return len(__float_to_string(f));
+}
+
+fun _float_write_to(buf: any, off: int, f: float) -> int {
+    let bits = __float_bits(f);
+    let sign = _ushr(bits, 63);
+    let ieee_exp = _ushr(bits, 52) & 2047;
+    let ieee_mant = bits & 4503599627370495;
+    if ieee_exp == 0 && ieee_mant == 0 {
+        let pos = off;
+        if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
+        __heap_store(buf, pos, 48); __heap_store(buf, pos + 1, 46); __heap_store(buf, pos + 2, 48);
+        return pos + 3;
+    }
+    if ieee_exp == 2047 { return _str_copy_to(buf, off, __float_to_string(f)); }
+    let scratch = __alloc_heap(2);
+    _ryu_d2d(ieee_mant, ieee_exp, scratch);
+    let mantissa = __heap_load(scratch, 0);
+    let exponent = __heap_load(scratch, 1);
+    let olength = _ryu_decimal_length17(mantissa);
+    let kk = olength + exponent;
+    if kk > -5 && kk <= 16 {
+        return _ryu_write_to(buf, off, mantissa, exponent, olength, kk, sign);
+    }
+    return _str_copy_to(buf, off, __float_to_string(f));
+}
+
+// Convert float to string using Ryū (with fallback for extreme values).
+fun _float_to_string_ryu(f: float) -> string {
+    let dcount = _float_digit_count(f);
+    let data = __alloc_heap(dcount);
+    _float_write_to(data, 0, f);
+    return __alloc_string(data, dcount);
+}
 
 // ============================================================================
 // Value to String Conversion
@@ -231,7 +660,7 @@ fun to_string(x: any) -> string {
         return _int_to_string(x);
     }
     if t == "float" {
-        return __float_to_string(x);
+        return _float_to_string_ryu(x);
     }
     if t == "bool" {
         if x {

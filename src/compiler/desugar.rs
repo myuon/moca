@@ -725,6 +725,7 @@ impl Desugar {
             Literal(String),
             String(String), // var name holding a string ref
             Int(String),    // var name holding an int
+            Float(String),  // var name holding a float
             Bool(String),   // var name holding a bool
             Nil,
         }
@@ -777,21 +778,15 @@ impl Desugar {
                             part_infos.push(PartInfo::String(var));
                         }
                         Some(Type::Float) => {
-                            // Pre-convert float to string: let _var = __float_to_string(expr);
+                            // Store float directly for _float_digit_count/_float_write_to
                             stmts.push(Statement::Let {
                                 name: var.clone(),
                                 type_annotation: None,
-                                init: Expr::Call {
-                                    callee: "__float_to_string".to_string(),
-                                    type_args: vec![],
-                                    args: vec![expr],
-                                    span,
-                                    inferred_type: Some(Type::String),
-                                },
+                                init: expr,
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::Float),
                             });
-                            part_infos.push(PartInfo::String(var));
+                            part_infos.push(PartInfo::Float(var));
                         }
                         _ => {
                             // Unknown type: fallback to to_string
@@ -850,6 +845,20 @@ impl Desugar {
                             name: var.clone(),
                             span,
                             inferred_type: Some(Type::Int),
+                        }],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+                PartInfo::Float(var) => {
+                    // _float_digit_count(var)
+                    len_parts.push(Expr::Call {
+                        callee: "_float_digit_count".to_string(),
+                        type_args: vec![],
+                        args: vec![Expr::Ident {
+                            name: var.clone(),
+                            span,
+                            inferred_type: Some(Type::Float),
                         }],
                         span,
                         inferred_type: Some(Type::Int),
@@ -997,6 +1006,24 @@ impl Desugar {
                                 name: var.clone(),
                                 span,
                                 inferred_type: Some(Type::Int),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+                PartInfo::Float(var) => {
+                    // _float_write_to(buf, off, var)
+                    Expr::Call {
+                        callee: "_float_write_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Ident {
+                                name: var.clone(),
+                                span,
+                                inferred_type: Some(Type::Float),
                             },
                         ],
                         span,

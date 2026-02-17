@@ -1723,12 +1723,12 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
                     let vb = self.stack[sb + b.0].as_i64().ok_or("expected integer")?;
-                    self.stack[sb + dst.0] = Value::I64(va << (vb as u32 & 63));
+                    self.stack[sb + dst.0] = Value::I64(va.wrapping_shl(vb as u32 & 63));
                 }
                 MicroOp::ShlI64Imm { dst, a, imm } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let va = self.stack[sb + a.0].as_i64().ok_or("expected integer")?;
-                    self.stack[sb + dst.0] = Value::I64(va << (imm as u32 & 63));
+                    self.stack[sb + dst.0] = Value::I64(va.wrapping_shl(imm as u32 & 63));
                 }
                 MicroOp::ShrI64 { dst, a, b } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -2236,7 +2236,7 @@ impl VM {
             Op::I64Shl => {
                 let b = self.pop_int()?;
                 let a = self.pop_int()?;
-                self.stack.push(Value::I64(a << (b as u32 & 63)));
+                self.stack.push(Value::I64(a.wrapping_shl(b as u32 & 63)));
             }
             Op::I64ShrS => {
                 let b = self.pop_int()?;
@@ -3088,7 +3088,7 @@ impl VM {
 
     fn add(&mut self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a + b)),
+            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a.wrapping_add(b))),
             (Value::F64(a), Value::F64(b)) => Ok(Value::F64(a + b)),
             (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 + b)),
             (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a + b as f64)),
@@ -3123,7 +3123,7 @@ impl VM {
 
     fn sub(&self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a - b)),
+            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a.wrapping_sub(b))),
             (Value::F64(a), Value::F64(b)) => Ok(Value::F64(a - b)),
             (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 - b)),
             (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a - b as f64)),
@@ -3133,7 +3133,7 @@ impl VM {
 
     fn mul(&self, a: Value, b: Value) -> Result<Value, String> {
         match (a, b) {
-            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a * b)),
+            (Value::I64(a), Value::I64(b)) => Ok(Value::I64(a.wrapping_mul(b))),
             (Value::F64(a), Value::F64(b)) => Ok(Value::F64(a * b)),
             (Value::I64(a), Value::F64(b)) => Ok(Value::F64(a as f64 * b)),
             (Value::F64(a), Value::I64(b)) => Ok(Value::F64(a * b as f64)),
