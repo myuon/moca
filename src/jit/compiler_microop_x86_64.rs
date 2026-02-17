@@ -53,8 +53,6 @@ pub struct MicroOpJitCompiler {
     self_func_index: usize,
     /// Number of locals in the function.
     self_locals_count: usize,
-    /// Already JIT-compiled functions: func_index → (entry_point_addr, total_regs).
-    compiled_functions: HashMap<usize, (u64, usize)>,
 }
 
 /// Kind of forward reference for patching.
@@ -79,7 +77,6 @@ impl MicroOpJitCompiler {
             total_regs: 0,
             self_func_index: 0,
             self_locals_count: 0,
-            compiled_functions: HashMap::new(),
         }
     }
 
@@ -89,9 +86,7 @@ impl MicroOpJitCompiler {
         converted: &ConvertedFunction,
         locals_count: usize,
         func_index: usize,
-        compiled_functions: HashMap<usize, (u64, usize)>,
     ) -> Result<CompiledCode, String> {
-        self.compiled_functions = compiled_functions;
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
@@ -958,6 +953,9 @@ impl MicroOpJitCompiler {
 
     // ==================== Call ====================
 
+    /// JitCallContext offset for jit_function_table pointer.
+    const JIT_FUNC_TABLE_OFFSET: i32 = 104;
+
     fn emit_call(
         &mut self,
         func_id: usize,
@@ -968,27 +966,47 @@ impl MicroOpJitCompiler {
             return self.emit_call_self(args, ret);
         }
 
-        // If callee is already JIT-compiled, emit a direct call with compile-time constants.
-        // Otherwise fall back to call_helper.
-        if let Some(&(entry_addr, total_regs)) = self.compiled_functions.get(&func_id) {
-            return self.emit_call_direct(entry_addr, total_regs, args, ret);
-        }
-
-        self.emit_call_via_helper(func_id, args, ret)
+        self.emit_call_via_table(func_id, args, ret)
     }
 
-    /// Emit a direct JIT→JIT call to a function whose entry point and frame size are known
-    /// at compile time. This avoids the overhead of going through call_helper.
-    fn emit_call_direct(
+    /// Emit a function call that looks up the callee in the JIT function table at runtime.
+    /// If the callee is compiled (entry != 0), calls it directly. Otherwise falls back to
+    /// call_helper.
+    fn emit_call_via_table(
         &mut self,
-        entry_addr: u64,
-        callee_total_regs: usize,
+        func_id: usize,
         args: &[VReg],
         ret: Option<&VReg>,
     ) -> Result<(), String> {
         let argc = args.len();
-        let frame_size = callee_total_regs * VALUE_SIZE as usize;
-        let frame_aligned = (frame_size + 15) & !15;
+        let table_entry_offset = (func_id * 16) as i32;
+
+        // Load entry_addr from function table
+        // TMP4 = table base, TMP5 = entry_addr
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.mov_rm(regs::TMP4, regs::VM_CTX, Self::JIT_FUNC_TABLE_OFFSET);
+            asm.mov_rm(regs::TMP5, regs::TMP4, table_entry_offset);
+            asm.test_rr(regs::TMP5, regs::TMP5);
+        }
+
+        // jz slow_path (will patch offset later)
+        let jz_site = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.je_rel32(0); // placeholder
+        }
+
+        // === Fast path: direct call via table ===
+        // Load total_regs from table, compute frame size
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // TMP4 still has table base
+            asm.mov_rm(regs::TMP4, regs::TMP4, table_entry_offset + 8); // total_regs
+            asm.shl_ri(regs::TMP4, 4); // * 16 (VALUE_SIZE)
+            asm.add_ri32(regs::TMP4, 15);
+            asm.and_ri32(regs::TMP4, -16); // 16-byte align → TMP4 = frame_aligned
+        }
 
         // Save callee-saved registers
         {
@@ -997,15 +1015,17 @@ impl MicroOpJitCompiler {
             asm.push(regs::FRAME_BASE);
         }
 
-        // Allocate frame on native stack
-        if frame_aligned > 0 {
+        // Allocate frame + save frame_aligned (push twice to maintain 16-byte alignment)
+        {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.sub_ri32(Reg::Rsp, frame_aligned as i32);
+            asm.sub_rr(Reg::Rsp, regs::TMP4); // allocate frame
+            asm.push(regs::TMP4); // save frame_aligned for dealloc
+            asm.push(regs::TMP4); // padding to keep 16-byte alignment
         }
 
-        // Copy args from current frame to new frame on stack
+        // Copy args from caller frame to new frame on stack (at RSP+16, past 2 pushed values)
         for (i, arg) in args.iter().enumerate().take(argc) {
-            let new_tag_offset = (i * VALUE_SIZE as usize) as i32;
+            let new_tag_offset = (i * VALUE_SIZE as usize) as i32 + 16;
             let new_payload_offset = new_tag_offset + 8;
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_rm(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
@@ -1014,25 +1034,27 @@ impl MicroOpJitCompiler {
             asm.mov_mr(Reg::Rsp, new_payload_offset, regs::TMP0);
         }
 
-        // Set up arguments: RDI=ctx, RSI=new_frame(rsp), RDX=unused
+        // Set up arguments: RDI=ctx, RSI=new_frame(rsp+16), RDX=unused
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
             asm.mov_rr(Reg::Rdi, regs::VM_CTX);
             asm.mov_rr(Reg::Rsi, Reg::Rsp);
-            asm.mov_rr(Reg::Rdx, Reg::Rsp); // unused but match signature
+            asm.add_ri32(Reg::Rsi, 16); // skip 2 saved values
+            asm.mov_rr(Reg::Rdx, Reg::Rsi);
         }
 
-        // Load entry point as immediate into R11 and call
+        // Call via TMP5 (entry_addr loaded earlier)
         {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.mov_ri64(Reg::R11, entry_addr as i64);
-            asm.call_r(Reg::R11);
+            asm.call_r(regs::TMP5);
         }
 
         // Deallocate frame
-        if frame_aligned > 0 {
+        {
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            asm.add_ri32(Reg::Rsp, frame_aligned as i32);
+            asm.pop(regs::TMP4); // discard padding
+            asm.pop(regs::TMP4); // restore frame_aligned
+            asm.add_rr(Reg::Rsp, regs::TMP4); // deallocate frame
         }
 
         // Restore callee-saved
@@ -1053,17 +1075,15 @@ impl MicroOpJitCompiler {
             );
         }
 
-        Ok(())
-    }
+        // jmp done (skip slow path)
+        let jmp_done_site = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0); // placeholder
+        }
 
-    /// Emit a call to a function through call_helper (slow path for non-JIT-compiled callees).
-    fn emit_call_via_helper(
-        &mut self,
-        func_id: usize,
-        args: &[VReg],
-        ret: Option<&VReg>,
-    ) -> Result<(), String> {
-        let argc = args.len();
+        // === Slow path: call_helper ===
+        let slow_path_offset = self.buf.len();
 
         // Allocate space on native stack for args array
         let args_size = argc * VALUE_SIZE as usize;
@@ -1131,6 +1151,24 @@ impl MicroOpJitCompiler {
                 Self::vreg_payload_offset(ret_vreg),
                 Reg::Rdx,
             );
+        }
+
+        let done_offset = self.buf.len();
+
+        // Patch jz → slow_path
+        {
+            // je_rel32 is 6 bytes: 0F 84 xx xx xx xx; rel32 is at offset+2
+            let rel = (slow_path_offset as i32) - (jz_site as i32 + 6);
+            let bytes = rel.to_le_bytes();
+            self.buf.code_mut()[jz_site + 2..jz_site + 6].copy_from_slice(&bytes);
+        }
+
+        // Patch jmp → done
+        {
+            // jmp_rel32 is 5 bytes: E9 xx xx xx xx; rel32 is at offset+1
+            let rel = (done_offset as i32) - (jmp_done_site as i32 + 5);
+            let bytes = rel.to_le_bytes();
+            self.buf.code_mut()[jmp_done_site + 1..jmp_done_site + 5].copy_from_slice(&bytes);
         }
 
         Ok(())

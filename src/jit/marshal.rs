@@ -202,6 +202,10 @@ pub struct JitCallContext {
     /// HeapAllocTyped helper: (ctx, data_ref_payload, len_payload, kind) -> JitReturn (returns Ref)
     pub heap_alloc_typed_helper:
         unsafe extern "C" fn(*mut JitCallContext, u64, u64, u64) -> JitReturn,
+    /// Pointer to JIT function table for direct call dispatch.
+    /// Layout: [entry_0, total_regs_0, entry_1, total_regs_1, ...] (u64 pairs).
+    /// entry == 0 means the function is not yet JIT-compiled.
+    pub jit_function_table: *const u64,
 }
 
 /// Type signature for call helper function.

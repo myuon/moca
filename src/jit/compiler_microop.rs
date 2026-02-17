@@ -54,9 +54,6 @@ pub struct MicroOpJitCompiler {
     self_func_index: usize,
     /// Number of locals in the function.
     self_locals_count: usize,
-    /// Already JIT-compiled functions: func_index → (entry_point_addr, total_regs).
-    /// Used to generate direct calls instead of going through call_helper.
-    compiled_functions: HashMap<usize, (u64, usize)>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -69,7 +66,6 @@ impl MicroOpJitCompiler {
             total_regs: 0,
             self_func_index: 0,
             self_locals_count: 0,
-            compiled_functions: HashMap::new(),
         }
     }
 
@@ -79,9 +75,7 @@ impl MicroOpJitCompiler {
         converted: &ConvertedFunction,
         locals_count: usize,
         func_index: usize,
-        compiled_functions: HashMap<usize, (u64, usize)>,
     ) -> Result<CompiledCode, String> {
-        self.compiled_functions = compiled_functions;
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
@@ -781,27 +775,47 @@ impl MicroOpJitCompiler {
             return self.emit_call_self(args, ret);
         }
 
-        // If callee is already JIT-compiled, emit a direct call with compile-time constants.
-        // Otherwise fall back to call_helper.
-        if let Some(&(entry_addr, total_regs)) = self.compiled_functions.get(&func_id) {
-            return self.emit_call_direct(entry_addr, total_regs, args, ret);
-        }
-
-        self.emit_call_via_helper(func_id, args, ret)
+        self.emit_call_via_table(func_id, args, ret)
     }
 
-    /// Emit a direct JIT→JIT call to a function whose entry point and frame size are known
-    /// at compile time. This avoids the overhead of going through call_helper.
-    fn emit_call_direct(
+    /// JitCallContext offset for jit_function_table pointer.
+    const JIT_FUNC_TABLE_OFFSET: u16 = 104;
+
+    /// Emit a function call that looks up the callee in the JIT function table at runtime.
+    /// If the callee is compiled (entry != 0), calls it directly. Otherwise falls back to
+    /// call_helper.
+    fn emit_call_via_table(
         &mut self,
-        entry_addr: u64,
-        callee_total_regs: usize,
+        func_id: usize,
         args: &[VReg],
         ret: Option<&VReg>,
     ) -> Result<(), String> {
         let argc = args.len();
-        let frame_size = callee_total_regs * VALUE_SIZE as usize;
-        let frame_aligned = (frame_size + 15) & !15;
+        let table_entry_offset = (func_id * 16) as u16;
+
+        // Load entry_addr from function table
+        // TMP4 = table base, TMP5 = entry_addr
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::VM_CTX, Self::JIT_FUNC_TABLE_OFFSET);
+            asm.ldr(regs::TMP5, regs::TMP4, table_entry_offset);
+        }
+
+        // cbz TMP5, slow_path (will patch offset later)
+        let cbz_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.cbz(regs::TMP5, 0); // placeholder
+        }
+
+        // === Fast path: direct call via table ===
+        // Load total_regs from table, compute frame size
+        // total_regs * 16 is always 16-byte aligned (VALUE_SIZE=16)
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP4, regs::TMP4, table_entry_offset + 8); // total_regs
+            asm.lsl_imm(regs::TMP4, regs::TMP4, 4); // * 16 → frame_aligned
+        }
 
         // Save callee-saved registers
         {
@@ -810,16 +824,17 @@ impl MicroOpJitCompiler {
             asm.stp_pre(Reg::X21, Reg::X22, -16);
         }
 
-        // Allocate frame on native stack
-        if frame_aligned > 0 {
+        // Allocate frame + save frame_aligned (TMP4) on stack
+        {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.sub_imm(Reg::Sp, Reg::Sp, frame_aligned as u16);
+            asm.sub(Reg::Sp, Reg::Sp, regs::TMP4); // allocate frame
+            asm.stp_pre(regs::TMP4, regs::TMP4, -16); // save frame_aligned (use stp pair padding)
         }
 
-        // Copy args from current frame to new frame on stack
+        // Copy args from caller frame to new frame on stack (at SP+16, past saved TMP4 pair)
         for i in 0..argc {
             let arg = &args[i];
-            let new_tag_offset = (i * VALUE_SIZE as usize) as u16;
+            let new_tag_offset = (i * VALUE_SIZE as usize) as u16 + 16;
             let new_payload_offset = new_tag_offset + 8;
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_tag_offset(arg));
@@ -828,25 +843,25 @@ impl MicroOpJitCompiler {
             asm.str(regs::TMP0, Reg::Sp, new_payload_offset);
         }
 
-        // Set up arguments: x0=ctx, x1=new_frame(sp), x2=unused
+        // Set up arguments: x0=ctx, x1=new_frame(sp+16), x2=unused
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.mov(Reg::X0, regs::VM_CTX);
-            asm.mov(Reg::X1, Reg::Sp); // new frame base
-            asm.mov(Reg::X2, Reg::Sp); // unused but match signature
+            asm.add_imm(Reg::X1, Reg::Sp, 16); // skip saved frame_aligned pair
+            asm.mov(Reg::X2, Reg::X1);
         }
 
-        // Load entry point as immediate into TMP4 and call
-        self.emit_load_imm64(entry_addr as i64, regs::TMP4);
+        // Call via TMP5 (entry_addr loaded earlier)
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.blr(regs::TMP4);
+            asm.blr(regs::TMP5);
         }
 
         // Deallocate frame
-        if frame_aligned > 0 {
+        {
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.add_imm(Reg::Sp, Reg::Sp, frame_aligned as u16);
+            asm.ldp_post(regs::TMP4, regs::TMP0, 16); // restore frame_aligned (TMP0 is padding)
+            asm.add(Reg::Sp, Reg::Sp, regs::TMP4); // deallocate frame
         }
 
         // Restore callee-saved
@@ -867,17 +882,15 @@ impl MicroOpJitCompiler {
             );
         }
 
-        Ok(())
-    }
+        // b done (skip slow path, will patch offset later)
+        let b_done_pos = self.buf.len();
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b(0); // placeholder
+        }
 
-    /// Emit a call to a function through call_helper (slow path for non-JIT-compiled callees).
-    fn emit_call_via_helper(
-        &mut self,
-        func_id: usize,
-        args: &[VReg],
-        ret: Option<&VReg>,
-    ) -> Result<(), String> {
-        let argc = args.len();
+        // === Slow path: call_helper ===
+        let slow_path_start = self.buf.len();
 
         // Allocate space on native stack for args array
         let args_size = argc * VALUE_SIZE as usize;
@@ -939,7 +952,7 @@ impl MicroOpJitCompiler {
             asm.add_imm(Reg::Sp, Reg::Sp, args_aligned as u16);
         }
 
-        // Store return value (x0=tag, x1=payload) into ret vreg
+        // Store return value (x0=tag, x1=payload)
         if let Some(ret_vreg) = ret {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.str(Reg::X0, regs::FRAME_BASE, Self::vreg_tag_offset(ret_vreg));
@@ -948,6 +961,30 @@ impl MicroOpJitCompiler {
                 regs::FRAME_BASE,
                 Self::vreg_payload_offset(ret_vreg),
             );
+        }
+
+        let done_pos = self.buf.len();
+
+        // Patch cbz → slow_path
+        {
+            let offset = (slow_path_start as i32 - cbz_pos as i32) / 4;
+            let code = self.buf.code_mut();
+            let inst = u32::from_le_bytes([
+                code[cbz_pos],
+                code[cbz_pos + 1],
+                code[cbz_pos + 2],
+                code[cbz_pos + 3],
+            ]);
+            let patched = (inst & 0xFF00001F) | (((offset as u32) & 0x7FFFF) << 5);
+            code[cbz_pos..cbz_pos + 4].copy_from_slice(&patched.to_le_bytes());
+        }
+
+        // Patch b → done
+        {
+            let offset = (done_pos as i32 - b_done_pos as i32) / 4;
+            let code = self.buf.code_mut();
+            let patched = 0x14000000u32 | ((offset as u32) & 0x03FFFFFF);
+            code[b_done_pos..b_done_pos + 4].copy_from_slice(&patched.to_le_bytes());
         }
 
         Ok(())

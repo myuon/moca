@@ -16,6 +16,8 @@ use crate::jit::compiler_microop_x86_64::MicroOpJitCompiler;
 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
 use crate::jit::compiler_x86_64::{CompiledCode, CompiledLoop};
 #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+use crate::jit::function_table::JitFunctionTable;
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
 use crate::jit::marshal::{JitCallContext, JitContext, JitReturn, JitValue};
 
 /// A call frame for the VM.
@@ -105,6 +107,9 @@ pub struct VM {
     jit_functions: HashMap<usize, CompiledCode>,
     /// Number of JIT compilations performed
     jit_compile_count: usize,
+    /// Function table for JIT direct call dispatch
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+    jit_function_table: JitFunctionTable,
     /// Output stream for print statements (stdout)
     output: Box<dyn Write>,
     /// Output stream for stderr
@@ -195,6 +200,8 @@ impl VM {
             #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_functions: HashMap::new(),
             jit_compile_count: 0,
+            #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+            jit_function_table: JitFunctionTable::new(0),
             output,
             stderr,
             file_descriptors: HashMap::new(),
@@ -371,26 +378,12 @@ impl VM {
             return; // Already compiled
         }
 
-        // Build map of already-compiled functions for direct call generation.
-        let compiled_fns: HashMap<usize, (u64, usize)> = self
-            .jit_functions
-            .iter()
-            .map(|(&idx, compiled)| {
-                let entry: unsafe extern "C" fn(
-                    *mut u8,
-                    *mut JitValue,
-                    *mut JitValue,
-                ) -> JitReturn = unsafe { compiled.entry_point() };
-                (idx, (entry as usize as u64, compiled.total_regs))
-            })
-            .collect();
-
         // Convert to MicroOp IR first
         use super::microop_converter;
         let converted = microop_converter::convert(func);
 
         let compiler = MicroOpJitCompiler::new();
-        match compiler.compile(&converted, func.locals_count, func_index, compiled_fns) {
+        match compiler.compile(&converted, func.locals_count, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -399,6 +392,17 @@ impl VM {
                         compiled.memory.size()
                     );
                 }
+                // Update function table with entry point for direct call dispatch
+                let entry: unsafe extern "C" fn(
+                    *mut u8,
+                    *mut JitValue,
+                    *mut JitValue,
+                ) -> JitReturn = unsafe { compiled.entry_point() };
+                self.jit_function_table.update(
+                    func_index,
+                    entry as usize as u64,
+                    compiled.total_regs,
+                );
                 self.jit_functions.insert(func_index, compiled);
                 self.jit_compile_count += 1;
             }
@@ -424,26 +428,12 @@ impl VM {
             return; // Already compiled
         }
 
-        // Build map of already-compiled functions for direct call generation.
-        let compiled_fns: HashMap<usize, (u64, usize)> = self
-            .jit_functions
-            .iter()
-            .map(|(&idx, compiled)| {
-                let entry: unsafe extern "C" fn(
-                    *mut u8,
-                    *mut JitValue,
-                    *mut JitValue,
-                ) -> JitReturn = unsafe { compiled.entry_point() };
-                (idx, (entry as usize as u64, compiled.total_regs))
-            })
-            .collect();
-
         // Convert to MicroOp IR first
         use super::microop_converter;
         let converted = microop_converter::convert(func);
 
         let compiler = MicroOpJitCompiler::new();
-        match compiler.compile(&converted, func.locals_count, func_index, compiled_fns) {
+        match compiler.compile(&converted, func.locals_count, func_index) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -452,6 +442,17 @@ impl VM {
                         compiled.memory.size()
                     );
                 }
+                // Update function table with entry point for direct call dispatch
+                let entry: unsafe extern "C" fn(
+                    *mut u8,
+                    *mut JitValue,
+                    *mut JitValue,
+                ) -> JitReturn = unsafe { compiled.entry_point() };
+                self.jit_function_table.update(
+                    func_index,
+                    entry as usize as u64,
+                    compiled.total_regs,
+                );
                 self.jit_functions.insert(func_index, compiled);
                 self.jit_compile_count += 1;
             }
@@ -667,6 +668,7 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            jit_function_table: self.jit_function_table.base_ptr(),
         };
 
         // Execute the JIT loop code
@@ -767,6 +769,7 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            jit_function_table: self.jit_function_table.base_ptr(),
         };
 
         // Execute the JIT loop code
@@ -866,6 +869,7 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            jit_function_table: self.jit_function_table.base_ptr(),
         };
 
         // Execute the JIT code
@@ -947,6 +951,7 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            jit_function_table: self.jit_function_table.base_ptr(),
         };
 
         // Execute the JIT code
@@ -989,6 +994,11 @@ impl VM {
         self.init_call_counts(chunk);
         // Initialize string constant cache
         self.init_string_cache(chunk);
+        // Initialize JIT function table
+        #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+        {
+            self.jit_function_table = JitFunctionTable::new(chunk.functions.len());
+        }
 
         // Start with main
         self.frames.push(Frame {
@@ -1124,6 +1134,10 @@ impl VM {
         // Initialize (same as run())
         self.init_call_counts(chunk);
         self.init_string_cache(chunk);
+        #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
+        {
+            self.jit_function_table = JitFunctionTable::new(chunk.functions.len());
+        }
 
         // Lazy conversion cache: indexed by func_index
         let mut func_cache: Vec<Option<ConvertedFunction>> = vec![None; chunk.functions.len()];
