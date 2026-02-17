@@ -166,6 +166,8 @@ impl MicroOpJitCompiler {
                 | MicroOp::HeapLoad2 { dst, .. }
                 | MicroOp::StackPop { dst }
                 | MicroOp::FloatToString { dst, .. }
+                | MicroOp::FloatDigitCount { dst, .. }
+                | MicroOp::FloatWriteTo { dst, .. }
                 | MicroOp::PrintDebug { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
                 | MicroOp::HeapAllocTyped { dst, .. }
@@ -576,6 +578,13 @@ impl MicroOpJitCompiler {
             // String operations
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
+            MicroOp::FloatDigitCount { dst, src } => self.emit_float_digit_count(dst, src),
+            MicroOp::FloatWriteTo {
+                dst,
+                buf,
+                offset,
+                src,
+            } => self.emit_float_write_to(dst, buf, offset, src),
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
             // Heap allocation operations
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
@@ -918,7 +927,7 @@ impl MicroOpJitCompiler {
     // ==================== Call ====================
 
     /// JitCallContext offset for jit_function_table pointer.
-    const JIT_FUNC_TABLE_OFFSET: i32 = 104;
+    const JIT_FUNC_TABLE_OFFSET: i32 = 120;
 
     fn emit_call(
         &mut self,
@@ -1613,6 +1622,58 @@ impl MicroOpJitCompiler {
         asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(src));
         // Load float_to_string_helper from JitCallContext offset 72
         asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result: payload (RDX) to frame, tag (RAX) to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
+        Ok(())
+    }
+
+    /// Emit FloatDigitCount: call float_digit_count_helper(ctx, float_payload) -> (tag, payload)
+    fn emit_float_digit_count(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let dst_shadow_off = self.shadow_tag_offset(dst);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=float_payload
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_offset(src));
+        // Load float_digit_count_helper from JitCallContext offset 104
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 104);
+        asm.call_r(regs::TMP4);
+        // Restore callee-saved
+        asm.pop(regs::FRAME_BASE);
+        asm.pop(regs::VM_CTX);
+        // Store result: payload (RDX) to frame, tag (RAX) to shadow
+        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
+        Ok(())
+    }
+
+    /// Emit FloatWriteTo: call float_write_to_helper(ctx, buf_payload, offset, float_payload) -> (tag, payload)
+    fn emit_float_write_to(
+        &mut self,
+        dst: &VReg,
+        buf: &VReg,
+        offset: &VReg,
+        src: &VReg,
+    ) -> Result<(), String> {
+        let dst_shadow_off = self.shadow_tag_offset(dst);
+        let mut asm = X86_64Assembler::new(&mut self.buf);
+        // Save callee-saved
+        asm.push(regs::VM_CTX);
+        asm.push(regs::FRAME_BASE);
+        // Args: RDI=ctx, RSI=buf_ref_payload, RDX=offset, RCX=float_payload
+        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_offset(buf));
+        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(offset));
+        asm.mov_rm(Reg::Rcx, regs::FRAME_BASE, Self::vreg_offset(src));
+        // Load float_write_to_helper from JitCallContext offset 112
+        asm.mov_rm(regs::TMP4, regs::VM_CTX, 112);
         asm.call_r(regs::TMP4);
         // Restore callee-saved
         asm.pop(regs::FRAME_BASE);

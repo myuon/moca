@@ -2566,6 +2566,30 @@ impl TypeChecker {
                 }
                 Some(Type::String)
             }
+            "_float_digit_count" => {
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        "_float_digit_count expects 1 argument",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Int)
+            }
+            "_float_write_to" => {
+                if args.len() != 3 {
+                    self.errors.push(TypeError::new(
+                        "_float_write_to expects 3 arguments (buf, offset, float)",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Int)
+            }
             "parse_int" => {
                 if args.len() != 1 {
                     self.errors

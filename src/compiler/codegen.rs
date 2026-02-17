@@ -157,7 +157,9 @@ impl Codegen {
             ResolvedExpr::AssociatedFunctionCall { .. } => ValueType::Ref,
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
-                "len" | "argc" | "parse_int" => ValueType::I64,
+                "len" | "argc" | "parse_int" | "_float_digit_count" | "_float_write_to" => {
+                    ValueType::I64
+                }
                 "type_of" | "__float_to_string" | "channel" | "recv" | "argv" | "args"
                 | "__alloc_heap" | "__alloc_string" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
@@ -1013,6 +1015,25 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::FloatToString);
+                    }
+                    "_float_digit_count" => {
+                        if args.len() != 1 {
+                            return Err("_float_digit_count takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::FloatDigitCount);
+                    }
+                    "_float_write_to" => {
+                        if args.len() != 3 {
+                            return Err(
+                                "_float_write_to takes exactly 3 arguments (buf, offset, float)"
+                                    .to_string(),
+                            );
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        self.compile_expr(&args[1], ops)?;
+                        self.compile_expr(&args[2], ops)?;
+                        ops.push(Op::FloatWriteTo);
                     }
                     "parse_int" => {
                         if args.len() != 1 {

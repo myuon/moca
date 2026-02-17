@@ -386,6 +386,8 @@ impl MicroOpJitCompiler {
                 | MicroOp::HeapLoad2 { dst, .. }
                 | MicroOp::StackPop { dst }
                 | MicroOp::FloatToString { dst, .. }
+                | MicroOp::FloatDigitCount { dst, .. }
+                | MicroOp::FloatWriteTo { dst, .. }
                 | MicroOp::PrintDebug { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
                 | MicroOp::HeapAllocTyped { dst, .. }
@@ -549,6 +551,13 @@ impl MicroOpJitCompiler {
             // String operations
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
+            MicroOp::FloatDigitCount { dst, src } => self.emit_float_digit_count(dst, src),
+            MicroOp::FloatWriteTo {
+                dst,
+                buf,
+                offset,
+                src,
+            } => self.emit_float_write_to(dst, buf, offset, src),
             MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
             // Heap allocation operations
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
@@ -926,7 +935,7 @@ impl MicroOpJitCompiler {
     }
 
     /// JitCallContext offset for jit_function_table pointer.
-    const JIT_FUNC_TABLE_OFFSET: u16 = 104;
+    const JIT_FUNC_TABLE_OFFSET: u16 = 120;
 
     /// Emit a function call that looks up the callee in the JIT function table at runtime.
     /// If the callee is compiled (entry != 0), calls it directly. Otherwise falls back to
@@ -1825,6 +1834,54 @@ impl MicroOpJitCompiler {
             asm.ldr(Reg::X1, regs::FRAME_BASE, src_shadow_off);
             asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_offset(src));
             asm.ldr(regs::TMP4, regs::VM_CTX, 72);
+            asm.blr(regs::TMP4);
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+            // Store payload to frame, tag to shadow
+            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(dst));
+            asm.str(Reg::X0, regs::FRAME_BASE, dst_shadow_off);
+        }
+        Ok(())
+    }
+
+    /// Emit FloatDigitCount: call float_digit_count_helper(ctx, float_payload) -> (tag, payload)
+    fn emit_float_digit_count(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+        let dst_shadow_off = self.shadow_tag_offset(dst);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            asm.mov(Reg::X0, regs::VM_CTX);
+            // X1 = float payload (raw bits)
+            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(src));
+            asm.ldr(regs::TMP4, regs::VM_CTX, 104);
+            asm.blr(regs::TMP4);
+            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
+            // Store payload to frame, tag to shadow
+            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(dst));
+            asm.str(Reg::X0, regs::FRAME_BASE, dst_shadow_off);
+        }
+        Ok(())
+    }
+
+    /// Emit FloatWriteTo: call float_write_to_helper(ctx, buf_payload, offset, float_payload) -> (tag, payload)
+    fn emit_float_write_to(
+        &mut self,
+        dst: &VReg,
+        buf: &VReg,
+        offset: &VReg,
+        src: &VReg,
+    ) -> Result<(), String> {
+        let dst_shadow_off = self.shadow_tag_offset(dst);
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
+            asm.mov(Reg::X0, regs::VM_CTX);
+            // X1 = buf ref payload (index)
+            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(buf));
+            // X2 = offset
+            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_offset(offset));
+            // X3 = float payload (raw bits)
+            asm.ldr(Reg::X3, regs::FRAME_BASE, Self::vreg_offset(src));
+            asm.ldr(regs::TMP4, regs::VM_CTX, 112);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
             // Store payload to frame, tag to shadow

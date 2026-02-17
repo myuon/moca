@@ -717,14 +717,16 @@ impl Desugar {
         // Phase 0: Evaluate expressions into temp vars and pre-convert floats
         // Each part becomes either:
         // - PartInfo::Literal { value, len } for string literals
-        // - PartInfo::String { var } for string/float/unknown (already a string ref)
+        // - PartInfo::String { var } for string/unknown (already a string ref)
         // - PartInfo::Int { var } for int values
+        // - PartInfo::Float { var } for float values
         // - PartInfo::Bool { var } for bool values
         // - PartInfo::Nil for nil values
         enum PartInfo {
             Literal(String),
             String(String), // var name holding a string ref
             Int(String),    // var name holding an int
+            Float(String),  // var name holding a float
             Bool(String),   // var name holding a bool
             Nil,
         }
@@ -777,21 +779,15 @@ impl Desugar {
                             part_infos.push(PartInfo::String(var));
                         }
                         Some(Type::Float) => {
-                            // Pre-convert float to string: let _var = __float_to_string(expr);
+                            // Store float directly (no pre-conversion to string)
                             stmts.push(Statement::Let {
                                 name: var.clone(),
                                 type_annotation: None,
-                                init: Expr::Call {
-                                    callee: "__float_to_string".to_string(),
-                                    type_args: vec![],
-                                    args: vec![expr],
-                                    span,
-                                    inferred_type: Some(Type::String),
-                                },
+                                init: expr,
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::Float),
                             });
-                            part_infos.push(PartInfo::String(var));
+                            part_infos.push(PartInfo::Float(var));
                         }
                         _ => {
                             // Unknown type: fallback to to_string
@@ -850,6 +846,20 @@ impl Desugar {
                             name: var.clone(),
                             span,
                             inferred_type: Some(Type::Int),
+                        }],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    });
+                }
+                PartInfo::Float(var) => {
+                    // _float_digit_count(var)
+                    len_parts.push(Expr::Call {
+                        callee: "_float_digit_count".to_string(),
+                        type_args: vec![],
+                        args: vec![Expr::Ident {
+                            name: var.clone(),
+                            span,
+                            inferred_type: Some(Type::Float),
                         }],
                         span,
                         inferred_type: Some(Type::Int),
@@ -997,6 +1007,24 @@ impl Desugar {
                                 name: var.clone(),
                                 span,
                                 inferred_type: Some(Type::Int),
+                            },
+                        ],
+                        span,
+                        inferred_type: Some(Type::Int),
+                    }
+                }
+                PartInfo::Float(var) => {
+                    // _float_write_to(buf, off, var)
+                    Expr::Call {
+                        callee: "_float_write_to".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            buf_ident(),
+                            off_ident(),
+                            Expr::Ident {
+                                name: var.clone(),
+                                span,
+                                inferred_type: Some(Type::Float),
                             },
                         ],
                         span,

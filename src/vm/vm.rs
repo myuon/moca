@@ -684,6 +684,8 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            float_digit_count_helper: jit_float_digit_count_helper,
+            float_write_to_helper: jit_float_write_to_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -773,6 +775,8 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            float_digit_count_helper: jit_float_digit_count_helper,
+            float_write_to_helper: jit_float_write_to_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -857,6 +861,8 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            float_digit_count_helper: jit_float_digit_count_helper,
+            float_write_to_helper: jit_float_write_to_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -936,6 +942,8 @@ impl VM {
             print_debug_helper: jit_print_debug_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            float_digit_count_helper: jit_float_digit_count_helper,
+            float_write_to_helper: jit_float_write_to_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -1560,6 +1568,46 @@ impl VM {
                     let s = self.value_to_string(&value)?;
                     let r = self.heap.alloc_string(s)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
+                }
+                MicroOp::FloatDigitCount { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let f = self.stack[sb + src.0]
+                        .as_f64()
+                        .ok_or("FloatDigitCount: expected float")?;
+                    let s = if f.fract() == 0.0 {
+                        format!("{}.0", f)
+                    } else {
+                        f.to_string()
+                    };
+                    self.stack[sb + dst.0] = Value::I64(s.len() as i64);
+                }
+                MicroOp::FloatWriteTo {
+                    dst,
+                    buf,
+                    offset,
+                    src,
+                } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let f = self.stack[sb + src.0]
+                        .as_f64()
+                        .ok_or("FloatWriteTo: expected float")?;
+                    let off = self.stack[sb + offset.0]
+                        .as_i64()
+                        .ok_or("FloatWriteTo: expected int offset")?
+                        as usize;
+                    let buf_ref = self.stack[sb + buf.0]
+                        .as_ref()
+                        .ok_or("FloatWriteTo: expected ref")?;
+                    let s = if f.fract() == 0.0 {
+                        format!("{}.0", f)
+                    } else {
+                        f.to_string()
+                    };
+                    for (i, ch) in s.chars().enumerate() {
+                        self.heap
+                            .write_slot(buf_ref, off + i, Value::I64(ch as i64))?;
+                    }
+                    self.stack[sb + dst.0] = Value::I64((off + s.len()) as i64);
                 }
                 MicroOp::PrintDebug { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -2620,6 +2668,50 @@ impl VM {
                 let s = self.value_to_string(&value)?;
                 let r = self.heap.alloc_string(s)?;
                 self.stack.push(Value::Ref(r));
+            }
+            Op::FloatDigitCount => {
+                let f = self
+                    .stack
+                    .pop()
+                    .ok_or("stack underflow")?
+                    .as_f64()
+                    .ok_or("FloatDigitCount: expected float")?;
+                let s = if f.fract() == 0.0 {
+                    format!("{}.0", f)
+                } else {
+                    f.to_string()
+                };
+                self.stack.push(Value::I64(s.len() as i64));
+            }
+            Op::FloatWriteTo => {
+                let f = self
+                    .stack
+                    .pop()
+                    .ok_or("stack underflow")?
+                    .as_f64()
+                    .ok_or("FloatWriteTo: expected float")?;
+                let off = self
+                    .stack
+                    .pop()
+                    .ok_or("stack underflow")?
+                    .as_i64()
+                    .ok_or("FloatWriteTo: expected int offset")? as usize;
+                let buf_ref = self
+                    .stack
+                    .pop()
+                    .ok_or("stack underflow")?
+                    .as_ref()
+                    .ok_or("FloatWriteTo: expected ref")?;
+                let s = if f.fract() == 0.0 {
+                    format!("{}.0", f)
+                } else {
+                    f.to_string()
+                };
+                for (i, ch) in s.chars().enumerate() {
+                    self.heap
+                        .write_slot(buf_ref, off + i, Value::I64(ch as i64))?;
+                }
+                self.stack.push(Value::I64((off + s.len()) as i64));
             }
             Op::ParseInt => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -4012,6 +4104,61 @@ unsafe extern "C" fn jit_float_to_string_helper(
             tag: 3, // TAG_NIL
             payload: 0,
         },
+    }
+}
+
+/// JIT float_digit_count helper: format float to string and return its length.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_float_digit_count_helper(
+    ctx: *mut JitCallContext,
+    payload: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("FloatDigitCount");
+
+    let f = f64::from_bits(payload);
+    let s = if f.fract() == 0.0 {
+        format!("{}.0", f)
+    } else {
+        f.to_string()
+    };
+    JitReturn {
+        tag: 0, // TAG_INT
+        payload: s.len() as u64,
+    }
+}
+
+/// JIT float_write_to helper: format float and write bytes directly into heap buffer.
+#[cfg(feature = "jit")]
+unsafe extern "C" fn jit_float_write_to_helper(
+    ctx: *mut JitCallContext,
+    buf_ref_payload: u64,
+    offset: u64,
+    float_payload: u64,
+) -> JitReturn {
+    let ctx_ref = unsafe { &mut *ctx };
+    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
+
+    vm.record_opcode("FloatWriteTo");
+
+    let buf = GcRef {
+        index: buf_ref_payload as usize,
+    };
+    let off = offset as usize;
+    let f = f64::from_bits(float_payload);
+    let s = if f.fract() == 0.0 {
+        format!("{}.0", f)
+    } else {
+        f.to_string()
+    };
+    for (i, ch) in s.chars().enumerate() {
+        let _ = vm.heap.write_slot(buf, off + i, Value::I64(ch as i64));
+    }
+    JitReturn {
+        tag: 0, // TAG_INT
+        payload: (off + s.len()) as u64,
     }
 }
 

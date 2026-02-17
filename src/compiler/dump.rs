@@ -1711,6 +1711,8 @@ impl<'a> Disassembler<'a> {
             Op::PrintDebug => self.output.push_str("PrintDebug"),
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::FloatToString => self.output.push_str("ToString"),
+            Op::FloatDigitCount => self.output.push_str("FloatDigitCount"),
+            Op::FloatWriteTo => self.output.push_str("FloatWriteTo"),
             Op::ParseInt => self.output.push_str("ParseInt"),
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),
@@ -2193,6 +2195,23 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         MicroOp::FloatToString { dst, src } => output.push_str(&format!(
             "ToString {}, {}",
             format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::FloatDigitCount { dst, src } => output.push_str(&format!(
+            "FloatDigitCount {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::FloatWriteTo {
+            dst,
+            buf,
+            offset,
+            src,
+        } => output.push_str(&format!(
+            "FloatWriteTo {}, {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(buf),
+            format_vreg(offset),
             format_vreg(src)
         )),
         MicroOp::PrintDebug { dst, src } => output.push_str(&format!(

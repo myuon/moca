@@ -294,6 +294,8 @@ impl<'a> Resolver<'a> {
                 "len".to_string(),
                 "type_of".to_string(),
                 "__float_to_string".to_string(),
+                "_float_digit_count".to_string(),
+                "_float_write_to".to_string(),
                 "parse_int".to_string(),
                 // Thread operations
                 "spawn".to_string(),

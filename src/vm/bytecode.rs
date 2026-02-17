@@ -402,7 +402,8 @@ const OP_HEAP_LOAD2: u8 = 105;
 const OP_CALL_INDIRECT: u8 = 106;
 
 const OP_HEAP_STORE2: u8 = 107;
-// 108 was OP_HEAP_ALLOC_STRING, now unused (merged into HeapAllocArray with kind)
+const OP_FLOAT_DIGIT_COUNT: u8 = 108;
+const OP_FLOAT_WRITE_TO: u8 = 109;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -586,6 +587,8 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::FloatToString => w.write_all(&[OP_FLOAT_TO_STRING])?,
+        Op::FloatDigitCount => w.write_all(&[OP_FLOAT_DIGIT_COUNT])?,
+        Op::FloatWriteTo => w.write_all(&[OP_FLOAT_WRITE_TO])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
         // Exception Handling
         Op::Throw => w.write_all(&[OP_THROW])?,
@@ -753,6 +756,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_PRINT_DEBUG => Op::PrintDebug,
         OP_TYPE_OF => Op::TypeOf,
         OP_FLOAT_TO_STRING => Op::FloatToString,
+        OP_FLOAT_DIGIT_COUNT => Op::FloatDigitCount,
+        OP_FLOAT_WRITE_TO => Op::FloatWriteTo,
         OP_PARSE_INT => Op::ParseInt,
         // Exception Handling
         OP_THROW => Op::Throw,
@@ -1180,6 +1185,8 @@ mod tests {
             Op::PrintDebug,
             Op::TypeOf,
             Op::FloatToString,
+            Op::FloatDigitCount,
+            Op::FloatWriteTo,
             Op::ParseInt,
             // Exception Handling
             Op::Throw,

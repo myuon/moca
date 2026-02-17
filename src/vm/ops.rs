@@ -169,6 +169,8 @@ pub enum Op {
     PrintDebug,
     TypeOf,
     FloatToString,
+    FloatDigitCount,
+    FloatWriteTo,
     ParseInt,
 
     // ========================================
@@ -301,6 +303,8 @@ impl Op {
             Op::PrintDebug => "PrintDebug",
             Op::TypeOf => "TypeOf",
             Op::FloatToString => "FloatToString",
+            Op::FloatDigitCount => "FloatDigitCount",
+            Op::FloatWriteTo => "FloatWriteTo",
             Op::ParseInt => "ParseInt",
             Op::Throw => "Throw",
             Op::TryBegin(_) => "TryBegin",

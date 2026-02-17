@@ -1432,6 +1432,59 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::FloatToString { dst, src });
                 vstack.push(Vse::RegRef(dst));
             }
+            Op::FloatDigitCount => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::FloatDigitCount { dst, src });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::FloatWriteTo => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let offset = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let buf = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::FloatWriteTo {
+                    dst,
+                    buf,
+                    offset,
+                    src,
+                });
+                vstack.push(Vse::Reg(dst));
+            }
             Op::PrintDebug => {
                 let src = pop_vreg(
                     &mut vstack,

@@ -458,6 +458,8 @@ impl Verifier {
             Op::PrintDebug => (1, 1),    // pops value, pushes return value
             Op::TypeOf => (1, 1),        // pops value, pushes type string
             Op::FloatToString => (1, 1), // pops value, pushes string
+            Op::FloatDigitCount => (1, 1), // pops float, pushes int (length)
+            Op::FloatWriteTo => (3, 1),  // pops buf+offset+float, pushes int (new offset)
             Op::ParseInt => (1, 1),      // pops string, pushes int
             // Exception handling
             Op::Throw => (1, 0),

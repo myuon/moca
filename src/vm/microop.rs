@@ -425,6 +425,20 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
+    /// Returns length of float's string representation.
+    /// dst = float_digit_count(src) (i64 length)
+    FloatDigitCount {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Write float's string representation directly into heap buffer.
+    /// dst = float_write_to(buf, offset, src) → new offset (i64)
+    FloatWriteTo {
+        dst: VReg,
+        buf: VReg,
+        offset: VReg,
+        src: VReg,
+    },
     /// Print value to output and return original value.
     /// dst = src (after printing src to output)
     PrintDebug {
