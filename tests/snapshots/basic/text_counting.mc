@@ -53,7 +53,7 @@ fun count_chars() {
             }
             j = j + 1;
         }
-        print(labels[max_idx] + ": " + to_string(max_val));
+        print(labels[max_idx] + ": " + max_val.to_string());
         counts[max_idx] = 0 - 1;
         rank = rank + 1;
     }

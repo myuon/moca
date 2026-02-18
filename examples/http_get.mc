@@ -13,7 +13,7 @@ fun main() {
     let port = parse_int(argv(2));
     let path = argv(3);
 
-    print("Connecting to " + host + ":" + to_string(port) + path);
+    print("Connecting to " + host + ":" + port.to_string() + path);
 
     // Create TCP socket
     let fd = socket(AF_INET(), SOCK_STREAM());

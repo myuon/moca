@@ -37,39 +37,20 @@ impl Desugar {
         name
     }
 
-    /// Specialize a `to_string(x)` call based on the argument's inferred type.
-    /// Returns a type-specific call (e.g., `_int_to_string(x)`) or identity for strings.
-    fn specialize_to_string(arg: Expr, arg_type: Option<&Type>, span: Span) -> Expr {
-        match arg_type {
-            Some(Type::String) => arg,
-            Some(Type::Int) => Expr::Call {
-                callee: "_int_to_string".to_string(),
-                type_args: vec![],
-                args: vec![arg],
-                span,
-                inferred_type: Some(Type::String),
-            },
-            Some(Type::Float) => Expr::Call {
-                callee: "_float_to_string".to_string(),
-                type_args: vec![],
-                args: vec![arg],
-                span,
-                inferred_type: Some(Type::String),
-            },
-            Some(Type::Bool) => Expr::Call {
-                callee: "_bool_to_string".to_string(),
-                type_args: vec![],
-                args: vec![arg],
-                span,
-                inferred_type: Some(Type::String),
-            },
-            _ => Expr::Call {
-                callee: "to_string".to_string(),
-                type_args: vec![],
-                args: vec![arg],
-                span,
-                inferred_type: Some(Type::String),
-            },
+    /// Convert an expression to string via `.to_string()` method call.
+    /// For strings, returns the expression as-is (identity).
+    fn to_string_method_call(arg: Expr, arg_type: Option<&Type>, span: Span) -> Expr {
+        if matches!(arg_type, Some(Type::String)) {
+            return arg;
+        }
+        Expr::MethodCall {
+            object: Box::new(arg),
+            method: "to_string".to_string(),
+            type_args: vec![],
+            args: vec![],
+            span,
+            object_type: arg_type.cloned(),
+            inferred_type: Some(Type::String),
         }
     }
 
@@ -633,29 +614,20 @@ impl Desugar {
                 }
             }
 
-            // Call - desugar arguments, specialize to_string by argument type
+            // Call - desugar arguments
             Expr::Call {
                 callee,
                 type_args,
                 args,
                 span,
                 inferred_type,
-            } => {
-                // Specialize to_string(x) based on argument type
-                if callee == "to_string" && args.len() == 1 {
-                    let arg = self.desugar_expr(args.into_iter().next().unwrap());
-                    let arg_type = arg.inferred_type().cloned();
-                    return Self::specialize_to_string(arg, arg_type.as_ref(), span);
-                }
-
-                Expr::Call {
-                    callee,
-                    type_args,
-                    args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
-                    span,
-                    inferred_type,
-                }
-            }
+            } => Expr::Call {
+                callee,
+                type_args,
+                args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                span,
+                inferred_type,
+            },
 
             // Struct literal - desugar field values
             Expr::StructLiteral {
@@ -836,7 +808,7 @@ impl Desugar {
                             },
                             InterpPart::TypedExpr(expr, Some(Type::String)) => *expr,
                             InterpPart::TypedExpr(expr, ref ty) => {
-                                Self::specialize_to_string(*expr, ty.as_ref(), span)
+                                Self::to_string_method_call(*expr, ty.as_ref(), span)
                             }
                         })
                         .collect();
@@ -952,15 +924,18 @@ impl Desugar {
                             part_infos.push(PartInfo::Float(var));
                         }
                         _ => {
-                            // Unknown type: fallback to to_string
+                            // Unknown type: fallback to .to_string() method call
+                            let obj_type = ty.clone();
                             stmts.push(Statement::Let {
                                 name: var.clone(),
                                 type_annotation: None,
-                                init: Expr::Call {
-                                    callee: "to_string".to_string(),
+                                init: Expr::MethodCall {
+                                    object: Box::new(expr),
+                                    method: "to_string".to_string(),
                                     type_args: vec![],
-                                    args: vec![expr],
+                                    args: vec![],
                                     span,
+                                    object_type: obj_type,
                                     inferred_type: Some(Type::String),
                                 },
                                 span,

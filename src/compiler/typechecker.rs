@@ -216,6 +216,8 @@ pub struct TypeChecker {
     generic_functions: HashMap<String, GenericFunctionInfo>,
     /// Struct definitions (name -> struct info)
     structs: HashMap<String, StructInfo>,
+    /// Primitive type methods: type_name -> (method_name -> method_type)
+    primitive_methods: HashMap<String, HashMap<String, Type>>,
     /// Substitution accumulated during inference
     substitution: Substitution,
     /// Current type parameters in scope (during function signature inference)
@@ -233,6 +235,7 @@ impl TypeChecker {
             functions: HashMap::new(),
             generic_functions: HashMap::new(),
             structs: HashMap::new(),
+            primitive_methods: HashMap::new(),
             substitution: Substitution::new(),
             current_type_params: Vec::new(),
             current_function_name: None,
@@ -757,9 +760,10 @@ impl TypeChecker {
     fn register_impl_methods(&mut self, impl_block: &ImplBlock) {
         let struct_name = &impl_block.struct_name;
 
-        // Allow impl blocks for builtin types (vec, map) or defined structs
+        // Allow impl blocks for builtin types (vec, map), primitive types, or defined structs
         let is_builtin_type = struct_name == "vec" || struct_name == "map";
-        if !is_builtin_type && !self.structs.contains_key(struct_name) {
+        let is_primitive_type = matches!(struct_name.as_str(), "int" | "float" | "bool" | "string");
+        if !is_builtin_type && !is_primitive_type && !self.structs.contains_key(struct_name) {
             self.errors.push(TypeError::new(
                 format!("impl for undefined struct `{}`", struct_name),
                 impl_block.span,
@@ -808,7 +812,13 @@ impl TypeChecker {
             // Check if this is an associated function (no 'self' parameter)
             let has_self = method.params.iter().any(|p| p.name == "self");
 
-            if has_self {
+            if is_primitive_type {
+                // Store methods for primitive types in dedicated map
+                self.primitive_methods
+                    .entry(struct_name.clone())
+                    .or_default()
+                    .insert(method.name.clone(), fn_type);
+            } else if has_self {
                 // Add method to struct's method table
                 if let Some(struct_info) = self.structs.get_mut(struct_name) {
                     struct_info.methods.insert(method.name.clone(), fn_type);
@@ -831,9 +841,18 @@ impl TypeChecker {
     fn check_impl_block(&mut self, impl_block: &mut ImplBlock) {
         let struct_name = &impl_block.struct_name;
         let is_builtin_type = struct_name == "vec" || struct_name == "map";
+        let is_primitive_type = matches!(struct_name.as_str(), "int" | "float" | "bool" | "string");
 
         // Get struct type for 'self'
-        let self_type = if let Some(info) = self.structs.get(struct_name).cloned() {
+        let self_type = if is_primitive_type {
+            Some(match struct_name.as_str() {
+                "int" => Type::Int,
+                "float" => Type::Float,
+                "bool" => Type::Bool,
+                "string" => Type::String,
+                _ => unreachable!(),
+            })
+        } else if let Some(info) = self.structs.get(struct_name).cloned() {
             // For generic structs, create GenericStruct with type params
             if !impl_block.type_params.is_empty() {
                 let type_args: Vec<Type> = impl_block
@@ -867,7 +886,13 @@ impl TypeChecker {
             self.current_type_params.extend(method.type_params.clone());
 
             // Get method signature
-            let method_type = if is_builtin_type && !has_self {
+            let method_type = if is_primitive_type {
+                // For primitive types, look up in dedicated primitive_methods map
+                self.primitive_methods
+                    .get(struct_name)
+                    .and_then(|methods| methods.get(&method.name))
+                    .cloned()
+            } else if is_builtin_type && !has_self {
                 // For builtin types, look up the function by {type}_{func} name
                 let func_name = format!("{}_{}", struct_name, method.name);
                 self.functions.get(&func_name).cloned()
@@ -2005,6 +2030,18 @@ impl TypeChecker {
                     return self.check_ptr_method(method, args, elem, env, *span);
                 }
 
+                // Handle primitive type methods (int, float, bool, string)
+                let primitive_type_name = match &resolved_obj_type {
+                    Type::Int => Some("int"),
+                    Type::Float => Some("float"),
+                    Type::Bool => Some("bool"),
+                    Type::String => Some("string"),
+                    _ => None,
+                };
+                if let Some(type_name) = primitive_type_name {
+                    return self.check_primitive_method(type_name, method, args, env, *span);
+                }
+
                 // Get struct name and type args from object type
                 let (struct_name, type_args) = match &resolved_obj_type {
                     Type::Struct { name, .. } => (name.clone(), Vec::new()),
@@ -2901,6 +2938,64 @@ impl TypeChecker {
             _ => {
                 self.errors.push(TypeError::new(
                     format!("undefined method `{}` on ptr<{}>", method, elem_type),
+                    span,
+                ));
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                self.fresh_var()
+            }
+        }
+    }
+
+    /// Type check method calls on primitive types (int, float, bool, string).
+    fn check_primitive_method(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &mut [Expr],
+        env: &mut TypeEnv,
+        span: Span,
+    ) -> Type {
+        let method_type = self
+            .primitive_methods
+            .get(type_name)
+            .and_then(|methods| methods.get(method))
+            .cloned();
+
+        match method_type {
+            Some(Type::Function { params, ret }) => {
+                if args.len() != params.len() {
+                    self.errors.push(TypeError::new(
+                        format!(
+                            "method `{}` on `{}` expects {} arguments, got {}",
+                            method,
+                            type_name,
+                            params.len(),
+                            args.len()
+                        ),
+                        span,
+                    ));
+                    return self.substitution.apply(&ret);
+                }
+                for (arg, param_type) in args.iter_mut().zip(params.iter()) {
+                    let arg_type = self.infer_expr(arg, env);
+                    if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                        self.errors.push(e);
+                    }
+                }
+                self.substitution.apply(&ret)
+            }
+            Some(_) => {
+                self.errors.push(TypeError::new(
+                    format!("`{}` is not a method on `{}`", method, type_name),
+                    span,
+                ));
+                self.fresh_var()
+            }
+            None => {
+                self.errors.push(TypeError::new(
+                    format!("undefined method `{}` on `{}`", method, type_name),
                     span,
                 ));
                 for arg in args {

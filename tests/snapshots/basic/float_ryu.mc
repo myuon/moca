@@ -57,8 +57,8 @@ print($"{1.5e2}");
 print($"{3.14e5}");
 
 // to_string for floats
-print($"{to_string(3.14)}");
-print($"{to_string(0.0)}");
-print($"{to_string(100000000000000000.0)}");
-print($"{to_string(0.0000001)}");
-print($"{to_string(-42.5)}");
+print($"{3.14.to_string()}");
+print($"{0.0.to_string()}");
+print($"{100000000000000000.0.to_string()}");
+print($"{0.0000001.to_string()}");
+print($"{(-42.5).to_string()}");

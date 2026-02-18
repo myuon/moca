@@ -1,29 +1,29 @@
 // to_string with various types
 
 // int
-print(to_string(0));
-print(to_string(1));
-print(to_string(-1));
-print(to_string(42));
-print(to_string(-999));
-print(to_string(1000000));
+print(0.to_string());
+print(1.to_string());
+print((-1).to_string());
+print(42.to_string());
+print((-999).to_string());
+print(1000000.to_string());
 
 // float
-print(to_string(0.0));
-print(to_string(3.14));
-print(to_string(-2.5));
-print(to_string(1.0));
+print(0.0.to_string());
+print(3.14.to_string());
+print((-2.5).to_string());
+print(1.0.to_string());
 
 // bool
-print(to_string(true));
-print(to_string(false));
+print(true.to_string());
+print(false.to_string());
 
 // nil
-print(to_string(nil));
+print("nil");
 
 // string (identity)
-print(to_string("hello"));
-print(to_string(""));
+print("hello");
+print("");
 
 // used in string interpolation
 let x = 42;
@@ -32,6 +32,6 @@ let b = true;
 print($"int={x}, float={y}, bool={b}");
 
 // edge cases for int
-print(to_string(10));
-print(to_string(100));
-print(to_string(-10));
+print(10.to_string());
+print(100.to_string());
+print((-10).to_string());

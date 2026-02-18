@@ -640,44 +640,50 @@ fun _bool_to_string(b: bool) -> string {
     return "false";
 }
 
-// Convert any value to its string representation.
-fun to_string(x: any) -> string {
-    let t = type_of(x);
-    if t == "string" {
-        return x;
+impl int {
+    fun to_string(self) -> string {
+        return _int_to_string(self);
     }
-    if t == "int" {
-        return _int_to_string(x);
+}
+
+impl float {
+    fun to_string(self) -> string {
+        return _float_to_string(self);
     }
-    if t == "float" {
-        return _float_to_string(x);
+}
+
+impl bool {
+    fun to_string(self) -> string {
+        return _bool_to_string(self);
     }
-    if t == "bool" {
-        return _bool_to_string(x);
+}
+
+impl string {
+    fun to_string(self) -> string {
+        return self;
     }
-    return "nil";
 }
 
 // Zero-pad an integer to 2 digits.
 fun _pad2(n: int) -> string {
     if n < 10 {
-        return "0" + to_string(n);
+        return "0" + n.to_string();
     }
-    return to_string(n);
+    return n.to_string();
 }
 
 // Zero-pad an integer to 4 digits.
 fun _pad4(n: int) -> string {
     if n < 10 {
-        return "000" + to_string(n);
+        return "000" + n.to_string();
     }
     if n < 100 {
-        return "00" + to_string(n);
+        return "00" + n.to_string();
     }
     if n < 1000 {
-        return "0" + to_string(n);
+        return "0" + n.to_string();
     }
-    return to_string(n);
+    return n.to_string();
 }
 
 // Check if a year is a leap year.
@@ -843,7 +849,7 @@ fun assert(condition: bool, msg: string) {
 // Uses to_string for comparison, so works with any type that can be converted to string.
 fun assert_eq(actual: int, expected: int, msg: string) {
     if actual != expected {
-        throw msg + " (expected: " + to_string(expected) + ", actual: " + to_string(actual) + ")";
+        throw msg + " (expected: " + expected.to_string() + ", actual: " + actual.to_string() + ")";
     }
 }
 
@@ -857,7 +863,7 @@ fun assert_eq_str(actual: string, expected: string, msg: string) {
 // Assert that two booleans are equal.
 fun assert_eq_bool(actual: bool, expected: bool, msg: string) {
     if actual != expected {
-        throw msg + " (expected: " + to_string(expected) + ", actual: " + to_string(actual) + ")";
+        throw msg + " (expected: " + expected.to_string() + ", actual: " + actual.to_string() + ")";
     }
 }
 

@@ -158,7 +158,7 @@ fun _test_rand_int_distribution() {
 
     // max/min <= 1.2  <=>  max * 5 <= min * 6
     assert(max_count * 5 <= min_count * 6,
-        "rand_int distribution: max/min ratio should be within 20% (max=" + to_string(max_count) + ", min=" + to_string(min_count) + ")");
+        "rand_int distribution: max/min ratio should be within 20% (max=" + max_count.to_string() + ", min=" + min_count.to_string() + ")");
 }
 
 // Generate rand_float() 10000 times into 10 buckets and check frequency uniformity (max/min <= 1.2)
@@ -187,7 +187,7 @@ fun _test_rand_float_distribution() {
 
     // max/min <= 1.2  <=>  max * 5 <= min * 6
     assert(max_count * 5 <= min_count * 6,
-        "rand_float distribution: max/min ratio should be within 20% (max=" + to_string(max_count) + ", min=" + to_string(min_count) + ")");
+        "rand_float distribution: max/min ratio should be within 20% (max=" + max_count.to_string() + ", min=" + min_count.to_string() + ")");
 }
 
 // ============================================================================
@@ -200,7 +200,7 @@ fun _assert_sorted_int(v: Vec<int>, msg: string) {
     let i = 0;
     while i < n - 1 {
         assert(v[i] <= v[i + 1],
-            msg + " (v[" + to_string(i) + "]=" + to_string(v[i]) + " > v[" + to_string(i + 1) + "]=" + to_string(v[i + 1]) + ")");
+            msg + " (v[" + i.to_string() + "]=" + v[i].to_string() + " > v[" + (i + 1).to_string() + "]=" + v[i + 1].to_string() + ")");
         i = i + 1;
     }
 }
@@ -210,7 +210,7 @@ fun _assert_sorted_float(v: Vec<float>, msg: string) {
     let n = v.len();
     let i = 0;
     while i < n - 1 {
-        assert(v[i] <= v[i + 1], msg + " (index " + to_string(i) + ")");
+        assert(v[i] <= v[i + 1], msg + " (index " + i.to_string() + ")");
         i = i + 1;
     }
 }
