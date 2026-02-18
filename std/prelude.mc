@@ -169,11 +169,11 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int) -> int {
 // Copy string data into buf at offset, return new offset.
 @inline
 fun _str_copy_to(buf: ptr<int>, off: int, s: string) -> int {
-    let sptr = __heap_load(s, 0);
-    let slen = __heap_load(s, 1);
+    let sptr = s.data;
+    let slen = s.len;
     let j = 0;
     while j < slen {
-        buf[off + j] = __heap_load(sptr, j);
+        buf[off + j] = sptr[j];
         j = j + 1;
     }
     return off + slen;
@@ -745,19 +745,19 @@ fun time_format(epoch_secs: int) -> string {
 // Concatenate two strings by copying character data into a new string.
 @inline
 fun string_concat(a: string, b: string) -> string {
-    let a_ptr = __heap_load(a, 0);
-    let a_len = __heap_load(a, 1);
-    let b_ptr = __heap_load(b, 0);
-    let b_len = __heap_load(b, 1);
+    let a_ptr = a.data;
+    let a_len = a.len;
+    let b_ptr = b.data;
+    let b_len = b.len;
     let total = a_len + b_len;
     let data = __alloc_heap(total);
     let i = 0;
     while i < a_len {
-        data[i] = __heap_load(a_ptr, i);
+        data[i] = a_ptr[i];
         i = i + 1;
     }
     while i < total {
-        data[i] = __heap_load(b_ptr, i - a_len);
+        data[i] = b_ptr[i - a_len];
         i = i + 1;
     }
     return __alloc_string(data, total);
@@ -779,11 +779,11 @@ fun string_join(parts: array<string>) -> string {
     i = 0;
     while i < n {
         let s = parts[i];
-        let s_ptr = __heap_load(s, 0);
-        let s_len = __heap_load(s, 1);
+        let s_ptr = s.data;
+        let s_len = s.len;
         let j = 0;
         while j < s_len {
-            data[off] = __heap_load(s_ptr, j);
+            data[off] = s_ptr[j];
             off = off + 1;
             j = j + 1;
         }

@@ -535,18 +535,46 @@ impl Desugar {
                 }
             }
 
-            // Field access - desugar object
+            // Field access - desugar object, specialize string fields
             Expr::Field {
                 object,
                 field,
                 span,
                 inferred_type,
-            } => Expr::Field {
-                object: Box::new(self.desugar_expr(*object)),
-                field,
-                span,
-                inferred_type,
-            },
+            } => {
+                let obj_type = object.inferred_type().cloned();
+                let object = self.desugar_expr(*object);
+
+                // String field access: s.data → __heap_load(s, 0), s.len → __heap_load(s, 1)
+                if matches!(obj_type.as_ref(), Some(Type::String)) {
+                    let idx = match field.as_str() {
+                        "data" => 0,
+                        "len" => 1,
+                        _ => unreachable!("typechecker rejects invalid string fields"),
+                    };
+                    return Expr::Call {
+                        callee: "__heap_load".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            object,
+                            Expr::Int {
+                                value: idx,
+                                span,
+                                inferred_type: Some(Type::Int),
+                            },
+                        ],
+                        span,
+                        inferred_type,
+                    };
+                }
+
+                Expr::Field {
+                    object: Box::new(object),
+                    field,
+                    span,
+                    inferred_type,
+                }
+            }
 
             // Unary - desugar operand
             Expr::Unary {
