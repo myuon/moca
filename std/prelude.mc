@@ -742,6 +742,26 @@ fun time_format(epoch_secs: int) -> string {
 // String Operations
 // ============================================================================
 
+// Compare two strings by content (length + data array elements).
+@inline
+fun _string_eq(a: string, b: string) -> bool {
+    let a_len = __heap_load(a, 1);
+    let b_len = __heap_load(b, 1);
+    if a_len != b_len {
+        return false;
+    }
+    let a_ptr = __heap_load(a, 0);
+    let b_ptr = __heap_load(b, 0);
+    let i = 0;
+    while i < a_len {
+        if __heap_load(a_ptr, i) != __heap_load(b_ptr, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
 // Concatenate two strings by copying character data into a new string.
 @inline
 fun string_concat(a: string, b: string) -> string {
