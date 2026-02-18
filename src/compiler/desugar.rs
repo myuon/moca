@@ -37,6 +37,35 @@ impl Desugar {
         name
     }
 
+    /// Extract the key type from a Map type (if known and concrete).
+    fn extract_map_key_type(obj_type: &Option<Type>) -> Option<&Type> {
+        match obj_type.as_ref()? {
+            Type::Map(key_type, _) => Some(key_type),
+            Type::GenericStruct {
+                name, type_args, ..
+            } if name == "Map" && !type_args.is_empty() => Some(&type_args[0]),
+            _ => None,
+        }
+    }
+
+    /// Specialize a Map method name based on the key type.
+    /// Returns Some(specialized_name) if the method can be specialized, None otherwise.
+    fn specialize_map_method(obj_type: &Option<Type>, method: &str) -> Option<String> {
+        let key_type = Self::extract_map_key_type(obj_type)?;
+        let suffix = match key_type {
+            Type::Int => "int",
+            Type::String => "string",
+            _ => return None,
+        };
+        match method {
+            "put" | "set" => Some(format!("put_{}", suffix)),
+            "get" => Some(format!("get_{}", suffix)),
+            "contains" => Some(format!("contains_{}", suffix)),
+            "remove" => Some(format!("remove_{}", suffix)),
+            _ => None,
+        }
+    }
+
     /// Check if the type should have its index operations desugared to method calls.
     /// Returns true for Vec<T> and Map<K,V>, false for Array<T> and other types.
     /// Array<T> is handled directly in codegen (not desugared) to support chained access.
@@ -305,11 +334,16 @@ impl Desugar {
                 if let Some(ref obj_type) = object_type
                     && self.should_desugar_index(obj_type)
                 {
+                    // For Map types, specialize to put_int/put_string if key type is known
+                    let method = Self::specialize_map_method(&object_type, "set")
+                        .unwrap_or_else(|| "set".to_string());
+
                     // Transform to method call: object.set(index, value)
+                    // or object.put_int(index, value) / object.put_string(index, value)
                     return Statement::Expr {
                         expr: Expr::MethodCall {
                             object: Box::new(desugared_object),
-                            method: "set".to_string(),
+                            method,
                             type_args: vec![],
                             args: vec![desugared_index, desugared_value],
                             span,
@@ -438,10 +472,15 @@ impl Desugar {
                 if let Some(ref obj_type) = object_type
                     && self.should_desugar_index(obj_type)
                 {
+                    // For Map types, specialize to get_int/get_string if key type is known
+                    let method = Self::specialize_map_method(&object_type, "get")
+                        .unwrap_or_else(|| "get".to_string());
+
                     // Transform to method call: object.get(index)
+                    // or object.get_int(index) / object.get_string(index)
                     return Expr::MethodCall {
                         object: Box::new(desugared_object),
-                        method: "get".to_string(),
+                        method,
                         type_args: vec![],
                         args: vec![desugared_index],
                         span,
@@ -558,6 +597,16 @@ impl Desugar {
                         inferred_type,
                     };
                 }
+
+                // Desugar Map method calls to type-specific variants
+                // e.g., m.put(k, v) → m.put_int(k, v) when K=int
+                let method =
+                    if let Some(specialized) = Self::specialize_map_method(&object_type, &method) {
+                        specialized
+                    } else {
+                        method
+                    };
+
                 Expr::MethodCall {
                     object: Box::new(self.desugar_expr(*object)),
                     method,
@@ -1318,7 +1367,18 @@ impl Desugar {
             inferred_type: None,
         });
 
-        // __new_literal_N.put(k, v);
+        // Determine the specialized put method based on key type annotation
+        let put_method = if let Some(key_ta) = type_args.first() {
+            match key_ta {
+                TypeAnnotation::Named(name) if name == "int" => "put_int".to_string(),
+                TypeAnnotation::Named(name) if name == "string" => "put_string".to_string(),
+                _ => "put".to_string(),
+            }
+        } else {
+            "put".to_string()
+        };
+
+        // __new_literal_N.put_int(k, v); or __new_literal_N.put_string(k, v);
         for elem in elements.into_iter() {
             if let NewLiteralElement::KeyValue { key, value } = elem {
                 statements.push(Statement::Expr {
@@ -1328,7 +1388,7 @@ impl Desugar {
                             span,
                             inferred_type: None,
                         }),
-                        method: "put".to_string(),
+                        method: put_method.clone(),
                         type_args: vec![],
                         args: vec![key, value],
                         span,
