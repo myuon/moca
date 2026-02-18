@@ -4146,9 +4146,6 @@ unsafe extern "C" fn jit_float_to_string_helper(
     }
 }
 
-/// JIT printDebug helper function.
-/// Prints a value to output and returns the same value.
-#[cfg(feature = "jit")]
 /// JIT HeapAllocDynSimple helper function.
 /// Allocates `size` null-initialized slots on the heap.
 #[cfg(feature = "jit")]

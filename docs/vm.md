@@ -307,7 +307,7 @@ TRY_END                     // End try block
 ### Built-in Operations
 
 ```
-PRINT_DEBUG         // Debug output stack top to stdout
+DEBUG               // [any] → [ref(string)] (value_to_string)
 GC_HINT <bytes>     // Hint GC about allocation
 ```
 
