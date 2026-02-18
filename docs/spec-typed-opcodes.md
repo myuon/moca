@@ -179,7 +179,7 @@ ArrayLen           // [ref] → [i64]
 ```
 Syscall(num, argc) // System call
 GcHint(size)       // GC allocation hint
-PrintDebug         // Debug print
+Debug              // [any] → [ref(string)]  (value_to_string)
 TypeOf             // [any] → [ref(string)]
 ToString           // [any] → [ref(string)]
 ParseInt           // [ref(string)] → [i64]

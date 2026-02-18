@@ -2578,12 +2578,15 @@ impl TypeChecker {
         span: Span,
     ) -> Option<Type> {
         match name {
-            "print" | "print_debug" => {
-                // print/print_debug accepts any type
-                for arg in args {
-                    self.infer_expr(arg, env);
+            "debug" => {
+                // debug(v: any) -> string
+                if args.len() != 1 {
+                    self.errors
+                        .push(TypeError::new("debug expects exactly 1 argument", span));
+                    return Some(Type::String);
                 }
-                Some(Type::Nil)
+                self.infer_expr(&mut args[0], env);
+                Some(Type::String)
             }
             "__syscall" => {
                 // __syscall(num, ...args) -> Int | String

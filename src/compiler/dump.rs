@@ -1726,7 +1726,7 @@ impl<'a> Disassembler<'a> {
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
-            Op::PrintDebug => self.output.push_str("PrintDebug"),
+            Op::Debug => self.output.push_str("Debug"),
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
@@ -2282,11 +2282,9 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(dst),
             format_vreg(src)
         )),
-        MicroOp::PrintDebug { dst, src } => output.push_str(&format!(
-            "PrintDebug {}, {}",
-            format_vreg(dst),
-            format_vreg(src)
-        )),
+        MicroOp::Debug { dst, src } => {
+            output.push_str(&format!("Debug {}, {}", format_vreg(dst), format_vreg(src)))
+        }
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),
@@ -2418,9 +2416,9 @@ mod tests {
 
     #[test]
     fn test_resolved_builtin() {
-        let resolved = resolve("print_debug(42);");
+        let resolved = resolve("debug(42);");
         let output = format_resolved(&resolved);
-        assert!(output.contains("Builtin(print_debug)"));
+        assert!(output.contains("Builtin(debug)"));
     }
 
     // Bytecode disassembler tests
@@ -2436,18 +2434,18 @@ mod tests {
 
     #[test]
     fn test_bytecode_simple() {
-        let chunk = compile("let x = 42; print_debug(x);");
+        let chunk = compile("let x = 42; debug(x);");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Main =="));
         assert!(output.contains("I64Const 42"));
         assert!(output.contains("LocalSet"));
         assert!(output.contains("LocalGet"));
-        assert!(output.contains("PrintDebug"));
+        assert!(output.contains("Debug"));
     }
 
     #[test]
     fn test_bytecode_function() {
-        let chunk = compile("fun add(a, b) { return a + b; } print_debug(add(1, 2));");
+        let chunk = compile("fun add(a, b) { return a + b; } debug(add(1, 2));");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Function[0]: add"));
         assert!(output.contains("LocalGet 0"));
@@ -2459,7 +2457,7 @@ mod tests {
 
     #[test]
     fn test_bytecode_control_flow() {
-        let chunk = compile("if true { print_debug(1); } else { print_debug(2); }");
+        let chunk = compile("if true { debug(1); } else { debug(2); }");
         let output = format_bytecode(&chunk);
         assert!(output.contains("I32Const 1"));
         assert!(output.contains("BrIfFalse"));
@@ -2468,7 +2466,7 @@ mod tests {
 
     #[test]
     fn test_bytecode_string_constants() {
-        let chunk = compile(r#"let s = "hello"; print_debug(s);"#);
+        let chunk = compile(r#"let s = "hello"; debug(s);"#);
         let output = format_bytecode(&chunk);
         assert!(output.contains("== String Constants =="));
         assert!(output.contains("\"hello\""));

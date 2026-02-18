@@ -1682,6 +1682,23 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::FloatToString { dst, src });
                 vstack.push(Vse::RegRef(dst));
             }
+            Op::Debug => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::Debug { dst, src });
+                vstack.push(Vse::RegRef(dst));
+            }
             Op::UMul128Hi => {
                 let b = pop_vreg(
                     &mut vstack,
@@ -1706,24 +1723,6 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::UMul128Hi { dst, a, b });
                 vstack.push(Vse::Reg(dst));
             }
-            Op::PrintDebug => {
-                let src = pop_vreg(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                );
-                let dst = alloc_temp(
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                    ValueType::I64,
-                );
-                micro_ops.push(MicroOp::PrintDebug { dst, src });
-                vstack.push(Vse::Reg(dst));
-            }
-
             // ============================================================
             // Heap allocation operations
             // ============================================================

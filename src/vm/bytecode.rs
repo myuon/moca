@@ -373,10 +373,10 @@ const OP_HEAP_STORE_DYN: u8 = 84;
 // System / Builtins
 const OP_SYSCALL: u8 = 86;
 const OP_GC_HINT: u8 = 87;
-const OP_PRINT_DEBUG: u8 = 88;
 const OP_TYPE_OF: u8 = 89;
 const OP_FLOAT_TO_STRING: u8 = 90;
 const OP_PARSE_INT: u8 = 91;
+const OP_DEBUG: u8 = 119;
 // Exception Handling
 const OP_THROW: u8 = 93;
 const OP_TRY_BEGIN: u8 = 94;
@@ -603,7 +603,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_GC_HINT])?;
             write_u32(w, *size as u32)?;
         }
-        Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
+        Op::Debug => w.write_all(&[OP_DEBUG])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::FloatToString => w.write_all(&[OP_FLOAT_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
@@ -779,7 +779,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // System / Builtins
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
-        OP_PRINT_DEBUG => Op::PrintDebug,
+        OP_DEBUG => Op::Debug,
         OP_TYPE_OF => Op::TypeOf,
         OP_FLOAT_TO_STRING => Op::FloatToString,
         OP_PARSE_INT => Op::ParseInt,
@@ -1001,7 +1001,8 @@ mod tests {
                     Op::I64Const(10),
                     Op::I64Const(20),
                     Op::Call(0, 2),
-                    Op::PrintDebug,
+                    Op::Debug,
+                    Op::Drop,
                     Op::Ret,
                 ],
                 stackmap: None,
@@ -1207,7 +1208,6 @@ mod tests {
             // System / Builtins
             Op::Syscall(7, 2),
             Op::GcHint(1024),
-            Op::PrintDebug,
             Op::TypeOf,
             Op::FloatToString,
             Op::ParseInt,
