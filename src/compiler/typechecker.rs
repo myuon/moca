@@ -2034,9 +2034,7 @@ impl TypeChecker {
                 {
                     let key_type = type_args[0].clone();
                     let value_type = type_args[1].clone();
-                    return self.check_map_method(
-                        method, args, &key_type, &value_type, env, *span,
-                    );
+                    return self.check_map_method(method, args, &key_type, &value_type, env, *span);
                 }
 
                 // Handle ptr<T> methods
