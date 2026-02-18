@@ -10,7 +10,7 @@ fun main() {
 
     let i = 1;
     while i < argc() {
-        print("argv(" + to_string(i) + "): ");
+        print("argv(" + i.to_string() + "): ");
         print(argv(i));
         i = i + 1;
     }
@@ -19,7 +19,7 @@ fun main() {
     let all_args = args();
     let j = 0;
     while j < len(all_args) {
-        print("  [" + to_string(j) + "] = " + all_args[j]);
+        print("  [" + j.to_string() + "] = " + all_args[j]);
         j = j + 1;
     }
 }

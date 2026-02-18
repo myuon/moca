@@ -9,7 +9,7 @@ fun main() {
         port = parse_int(argv(1));
     }
 
-    print("Starting HTTP server on port " + to_string(port));
+    print("Starting HTTP server on port " + port.to_string());
 
     // Create TCP socket
     let fd = socket(AF_INET(), SOCK_STREAM());
@@ -21,7 +21,7 @@ fun main() {
     // Bind to address
     let bind_result = bind(fd, "0.0.0.0", port);
     if bind_result < 0 {
-        print("Error: Failed to bind to port " + to_string(port));
+        print("Error: Failed to bind to port " + port.to_string());
         if bind_result == EADDRINUSE() {
             print("  Port is already in use");
         }
@@ -37,7 +37,7 @@ fun main() {
         return 1;
     }
 
-    print("Server listening on http://0.0.0.0:" + to_string(port));
+    print("Server listening on http://0.0.0.0:" + port.to_string());
     print("Press Ctrl+C to stop");
 
     // Accept and handle connections in a loop
@@ -51,7 +51,7 @@ fun main() {
             print("Error: Failed to accept connection");
             running = false;
         } else {
-            print("Client connected (fd=" + to_string(client_fd) + ")");
+            print("Client connected (fd=" + client_fd.to_string() + ")");
 
             // Read the HTTP request
             let request = read(client_fd, 4096);
@@ -62,7 +62,7 @@ fun main() {
             let body = "Hello, World!\n";
             let response = "HTTP/1.1 200 OK\r\n" +
                           "Content-Type: text/plain\r\n" +
-                          "Content-Length: " + to_string(len(body)) + "\r\n" +
+                          "Content-Length: " + len(body).to_string() + "\r\n" +
                           "Connection: close\r\n" +
                           "\r\n" +
                           body;

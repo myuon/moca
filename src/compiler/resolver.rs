@@ -272,6 +272,8 @@ pub struct Resolver<'a> {
     builtins: Vec<String>,
     /// Struct definitions: struct_name -> info
     structs: HashMap<String, StructDefInfo>,
+    /// Primitive type methods: type_name -> (method_name -> func_index)
+    primitive_methods: HashMap<String, HashMap<String, usize>>,
     /// Resolved struct list (for output)
     resolved_structs: Vec<ResolvedStruct>,
     /// Lambda functions lifted during resolution
@@ -318,6 +320,7 @@ impl<'a> Resolver<'a> {
                 "args".to_string(),
             ],
             structs: HashMap::new(),
+            primitive_methods: HashMap::new(),
             resolved_structs: Vec::new(),
             lifted_functions: Vec::new(),
             next_lambda_id: 0,
@@ -461,8 +464,12 @@ impl<'a> Resolver<'a> {
         for impl_block in &impl_blocks {
             let is_builtin_type =
                 impl_block.struct_name == "vec" || impl_block.struct_name == "map";
+            let is_primitive_type = matches!(
+                impl_block.struct_name.as_str(),
+                "int" | "float" | "bool" | "string"
+            );
 
-            if !is_builtin_type {
+            if !is_builtin_type && !is_primitive_type {
                 // For struct impls, verify the struct exists
                 if !self.structs.contains_key(&impl_block.struct_name) {
                     return Err(self.error(
@@ -512,8 +519,14 @@ impl<'a> Resolver<'a> {
                     }
                 });
 
-                // Add method to struct's method table (only for non-builtin types)
-                if let Some(struct_info) = self.structs.get_mut(&impl_block.struct_name) {
+                if is_primitive_type {
+                    // Add method to primitive type's method table
+                    self.primitive_methods
+                        .entry(impl_block.struct_name.clone())
+                        .or_default()
+                        .insert(method.name.clone(), func_index);
+                } else if let Some(struct_info) = self.structs.get_mut(&impl_block.struct_name) {
+                    // Add method to struct's method table
                     struct_info.methods.insert(method.name.clone(), func_index);
                     struct_info
                         .method_return_types
@@ -1504,8 +1517,50 @@ impl<'a> Resolver<'a> {
                 method,
                 args,
                 span,
+                object_type,
                 ..
             } => {
+                // Check if object is a primitive type (set by typechecker)
+                let primitive_type_name = object_type.as_ref().and_then(|t| match t {
+                    Type::Int => Some("int"),
+                    Type::Float => Some("float"),
+                    Type::Bool => Some("bool"),
+                    Type::String => Some("string"),
+                    _ => None,
+                });
+
+                if let Some(type_name) = primitive_type_name {
+                    // Resolve primitive type method call
+                    let resolved_object = self.resolve_expr(*object, scope)?;
+                    let resolved_args: Vec<_> = args
+                        .into_iter()
+                        .map(|a| self.resolve_expr(a, scope))
+                        .collect::<Result<_, _>>()?;
+
+                    let func_index = self
+                        .primitive_methods
+                        .get(type_name)
+                        .and_then(|methods| methods.get(&method))
+                        .copied()
+                        .ok_or_else(|| {
+                            self.error(
+                                &format!(
+                                    "undefined method '{}' for primitive type '{}'",
+                                    method, type_name
+                                ),
+                                span,
+                            )
+                        })?;
+
+                    return Ok(ResolvedExpr::MethodCall {
+                        object: Box::new(resolved_object),
+                        method,
+                        func_index,
+                        args: resolved_args,
+                        return_struct_name: None,
+                    });
+                }
+
                 // Get struct name from the object expression before resolving
                 let struct_name = match &*object {
                     Expr::Ident { name, .. } => {

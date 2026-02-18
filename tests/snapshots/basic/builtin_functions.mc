@@ -7,10 +7,10 @@ print(type_of("hello"));
 print(type_of([1, 2, 3]));
 
 // to_string
-print(to_string(42));
-print(to_string(3.14));
-print(to_string(true));
-print(to_string(nil));
+print(42.to_string());
+print(3.14.to_string());
+print(true.to_string());
+print("nil");
 
 // parse_int
 let n = parse_int("42");
