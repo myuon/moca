@@ -4,7 +4,7 @@ let sum = 0;
 for row in matrix {
     for val in row {
         sum = sum + val;
-        print(val);
+        print($"{val}");
     }
 }
-print(sum);
+print($"{sum}");

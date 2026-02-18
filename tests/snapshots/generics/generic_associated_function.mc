@@ -14,6 +14,6 @@ let w1 = Wrapper<int>::create(123);
 let w2 = Wrapper<string>::create("test");
 let w3 = Wrapper<bool>::create(false);
 
-print(w1.data);
-print(w2.data);
-print(w3.data);
+print($"{w1.data}");
+print($"{w2.data}");
+print($"{w3.data}");

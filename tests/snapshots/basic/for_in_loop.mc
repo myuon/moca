@@ -3,4 +3,4 @@ let sum = 0;
 for x in arr {
     sum = sum + x;
 }
-print(sum);
+print($"{sum}");

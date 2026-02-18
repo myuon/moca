@@ -28,7 +28,7 @@ fun quicksort_benchmark() {
     // Print all sorted elements
     i = 0;
     while i < 100000 {
-        print(v[i]);
+        print($"{v[i]}");
         i = i + 1;
     }
 }

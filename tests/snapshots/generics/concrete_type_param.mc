@@ -16,10 +16,10 @@ fun vec_int_set(v: Vec<int>, i: int, val: int) {
 }
 
 let v = new Vec<int> {10, 20, 30};
-print(vec_int_len(v));
-print(vec_int_get(v, 1));
+print($"{vec_int_len(v)}");
+print($"{vec_int_get(v, 1)}");
 vec_int_set(v, 1, 99);
-print(vec_int_get(v, 1));
+print($"{vec_int_get(v, 1)}");
 
 // Vec<float> parameter
 fun vec_float_len(v: Vec<float>) -> int {
@@ -27,7 +27,7 @@ fun vec_float_len(v: Vec<float>) -> int {
 }
 
 let vf = new Vec<float> {1.5, 2.5};
-print(vec_float_len(vf));
+print($"{vec_float_len(vf)}");
 
 // Map parameter with method calls
 fun map_len(m: Map<string, int>) -> int {
@@ -36,7 +36,7 @@ fun map_len(m: Map<string, int>) -> int {
 
 let m: Map<string, int> = map::`new`();
 m["hello"] = 42;
-print(map_len(m));
+print($"{map_len(m)}");
 
 // Named struct parameter (Rand)
 fun rand_next(r: Rand) -> int {
@@ -45,4 +45,4 @@ fun rand_next(r: Rand) -> int {
 
 let rng: Rand = Rand::`new`(42);
 let val = rand_next(rng);
-print(val > 0);
+print($"{val > 0}");

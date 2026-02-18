@@ -5,11 +5,11 @@ struct Box<T> {
 }
 
 let box_int = Box { value: 42 };
-print(box_int.value);
+print($"{box_int.value}");
 
 box_int.value = 100;
-print(box_int.value);
+print($"{box_int.value}");
 
 let box_str = Box { value: "hello" };
 box_str.value = "world";
-print(box_str.value);
+print($"{box_str.value}");

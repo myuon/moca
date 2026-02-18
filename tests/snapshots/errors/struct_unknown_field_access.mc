@@ -3,4 +3,4 @@ struct Point {
     y: int
 }
 let p = Point { x: 10, y: 20 };
-print(p.z);
+print($"{p.z}");

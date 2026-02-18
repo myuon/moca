@@ -1,2 +1,2 @@
 let arr: array<int> = [];
-print(arr);
+print(debug(arr));

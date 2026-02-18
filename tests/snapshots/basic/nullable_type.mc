@@ -10,9 +10,9 @@ fun maybe_double(x: int?) -> int? {
 let a: int? = 5;
 let b: int? = nil;
 
-print(maybe_double(a));
-print(maybe_double(b));
+print(debug(maybe_double(a)));
+print(debug(maybe_double(b)));
 
 // Assigning non-nil to nullable
 let c: int? = 10;
-print(c);
+print(debug(c));

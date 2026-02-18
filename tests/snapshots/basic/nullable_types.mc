@@ -1,8 +1,8 @@
 let x: int? = nil;
 let y: int? = 42;
-print(x);
-print(y);
+print(debug(x));
+print(debug(y));
 let s: string? = nil;
 let t: string? = "hello";
-print(s);
-print(t);
+print(debug(s));
+print(debug(t));

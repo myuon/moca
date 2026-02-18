@@ -4,4 +4,4 @@ fun add(a: int, b: int) -> int {
 }
 
 let result = add("hello", 5);
-print(result);
+print($"{result}");

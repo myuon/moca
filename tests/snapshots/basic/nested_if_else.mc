@@ -15,7 +15,7 @@ fun classify(n: int) -> string {
     }
 }
 
-print(classify(-5));
-print(classify(0));
-print(classify(5));
-print(classify(100));
+print($"{classify(-5)}");
+print($"{classify(0)}");
+print($"{classify(5)}");
+print($"{classify(100)}");

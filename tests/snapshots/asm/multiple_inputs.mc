@@ -4,4 +4,4 @@ let b = 4;
 let sum = asm(a, b) -> i64 {
     __emit("Add");
 };
-print(sum);
+print($"{sum}");

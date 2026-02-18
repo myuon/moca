@@ -9,7 +9,7 @@ let compose = fun(f: (int) -> int, g: (int) -> int) -> (int) -> int {
 let double = fun(x: int) -> int { return x * 2; };
 let inc = fun(x: int) -> int { return x + 1; };
 let double_then_inc = compose(inc, double);
-print(double_then_inc(5));
+print($"{double_then_inc(5)}");
 
 // 2. Lambda returning lambda (currying)
 let add = fun(a: int) -> (int) -> int {
@@ -18,7 +18,7 @@ let add = fun(a: int) -> (int) -> int {
     };
 };
 let add3 = add(3);
-print(add3(7));
+print($"{add3(7)}");
 
 // 3. Three-level nesting
 fun make_counter(start: int) -> () -> int {
@@ -28,4 +28,4 @@ fun make_counter(start: int) -> () -> int {
     };
 }
 let counter = make_counter(42);
-print(counter());
+print($"{counter()}");

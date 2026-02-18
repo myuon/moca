@@ -12,10 +12,10 @@ fun swap<A, B>(a: A, b: B) -> B {
 }
 
 // Explicit type arguments
-print(first<int, string>(1, "x"));
-print(second<int, string>(2, "y"));
+print($"{first<int, string>(1, "x")}");
+print($"{second<int, string>(2, "y")}");
 
 // Type inference
-print(first(10, "hello"));
-print(second(20, "world"));
-print(swap("ignored", 999));
+print($"{first(10, "hello")}");
+print($"{second(20, "world")}");
+print($"{swap("ignored", 999)}");

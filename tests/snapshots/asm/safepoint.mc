@@ -7,4 +7,4 @@ let result = asm(x) -> i64 {
     __emit("PushInt", 2);
     __emit("Add");
 };
-print(result);
+print($"{result}");

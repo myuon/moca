@@ -25,29 +25,29 @@ impl Counter {
 
 // Test 1: Method with return value (read self.field)
 let c1 = Counter { count: 10 };
-print(c1.get());
+print($"{c1.get()}");
 
 // Test 2: Method that modifies self
 let c2 = Counter { count: 0 };
 c2.increment();
-print(c2.get());
+print($"{c2.get()}");
 
 c2.increment();
 c2.increment();
-print(c2.get());
+print($"{c2.get()}");
 
 // Test 3: Method with arguments
 let c3 = Counter { count: 5 };
 c3.add(10);
-print(c3.get());
+print($"{c3.get()}");
 
 // Test 4: Multiple method calls
 let c4 = Counter { count: 100 };
 c4.add(50);
 c4.increment();
-print(c4.get());
+print($"{c4.get()}");
 c4.reset();
-print(c4.get());
+print($"{c4.get()}");
 
 // Test 5: Struct with multiple fields
 struct Point {
@@ -66,11 +66,11 @@ impl Point {
 }
 
 let p = Point { x: 3, y: 4 };
-print(p.sum());
+print($"{p.sum()}");
 
 let p2 = Point { x: 0, y: 10 };
 p2.set_x(5);
-print(p2.sum());
+print($"{p2.sum()}");
 
 // Test 6: Method chaining (method returns struct)
 struct Builder {
@@ -90,4 +90,4 @@ impl Builder {
 let b = Builder { value: 0 };
 let b2 = b.add(5);
 let b3 = b2.add(10);
-print(b3.get());
+print($"{b3.get()}");

@@ -10,11 +10,11 @@ fun `new`() -> int {
 }
 
 // Call the escaped function
-print(`new`());
+print($"{`new`()}");
 
 // Define a function named `let` using backtick escape
 fun `let`(s: string) {
-    print(s);
+    print($"{s}");
 }
 
 // Call the escaped function
@@ -22,4 +22,4 @@ fun `let`(s: string) {
 
 // Variable using escaped identifier
 let `if` = 100;
-print(`if`);
+print($"{`if`}");

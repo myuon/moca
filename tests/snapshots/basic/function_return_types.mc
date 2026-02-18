@@ -23,14 +23,14 @@ fun no_return() {
     print("side effect only");
 }
 
-print(get_int());
-print(get_float());
-print(get_bool());
-print(get_string());
+print($"{get_int()}");
+print($"{get_float()}");
+print($"{get_bool()}");
+print($"{get_string()}");
 
 let arr = get_array();
-print(arr[0]);
-print(arr[1]);
-print(arr[2]);
+print($"{arr[0]}");
+print($"{arr[1]}");
+print($"{arr[2]}");
 
 no_return();

@@ -2,15 +2,15 @@
 let a = true;
 let b = false;
 
-print(!a);
-print(!b);
-print(!!a);
-print(!(!b));
+print($"{!a}");
+print($"{!b}");
+print($"{!!a}");
+print($"{!(!b)}");
 
 // Combined with comparisons
 let x = 5;
-print(!(x > 10));
-print(!(x < 3));
+print($"{!(x > 10)}");
+print($"{!(x < 3)}");
 
 // In conditions
 if !b {

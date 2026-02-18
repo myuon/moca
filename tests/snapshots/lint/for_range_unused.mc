@@ -10,5 +10,5 @@ for _i in 0..10 {
 
 // Used variable — no warning
 for i in 0..5 {
-    print(i);
+    print($"{i}");
 }

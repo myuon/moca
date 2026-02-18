@@ -14,5 +14,5 @@ print("nil");
 
 // parse_int
 let n = parse_int("42");
-print(n);
-print(n + 8);
+print($"{n}");
+print($"{n + 8}");

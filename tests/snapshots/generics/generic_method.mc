@@ -10,7 +10,7 @@ impl<T> Container<T> {
 }
 
 let c1 = Container<int> { value: 10 };
-print(c1.get());
+print($"{c1.get()}");
 
 let c2 = Container<string> { value: "hello" };
-print(c2.get());
+print($"{c2.get()}");

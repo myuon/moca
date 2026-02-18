@@ -1,6 +1,6 @@
 // Test expression statements
 fun side_effect(x: int) -> int {
-    print(x);
+    print($"{x}");
     return x + 1;
 }
 
@@ -10,4 +10,4 @@ side_effect(2);
 
 // Used result
 let result = side_effect(3);
-print(result);
+print($"{result}");

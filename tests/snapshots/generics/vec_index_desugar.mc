@@ -14,19 +14,19 @@
 let v: Vec<int> = new Vec<int> {1, 2, 3};
 
 // Test index access with [] syntax (desugars to .get())
-print(v[0]);
-print(v[1]);
-print(v[2]);
+print($"{v[0]}");
+print($"{v[1]}");
+print($"{v[2]}");
 
 // Test index assignment with [] syntax (desugars to .set())
 v[1] = 99;
-print(v[1]);
+print($"{v[1]}");
 
 // Verify other elements unchanged
-print(v[0]);
-print(v[2]);
+print($"{v[0]}");
+print($"{v[2]}");
 
 // Test with computed index
 let i = 0;
 v[i] = 100;
-print(v[i]);
+print($"{v[i]}");

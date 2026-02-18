@@ -50,4 +50,4 @@ fun mandelbrot_bench(max_iter: int) -> int {
     return escape_count;
 }
 
-print(mandelbrot_bench(30000));
+print($"{mandelbrot_bench(30000)}");

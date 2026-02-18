@@ -10,7 +10,7 @@ fun nested_loop() {
         }
         i = i + 1;
     }
-    print(sum);
+    print($"{sum}");
 }
 
 nested_loop();

@@ -2,13 +2,13 @@
 let hello = "Hello";
 let world = "World";
 let msg = hello + " " + world + "!";
-print(msg);
+print($"{msg}");
 
 // Empty string
 let empty = "";
 print(empty + "test");
 
 // String length
-print(len("hello"));
-print(len(""));
-print(len("こんにちは"));
+print($"{len("hello")}");
+print($"{len("")}");
+print($"{len("こんにちは")}");

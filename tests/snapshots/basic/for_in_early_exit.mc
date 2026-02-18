@@ -8,6 +8,6 @@ fun find_first_even(arr: array<int>) -> int {
     return -1;
 }
 
-print(find_first_even([1, 3, 5, 6, 7]));
-print(find_first_even([1, 3, 5, 7]));
-print(find_first_even([2, 4, 6]));
+print($"{find_first_even([1, 3, 5, 6, 7])}");
+print($"{find_first_even([1, 3, 5, 7])}");
+print($"{find_first_even([2, 4, 6])}");

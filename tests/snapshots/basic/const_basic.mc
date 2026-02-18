@@ -1,36 +1,36 @@
 // const basic test
 const N = 42;
-print(N);
+print($"{N}");
 
 const PI = 3.14;
-print(PI);
+print($"{PI}");
 
 const NAME = "hello";
-print(NAME);
+print($"{NAME}");
 
 const FLAG = true;
-print(FLAG);
+print($"{FLAG}");
 
 // const in function scope
 fun test() {
     const LOCAL = 100;
-    print(LOCAL);
+    print($"{LOCAL}");
 }
 test();
 
 // const in block scope
 if true {
     const BLOCK = 999;
-    print(BLOCK);
+    print($"{BLOCK}");
 }
 
 // const used in expressions
 const A = 10;
 const B = 20;
-print(A + B);
+print($"{A + B}");
 
 // const shadowing
 const X = 1;
-print(X);
+print($"{X}");
 let X = 2;
-print(X);
+print($"{X}");

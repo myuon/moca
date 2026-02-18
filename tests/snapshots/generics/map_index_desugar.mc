@@ -12,16 +12,16 @@
 let m: Map<string, int> = new Map<string, int> {"a": 10, "b": 20};
 
 // Test index access with [] syntax (desugars to .get())
-print(m["a"]);
-print(m["b"]);
+print($"{m["a"]}");
+print($"{m["b"]}");
 
 // Test index assignment with [] syntax (desugars to .set())
 m["b"] = 99;
-print(m["b"]);
+print($"{m["b"]}");
 
 // Verify other elements unchanged
-print(m["a"]);
+print($"{m["a"]}");
 
 // Test adding new key
 m["c"] = 30;
-print(m["c"]);
+print($"{m["c"]}");

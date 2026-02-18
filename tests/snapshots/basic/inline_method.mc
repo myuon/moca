@@ -22,6 +22,6 @@ impl Point {
 }
 
 let p = Point { x: 10, y: 20 };
-print(p.get_x());
-print(p.get_y());
-print(p.sum());
+print($"{p.get_x()}");
+print($"{p.get_y()}");
+print($"{p.sum()}");

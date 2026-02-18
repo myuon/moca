@@ -5,7 +5,7 @@ let nanos = time_nanos();
 let formatted = time_format(secs);
 let epoch0 = time_format(0);
 
-print_debug(secs);
-print_debug(nanos);
-print_debug(formatted);
-print_debug(epoch0);
+print($"{secs}");
+print($"{nanos}");
+print($"{formatted}");
+print($"{epoch0}");

@@ -15,9 +15,9 @@ let d = double<float>(5.5);
 let a2 = double<int>(10);
 let b2 = double<string>("ten");
 
-print(a);
-print(b);
-print(c);
-print(d);
-print(a2);
-print(b2);
+print($"{a}");
+print($"{b}");
+print($"{c}");
+print($"{d}");
+print($"{a2}");
+print($"{b2}");

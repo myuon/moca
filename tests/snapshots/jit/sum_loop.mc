@@ -8,5 +8,5 @@ fun sum_to(n) {
     return total;
 }
 
-print(sum_to(100));
-print(sum_to(1000));
+print($"{sum_to(100)}");
+print($"{sum_to(1000)}");

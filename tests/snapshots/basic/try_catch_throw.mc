@@ -9,7 +9,7 @@ fun might_fail(x: int) -> int {
 // Test successful case
 try {
     let result = might_fail(5);
-    print(result);
+    print($"{result}");
 } catch e {
     print("caught error");
 }
@@ -17,7 +17,7 @@ try {
 // Test error case
 try {
     let result = might_fail(-1);
-    print(result);
+    print($"{result}");
 } catch e {
     print("caught: " + e);
 }

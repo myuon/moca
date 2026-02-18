@@ -7,24 +7,24 @@ vec.push(20);
 vec.push(30);
 
 // Test index access with [] syntax
-print(vec[0]);
-print(vec[1]);
-print(vec[2]);
+print(debug(vec[0]));
+print(debug(vec[1]));
+print(debug(vec[2]));
 
 // Test index assignment with [] syntax
 vec[1] = 99;
-print(vec[1]);
+print(debug(vec[1]));
 
 // Verify other elements unchanged
-print(vec[0]);
-print(vec[2]);
+print(debug(vec[0]));
+print(debug(vec[2]));
 
 // Test with computed index
 let i = 2;
-print(vec[i]);
+print(debug(vec[i]));
 vec[i] = 200;
-print(vec[i]);
+print(debug(vec[i]));
 
 // Test mixing [] syntax with methods
-print(vec.len());
-print(vec.get(0));
+print(debug(vec.len()));
+print(debug(vec.get(0)));

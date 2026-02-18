@@ -1,4 +1,4 @@
 let x = nil;
-print(x);
-print(x == nil);
-print(x != nil);
+print(debug(x));
+print($"{x == nil}");
+print($"{x != nil}");

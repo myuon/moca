@@ -9,7 +9,7 @@ while i < 20 {
     i = i + 1;
 }
 
-print(m.len());
+print($"{m.len()}");
 
 // Verify all entries are still accessible after resize
 let all_ok = true;
@@ -44,7 +44,7 @@ if contains_ok {
 m.remove(5);
 m.remove(10);
 m.remove(15);
-print(m.len());
+print($"{m.len()}");
 
 // Verify removed entries are gone
 if !m.contains(5) && !m.contains(10) && !m.contains(15) {

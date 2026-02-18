@@ -1,5 +1,5 @@
 let s = "hello";
-print(s);
+print($"{s}");
 let s2 = "world";
 print(s + " " + s2);
-print(len(s));
+print($"{len(s)}");

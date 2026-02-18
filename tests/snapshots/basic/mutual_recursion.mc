@@ -6,5 +6,5 @@ fun is_odd(n: int) -> bool {
     if n == 0 { return false; }
     return is_even(n - 1);
 }
-print(is_even(4));
-print(is_odd(4));
+print($"{is_even(4)}");
+print($"{is_odd(4)}");

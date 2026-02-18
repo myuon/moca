@@ -1,2 +1,2 @@
 let x = 42;
-print(x.field);
+print($"{x.field}");

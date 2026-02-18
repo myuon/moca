@@ -19,11 +19,11 @@ fun grade(score: int) -> string {
     }
 }
 
-print(grade(95));
-print(grade(85));
-print(grade(75));
-print(grade(65));
-print(grade(55));
+print($"{grade(95)}");
+print($"{grade(85)}");
+print($"{grade(75)}");
+print($"{grade(65)}");
+print($"{grade(55)}");
 
 // Simple if-else
 fun abs_value(x: int) -> int {
@@ -34,6 +34,6 @@ fun abs_value(x: int) -> int {
     }
 }
 
-print(abs_value(10));
-print(abs_value(-5));
-print(abs_value(0));
+print($"{abs_value(10)}");
+print($"{abs_value(-5)}");
+print($"{abs_value(0)}");

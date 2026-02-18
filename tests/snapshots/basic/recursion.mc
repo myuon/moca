@@ -13,7 +13,7 @@ fun power(base: int, exp: int) -> int {
     return base * power(base, exp - 1);
 }
 
-print(sum_to(5));
-print(sum_to(10));
-print(power(2, 5));
-print(power(3, 4));
+print($"{sum_to(5)}");
+print($"{sum_to(10)}");
+print($"{power(2, 5)}");
+print($"{power(3, 4)}");

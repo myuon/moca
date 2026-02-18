@@ -10,12 +10,12 @@
 let m: Map<string, int> = new Map<string, int> {"a": 10, "b": 20};
 
 // Check size
-print(m.len());
+print($"{m.len()}");
 
 // Check values
-print(m.get_string("a"));
-print(m.get_string("b"));
+print($"{m.get_string("a")}");
+print($"{m.get_string("b")}");
 
 // Check contains
-print(m.contains_string("a"));
-print(m.contains_string("b"));
+print($"{m.contains_string("a")}");
+print($"{m.contains_string("b")}");

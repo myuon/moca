@@ -19,4 +19,4 @@ while i < 160000 {
     sum = sum + is_even(i % 200);
     i = i + 1;
 }
-print(sum);
+print($"{sum}");

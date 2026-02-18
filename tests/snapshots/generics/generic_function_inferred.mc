@@ -4,7 +4,7 @@ fun identity<T>(x: T) -> T {
 }
 
 // Type argument inferred from usage
-print(identity(100));
-print(identity("world"));
-print(identity(false));
-print(identity(2.71));
+print($"{identity(100)}");
+print($"{identity("world")}");
+print($"{identity(false)}");
+print($"{identity(2.71)}");

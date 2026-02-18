@@ -15,6 +15,6 @@ fun first_or_default(arr: array<int>, default: int) -> int {
 }
 
 let numbers = [1, 2, 3, 4, 5];
-print(sum_array(numbers));
-print(first_or_default(numbers, -1));
-print(first_or_default([], -1));
+print($"{sum_array(numbers)}");
+print($"{first_or_default(numbers, -1)}");
+print($"{first_or_default([], -1)}");

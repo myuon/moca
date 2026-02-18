@@ -18,9 +18,9 @@ fun maybe_value(x: int?) -> int {
     return x;
 }
 
-print(add(3, 4));
-print(greet("World"));
-print(is_positive(5));
-print(is_positive(-3));
-print(maybe_value(nil));
-print(maybe_value(42));
+print($"{add(3, 4)}");
+print($"{greet("World")}");
+print($"{is_positive(5)}");
+print($"{is_positive(-3)}");
+print($"{maybe_value(nil)}");
+print($"{maybe_value(42)}");

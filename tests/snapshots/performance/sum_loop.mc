@@ -6,7 +6,7 @@ fun sum_loop() {
         sum = sum + i;
         i = i + 1;
     }
-    print(sum);
+    print($"{sum}");
 }
 
 sum_loop();

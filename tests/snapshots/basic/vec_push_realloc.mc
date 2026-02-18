@@ -9,12 +9,12 @@ while (i < 100) {
     i = i + 1;
 }
 
-print(v.len());
+print($"{v.len()}");
 
 // Verify first and last elements
-print(v.get(0));
-print(v.get(99));
+print(debug(v.get(0)));
+print(debug(v.get(99)));
 
 // Verify some middle elements
-print(v.get(50));
-print(v.get(25));
+print(debug(v.get(50)));
+print(debug(v.get(25)));

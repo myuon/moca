@@ -10,4 +10,4 @@ fun will_throw() -> int {
 print("calling function");
 let result = will_throw();
 print("after function call - should not print");
-print(result);
+print($"{result}");

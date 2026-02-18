@@ -1,4 +1,4 @@
 let x = 10 + 20 * 2;
-print(x);
+print($"{x}");
 let y = x % 7;
-print(y);
+print($"{y}");

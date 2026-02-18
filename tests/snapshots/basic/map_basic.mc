@@ -7,9 +7,9 @@ let m: map<string, string> = map::`new`();
 m.put("name", "Alice");
 m.put("city", "Tokyo");
 
-print(m.get("name"));
-print(m.get("city"));
-print(m.len());
+print($"{m.get("name")}");
+print($"{m.get("city")}");
+print($"{m.len()}");
 
 // Test contains
 if m.contains("name") {
@@ -21,15 +21,15 @@ if !m.contains("unknown") {
 
 // Test overwrite
 m.put("name", "Bob");
-print(m.get("name"));
-print(m.len());
+print($"{m.get("name")}");
+print($"{m.len()}");
 
 // Test remove
 let removed = m.remove("city");
 if removed {
     print("removed city");
 }
-print(m.len());
+print($"{m.len()}");
 
 // Test get non-existent key returns 0
-print(m.get("city"));
+print(debug(m.get("city")));

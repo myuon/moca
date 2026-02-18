@@ -4,8 +4,8 @@
 let person: map<string, string> = map::`new`();
 person.put("name", "Alice");
 person.put("city", "Tokyo");
-print(person.get("name"));
-print(person.get("city"));
+print($"{person.get("name")}");
+print($"{person.get("city")}");
 
 // Int key map demonstrating computed keys
 let x = 10;
@@ -14,4 +14,4 @@ let point: map<int, string> = map::`new`();
 point.put(x, "ten");
 point.put(y, "twenty");
 point.put(x + y, "thirty");
-print(point.get(30));
+print($"{point.get(30)}");

@@ -19,12 +19,12 @@ impl Point {
 
 // Call associated functions
 let p1 = Point::origin();
-print(p1.x);
-print(p1.y);
+print($"{p1.x}");
+print($"{p1.y}");
 
 let p2 = Point::create(3, 4);
-print(p2.x);
-print(p2.y);
+print($"{p2.x}");
+print($"{p2.y}");
 
 // Another struct with associated function
 struct Counter {
@@ -42,7 +42,7 @@ impl Counter {
 }
 
 let c = Counter::zero();
-print(c.value);
+print($"{c.value}");
 
 let c2 = Counter::with_value(100);
-print(c2.value);
+print($"{c2.value}");

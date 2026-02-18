@@ -1,6 +1,6 @@
 // All variables are used — no warnings expected
 let x = 42;
-print(x);
+print($"{x}");
 
 // _ prefix — no warning
 let _unused = 99;
@@ -9,11 +9,11 @@ let _unused = 99;
 let a = 1;
 let b = 2;
 let c = a + b;
-print(c);
+print($"{c}");
 
 // for-in with used variable
 for i in [1, 2, 3] {
-    print(i);
+    print($"{i}");
 }
 
 // catch with used variable
@@ -21,6 +21,6 @@ fun safe() {
     try {
         print("try");
     } catch e {
-        print(e);
+        print($"{e}");
     }
 }

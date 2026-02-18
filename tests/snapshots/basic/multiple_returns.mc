@@ -23,10 +23,10 @@ fun sign(x: int) -> int {
     return 0;
 }
 
-print(max(10, 20));
-print(max(30, 5));
-print(abs(-15));
-print(abs(15));
-print(sign(-5));
-print(sign(5));
-print(sign(0));
+print($"{max(10, 20)}");
+print($"{max(30, 5)}");
+print($"{abs(-15)}");
+print($"{abs(15)}");
+print($"{sign(-5)}");
+print($"{sign(5)}");
+print($"{sign(0)}");

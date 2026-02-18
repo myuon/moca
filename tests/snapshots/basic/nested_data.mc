@@ -8,7 +8,7 @@ point.put("y", 20);
 
 // Create an array of numbers
 let numbers = [1, 2, 3];
-print(numbers[1]);
+print($"{numbers[1]}");
 
 // Access the nested map
-print(point.get("x"));
+print($"{point.get("x")}");

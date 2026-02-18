@@ -11,13 +11,13 @@
 let m: Map<int, string> = new Map<int, string> {1: "one", 2: "two", 3: "three"};
 
 // Check size
-print(m.len());
+print($"{m.len()}");
 
 // Check values
-print(m.get_int(1));
-print(m.get_int(2));
-print(m.get_int(3));
+print($"{m.get_int(1)}");
+print($"{m.get_int(2)}");
+print($"{m.get_int(3)}");
 
 // Check contains
-print(m.contains_int(1));
-print(m.contains_int(4));
+print($"{m.contains_int(1)}");
+print($"{m.contains_int(4)}");

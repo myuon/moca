@@ -7,9 +7,9 @@ fun abs(x: int) -> int {
     return x;
 }
 
-print(abs(5));
-print(abs(-5));
-print(abs(0));
+print($"{abs(5)}");
+print($"{abs(-5)}");
+print($"{abs(0)}");
 
 // Multiple returns in different branches
 @inline
@@ -23,9 +23,9 @@ fun clamp(x: int, lo: int, hi: int) -> int {
     return x;
 }
 
-print(clamp(5, 0, 10));
-print(clamp(-3, 0, 10));
-print(clamp(15, 0, 10));
+print($"{clamp(5, 0, 10)}");
+print($"{clamp(-3, 0, 10)}");
+print($"{clamp(15, 0, 10)}");
 
 // Return in while loop
 @inline
@@ -40,4 +40,4 @@ fun find_first_ge(threshold: int) -> int {
     return -1;
 }
 
-print(find_first_ge(7));
+print($"{find_first_ge(7)}");

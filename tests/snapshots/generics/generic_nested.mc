@@ -15,7 +15,7 @@ let p = Pair<Option<int>, Option<string>> {
     right: Option<string> { has_value: true, value: "nested" }
 };
 
-print(p.left.has_value);
-print(p.left.value);
-print(p.right.has_value);
-print(p.right.value);
+print($"{p.left.has_value}");
+print($"{p.left.value}");
+print($"{p.right.has_value}");
+print($"{p.right.value}");

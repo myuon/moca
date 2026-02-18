@@ -3,7 +3,7 @@ let x = 42;
 
 // Used variable (no warning)
 let y = 10;
-print(y);
+print($"{y}");
 
 // _ prefix suppresses warning
 let _z = 99;
@@ -12,7 +12,7 @@ let _z = 99;
 fun foo() {
     let a = 1;
     let b = 2;
-    print(b);
+    print($"{b}");
 }
 
 // Unused for-in loop variable
@@ -22,7 +22,7 @@ for i in [1, 2, 3] {
 
 // Used for-in loop variable (no warning)
 for j in [1, 2, 3] {
-    print(j);
+    print($"{j}");
 }
 
 // Unused catch variable
@@ -39,7 +39,7 @@ fun baz() {
     try {
         print("try");
     } catch e {
-        print(e);
+        print($"{e}");
     }
 }
 
@@ -55,7 +55,7 @@ fun nested() {
 let p = 1;
 let q = 2;
 let r = 3;
-print(r);
+print($"{r}");
 
 // Assignment-only is NOT a usage
 let w = 0;

@@ -11,11 +11,11 @@ if fd < 0 {
 } else {
     // Write content
     let written = write(fd, content, len(content));
-    print(written);
+    print($"{written}");
 
     // Close file
     let close_result = close(fd);
-    print(close_result);
+    print($"{close_result}");
 }
 
 // Open file for reading (O_RDONLY = 0)
@@ -25,17 +25,17 @@ if fd2 < 0 {
 } else {
     // Read content back
     let read_content = read(fd2, 100);
-    print(read_content);
+    print($"{read_content}");
 
     // Close file
     let close_result2 = close(fd2);
-    print(close_result2);
+    print($"{close_result2}");
 }
 
 // Test 2: Verify constants are accessible
-print(O_RDONLY());
-print(O_WRONLY());
-print(O_CREAT());
-print(O_TRUNC());
-print(AF_INET());
-print(SOCK_STREAM());
+print($"{O_RDONLY()}");
+print($"{O_WRONLY()}");
+print($"{O_CREAT()}");
+print($"{O_TRUNC()}");
+print($"{AF_INET()}");
+print($"{SOCK_STREAM()}");

@@ -11,9 +11,9 @@
 // Create a Vec with computed values
 let v: Vec<int> = new Vec<int> {1 + 0, 1 + 1, 1 + 2};
 
-print(v.len());
+print($"{v.len()}");
 
 // Verify the computed values
-print(v.get(0));
-print(v.get(1));
-print(v.get(2));
+print($"{v.get(0)}");
+print($"{v.get(1)}");
+print($"{v.get(2)}");

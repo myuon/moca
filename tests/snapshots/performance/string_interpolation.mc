@@ -22,7 +22,7 @@ fun string_interp_bench() {
         total = total + len(line);
         i = i + 1;
     }
-    print(total);
+    print($"{total}");
 }
 
 string_interp_bench();

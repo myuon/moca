@@ -9,5 +9,5 @@ send(sender_id, 100);
 // Receive them
 let a = recv(receiver_id);
 let b = recv(receiver_id);
-print(a);
-print(b);
+print(debug(a));
+print(debug(b));

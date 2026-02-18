@@ -1,21 +1,21 @@
 // Test write syscall to stdout
 let result = write(1, "hello", 5);
-print(result);
+print($"{result}");
 
 // Test partial write
 let result2 = write(1, "world!", 3);
-print(result2);
+print($"{result2}");
 
 // Test with newline
 write(1, "\n", 1);
 
 // Test invalid fd (should return -1)
 let bad_result = write(99, "test", 4);
-print(bad_result);
+print($"{bad_result}");
 
 // Test count larger than string length (should truncate)
 let truncated = write(1, "hi", 100);
-print(truncated);
+print($"{truncated}");
 
 write(1, "\n", 1);
 
