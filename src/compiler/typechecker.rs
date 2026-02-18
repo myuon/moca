@@ -1468,6 +1468,17 @@ impl TypeChecker {
                         ));
                         self.fresh_var()
                     }
+                    Type::String => match field.as_str() {
+                        "data" => Type::Ptr(Box::new(Type::Int)),
+                        "len" => Type::Int,
+                        _ => {
+                            self.errors.push(TypeError::new(
+                                format!("string has no field `{}`", field),
+                                *span,
+                            ));
+                            self.fresh_var()
+                        }
+                    },
                     Type::Var(_) => {
                         // Can't infer field access on unknown object type
                         self.fresh_var()
