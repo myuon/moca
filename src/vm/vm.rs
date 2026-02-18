@@ -2780,6 +2780,45 @@ impl VM {
                 // print returns the value it printed (for expression statements)
                 self.stack.push(value);
             }
+            Op::PrintInt => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                match value {
+                    Value::I64(n) => {
+                        writeln!(self.output, "{}", n).map_err(|e| format!("io error: {}", e))?;
+                    }
+                    _ => {
+                        let s = self.value_to_string(&value)?;
+                        writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
+                    }
+                }
+                self.stack.push(value);
+            }
+            Op::PrintFloat => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                match value {
+                    Value::F64(f) => {
+                        writeln!(self.output, "{}", f).map_err(|e| format!("io error: {}", e))?;
+                    }
+                    _ => {
+                        let s = self.value_to_string(&value)?;
+                        writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
+                    }
+                }
+                self.stack.push(value);
+            }
+            Op::PrintBool => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                match value {
+                    Value::Bool(b) => {
+                        writeln!(self.output, "{}", b).map_err(|e| format!("io error: {}", e))?;
+                    }
+                    _ => {
+                        let s = self.value_to_string(&value)?;
+                        writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
+                    }
+                }
+                self.stack.push(value);
+            }
             Op::GcHint(_bytes) => {
                 // Hint about upcoming allocation - might trigger GC
                 if self.heap.should_gc() {

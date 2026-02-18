@@ -162,7 +162,7 @@ impl Debugger {
                     self.stack.push(Value::I64(-v));
                 }
             }
-            Op::PrintDebug => {
+            Op::PrintDebug | Op::PrintInt | Op::PrintFloat | Op::PrintBool => {
                 if let Some(val) = self.stack.last() {
                     self.output.push(self.format_value(val).to_string());
                 }

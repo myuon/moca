@@ -469,6 +469,9 @@ impl Verifier {
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::GcHint(_) => (0, 0),
             Op::PrintDebug => (1, 1),    // pops value, pushes return value
+            Op::PrintInt => (1, 1),      // pops int, pushes return value
+            Op::PrintFloat => (1, 1),    // pops float, pushes return value
+            Op::PrintBool => (1, 1),     // pops bool, pushes return value
             Op::TypeOf => (1, 1),        // pops value, pushes type string
             Op::FloatToString => (1, 1), // pops value, pushes string
             Op::ParseInt => (1, 1),      // pops string, pushes int

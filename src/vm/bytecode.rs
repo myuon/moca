@@ -377,6 +377,9 @@ const OP_PRINT_DEBUG: u8 = 88;
 const OP_TYPE_OF: u8 = 89;
 const OP_FLOAT_TO_STRING: u8 = 90;
 const OP_PARSE_INT: u8 = 91;
+const OP_PRINT_INT: u8 = 119;
+const OP_PRINT_FLOAT: u8 = 120;
+const OP_PRINT_BOOL: u8 = 121;
 // Exception Handling
 const OP_THROW: u8 = 93;
 const OP_TRY_BEGIN: u8 = 94;
@@ -604,6 +607,9 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *size as u32)?;
         }
         Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
+        Op::PrintInt => w.write_all(&[OP_PRINT_INT])?,
+        Op::PrintFloat => w.write_all(&[OP_PRINT_FLOAT])?,
+        Op::PrintBool => w.write_all(&[OP_PRINT_BOOL])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::FloatToString => w.write_all(&[OP_FLOAT_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
@@ -780,6 +786,9 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_PRINT_DEBUG => Op::PrintDebug,
+        OP_PRINT_INT => Op::PrintInt,
+        OP_PRINT_FLOAT => Op::PrintFloat,
+        OP_PRINT_BOOL => Op::PrintBool,
         OP_TYPE_OF => Op::TypeOf,
         OP_FLOAT_TO_STRING => Op::FloatToString,
         OP_PARSE_INT => Op::ParseInt,

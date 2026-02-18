@@ -1706,7 +1706,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::UMul128Hi { dst, a, b });
                 vstack.push(Vse::Reg(dst));
             }
-            Op::PrintDebug => {
+            Op::PrintDebug | Op::PrintInt | Op::PrintFloat | Op::PrintBool => {
                 let src = pop_vreg(
                     &mut vstack,
                     &mut micro_ops,

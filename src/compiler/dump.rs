@@ -1727,6 +1727,9 @@ impl<'a> Disassembler<'a> {
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::PrintDebug => self.output.push_str("PrintDebug"),
+            Op::PrintInt => self.output.push_str("PrintInt"),
+            Op::PrintFloat => self.output.push_str("PrintFloat"),
+            Op::PrintBool => self.output.push_str("PrintBool"),
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
@@ -2442,7 +2445,7 @@ mod tests {
         assert!(output.contains("I64Const 42"));
         assert!(output.contains("LocalSet"));
         assert!(output.contains("LocalGet"));
-        assert!(output.contains("PrintDebug"));
+        assert!(output.contains("PrintInt"));
     }
 
     #[test]

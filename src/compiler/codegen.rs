@@ -1008,8 +1008,14 @@ impl Codegen {
                                 ops.push(Op::PrintDebug);
                             }
                         } else {
+                            let print_op = match self.infer_expr_type(&args[0]) {
+                                ValueType::I64 => Op::PrintInt,
+                                ValueType::F64 | ValueType::F32 => Op::PrintFloat,
+                                ValueType::I32 => Op::PrintBool,
+                                ValueType::Ref => Op::PrintDebug,
+                            };
                             self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::PrintDebug);
+                            ops.push(print_op);
                         }
                     }
                     "__syscall" => {
@@ -1585,6 +1591,9 @@ impl Codegen {
 
             // Builtins
             "PrintDebug" => Ok(Op::PrintDebug),
+            "PrintInt" => Ok(Op::PrintInt),
+            "PrintFloat" => Ok(Op::PrintFloat),
+            "PrintBool" => Ok(Op::PrintBool),
 
             // GC hint
             "GcHint" => {
@@ -1697,7 +1706,7 @@ mod tests {
     fn test_simple_print() {
         let chunk = compile("print_debug(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::I64Const(42)));
-        assert!(chunk.main.code.contains(&Op::PrintDebug));
+        assert!(chunk.main.code.contains(&Op::PrintInt));
     }
 
     #[test]
