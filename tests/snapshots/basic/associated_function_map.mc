@@ -16,7 +16,7 @@ m2.put(2, "two");
 print(m2.len());
 print(m2.get(1));
 
-// With any types
-let m3: map<any, any> = map::`new`();
+// With string keys and int values
+let m3: map<string, int> = map::`new`();
 m3.put("key", 100);
 print(m3.get("key"));
