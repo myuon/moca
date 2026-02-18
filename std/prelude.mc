@@ -1576,63 +1576,6 @@ impl<K, V> Map<K, V> {
         return result;
     }
 
-    // Generic put method - dispatches based on key type
-    fun put(self, key: any, val: any) {
-        let key_type = type_of(key);
-        if key_type == "int" {
-            self.put_int(key, val);
-        } else if key_type == "string" {
-            self.put_string(key, val);
-        } else {
-            throw "map.put: unsupported key type";
-        }
-    }
-
-    // Alias for put - used by index assignment desugar (map[key] = value)
-    fun set(self, key: any, val: any) {
-        self.put(key, val);
-    }
-
-    // Generic get method - dispatches based on key type
-    fun get(self, key: any) -> any {
-        let key_type = type_of(key);
-        if key_type == "int" {
-            return self.get_int(key);
-        } else if key_type == "string" {
-            return self.get_string(key);
-        } else {
-            throw "map.get: unsupported key type";
-        }
-    }
-
-    // Generic contains method - dispatches based on key type
-    fun contains(self, key: any) -> bool {
-        let key_type = type_of(key);
-        if key_type == "int" {
-            return self.contains_int(key);
-        }
-        if key_type == "string" {
-            return self.contains_string(key);
-        }
-        // Unsupported key type - throw error and return false to satisfy type checker
-        throw "map.contains: unsupported key type";
-        return false;
-    }
-
-    // Generic remove method - dispatches based on key type
-    fun remove(self, key: any) -> bool {
-        let key_type = type_of(key);
-        if key_type == "int" {
-            return self.remove_int(key);
-        }
-        if key_type == "string" {
-            return self.remove_string(key);
-        }
-        // Unsupported key type - throw error and return false to satisfy type checker
-        throw "map.remove: unsupported key type";
-        return false;
-    }
-
     // Get the size of the map
     fun len(self) -> int {
         return self.hm_size;

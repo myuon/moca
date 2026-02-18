@@ -2025,6 +2025,18 @@ impl TypeChecker {
                     return self.check_map_method(method, args, key_type, value_type, env, *span);
                 }
 
+                // Handle Map<K, V> (GenericStruct form) methods
+                if let Type::GenericStruct {
+                    name, type_args, ..
+                } = &resolved_obj_type
+                    && name == "Map"
+                    && type_args.len() == 2
+                {
+                    let key_type = type_args[0].clone();
+                    let value_type = type_args[1].clone();
+                    return self.check_map_method(method, args, &key_type, &value_type, env, *span);
+                }
+
                 // Handle ptr<T> methods
                 if let Type::Ptr(ref elem) = resolved_obj_type {
                     return self.check_ptr_method(method, args, elem, env, *span);
@@ -3017,11 +3029,11 @@ impl TypeChecker {
         span: Span,
     ) -> Type {
         match method {
-            "put" => {
-                // put(key: K, value: V) -> nil
+            "put" | "set" | "put_int" | "put_string" => {
+                // put/set/put_int/put_string(key: K, value: V) -> nil
                 if args.len() != 2 {
                     self.errors.push(TypeError::new(
-                        format!("map.put expects 2 arguments, got {}", args.len()),
+                        format!("map.{} expects 2 arguments, got {}", method, args.len()),
                         span,
                     ));
                     return Type::Nil;
@@ -3036,7 +3048,7 @@ impl TypeChecker {
                 }
                 Type::Nil
             }
-            "get" => {
+            "get" | "get_int" | "get_string" => {
                 // get(key: K) -> V
                 if args.len() != 1 {
                     self.errors.push(TypeError::new(
@@ -3051,7 +3063,7 @@ impl TypeChecker {
                 }
                 self.substitution.apply(value_type)
             }
-            "contains" => {
+            "contains" | "contains_int" | "contains_string" => {
                 // contains(key: K) -> bool
                 if args.len() != 1 {
                     self.errors.push(TypeError::new(
@@ -3066,7 +3078,7 @@ impl TypeChecker {
                 }
                 Type::Bool
             }
-            "remove" => {
+            "remove" | "remove_int" | "remove_string" => {
                 // remove(key: K) -> bool
                 if args.len() != 1 {
                     self.errors.push(TypeError::new(
