@@ -828,10 +828,22 @@ fun print_str(s: string) {
     write(1, s, n);
 }
 
+// Print a string to stdout with a trailing newline.
+fun print(s: string) {
+    print_str(s);
+    write(1, "\n", 1);
+}
+
 // Print a string to stderr without a newline.
 fun eprint_str(s: string) {
     let n = len(s);
     write(2, s, n);
+}
+
+// Print a string to stderr with a trailing newline.
+fun eprint(s: string) {
+    eprint_str(s);
+    write(2, "\n", 1);
 }
 
 // ============================================================================

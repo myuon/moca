@@ -1,93 +1,84 @@
-# Spec.md — Phase 1: Map の any 型依存削減
+# Spec.md — print関数のprelude化とPrintDebug opcode廃止
 
 ## 1. Goal
-- Map<K, V> の `put/get/contains/remove/set` からランタイム `type_of()` ディスパッチを除去し、コンパイル時の型情報（desugar パスの既存機能）に基づく型別メソッド直接呼び出しのみで動作するようにする
+- `print`/`print_debug` ビルトイン（コンパイラ組み込み + `Op::PrintDebug`）を廃止し、`print(s: string)` をprelude関数にする
+- 呼び出し側は `print($"{x}")` や `print(debug(arr))` のように文字列を渡す形に統一する
 
 ## 2. Non-Goals
-- `to_string` の型別特殊化（Phase 2）
-- 型別命令の追加（`Op::StringEq` 等、Phase 3）
+- `debug` ビルトインの自作実装への置き換え（将来issueとして積む）
 - ObjectKind の廃止（Phase 4）
-- `any` 型そのものの言語仕様からの削除
-- `keys()` / `values()` の返り値型の改善（`vec<any>` → `vec<K>` / `vec<V>` は別途対応）
-- `HashMapEntry` の型パラメータ化（`__heap_load`/`__heap_store` の型付けとの整合性を優先し据え置き）
+- `any` 型の言語仕様からの削除
+- string interpolation の仕組み変更
 
 ## 3. Target Users
-- moca 言語のユーザー（Map を使用するプログラムの作者）
-- moca コンパイラ / VM の開発者（Phase 2〜4 への土台）
+- moca 言語のユーザー
+- moca コンパイラ / VM の開発者
 
 ## 4. Core User Flow
-- ユーザーは `map<string, int>` や `map<int, string>` のように型付きMapを使う
-- `m.put(key, val)`, `m.get(key)`, `m[key]`, `m[key] = val` 等の操作は、既存の desugar パスが K 型を見て `put_string` / `put_int` 等に自動書き換え済み
-- **変更点**: prelude から generic ディスパッチメソッド（`put/set/get/contains/remove`）を削除
-- **変更点**: ヘルパー関数 `_map_find_entry_int/string` / `_map_rehash_int/string` の引数型を `Map<any, any>` から適切な型に修正
-- **変更点**: basic テスト群（map_basic, map_collision, map_int_keys, map_iteration, map_resize）を `map<any, any>` から型付き Map に移行
-- **変更点**: `impl map` の `map::new()` を対処
-- **変更点**: desugar の `set` メソッドに対する型別書き換え対応を確認・追加
+- `print("hello")` → prelude の `print(s: string)` を呼ぶ（改行付き出力）
+- `print($"{x}")` → string interpolation で `x.to_string()` → `print` に渡す
+- `print(debug(arr))` → `debug` ビルトインが `any` → `string` 変換 → `print` に渡す
+- `eprint("error")` → stderr に改行付き出力
 
 ## 5. Inputs & Outputs
-- **入力**: 既存の Map 実装（std/prelude.mc）、既存テスト群（tests/snapshots/basic/map_*.mc）
-- **出力**: `type_of()` を使わない Map 実装、型付き Map を使うテスト
+- **入力**: 既存の `print(x)` / `print_debug(x)` を使う全テストファイル（155ファイル）、prelude の `print_str` / `eprint_str`
+- **出力**: `print(s: string)` / `eprint(s: string)` prelude関数、`debug(v: any) -> string` ビルトイン、全テスト書き換え
 
 ## 6. Tech Stack
-- Rust（コンパイラ）
-- moca（prelude/テスト）
-- テスト: `cargo test`（snapshot tests）
+- Rust（コンパイラ / VM）
+- moca（prelude / テスト）
 
 ## 7. Rules & Constraints
-- 既存 snapshot テストの**外部挙動（出力）は維持**する（.stdout の内容は変わらない）
-- テストの .mc ファイルは型付きMap への書き換えが許容される
-- `cargo fmt && cargo check && cargo test && cargo clippy` が全パスすること
-- desugar パスの `specialize_map_method` は既に `put/get/contains/remove` → `put_int/put_string` 等の書き換えを行っている（変更不要の見込み）
-- desugar で `set` → `put_int/put_string` への書き換えが正しく動くか確認が必要
+- 既存 snapshot テストの**出力は変更しない**（.stdout は同一）
+- `cargo fmt && cargo check && cargo test && cargo clippy` 全パス
+- codegen の文字列リテラル最適化は削除する（普通に `print` 関数を呼ぶだけ）
+- `debug` ビルトインは将来自作に置き換えるので、issueを作成する
 
-## 8. Open Questions
-- `map::new()` の `impl map` ブロックが `map<any, any>` を返している。呼び出し側で型付きMap を使うなら不要になる可能性あり → 実際の使用状況を調べて判断
+## 8. Acceptance Criteria
+1. `print` / `print_debug` がコンパイラのビルトインリストから削除されている
+2. `Op::PrintDebug` が `Op` enum から削除されている
+3. prelude に `print(s: string)` が定義されている（改行付き出力）
+4. prelude に `eprint(s: string)` が定義されている（stderr、改行付き）
+5. `debug(v: any) -> string` ビルトインが追加されている（Op::Debug で value_to_string を使用）
+6. 全テストファイルが `print($"{x}")` / `print(debug(x))` / `print("literal")` 形式に移行済み
+7. 全テスト（`cargo test`）がパスする
+8. `cargo clippy` に警告がない
+9. `debug` を自作に置き換えるissueが作成されている
 
-## 9. Acceptance Criteria
-1. prelude の `Map<K,V>` impl から `put(self, key: any, val: any)` が削除されている
-2. prelude の `Map<K,V>` impl から `set(self, key: any, val: any)` が削除されている
-3. prelude の `Map<K,V>` impl から `get(self, key: any) -> any` が削除されている
-4. prelude の `Map<K,V>` impl から `contains(self, key: any) -> bool` が削除されている
-5. prelude の `Map<K,V>` impl から `remove(self, key: any) -> bool` が削除されている
-6. `_map_find_entry_int/string` の引数が `Map<any, any>` ではなくなっている
-7. `_map_rehash_int/string` の引数が `Map<any, any>` ではなくなっている
-8. basic テスト群が型付き Map (`map<string, ...>` / `map<int, ...>`) を使用している
-9. 全テスト（`cargo test`）がパスする
-10. `cargo clippy` に警告がない
-
-## 10. Verification Strategy
+## 9. Verification Strategy
 - **進捗検証**: 各タスク完了後に `cargo check && cargo test` を実行
-- **達成検証**: `grep "type_of" std/prelude.mc` で Map メソッド内の type_of 使用がゼロ、`grep "key: any" std/prelude.mc` で Map メソッドに any 残留なし
-- **漏れ検出**: 全 Acceptance Criteria をチェックリストで確認
+- **達成検証**: `grep "Op::PrintDebug" src/` でゼロ、全 Acceptance Criteria チェック
+- **漏れ検出**: `grep 'print\b' src/compiler/resolver.rs` でビルトインに `print` が残っていないことを確認
 
-## 11. Test Plan
+## 10. Test Plan
 
-### Scenario 1: 型付き Map<string, V> の基本操作
-- **Given**: `let m: map<string, int> = Map<string, int>::new();` で Map 作成
-- **When**: `m.put("key", 42)`, `m.get("key")`, `m.contains("key")`, `m.remove("key")` を実行
-- **Then**: desugar が put_string/get_string/contains_string/remove_string に書き換え、正しい結果を返す
+### Scenario 1: int/float/bool の print
+- **Given**: `let x = 42;`
+- **When**: `print($"{x}")` を実行
+- **Then**: "42\n" が出力される
 
-### Scenario 2: 型付き Map<int, V> の基本操作
-- **Given**: `let m: map<int, string> = Map<int, string>::new();` で Map 作成
-- **When**: `m.put(1, "one")`, `m.get(1)`, `m.contains(1)`, `m.remove(1)` を実行
-- **Then**: desugar が put_int/get_int/contains_int/remove_int に書き換え、正しい結果を返す
+### Scenario 2: 配列・nil の debug + print
+- **Given**: `let arr: array<int> = []; let n = nil;`
+- **When**: `print(debug(arr))` / `print(debug(n))` を実行
+- **Then**: "[]\n" / "nil\n" が出力される
 
-### Scenario 3: リサイズ後のデータ整合性
-- **Given**: 型付き Map に 20 エントリを追加（リサイズ発生）
-- **When**: 全エントリの存在確認と値の検証
-- **Then**: 全エントリが正しく取得でき、リサイズ後もデータが保持されている
+### Scenario 3: 文字列の print
+- **Given**: `let s = "hello";`
+- **When**: `print(s)` を実行
+- **Then**: "hello\n" が出力される
 
 ---
 
 ## TODO
 
-- [ ] 1. desugar: `set` メソッドの型別書き換え対応を確認（`put_int`/`put_string` に書き換わるか）
-- [ ] 2. prelude: Map<K,V> impl から generic ディスパッチメソッド (put/set/get/contains/remove) を削除
-- [ ] 3. prelude: `_map_find_entry_int/string` と `_map_rehash_int/string` の引数型を `Map<any, any>` から修正
-- [ ] 4. prelude: `impl map` の `map::new()` を対処
-- [ ] 5. テスト: map_basic.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 6. テスト: map_collision.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 7. テスト: map_int_keys.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 8. テスト: map_iteration.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 9. テスト: map_resize.mc を型付き Map に移行（.stdout は変更なし）
+- [ ] 1. prelude: `print_str` → `print(s: string)` にリネーム（改行付き: `write(1, s, len(s)); write(1, "\n", 1);`）
+- [ ] 2. prelude: `eprint_str` → `eprint(s: string)` にリネーム（同様に改行付き）
+- [ ] 3. コンパイラ: `debug(v: any) -> string` ビルトインを追加（resolver, typechecker, codegen に `Op::Debug`）
+- [ ] 4. VM: `Op::Debug` ハンドラ追加（pop any → value_to_string → push Ref(string)）
+- [ ] 5. bytecode/verifier/microop/JIT/dump に `Op::Debug` を追加
+- [ ] 6. codegen: `print` / `print_debug` ビルトインのコード生成を削除（文字列リテラル最適化も削除）
+- [ ] 7. resolver/typechecker: `print` / `print_debug` をビルトインリストから削除
+- [ ] 8. Op::PrintDebug および関連コード（MicroOp::PrintDebug, JIT print_debug_helper 等）を全削除
+- [ ] 9. テストファイル全書き換え: `print(x)` → 型に応じて `print($"{x}")` / `print(debug(x))` / `print(x)`
 - [ ] 10. 全テスト通過確認 (`cargo fmt && cargo check && cargo test && cargo clippy`)
+- [ ] 11. `debug` を自作実装に置き換えるissueを作成
