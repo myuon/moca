@@ -626,6 +626,20 @@ fun _int_to_string(n: int) -> string {
     return __alloc_string(data, dcount);
 }
 
+// Internal: convert float to string (single heap allocation).
+fun _float_to_string(f: float) -> string {
+    let dcount = _float_digit_count(f);
+    let data = __alloc_heap(dcount);
+    _float_write_to(data, 0, f);
+    return __alloc_string(data, dcount);
+}
+
+// Internal: convert bool to string.
+fun _bool_to_string(b: bool) -> string {
+    if b { return "true"; }
+    return "false";
+}
+
 // Convert any value to its string representation.
 fun to_string(x: any) -> string {
     let t = type_of(x);
@@ -636,16 +650,10 @@ fun to_string(x: any) -> string {
         return _int_to_string(x);
     }
     if t == "float" {
-        let dcount = _float_digit_count(x);
-        let data = __alloc_heap(dcount);
-        _float_write_to(data, 0, x);
-        return __alloc_string(data, dcount);
+        return _float_to_string(x);
     }
     if t == "bool" {
-        if x {
-            return "true";
-        }
-        return "false";
+        return _bool_to_string(x);
     }
     return "nil";
 }
