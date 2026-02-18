@@ -81,6 +81,7 @@ impl Substitution {
                     ty.clone()
                 }
             }
+            Type::Ptr(elem) => Type::Ptr(Box::new(self.apply(elem))),
             Type::Array(elem) => Type::Array(Box::new(self.apply(elem))),
             Type::Vector(elem) => Type::Vector(Box::new(self.apply(elem))),
             Type::Map(key, value) => {
@@ -309,6 +310,15 @@ impl TypeChecker {
                 ))
             }
             TypeAnnotation::Generic { name, type_args } => {
+                // Handle ptr<T>
+                if name == "ptr" {
+                    if type_args.len() != 1 {
+                        return Err(TypeError::new("ptr expects exactly 1 type argument", span));
+                    }
+                    let elem = self.resolve_type_annotation(&type_args[0], span)?;
+                    return Ok(Type::Ptr(Box::new(elem)));
+                }
+
                 // Look up struct definition
                 if let Some(struct_info) = self.structs.get(name).cloned() {
                     // Check type argument count
@@ -374,6 +384,9 @@ impl TypeChecker {
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
+
+            // Ptr<T> unification
+            (Type::Ptr(a), Type::Ptr(b)) => self.unify(a, b, span),
 
             // Any type unifies with any other type
             // any ~ T -> T (any adapts to the other type)
@@ -1136,6 +1149,15 @@ impl TypeChecker {
                             self.errors.push(e);
                         }
                     }
+                    Type::Ptr(ref elem) => {
+                        // ptr<T> - index should be int, check element type T
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
+                        if let Err(e) = self.unify(&val_type, elem, *span) {
+                            self.errors.push(e);
+                        }
+                    }
                     _ => {
                         self.errors.push(TypeError::new(
                             format!(
@@ -1379,6 +1401,13 @@ impl TypeChecker {
                             self.fresh_var()
                         }
                     }
+                    Type::Ptr(ref elem) => {
+                        // ptr<T> - index should be int, return element type T
+                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
+                            self.errors.push(e);
+                        }
+                        self.substitution.apply(elem)
+                    }
                     Type::Var(_) => {
                         // Unknown type, could be array or struct
                         self.fresh_var()
@@ -1386,7 +1415,7 @@ impl TypeChecker {
                     _ => {
                         self.errors.push(TypeError::new(
                             format!(
-                                "expected array, Vector, Vec, Map, string or struct, found `{}`",
+                                "expected array, Vector, Vec, Map, string, struct or ptr, found `{}`",
                                 obj_type
                             ),
                             *span,
@@ -1958,6 +1987,11 @@ impl TypeChecker {
                 // Handle map<K, V> methods
                 if let Type::Map(key_type, value_type) = &resolved_obj_type {
                     return self.check_map_method(method, args, key_type, value_type, env, *span);
+                }
+
+                // Handle ptr<T> methods
+                if let Type::Ptr(ref elem) = resolved_obj_type {
+                    return self.check_ptr_method(method, args, elem, env, *span);
                 }
 
                 // Get struct name and type args from object type
@@ -2642,7 +2676,44 @@ impl TypeChecker {
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
-                Some(Type::Any) // Returns a reference (opaque)
+                // Returns a raw heap pointer with fresh type variable
+                let elem = self.fresh_var();
+                Some(Type::Ptr(Box::new(elem)))
+            }
+            "__null_ptr" => {
+                if !args.is_empty() {
+                    self.errors
+                        .push(TypeError::new("__null_ptr expects 0 arguments", span));
+                }
+                // Returns a null pointer with fresh type variable
+                let elem = self.fresh_var();
+                Some(Type::Ptr(Box::new(elem)))
+            }
+            "__ptr_offset" => {
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        "__ptr_offset expects 2 arguments (ptr, offset)",
+                        span,
+                    ));
+                }
+                let ptr_type = if !args.is_empty() {
+                    self.infer_expr(&mut args[0], env)
+                } else {
+                    self.fresh_var()
+                };
+                if args.len() > 1 {
+                    let offset_type = self.infer_expr(&mut args[1], env);
+                    if let Err(e) = self.unify(&offset_type, &Type::Int, span) {
+                        self.errors.push(e);
+                    }
+                }
+                // ptr_type should be ptr<T>, return same ptr<T>
+                let elem = self.fresh_var();
+                let expected_ptr = Type::Ptr(Box::new(elem));
+                if let Err(e) = self.unify(&ptr_type, &expected_ptr, span) {
+                    self.errors.push(e);
+                }
+                Some(self.substitution.apply(&expected_ptr))
             }
             "__umul128_hi" => {
                 if args.len() != 2 {
@@ -2781,6 +2852,44 @@ impl TypeChecker {
             _ => {
                 self.errors.push(TypeError::new(
                     format!("undefined method `{}` on vec<{}>", method, elem_type),
+                    span,
+                ));
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                self.fresh_var()
+            }
+        }
+    }
+
+    /// Type check method calls on ptr<T>.
+    fn check_ptr_method(
+        &mut self,
+        method: &str,
+        args: &mut [Expr],
+        elem_type: &Type,
+        env: &mut TypeEnv,
+        span: Span,
+    ) -> Type {
+        match method {
+            "offset" => {
+                // offset(n: int) -> ptr<T>
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("ptr.offset expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Ptr(Box::new(self.substitution.apply(elem_type)));
+                }
+                let arg_type = self.infer_expr(&mut args[0], env);
+                if let Err(e) = self.unify(&arg_type, &Type::Int, args[0].span()) {
+                    self.errors.push(e);
+                }
+                Type::Ptr(Box::new(self.substitution.apply(elem_type)))
+            }
+            _ => {
+                self.errors.push(TypeError::new(
+                    format!("undefined method `{}` on ptr<{}>", method, elem_type),
                     span,
                 ));
                 for arg in args {

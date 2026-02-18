@@ -1,1 +1,1 @@
-expected array, Vector, Vec, Map, string or struct
+expected array, Vector, Vec, Map, string, struct or ptr

@@ -1533,6 +1533,24 @@ impl VM {
                             format!("runtime error: slot index {} out of bounds ({})", index, e)
                         })?;
                 }
+                MicroOp::HeapOffsetRef { dst, src, offset } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let r = self.stack[sb + src.0]
+                        .as_ref()
+                        .ok_or("runtime error: expected reference")?;
+                    let n = self.stack[sb + offset.0]
+                        .as_i64()
+                        .ok_or("runtime error: expected integer offset")?;
+                    if n < 0 {
+                        return Err(format!(
+                            "runtime error: negative offset {} for HeapOffsetRef",
+                            n
+                        ));
+                    }
+                    let new_ref = r.with_added_slot_offset(n as usize);
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Ref(new_ref);
+                }
 
                 MicroOp::StackPush { src } => {
                     let frame = self.frames.last().unwrap();
@@ -2959,6 +2977,19 @@ impl VM {
                 self.heap
                     .write_slot(ptr_ref, index as usize, value)
                     .map_err(|e| format!("runtime error: {}", e))?;
+            }
+            Op::HeapOffsetRef => {
+                let offset = self.pop_int()?;
+                let val = self.stack.pop().ok_or("stack underflow")?;
+                let r = val.as_ref().ok_or("runtime error: expected reference")?;
+                if offset < 0 {
+                    return Err(format!(
+                        "runtime error: negative offset {} for HeapOffsetRef",
+                        offset
+                    ));
+                }
+                let new_ref = r.with_added_slot_offset(offset as usize);
+                self.stack.push(Value::Ref(new_ref));
             }
             Op::HeapAllocDyn => {
                 // Pop size from stack, then pop that many elements as initial values

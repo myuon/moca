@@ -143,9 +143,9 @@ fun _int_digit_count(n: int) -> int {
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
 @inline
-fun _int_write_to(buf: any, off: int, n: int) -> int {
+fun _int_write_to(buf: ptr<int>, off: int, n: int) -> int {
     if n == 0 {
-        __heap_store(buf, off, 48);
+        buf[off] = 48;
         return off + 1;
     }
     let negative = n < 0;
@@ -155,11 +155,11 @@ fun _int_write_to(buf: any, off: int, n: int) -> int {
     }
     let dcount = _int_digit_count(n);
     if negative {
-        __heap_store(buf, off, 45);
+        buf[off] = 45;
     }
     let pos = off + dcount - 1;
     while val > 0 {
-        __heap_store(buf, pos, val % 10 + 48);
+        buf[pos] = val % 10 + 48;
         val = val / 10;
         pos = pos - 1;
     }
@@ -168,12 +168,12 @@ fun _int_write_to(buf: any, off: int, n: int) -> int {
 
 // Copy string data into buf at offset, return new offset.
 @inline
-fun _str_copy_to(buf: any, off: int, s: string) -> int {
-    let ptr = __heap_load(s, 0);
+fun _str_copy_to(buf: ptr<int>, off: int, s: string) -> int {
+    let sptr = __heap_load(s, 0);
     let slen = __heap_load(s, 1);
     let j = 0;
     while j < slen {
-        __heap_store(buf, off + j, __heap_load(ptr, j));
+        buf[off + j] = __heap_load(sptr, j);
         j = j + 1;
     }
     return off + slen;
@@ -190,19 +190,19 @@ fun _bool_str_len(b: bool) -> int {
 
 // Write "true" or "false" into buf at offset, return new offset.
 @inline
-fun _bool_write_to(buf: any, off: int, b: bool) -> int {
+fun _bool_write_to(buf: ptr<int>, off: int, b: bool) -> int {
     if b {
-        __heap_store(buf, off, 116);
-        __heap_store(buf, off + 1, 114);
-        __heap_store(buf, off + 2, 117);
-        __heap_store(buf, off + 3, 101);
+        buf[off] = 116;
+        buf[off + 1] = 114;
+        buf[off + 2] = 117;
+        buf[off + 3] = 101;
         return off + 4;
     }
-    __heap_store(buf, off, 102);
-    __heap_store(buf, off + 1, 97);
-    __heap_store(buf, off + 2, 108);
-    __heap_store(buf, off + 3, 115);
-    __heap_store(buf, off + 4, 101);
+    buf[off] = 102;
+    buf[off + 1] = 97;
+    buf[off + 2] = 108;
+    buf[off + 3] = 115;
+    buf[off + 4] = 101;
     return off + 5;
 }
 
@@ -520,18 +520,18 @@ fun _ryu_formatted_length(mantissa: int, exponent: int, length: int, kk: int) ->
     return kk + 2;
 }
 
-fun _ryu_write_to(buf: any, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
+fun _ryu_write_to(buf: ptr<int>, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
     let pos = off;
-    if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
+    if sign != 0 { buf[pos] = 45; pos = pos + 1; }
     if kk <= 0 {
-        __heap_store(buf, pos, 48); __heap_store(buf, pos + 1, 46);
+        buf[pos] = 48; buf[pos + 1] = 46;
         pos = pos + 2;
         let z = 0;
-        while z < 0 - kk { __heap_store(buf, pos, 48); pos = pos + 1; z = z + 1; }
+        while z < 0 - kk { buf[pos] = 48; pos = pos + 1; z = z + 1; }
         let val = mantissa;
         let i = length - 1;
         while i >= 0 {
-            __heap_store(buf, pos + i, val % 10 + 48);
+            buf[pos + i] = val % 10 + 48;
             val = val / 10; i = i - 1;
         }
         pos = pos + length;
@@ -541,22 +541,22 @@ fun _ryu_write_to(buf: any, off: int, mantissa: int, exponent: int, length: int,
         while i >= 0 {
             let wi = i;
             if i >= kk { wi = i + 1; }
-            __heap_store(buf, pos + wi, val % 10 + 48);
+            buf[pos + wi] = val % 10 + 48;
             val = val / 10; i = i - 1;
         }
-        __heap_store(buf, pos + kk, 46);
+        buf[pos + kk] = 46;
         pos = pos + length + 1;
     } else {
         let val = mantissa;
         let i = length - 1;
         while i >= 0 {
-            __heap_store(buf, pos + i, val % 10 + 48);
+            buf[pos + i] = val % 10 + 48;
             val = val / 10; i = i - 1;
         }
         pos = pos + length;
         let z = 0;
-        while z < kk - length { __heap_store(buf, pos, 48); pos = pos + 1; z = z + 1; }
-        __heap_store(buf, pos, 46); __heap_store(buf, pos + 1, 48);
+        while z < kk - length { buf[pos] = 48; pos = pos + 1; z = z + 1; }
+        buf[pos] = 46; buf[pos + 1] = 48;
         pos = pos + 2;
     }
     return pos;
@@ -581,25 +581,25 @@ fun _float_digit_count(f: float) -> int {
     return sign + _ryu_formatted_length(mantissa, exponent, length, kk);
 }
 
-fun _float_write_to(buf: any, off: int, f: float) -> int {
+fun _float_write_to(buf: ptr<int>, off: int, f: float) -> int {
     let bits = __float_bits(f);
     let sign = _ushr(bits, 63);
     let ieee_exp = _ushr(bits, 52) & 2047;
     let ieee_mant = bits & 4503599627370495;
     if ieee_exp == 0 && ieee_mant == 0 {
         let pos = off;
-        if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
-        __heap_store(buf, pos, 48); __heap_store(buf, pos + 1, 46); __heap_store(buf, pos + 2, 48);
+        if sign != 0 { buf[pos] = 45; pos = pos + 1; }
+        buf[pos] = 48; buf[pos + 1] = 46; buf[pos + 2] = 48;
         return pos + 3;
     }
     if ieee_exp == 2047 {
         if ieee_mant != 0 {
-            __heap_store(buf, off, 78); __heap_store(buf, off + 1, 97); __heap_store(buf, off + 2, 78);
+            buf[off] = 78; buf[off + 1] = 97; buf[off + 2] = 78;
             return off + 3;
         }
         let pos = off;
-        if sign != 0 { __heap_store(buf, pos, 45); pos = pos + 1; }
-        __heap_store(buf, pos, 105); __heap_store(buf, pos + 1, 110); __heap_store(buf, pos + 2, 102);
+        if sign != 0 { buf[pos] = 45; pos = pos + 1; }
+        buf[pos] = 105; buf[pos + 1] = 110; buf[pos + 2] = 102;
         return pos + 3;
     }
     let scratch: array<int> = [0, 0];
@@ -745,11 +745,11 @@ fun string_concat(a: string, b: string) -> string {
     let data = __alloc_heap(total);
     let i = 0;
     while i < a_len {
-        __heap_store(data, i, __heap_load(a_ptr, i));
+        data[i] = __heap_load(a_ptr, i);
         i = i + 1;
     }
     while i < total {
-        __heap_store(data, i, __heap_load(b_ptr, i - a_len));
+        data[i] = __heap_load(b_ptr, i - a_len);
         i = i + 1;
     }
     return __alloc_string(data, total);
@@ -775,7 +775,7 @@ fun string_join(parts: array<string>) -> string {
         let s_len = __heap_load(s, 1);
         let j = 0;
         while j < s_len {
-            __heap_store(data, off, __heap_load(s_ptr, j));
+            data[off] = __heap_load(s_ptr, j);
             off = off + 1;
             j = j + 1;
         }
@@ -1015,21 +1015,21 @@ fun str_index_of(haystack: string, needle: string) -> int {
 // ============================================================================
 
 // Array<T> - Fixed-length array implementation.
-// Layout: [ptr, len]
+// Layout: [data, len]
 struct Array<T> {
-    ptr: int,
+    data: ptr<T>,
     len: int
 }
 
 impl<T> Array<T> {
     // Get a value at the specified index
     fun get(self, index: int) -> T {
-        return __heap_load(self.ptr, index);
+        return self.data[index];
     }
 
     // Set a value at the specified index
     fun set(self, index: int, value: T) {
-        __heap_store(self.ptr, index, value);
+        self.data[index] = value;
     }
 
     // Get the length of the array
@@ -1043,9 +1043,9 @@ impl<T> Array<T> {
 // ============================================================================
 
 // Vec<T> - Generic vector (dynamic array) implementation.
-// Layout: [ptr, len, cap]
+// Layout: [data, len, cap]
 struct Vec<T> {
-    ptr: int,
+    data: ptr<T>,
     len: int,
     cap: int
 }
@@ -1053,12 +1053,12 @@ struct Vec<T> {
 impl<T> Vec<T> {
     // Create a new empty vector.
     fun `new`() -> Vec<T> {
-        return Vec<T> { ptr: 0, len: 0, cap: 0 };
+        return Vec<T> { data: __null_ptr(), len: 0, cap: 0 };
     }
 
     // Create a vector with pre-set capacity.
     fun with_capacity(cap: int) -> Vec<T> {
-        return Vec<T> { ptr: 0, len: 0, cap: cap };
+        return Vec<T> { data: __null_ptr(), len: 0, cap: cap };
     }
 
     // Create an uninitialized vector with specified length (for desugar).
@@ -1066,10 +1066,10 @@ impl<T> Vec<T> {
     // Elements are uninitialized and must be set before use.
     fun uninit(cap: int) -> Vec<T> {
         if cap == 0 {
-            return Vec<T> { ptr: 0, len: 0, cap: 0 };
+            return Vec<T> { data: __null_ptr(), len: 0, cap: 0 };
         }
-        let data = __alloc_heap(cap);
-        return Vec<T> { ptr: data, len: cap, cap: cap };
+        let d = __alloc_heap(cap);
+        return Vec<T> { data: d, len: cap, cap: cap };
     }
 
     // Push a value to the end of the vector
@@ -1082,23 +1082,23 @@ impl<T> Vec<T> {
             }
             let new_data = __alloc_heap(new_cap);
 
-            // Copy old data if ptr is not null
-            if self.ptr != 0 {
+            // Copy old data if data is not null
+            if self.data != __null_ptr() {
                 let i = 0;
                 while i < self.len {
-                    let val = __heap_load(self.ptr, i);
-                    __heap_store(new_data, i, val);
+                    let val = self.data[i];
+                    new_data[i] = val;
                     i = i + 1;
                 }
             }
 
             // Update vector header
-            self.ptr = new_data;
+            self.data = new_data;
             self.cap = new_cap;
         }
 
-        // Store the value at ptr[len]
-        __heap_store(self.ptr, self.len, value);
+        // Store the value at data[len]
+        self.data[self.len] = value;
         // Increment len
         self.len = self.len + 1;
     }
@@ -1111,7 +1111,7 @@ impl<T> Vec<T> {
         }
 
         self.len = self.len - 1;
-        let value = __heap_load(self.ptr, self.len);
+        let value = self.data[self.len];
 
         return value;
     }
@@ -1119,13 +1119,13 @@ impl<T> Vec<T> {
     // Get a value at the specified index
     @inline
     fun get(self, index: int) -> T {
-        return __heap_load(self.ptr, index);
+        return self.data[index];
     }
 
     // Set a value at the specified index
     @inline
     fun set(self, index: int, value: T) {
-        __heap_store(self.ptr, index, value);
+        self.data[index] = value;
     }
 
     // Get the length of the vector
@@ -1138,12 +1138,12 @@ impl<T> Vec<T> {
 impl vec {
     // Create a new empty vector.
     fun `new`() -> vec<any> {
-        return Vec<any> { ptr: 0, len: 0, cap: 0 };
+        return Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
     }
 
     // Create a vector with pre-set capacity.
     fun with_capacity(cap: int) -> vec<any> {
-        return Vec<any> { ptr: 0, len: 0, cap: cap };
+        return Vec<any> { data: __null_ptr(), len: 0, cap: cap };
     }
 }
 
@@ -1157,7 +1157,7 @@ impl vec {
 struct HashMapEntry {
     hm_key: any,
     hm_value: any,
-    hm_next: int
+    hm_next: ptr<any>
 }
 
 // Map<K, V> - Generic hash map implementation.
@@ -1166,7 +1166,7 @@ struct HashMapEntry {
 // hm_size: number of entries in the map
 // hm_capacity: number of buckets
 struct Map<K, V> {
-    hm_buckets: int,
+    hm_buckets: ptr<any>,
     hm_size: int,
     hm_capacity: int
 }
@@ -1199,7 +1199,7 @@ fun _map_hash_string(key: string) -> int {
 // Internal: Find entry by key in a bucket chain (int key)
 fun _map_find_entry_int(m: Map<any, any>, key: int) -> int {
     let bucket_idx = _map_hash_int(key) % m.hm_capacity;
-    let entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+    let entry_ptr = m.hm_buckets[bucket_idx];
 
     while entry_ptr != 0 {
         let entry_key = __heap_load(entry_ptr, 0);
@@ -1214,7 +1214,7 @@ fun _map_find_entry_int(m: Map<any, any>, key: int) -> int {
 // Internal: Find entry by key in a bucket chain (string key)
 fun _map_find_entry_string(m: Map<any, any>, key: string) -> int {
     let bucket_idx = _map_hash_string(key) % m.hm_capacity;
-    let entry_ptr = __heap_load(m.hm_buckets, bucket_idx);
+    let entry_ptr = m.hm_buckets[bucket_idx];
 
     while entry_ptr != 0 {
         let entry_key = __heap_load(entry_ptr, 0);
@@ -1236,14 +1236,14 @@ fun _map_rehash_int(m: Map<any, any>) {
     // Initialize new buckets to 0
     let i = 0;
     while i < new_capacity {
-        __heap_store(new_buckets, i, 0);
+        new_buckets[i] = 0;
         i = i + 1;
     }
 
     // Rehash all entries
     i = 0;
     while i < old_capacity {
-        let entry_ptr = __heap_load(old_buckets, i);
+        let entry_ptr = old_buckets[i];
         while entry_ptr != 0 {
             let key = __heap_load(entry_ptr, 0);
             let next_ptr = __heap_load(entry_ptr, 2);
@@ -1252,9 +1252,9 @@ fun _map_rehash_int(m: Map<any, any>) {
             let new_bucket_idx = _map_hash_int(key) % new_capacity;
 
             // Insert at head of new bucket
-            let old_head = __heap_load(new_buckets, new_bucket_idx);
+            let old_head = new_buckets[new_bucket_idx];
             __heap_store(entry_ptr, 2, old_head);
-            __heap_store(new_buckets, new_bucket_idx, entry_ptr);
+            new_buckets[new_bucket_idx] = entry_ptr;
 
             entry_ptr = next_ptr;
         }
@@ -1275,14 +1275,14 @@ fun _map_rehash_string(m: Map<any, any>) {
     // Initialize new buckets to 0
     let i = 0;
     while i < new_capacity {
-        __heap_store(new_buckets, i, 0);
+        new_buckets[i] = 0;
         i = i + 1;
     }
 
     // Rehash all entries
     i = 0;
     while i < old_capacity {
-        let entry_ptr = __heap_load(old_buckets, i);
+        let entry_ptr = old_buckets[i];
         while entry_ptr != 0 {
             let key = __heap_load(entry_ptr, 0);
             let next_ptr = __heap_load(entry_ptr, 2);
@@ -1291,9 +1291,9 @@ fun _map_rehash_string(m: Map<any, any>) {
             let new_bucket_idx = _map_hash_string(key) % new_capacity;
 
             // Insert at head of new bucket
-            let old_head = __heap_load(new_buckets, new_bucket_idx);
+            let old_head = new_buckets[new_bucket_idx];
             __heap_store(entry_ptr, 2, old_head);
-            __heap_store(new_buckets, new_bucket_idx, entry_ptr);
+            new_buckets[new_bucket_idx] = entry_ptr;
 
             entry_ptr = next_ptr;
         }
@@ -1314,23 +1314,23 @@ fun _vec_push_internal(v: Vec<any>, value) {
         }
         let new_data = __alloc_heap(new_cap);
 
-        // Copy old data if ptr is not null
-        if v.ptr != 0 {
+        // Copy old data if data is not null
+        if v.data != __null_ptr() {
             let i = 0;
             while i < v.len {
-                let val = __heap_load(v.ptr, i);
-                __heap_store(new_data, i, val);
+                let val = v.data[i];
+                new_data[i] = val;
                 i = i + 1;
             }
         }
 
         // Update vector header
-        v.ptr = new_data;
+        v.data = new_data;
         v.cap = new_cap;
     }
 
-    // Store the value at ptr[len]
-    __heap_store(v.ptr, v.len, value);
+    // Store the value at data[len]
+    v.data[v.len] = value;
     // Increment len
     v.len = v.len + 1;
 }
@@ -1343,7 +1343,7 @@ impl<K, V> Map<K, V> {
         // Initialize all buckets to 0 (empty)
         let i = 0;
         while i < capacity {
-            __heap_store(buckets, i, 0);
+            buckets[i] = 0;
             i = i + 1;
         }
         return Map<K, V> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
@@ -1356,7 +1356,7 @@ impl<K, V> Map<K, V> {
         let buckets = __alloc_heap(capacity);
         let i = 0;
         while i < capacity {
-            __heap_store(buckets, i, 0);
+            buckets[i] = 0;
             i = i + 1;
         }
         return Map<K, V> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
@@ -1386,9 +1386,9 @@ impl<K, V> Map<K, V> {
 
         // Insert at head of bucket
         let bucket_idx = _map_hash_int(key) % self.hm_capacity;
-        let old_head = __heap_load(self.hm_buckets, bucket_idx);
+        let old_head = self.hm_buckets[bucket_idx];
         __heap_store(entry, 2, old_head);
-        __heap_store(self.hm_buckets, bucket_idx, entry);
+        self.hm_buckets[bucket_idx] = entry;
 
         self.hm_size = self.hm_size + 1;
     }
@@ -1417,9 +1417,9 @@ impl<K, V> Map<K, V> {
 
         // Insert at head of bucket
         let bucket_idx = _map_hash_string(key) % self.hm_capacity;
-        let old_head = __heap_load(self.hm_buckets, bucket_idx);
+        let old_head = self.hm_buckets[bucket_idx];
         __heap_store(entry, 2, old_head);
-        __heap_store(self.hm_buckets, bucket_idx, entry);
+        self.hm_buckets[bucket_idx] = entry;
 
         self.hm_size = self.hm_size + 1;
     }
@@ -1458,7 +1458,7 @@ impl<K, V> Map<K, V> {
     // Returns true if the key was found and removed, false otherwise
     fun remove_int(self, key: int) -> bool {
         let bucket_idx = _map_hash_int(key) % self.hm_capacity;
-        let entry_ptr = __heap_load(self.hm_buckets, bucket_idx);
+        let entry_ptr = self.hm_buckets[bucket_idx];
         let prev_ptr = 0;
 
         while entry_ptr != 0 {
@@ -1468,7 +1468,7 @@ impl<K, V> Map<K, V> {
                 let next_ptr = __heap_load(entry_ptr, 2);
                 if prev_ptr == 0 {
                     // Entry is head of bucket
-                    __heap_store(self.hm_buckets, bucket_idx, next_ptr);
+                    self.hm_buckets[bucket_idx] = next_ptr;
                 } else {
                     // Entry is in middle/end of chain
                     __heap_store(prev_ptr, 2, next_ptr);
@@ -1486,7 +1486,7 @@ impl<K, V> Map<K, V> {
     // Returns true if the key was found and removed, false otherwise
     fun remove_string(self, key: string) -> bool {
         let bucket_idx = _map_hash_string(key) % self.hm_capacity;
-        let entry_ptr = __heap_load(self.hm_buckets, bucket_idx);
+        let entry_ptr = self.hm_buckets[bucket_idx];
         let prev_ptr = 0;
 
         while entry_ptr != 0 {
@@ -1496,7 +1496,7 @@ impl<K, V> Map<K, V> {
                 let next_ptr = __heap_load(entry_ptr, 2);
                 if prev_ptr == 0 {
                     // Entry is head of bucket
-                    __heap_store(self.hm_buckets, bucket_idx, next_ptr);
+                    self.hm_buckets[bucket_idx] = next_ptr;
                 } else {
                     // Entry is in middle/end of chain
                     __heap_store(prev_ptr, 2, next_ptr);
@@ -1512,10 +1512,10 @@ impl<K, V> Map<K, V> {
 
     // Get all keys from the map as a vector (works for any key type)
     fun keys(self) -> vec<any> {
-        let result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
+        let result: Vec<any> = Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
         let i = 0;
         while i < self.hm_capacity {
-            let entry_ptr = __heap_load(self.hm_buckets, i);
+            let entry_ptr = self.hm_buckets[i];
             while entry_ptr != 0 {
                 let key = __heap_load(entry_ptr, 0);
                 _vec_push_internal(result, key);
@@ -1528,10 +1528,10 @@ impl<K, V> Map<K, V> {
 
     // Get all values from the map as a vector
     fun values(self) -> vec<any> {
-        let result: Vec<any> = Vec<any> { ptr: 0, len: 0, cap: 0 };
+        let result: Vec<any> = Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
         let i = 0;
         while i < self.hm_capacity {
-            let entry_ptr = __heap_load(self.hm_buckets, i);
+            let entry_ptr = self.hm_buckets[i];
             while entry_ptr != 0 {
                 let val = __heap_load(entry_ptr, 1);
                 _vec_push_internal(result, val);
@@ -1614,7 +1614,7 @@ impl map {
         // Initialize all buckets to 0 (nil)
         let i = 0;
         while i < capacity {
-            __heap_store(buckets, i, 0);
+            buckets[i] = 0;
             i = i + 1;
         }
         return Map<any, any> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };

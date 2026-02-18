@@ -213,20 +213,47 @@ impl fmt::Display for HeapObject {
 /// The index field represents the offset in words into linear memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GcRef {
-    /// Offset in words (u64 units) into linear memory.
+    /// Encodes both base offset and slot offset via bit-packing.
+    /// Lower 40 bits: base offset in words (heap header position).
+    /// Upper 24 bits: slot offset (added to slot_index in read_slot/write_slot).
     /// Offset 0 is reserved as an invalid/null reference.
     pub index: usize,
 }
 
 impl GcRef {
-    /// Create a GcRef from an offset. Offset 0 is reserved.
+    const BASE_MASK: usize = (1 << 40) - 1;
+    const OFFSET_SHIFT: usize = 40;
+
+    /// Create a GcRef from a base offset. Slot offset is 0.
     pub fn from_offset(offset: usize) -> Self {
         Self { index: offset }
     }
 
-    /// Get the offset into linear memory.
+    /// Create a GcRef with both base and slot offset.
+    pub fn new_with_slot_offset(base: usize, slot_offset: usize) -> Self {
+        Self {
+            index: (slot_offset << Self::OFFSET_SHIFT) | (base & Self::BASE_MASK),
+        }
+    }
+
+    /// Get the base offset into linear memory (heap header position).
+    pub fn base(&self) -> usize {
+        self.index & Self::BASE_MASK
+    }
+
+    /// Get the base offset into linear memory (alias for base(), backward compat).
     pub fn offset(&self) -> usize {
-        self.index
+        self.base()
+    }
+
+    /// Get the slot offset (added to slot_index in heap operations).
+    pub fn slot_offset(&self) -> usize {
+        self.index >> Self::OFFSET_SHIFT
+    }
+
+    /// Create a new GcRef with an additional slot offset.
+    pub fn with_added_slot_offset(&self, n: usize) -> Self {
+        Self::new_with_slot_offset(self.base(), self.slot_offset() + n)
     }
 
     /// Check if this is a valid (non-null) reference.
@@ -437,15 +464,16 @@ impl Heap {
             return None;
         }
 
-        let offset = r.offset();
+        let actual_slot = slot_index + r.slot_offset();
+        let offset = r.base();
         let header = *self.memory.get(offset)?;
         let slot_count = decode_slot_count(header) as usize;
 
-        if slot_index >= slot_count {
+        if actual_slot >= slot_count {
             return None;
         }
 
-        let tag_offset = offset + 1 + 2 * slot_index;
+        let tag_offset = offset + 1 + 2 * actual_slot;
         let tag = *self.memory.get(tag_offset)?;
         let payload = *self.memory.get(tag_offset + 1)?;
         Value::decode(tag, payload)
@@ -457,21 +485,22 @@ impl Heap {
             return Err("invalid reference".to_string());
         }
 
-        let offset = r.offset();
+        let actual_slot = slot_index + r.slot_offset();
+        let offset = r.base();
         let header = *self
             .memory
             .get(offset)
             .ok_or("invalid reference: out of bounds")?;
         let slot_count = decode_slot_count(header) as usize;
 
-        if slot_index >= slot_count {
+        if actual_slot >= slot_count {
             return Err(format!(
                 "slot index {} out of bounds (count: {})",
-                slot_index, slot_count
+                actual_slot, slot_count
             ));
         }
 
-        let tag_offset = offset + 1 + 2 * slot_index;
+        let tag_offset = offset + 1 + 2 * actual_slot;
         let (tag, payload) = value.encode();
         self.memory[tag_offset] = tag;
         self.memory[tag_offset + 1] = payload;

@@ -56,6 +56,7 @@ fn mangle_type(ty: &Type) -> String {
         Type::Bool => "bool".to_string(),
         Type::String => "string".to_string(),
         Type::Nil => "nil".to_string(),
+        Type::Ptr(elem) => format!("ptr_{}", mangle_type(elem)),
         Type::Any => "any".to_string(),
         Type::Array(elem) => format!("array_{}", mangle_type(elem)),
         Type::Vector(elem) => format!("vec_{}", mangle_type(elem)),
@@ -712,6 +713,10 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
         Type::Bool => TypeAnnotation::Named("bool".to_string()),
         Type::String => TypeAnnotation::Named("string".to_string()),
         Type::Nil => TypeAnnotation::Named("nil".to_string()),
+        Type::Ptr(elem) => TypeAnnotation::Generic {
+            name: "ptr".to_string(),
+            type_args: vec![type_to_annotation(elem)],
+        },
         Type::Any => TypeAnnotation::Named("any".to_string()),
         Type::Array(elem) => TypeAnnotation::Array(Box::new(type_to_annotation(elem))),
         Type::Vector(elem) => TypeAnnotation::Vec(Box::new(type_to_annotation(elem))),

@@ -13,7 +13,7 @@ fun _perf_lcg_next(seed: int) -> int {
 
 fun quicksort_benchmark() {
     // Generate 100000 random integers using LCG
-    let v: Vec<int> = Vec<int> { ptr: 0, len: 0, cap: 0 };
+    let v: Vec<int> = Vec<int> { data: __null_ptr(), len: 0, cap: 0 };
     let seed = 42;
     let i = 0;
     while i < 100000 {

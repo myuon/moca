@@ -167,6 +167,8 @@ pub enum Op {
     HeapLoad2,
     /// Indirect store: pop val, pop idx, pop ref → heap[heap[ref][0]][idx] = val
     HeapStore2,
+    /// Offset a reference: pop offset, pop ref → push ref with slot_offset += offset
+    HeapOffsetRef,
 
     // ========================================
     // System / Builtins
@@ -311,6 +313,7 @@ impl Op {
             Op::HeapStoreDyn => "HeapStoreDyn",
             Op::HeapLoad2 => "HeapLoad2",
             Op::HeapStore2 => "HeapStore2",
+            Op::HeapOffsetRef => "HeapOffsetRef",
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::PrintDebug => "PrintDebug",

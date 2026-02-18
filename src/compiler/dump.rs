@@ -1722,6 +1722,7 @@ impl<'a> Disassembler<'a> {
             Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
             Op::HeapLoad2 => self.output.push_str("HeapLoad2"),
             Op::HeapStore2 => self.output.push_str("HeapStore2"),
+            Op::HeapOffsetRef => self.output.push_str("HeapOffsetRef"),
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
@@ -2222,6 +2223,12 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(obj),
             format_vreg(idx),
             format_vreg(src)
+        )),
+        MicroOp::HeapOffsetRef { dst, src, offset } => output.push_str(&format!(
+            "HeapOffsetRef {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(src),
+            format_vreg(offset)
         )),
 
         // Heap allocation operations

@@ -45,6 +45,8 @@ pub enum Type {
     /// Type variable for inference (unresolved type).
     /// These are resolved during unification in Algorithm W.
     Var(TypeVarId),
+    /// Raw heap pointer type: `ptr<T>`
+    Ptr(Box<Type>),
     /// Any type: bypasses type checking, unifies with any other type.
     /// When unified with another type T, the result is T.
     Any,
@@ -106,7 +108,7 @@ impl Type {
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => false,
             Type::Var(_) => true,
             Type::Param { .. } => false, // Type params are not inference variables
-            Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
+            Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
             Type::Map(key, value) => key.has_type_vars() || value.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
             Type::Object(fields) => fields.values().any(|t| t.has_type_vars()),
@@ -139,7 +141,9 @@ impl Type {
                     vars.push(*id);
                 }
             }
-            Type::Array(elem) | Type::Vector(elem) => elem.collect_type_vars(vars),
+            Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => {
+                elem.collect_type_vars(vars)
+            }
             Type::Map(key, value) => {
                 key.collect_type_vars(vars);
                 value.collect_type_vars(vars);
@@ -189,6 +193,7 @@ impl Type {
                     self.clone()
                 }
             }
+            Type::Ptr(elem) => Type::Ptr(Box::new(elem.substitute_param(param_name, replacement))),
             Type::Array(elem) => {
                 Type::Array(Box::new(elem.substitute_param(param_name, replacement)))
             }
@@ -278,6 +283,7 @@ impl fmt::Display for Type {
             }
             Type::Struct { name, .. } => write!(f, "{}", name),
             Type::Var(id) => write!(f, "?T{}", id),
+            Type::Ptr(elem) => write!(f, "ptr<{}>", elem),
             Type::Any => write!(f, "any"),
             Type::Param { name } => write!(f, "{}", name),
             Type::GenericStruct {
@@ -355,12 +361,19 @@ impl TypeAnnotation {
                 let param_types: Result<Vec<_>, _> = params.iter().map(|p| p.to_type()).collect();
                 Ok(Type::function(param_types?, ret.to_type()?))
             }
-            TypeAnnotation::Generic { name, .. } => {
-                // Generic types need context from typechecker to resolve
-                Err(format!(
-                    "generic type '{}' requires typechecker context",
-                    name
-                ))
+            TypeAnnotation::Generic { name, type_args } => {
+                if name == "ptr" {
+                    if type_args.len() != 1 {
+                        return Err("ptr expects exactly 1 type argument".to_string());
+                    }
+                    Ok(Type::Ptr(Box::new(type_args[0].to_type()?)))
+                } else {
+                    // Generic types need context from typechecker to resolve
+                    Err(format!(
+                        "generic type '{}' requires typechecker context",
+                        name
+                    ))
+                }
             }
         }
     }

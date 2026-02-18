@@ -1567,6 +1567,31 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 );
                 micro_ops.push(MicroOp::HeapStore2 { obj, idx, src });
             }
+            Op::HeapOffsetRef => {
+                // pop offset, pop ref → push ref with slot_offset += offset
+                let offset = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::HeapOffsetRef { dst, src, offset });
+                vstack.push(Vse::Reg(dst));
+            }
 
             // ============================================================
             // Raw with PC target remapping
