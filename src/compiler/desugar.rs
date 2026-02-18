@@ -37,6 +37,42 @@ impl Desugar {
         name
     }
 
+    /// Specialize a `to_string(x)` call based on the argument's inferred type.
+    /// Returns a type-specific call (e.g., `_int_to_string(x)`) or identity for strings.
+    fn specialize_to_string(arg: Expr, arg_type: Option<&Type>, span: Span) -> Expr {
+        match arg_type {
+            Some(Type::String) => arg,
+            Some(Type::Int) => Expr::Call {
+                callee: "_int_to_string".to_string(),
+                type_args: vec![],
+                args: vec![arg],
+                span,
+                inferred_type: Some(Type::String),
+            },
+            Some(Type::Float) => Expr::Call {
+                callee: "_float_to_string".to_string(),
+                type_args: vec![],
+                args: vec![arg],
+                span,
+                inferred_type: Some(Type::String),
+            },
+            Some(Type::Bool) => Expr::Call {
+                callee: "_bool_to_string".to_string(),
+                type_args: vec![],
+                args: vec![arg],
+                span,
+                inferred_type: Some(Type::String),
+            },
+            _ => Expr::Call {
+                callee: "to_string".to_string(),
+                type_args: vec![],
+                args: vec![arg],
+                span,
+                inferred_type: Some(Type::String),
+            },
+        }
+    }
+
     /// Extract the key type from a Map type (if known and concrete).
     fn extract_map_key_type(obj_type: &Option<Type>) -> Option<&Type> {
         match obj_type.as_ref()? {
@@ -540,20 +576,29 @@ impl Desugar {
                 inferred_type,
             },
 
-            // Call - desugar arguments
+            // Call - desugar arguments, specialize to_string by argument type
             Expr::Call {
                 callee,
                 type_args,
                 args,
                 span,
                 inferred_type,
-            } => Expr::Call {
-                callee,
-                type_args,
-                args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
-                span,
-                inferred_type,
-            },
+            } => {
+                // Specialize to_string(x) based on argument type
+                if callee == "to_string" && args.len() == 1 {
+                    let arg = self.desugar_expr(args.into_iter().next().unwrap());
+                    let arg_type = arg.inferred_type().cloned();
+                    return Self::specialize_to_string(arg, arg_type.as_ref(), span);
+                }
+
+                Expr::Call {
+                    callee,
+                    type_args,
+                    args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                    span,
+                    inferred_type,
+                }
+            }
 
             // Struct literal - desugar field values
             Expr::StructLiteral {
@@ -733,13 +778,9 @@ impl Desugar {
                                 inferred_type: Some(Type::String),
                             },
                             InterpPart::TypedExpr(expr, Some(Type::String)) => *expr,
-                            InterpPart::TypedExpr(expr, _) => Expr::Call {
-                                callee: "to_string".to_string(),
-                                type_args: vec![],
-                                args: vec![*expr],
-                                span,
-                                inferred_type: Some(Type::String),
-                            },
+                            InterpPart::TypedExpr(expr, ref ty) => {
+                                Self::specialize_to_string(*expr, ty.as_ref(), span)
+                            }
                         })
                         .collect();
 
