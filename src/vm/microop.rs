@@ -493,7 +493,7 @@ pub enum MicroOp {
     },
     /// Print value to output and return original value.
     /// dst = src (after printing src to output)
-    PrintDebug {
+    Print {
         dst: VReg,
         src: VReg,
     },

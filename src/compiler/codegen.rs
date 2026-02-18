@@ -1005,14 +1005,14 @@ impl Codegen {
                             } else {
                                 // Fallback if print_str not available
                                 self.compile_expr(&args[0], ops)?;
-                                ops.push(Op::PrintDebug);
+                                ops.push(Op::PrintRef);
                             }
                         } else {
                             let print_op = match self.infer_expr_type(&args[0]) {
                                 ValueType::I64 => Op::PrintInt,
                                 ValueType::F64 | ValueType::F32 => Op::PrintFloat,
                                 ValueType::I32 => Op::PrintBool,
-                                ValueType::Ref => Op::PrintDebug,
+                                ValueType::Ref => Op::PrintRef,
                             };
                             self.compile_expr(&args[0], ops)?;
                             ops.push(print_op);
@@ -1590,7 +1590,7 @@ impl Codegen {
             "TryEnd" => Ok(Op::TryEnd),
 
             // Builtins
-            "PrintDebug" => Ok(Op::PrintDebug),
+            "PrintRef" => Ok(Op::PrintRef),
             "PrintInt" => Ok(Op::PrintInt),
             "PrintFloat" => Ok(Op::PrintFloat),
             "PrintBool" => Ok(Op::PrintBool),

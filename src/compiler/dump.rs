@@ -1726,7 +1726,7 @@ impl<'a> Disassembler<'a> {
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
-            Op::PrintDebug => self.output.push_str("PrintDebug"),
+            Op::PrintRef => self.output.push_str("PrintRef"),
             Op::PrintInt => self.output.push_str("PrintInt"),
             Op::PrintFloat => self.output.push_str("PrintFloat"),
             Op::PrintBool => self.output.push_str("PrintBool"),
@@ -2285,11 +2285,9 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(dst),
             format_vreg(src)
         )),
-        MicroOp::PrintDebug { dst, src } => output.push_str(&format!(
-            "PrintDebug {}, {}",
-            format_vreg(dst),
-            format_vreg(src)
-        )),
+        MicroOp::Print { dst, src } => {
+            output.push_str(&format!("Print {}, {}", format_vreg(dst), format_vreg(src)))
+        }
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),

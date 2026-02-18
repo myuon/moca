@@ -397,7 +397,7 @@ impl MicroOpJitCompiler {
                 | MicroOp::HeapLoad2 { dst, .. }
                 | MicroOp::StackPop { dst }
                 | MicroOp::FloatToString { dst, .. }
-                | MicroOp::PrintDebug { dst, .. }
+                | MicroOp::Print { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
                 | MicroOp::HeapAllocTyped { dst, .. }
                 | MicroOp::StringConst { dst, .. } => {
@@ -571,7 +571,7 @@ impl MicroOpJitCompiler {
             // String operations
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
-            MicroOp::PrintDebug { dst, src } => self.emit_print_debug(dst, src),
+            MicroOp::Print { dst, src } => self.emit_print(dst, src),
             // Heap allocation operations
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
             MicroOp::HeapAllocTyped {
@@ -1960,9 +1960,9 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit PrintDebug: call print_debug_helper(ctx, tag, payload) -> (tag, payload)
+    /// Emit Print: call print_helper(ctx, tag, payload) -> (tag, payload)
     /// Reads source tag from shadow area.
-    fn emit_print_debug(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
+    fn emit_print(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
         let src_shadow_off = self.shadow_tag_offset(src);
         let dst_shadow_off = self.shadow_tag_offset(dst);
         {

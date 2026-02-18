@@ -681,7 +681,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+            print_helper: jit_print_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -770,7 +770,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+            print_helper: jit_print_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -854,7 +854,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+            print_helper: jit_print_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -933,7 +933,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+            print_helper: jit_print_helper,
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -1579,7 +1579,7 @@ impl VM {
                     let r = self.heap.alloc_string(s)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
-                MicroOp::PrintDebug { dst, src } => {
+                MicroOp::Print { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let value = self.stack[sb + src.0];
                     let s = self.value_to_string(&value)?;
@@ -2773,7 +2773,7 @@ impl VM {
             Op::TryEnd => {
                 self.try_frames.pop();
             }
-            Op::PrintDebug => {
+            Op::PrintRef => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
                 writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
@@ -2782,40 +2782,28 @@ impl VM {
             }
             Op::PrintInt => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
-                match value {
-                    Value::I64(n) => {
-                        writeln!(self.output, "{}", n).map_err(|e| format!("io error: {}", e))?;
-                    }
-                    _ => {
-                        let s = self.value_to_string(&value)?;
-                        writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
-                    }
+                if let Value::I64(n) = value {
+                    writeln!(self.output, "{}", n).map_err(|e| format!("io error: {}", e))?;
+                } else {
+                    return Err("PrintInt: expected int".to_string());
                 }
                 self.stack.push(value);
             }
             Op::PrintFloat => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
-                match value {
-                    Value::F64(f) => {
-                        writeln!(self.output, "{}", f).map_err(|e| format!("io error: {}", e))?;
-                    }
-                    _ => {
-                        let s = self.value_to_string(&value)?;
-                        writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
-                    }
+                if let Value::F64(f) = value {
+                    writeln!(self.output, "{}", f).map_err(|e| format!("io error: {}", e))?;
+                } else {
+                    return Err("PrintFloat: expected float".to_string());
                 }
                 self.stack.push(value);
             }
             Op::PrintBool => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
-                match value {
-                    Value::Bool(b) => {
-                        writeln!(self.output, "{}", b).map_err(|e| format!("io error: {}", e))?;
-                    }
-                    _ => {
-                        let s = self.value_to_string(&value)?;
-                        writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
-                    }
+                if let Value::Bool(b) = value {
+                    writeln!(self.output, "{}", b).map_err(|e| format!("io error: {}", e))?;
+                } else {
+                    return Err("PrintBool: expected bool".to_string());
                 }
                 self.stack.push(value);
             }
@@ -4190,10 +4178,10 @@ unsafe extern "C" fn jit_float_to_string_helper(
     }
 }
 
-/// JIT printDebug helper function.
+/// JIT print helper function.
 /// Prints a value to output and returns the same value.
 #[cfg(feature = "jit")]
-unsafe extern "C" fn jit_print_debug_helper(
+unsafe extern "C" fn jit_print_helper(
     ctx: *mut JitCallContext,
     tag: u64,
     payload: u64,
@@ -4201,7 +4189,7 @@ unsafe extern "C" fn jit_print_debug_helper(
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
 
-    vm.record_opcode("PrintDebug");
+    vm.record_opcode("Print");
 
     let value = JitValue { tag, payload }.to_value();
     if let Ok(s) = vm.value_to_string(&value) {

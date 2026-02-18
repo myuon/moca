@@ -175,7 +175,7 @@ pub enum Op {
     // ========================================
     Syscall(usize, usize),
     GcHint(usize),
-    PrintDebug,
+    PrintRef,
     PrintInt,
     PrintFloat,
     PrintBool,
@@ -319,7 +319,7 @@ impl Op {
             Op::HeapOffsetRef => "HeapOffsetRef",
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
-            Op::PrintDebug => "PrintDebug",
+            Op::PrintRef => "PrintRef",
             Op::PrintInt => "PrintInt",
             Op::PrintFloat => "PrintFloat",
             Op::PrintBool => "PrintBool",
