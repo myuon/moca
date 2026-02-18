@@ -9,7 +9,7 @@
 
 use crate::compiler::ast::{
     AsmBlock, BinaryOp, Block, Expr, FnDef, ImplBlock, Item, NewLiteralElement, Param, Program,
-    Statement, StructDef, StructField,
+    Statement, StructDef, StructField, UnaryOp,
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
@@ -589,20 +589,49 @@ impl Desugar {
                 inferred_type,
             },
 
-            // Binary - desugar both sides
+            // Binary - desugar both sides, specialize string equality
             Expr::Binary {
                 op,
                 left,
                 right,
                 span,
                 inferred_type,
-            } => Expr::Binary {
-                op,
-                left: Box::new(self.desugar_expr(*left)),
-                right: Box::new(self.desugar_expr(*right)),
-                span,
-                inferred_type,
-            },
+            } => {
+                let left_type = left.inferred_type().cloned();
+                let left = Box::new(self.desugar_expr(*left));
+                let right = Box::new(self.desugar_expr(*right));
+
+                // String equality: a == b → _string_eq(a, b), a != b → !_string_eq(a, b)
+                if matches!(left_type.as_ref(), Some(Type::String))
+                    && matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                {
+                    let call = Expr::Call {
+                        callee: "_string_eq".to_string(),
+                        type_args: vec![],
+                        args: vec![*left, *right],
+                        span,
+                        inferred_type: Some(Type::Bool),
+                    };
+                    if op == BinaryOp::Ne {
+                        Expr::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(call),
+                            span,
+                            inferred_type: Some(Type::Bool),
+                        }
+                    } else {
+                        call
+                    }
+                } else {
+                    Expr::Binary {
+                        op,
+                        left,
+                        right,
+                        span,
+                        inferred_type,
+                    }
+                }
+            }
 
             // Call - desugar arguments, specialize to_string by argument type
             Expr::Call {
