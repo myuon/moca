@@ -292,6 +292,7 @@ pub fn format_diagnostics(filename: &str, diagnostics: &[Diagnostic]) -> String 
 /// Return the default set of lint rules.
 pub fn default_rules() -> Vec<Box<dyn LintRule>> {
     vec![
+        Box::new(PreferNewLiteral),
         Box::new(PreferIndexAccess),
         Box::new(RedundantTypeAnnotation),
     ]
@@ -300,6 +301,52 @@ pub fn default_rules() -> Vec<Box<dyn LintRule>> {
 // ============================================================================
 // Rules
 // ============================================================================
+
+/// Suggests using `new Vec<T> {}` / `new Map<K, V> {}` instead of
+/// `Vec<T>::\`new\`()` / `Map<K, V>::\`new\`()`.
+pub struct PreferNewLiteral;
+
+impl LintRule for PreferNewLiteral {
+    fn name(&self) -> &str {
+        "prefer-new-literal"
+    }
+
+    fn check_expr(&self, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
+        if let Expr::AssociatedFunctionCall {
+            type_name,
+            type_args,
+            function,
+            args,
+            span,
+            ..
+        } = expr
+            && (type_name == "Vec" || type_name == "Map")
+            && function == "new"
+            && args.is_empty()
+        {
+            let type_params = if type_args.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<{}>",
+                    type_args
+                        .iter()
+                        .map(|a| format!("{}", a))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            diagnostics.push(Diagnostic {
+                rule: self.name().to_string(),
+                message: format!(
+                    "use `new {}{} {{}}` instead of `{}{}::\\`new\\`()`",
+                    type_name, type_params, type_name, type_params
+                ),
+                span: *span,
+            });
+        }
+    }
+}
 
 /// Suggests using `obj[index]` instead of `obj.get(index)` and
 /// `obj[index] = value` instead of `obj.set(index, value)` / `obj.put(key, value)`
