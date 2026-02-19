@@ -3123,6 +3123,49 @@ impl TypeChecker {
                 }
                 Type::Int
             }
+            "_find_entry_int" => {
+                // _find_entry_int(key: int) -> int (internal)
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!("map._find_entry_int expects 1 argument, got {}", args.len()),
+                        span,
+                    ));
+                    return Type::Int;
+                }
+                let k_type = self.infer_expr(&mut args[0], env);
+                if let Err(e) = self.unify(&k_type, &Type::Int, args[0].span()) {
+                    self.errors.push(e);
+                }
+                Type::Int
+            }
+            "_find_entry_string" => {
+                // _find_entry_string(key: string) -> int (internal)
+                if args.len() != 1 {
+                    self.errors.push(TypeError::new(
+                        format!(
+                            "map._find_entry_string expects 1 argument, got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                    return Type::Int;
+                }
+                let k_type = self.infer_expr(&mut args[0], env);
+                if let Err(e) = self.unify(&k_type, &Type::String, args[0].span()) {
+                    self.errors.push(e);
+                }
+                Type::Int
+            }
+            "_rehash_int" | "_rehash_string" => {
+                // _rehash_int() / _rehash_string() (internal)
+                if !args.is_empty() {
+                    self.errors.push(TypeError::new(
+                        format!("map.{} expects 0 arguments, got {}", method, args.len()),
+                        span,
+                    ));
+                }
+                Type::Nil
+            }
             _ => {
                 self.errors.push(TypeError::new(
                     format!(
