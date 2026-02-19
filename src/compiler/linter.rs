@@ -292,7 +292,6 @@ pub fn format_diagnostics(filename: &str, diagnostics: &[Diagnostic]) -> String 
 /// Return the default set of lint rules.
 pub fn default_rules() -> Vec<Box<dyn LintRule>> {
     vec![
-        Box::new(PreferNewLiteral),
         Box::new(PreferIndexAccess),
         Box::new(RedundantTypeAnnotation),
     ]
@@ -301,35 +300,6 @@ pub fn default_rules() -> Vec<Box<dyn LintRule>> {
 // ============================================================================
 // Rules
 // ============================================================================
-
-/// Suggests using `new Vec<T> {}` instead of `vec::new()`.
-pub struct PreferNewLiteral;
-
-impl LintRule for PreferNewLiteral {
-    fn name(&self) -> &str {
-        "prefer-new-literal"
-    }
-
-    fn check_expr(&self, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
-        if let Expr::AssociatedFunctionCall {
-            type_name,
-            function,
-            args,
-            span,
-            ..
-        } = expr
-            && type_name == "vec"
-            && function == "new"
-            && args.is_empty()
-        {
-            diagnostics.push(Diagnostic {
-                rule: self.name().to_string(),
-                message: "use `new Vec<T> {}` instead of `vec::\\`new\\`()`".to_string(),
-                span: *span,
-            });
-        }
-    }
-}
 
 /// Suggests using `obj[index]` instead of `obj.get(index)` and
 /// `obj[index] = value` instead of `obj.set(index, value)` / `obj.put(key, value)`

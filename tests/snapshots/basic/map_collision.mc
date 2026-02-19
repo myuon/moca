@@ -2,7 +2,7 @@
 
 // ===== Int key collision test =====
 // Keys 0, 16, 32 all hash to bucket 0 (key % 16 == 0)
-let m1: map<int, string> = map::`new`();
+let m1: Map<int, string> = Map<int, string>::`new`();
 
 m1.put(0, "zero");
 m1.put(16, "sixteen");
@@ -33,7 +33,7 @@ print(m1.get(32));
 
 // ===== String key collision test =====
 // Keys "a", "q", "A" all hash to bucket 6
-let m2: map<string, int> = map::`new`();
+let m2: Map<string, int> = Map<string, int>::`new`();
 
 m2.put("a", 100);
 m2.put("q", 200);

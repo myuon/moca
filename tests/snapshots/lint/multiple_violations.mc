@@ -1,2 +1,2 @@
-let _a = vec::`new`();
-let _b = vec::`new`();
+let _a: Vec<int> = new Vec<int> {};
+let _b: Vec<int> = new Vec<int> {};

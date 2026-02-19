@@ -2496,21 +2496,6 @@ impl TypeChecker {
             }
         }
 
-        // Check builtin types: vec and map
-        match type_name {
-            "vec" => {
-                if let Some(ty) = self.check_vec_associated_function(function, &arg_types, span) {
-                    return ty;
-                }
-            }
-            "map" => {
-                if let Some(ty) = self.check_map_associated_function(function, &arg_types, span) {
-                    return ty;
-                }
-            }
-            _ => {}
-        }
-
         // Not found
         self.errors.push(TypeError::new(
             format!(
@@ -2520,53 +2505,6 @@ impl TypeChecker {
             span,
         ));
         self.fresh_var()
-    }
-
-    /// Check associated functions on vec type.
-    fn check_vec_associated_function(
-        &mut self,
-        function: &str,
-        arg_types: &[Type],
-        span: Span,
-    ) -> Option<Type> {
-        match function {
-            "new" => {
-                if !arg_types.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("vec::new expects 0 arguments, got {}", arg_types.len()),
-                        span,
-                    ));
-                }
-                // Return vec<T> where T is a fresh type variable (will be inferred from usage)
-                Some(Type::Vector(Box::new(self.fresh_var())))
-            }
-            _ => None,
-        }
-    }
-
-    /// Check associated functions on map type.
-    fn check_map_associated_function(
-        &mut self,
-        function: &str,
-        arg_types: &[Type],
-        span: Span,
-    ) -> Option<Type> {
-        match function {
-            "new" => {
-                if !arg_types.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("map::new expects 0 arguments, got {}", arg_types.len()),
-                        span,
-                    ));
-                }
-                // Return map<K, V> where K and V are fresh type variables
-                Some(Type::Map(
-                    Box::new(self.fresh_var()),
-                    Box::new(self.fresh_var()),
-                ))
-            }
-            _ => None,
-        }
     }
 
     /// Check builtin function calls.

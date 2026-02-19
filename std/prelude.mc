@@ -1169,18 +1169,6 @@ impl<T> Vec<T> {
 }
 
 // Associated functions for vec<T> (syntax sugar for Vec<T>)
-impl vec {
-    // Create a new empty vector.
-    fun `new`() -> vec<any> {
-        return Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
-    }
-
-    // Create a vector with pre-set capacity.
-    fun with_capacity(cap: int) -> vec<any> {
-        return Vec<any> { data: __null_ptr(), len: 0, cap: cap };
-    }
-}
-
 // ============================================================================
 // Map Functions (HashMap implementation using chaining)
 // ============================================================================
@@ -1530,22 +1518,6 @@ impl<K, V> Map<K, V> {
     // Get the size of the map
     fun len(self) -> int {
         return self.hm_size;
-    }
-}
-
-// Associated functions for map<K, V> (syntax sugar for Map<K, V>)
-impl map {
-    // Create a new empty map with default capacity (16 buckets)
-    fun `new`() -> map<any, any> {
-        let capacity = 16;
-        let buckets = __alloc_heap(capacity);
-        // Initialize all buckets to 0 (nil)
-        let i = 0;
-        while i < capacity {
-            buckets[i] = 0;
-            i = i + 1;
-        }
-        return Map<any, any> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
     }
 }
 

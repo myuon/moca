@@ -3,7 +3,7 @@
 // using maps with consistent types per map
 
 // Test 1: String access - prints "outer"
-let str_map: map<string, string> = map::`new`();
+let str_map: Map<string, string> = Map<string, string>::`new`();
 str_map.put("name", "outer");
 print(str_map.get("name"));
 

@@ -1,2 +1,2 @@
-// Error: map::`new`() should not take any arguments
-let m = map::`new`(16);
+// Error: Map<string, int>::`new`() should not take any arguments
+let m = Map<string, int>::`new`(16);
