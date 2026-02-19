@@ -1338,37 +1338,6 @@ fun _map_rehash_string(m: Map<any, any>) {
     m.hm_capacity = new_capacity;
 }
 
-// Internal helper: push to vector without using method syntax
-fun _vec_push_internal(v: Vec<any>, value) {
-    if v.len >= v.cap {
-        // Need to grow
-        let new_cap = v.cap * 2;
-        if new_cap < 8 {
-            new_cap = 8;
-        }
-        let new_data = __alloc_heap(new_cap);
-
-        // Copy old data if data is not null
-        if v.data != __null_ptr() {
-            let i = 0;
-            while i < v.len {
-                let val = v.data[i];
-                new_data[i] = val;
-                i = i + 1;
-            }
-        }
-
-        // Update vector header
-        v.data = new_data;
-        v.cap = new_cap;
-    }
-
-    // Store the value at data[len]
-    v.data[v.len] = value;
-    // Increment len
-    v.len = v.len + 1;
-}
-
 impl<K, V> Map<K, V> {
     // Create a new empty map
     fun `new`() -> Map<K, V> {
@@ -1544,15 +1513,15 @@ impl<K, V> Map<K, V> {
         return false;
     }
 
-    // Get all keys from the map as a vector (works for any key type)
-    fun keys(self) -> vec<any> {
-        let result: Vec<any> = Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
+    // Get all keys from the map as a vector
+    fun keys(self) -> Vec<K> {
+        let result: Vec<K> = Vec<K> { data: __null_ptr(), len: 0, cap: 0 };
         let i = 0;
         while i < self.hm_capacity {
             let entry_ptr = self.hm_buckets[i];
             while entry_ptr != 0 {
                 let key = __heap_load(entry_ptr, 0);
-                _vec_push_internal(result, key);
+                result.push(key);
                 entry_ptr = __heap_load(entry_ptr, 2);
             }
             i = i + 1;
@@ -1561,14 +1530,14 @@ impl<K, V> Map<K, V> {
     }
 
     // Get all values from the map as a vector
-    fun values(self) -> vec<any> {
-        let result: Vec<any> = Vec<any> { data: __null_ptr(), len: 0, cap: 0 };
+    fun values(self) -> Vec<V> {
+        let result: Vec<V> = Vec<V> { data: __null_ptr(), len: 0, cap: 0 };
         let i = 0;
         while i < self.hm_capacity {
             let entry_ptr = self.hm_buckets[i];
             while entry_ptr != 0 {
                 let val = __heap_load(entry_ptr, 1);
-                _vec_push_internal(result, val);
+                result.push(val);
                 entry_ptr = __heap_load(entry_ptr, 2);
             }
             i = i + 1;
