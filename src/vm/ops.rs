@@ -176,6 +176,18 @@ pub enum Op {
     Syscall(usize, usize),
     GcHint(usize),
     PrintDebug,
+    /// Type-specific print: print i64 value without ObjectKind dispatch
+    PrintI64,
+    /// Type-specific print: print f64 value without ObjectKind dispatch
+    PrintF64,
+    /// Type-specific print: print bool value without ObjectKind dispatch
+    PrintBool,
+    /// Type-specific print: print string value without ObjectKind dispatch
+    PrintString,
+    /// Type-specific print: print nil without ObjectKind dispatch
+    PrintNil,
+    /// Content-based string equality without ObjectKind dispatch
+    StringEq,
     TypeOf,
     FloatToString,
     ParseInt,
@@ -317,6 +329,12 @@ impl Op {
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::PrintDebug => "PrintDebug",
+            Op::PrintI64 => "PrintI64",
+            Op::PrintF64 => "PrintF64",
+            Op::PrintBool => "PrintBool",
+            Op::PrintString => "PrintString",
+            Op::PrintNil => "PrintNil",
+            Op::StringEq => "StringEq",
             Op::TypeOf => "TypeOf",
             Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",

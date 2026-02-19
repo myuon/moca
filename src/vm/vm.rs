@@ -1586,6 +1586,63 @@ impl VM {
                     writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
                     self.stack[sb + dst.0] = value;
                 }
+                MicroOp::PrintI64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let n = value.as_i64().ok_or("PrintI64: expected i64")?;
+                    writeln!(self.output, "{}", n).map_err(|e| format!("io error: {}", e))?;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::PrintF64 { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let f = value.as_f64().ok_or("PrintF64: expected f64")?;
+                    if f.fract() == 0.0 {
+                        writeln!(self.output, "{}.0", f)
+                    } else {
+                        writeln!(self.output, "{}", f)
+                    }
+                    .map_err(|e| format!("io error: {}", e))?;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::PrintBool { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let b = value.as_bool();
+                    writeln!(self.output, "{}", b).map_err(|e| format!("io error: {}", e))?;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::PrintString { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let r = value.as_ref().ok_or("PrintString: expected ref")?;
+                    let s = self.ref_to_rust_string(r)?;
+                    writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
+                    self.stack[sb + dst.0] = value;
+                }
+                MicroOp::PrintNil { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    writeln!(self.output, "nil").map_err(|e| format!("io error: {}", e))?;
+                    self.stack[sb + dst.0] = self.stack[sb + src.0];
+                }
+                MicroOp::StringEq { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let a_ref = self.stack[sb + a.0]
+                        .as_ref()
+                        .ok_or("StringEq: expected ref")?;
+                    let b_ref = self.stack[sb + b.0]
+                        .as_ref()
+                        .ok_or("StringEq: expected ref")?;
+                    let a_obj = self.heap.get(a_ref).ok_or("StringEq: invalid ref")?;
+                    let b_obj = self.heap.get(b_ref).ok_or("StringEq: invalid ref")?;
+                    let a_data = a_obj.slots[0].as_ref().and_then(|r| self.heap.get(r));
+                    let b_data = b_obj.slots[0].as_ref().and_then(|r| self.heap.get(r));
+                    let result = match (a_data, b_data) {
+                        (Some(ad), Some(bd)) => ad.slots == bd.slots,
+                        _ => false,
+                    };
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
                 MicroOp::HeapAllocDynSimple { dst, size } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let size_val = self.stack[sb + size.0]
@@ -2779,6 +2836,56 @@ impl VM {
                 writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
                 // print returns the value it printed (for expression statements)
                 self.stack.push(value);
+            }
+            Op::PrintI64 => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let n = value.as_i64().ok_or("PrintI64: expected i64")?;
+                writeln!(self.output, "{}", n).map_err(|e| format!("io error: {}", e))?;
+                self.stack.push(value);
+            }
+            Op::PrintF64 => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let f = value.as_f64().ok_or("PrintF64: expected f64")?;
+                if f.fract() == 0.0 {
+                    writeln!(self.output, "{}.0", f)
+                } else {
+                    writeln!(self.output, "{}", f)
+                }
+                .map_err(|e| format!("io error: {}", e))?;
+                self.stack.push(value);
+            }
+            Op::PrintBool => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let b = value.as_bool();
+                writeln!(self.output, "{}", b).map_err(|e| format!("io error: {}", e))?;
+                self.stack.push(value);
+            }
+            Op::PrintString => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let r = value.as_ref().ok_or("PrintString: expected ref")?;
+                let s = self.ref_to_rust_string(r)?;
+                writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
+                self.stack.push(value);
+            }
+            Op::PrintNil => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                writeln!(self.output, "nil").map_err(|e| format!("io error: {}", e))?;
+                self.stack.push(value);
+            }
+            Op::StringEq => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let a_ref = a.as_ref().ok_or("StringEq: expected ref")?;
+                let b_ref = b.as_ref().ok_or("StringEq: expected ref")?;
+                let a_obj = self.heap.get(a_ref).ok_or("StringEq: invalid ref")?;
+                let b_obj = self.heap.get(b_ref).ok_or("StringEq: invalid ref")?;
+                let a_data = a_obj.slots[0].as_ref().and_then(|r| self.heap.get(r));
+                let b_data = b_obj.slots[0].as_ref().and_then(|r| self.heap.get(r));
+                let result = match (a_data, b_data) {
+                    (Some(ad), Some(bd)) => ad.slots == bd.slots,
+                    _ => false,
+                };
+                self.stack.push(Value::Bool(result));
             }
             Op::GcHint(_bytes) => {
                 // Hint about upcoming allocation - might trigger GC

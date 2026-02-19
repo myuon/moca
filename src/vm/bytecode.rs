@@ -415,6 +415,14 @@ const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
 
+// Type-specific print / equality (Phase 5)
+const OP_PRINT_I64: u8 = 119;
+const OP_PRINT_F64: u8 = 120;
+const OP_PRINT_BOOL: u8 = 121;
+const OP_PRINT_STRING: u8 = 122;
+const OP_PRINT_NIL: u8 = 123;
+const OP_STRING_EQ: u8 = 124;
+
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
         // Constants
@@ -604,6 +612,12 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *size as u32)?;
         }
         Op::PrintDebug => w.write_all(&[OP_PRINT_DEBUG])?,
+        Op::PrintI64 => w.write_all(&[OP_PRINT_I64])?,
+        Op::PrintF64 => w.write_all(&[OP_PRINT_F64])?,
+        Op::PrintBool => w.write_all(&[OP_PRINT_BOOL])?,
+        Op::PrintString => w.write_all(&[OP_PRINT_STRING])?,
+        Op::PrintNil => w.write_all(&[OP_PRINT_NIL])?,
+        Op::StringEq => w.write_all(&[OP_STRING_EQ])?,
         Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::FloatToString => w.write_all(&[OP_FLOAT_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
@@ -780,6 +794,12 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_PRINT_DEBUG => Op::PrintDebug,
+        OP_PRINT_I64 => Op::PrintI64,
+        OP_PRINT_F64 => Op::PrintF64,
+        OP_PRINT_BOOL => Op::PrintBool,
+        OP_PRINT_STRING => Op::PrintString,
+        OP_PRINT_NIL => Op::PrintNil,
+        OP_STRING_EQ => Op::StringEq,
         OP_TYPE_OF => Op::TypeOf,
         OP_FLOAT_TO_STRING => Op::FloatToString,
         OP_PARSE_INT => Op::ParseInt,
@@ -1208,6 +1228,12 @@ mod tests {
             Op::Syscall(7, 2),
             Op::GcHint(1024),
             Op::PrintDebug,
+            Op::PrintI64,
+            Op::PrintF64,
+            Op::PrintBool,
+            Op::PrintString,
+            Op::PrintNil,
+            Op::StringEq,
             Op::TypeOf,
             Op::FloatToString,
             Op::ParseInt,

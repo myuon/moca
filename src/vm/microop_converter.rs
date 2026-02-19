@@ -1723,6 +1723,102 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::PrintDebug { dst, src });
                 vstack.push(Vse::Reg(dst));
             }
+            Op::PrintI64 => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::PrintI64 { dst, src });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::PrintF64 => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::F64,
+                );
+                micro_ops.push(MicroOp::PrintF64 { dst, src });
+                vstack.push(Vse::RegF64(dst));
+            }
+            Op::PrintBool => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I32,
+                );
+                micro_ops.push(MicroOp::PrintBool { dst, src });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::PrintString => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::PrintString { dst, src });
+                vstack.push(Vse::RegRef(dst));
+            }
+            Op::PrintNil => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::PrintNil { dst, src });
+                vstack.push(Vse::RegRef(dst));
+            }
+            Op::StringEq => {
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                    |dst, a, b| MicroOp::StringEq { dst, a, b },
+                );
+            }
 
             // ============================================================
             // Heap allocation operations
@@ -2092,7 +2188,14 @@ fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
         | MicroOp::I64TruncF32S { dst, .. }
         | MicroOp::F32DemoteF64 { dst, .. }
         | MicroOp::F64PromoteF32 { dst, .. }
-        | MicroOp::F64ReinterpretAsI64 { dst, .. } => {
+        | MicroOp::F64ReinterpretAsI64 { dst, .. }
+        // Type-specific print / equality
+        | MicroOp::PrintI64 { dst, .. }
+        | MicroOp::PrintF64 { dst, .. }
+        | MicroOp::PrintBool { dst, .. }
+        | MicroOp::PrintString { dst, .. }
+        | MicroOp::PrintNil { dst, .. }
+        | MicroOp::StringEq { dst, .. } => {
             let old = *dst;
             *dst = new_dst;
             Some(old)

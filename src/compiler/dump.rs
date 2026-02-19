@@ -1727,6 +1727,12 @@ impl<'a> Disassembler<'a> {
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::PrintDebug => self.output.push_str("PrintDebug"),
+            Op::PrintI64 => self.output.push_str("PrintI64"),
+            Op::PrintF64 => self.output.push_str("PrintF64"),
+            Op::PrintBool => self.output.push_str("PrintBool"),
+            Op::PrintString => self.output.push_str("PrintString"),
+            Op::PrintNil => self.output.push_str("PrintNil"),
+            Op::StringEq => self.output.push_str("StringEq"),
             Op::TypeOf => self.output.push_str("TypeOf"),
             Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
@@ -2286,6 +2292,37 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             "PrintDebug {}, {}",
             format_vreg(dst),
             format_vreg(src)
+        )),
+        MicroOp::PrintI64 { dst, src } => output.push_str(&format!(
+            "PrintI64 {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::PrintF64 { dst, src } => output.push_str(&format!(
+            "PrintF64 {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::PrintBool { dst, src } => output.push_str(&format!(
+            "PrintBool {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::PrintString { dst, src } => output.push_str(&format!(
+            "PrintString {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::PrintNil { dst, src } => output.push_str(&format!(
+            "PrintNil {}, {}",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::StringEq { dst, a, b } => output.push_str(&format!(
+            "StringEq {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
         )),
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),

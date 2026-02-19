@@ -1009,7 +1009,41 @@ impl Codegen {
                             }
                         } else {
                             self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::PrintDebug);
+                            // Use type-specific print ops only when the type
+                            // is unambiguously determined by the expression
+                            // structure. infer_expr_type defaults to I64 for
+                            // MethodCall/Field etc., which is unreliable.
+                            let print_op = match &args[0] {
+                                ResolvedExpr::Int(_) => Op::PrintI64,
+                                ResolvedExpr::Float(_) => Op::PrintF64,
+                                ResolvedExpr::Bool(_) => Op::PrintBool,
+                                ResolvedExpr::Nil => Op::PrintNil,
+                                ResolvedExpr::Unary {
+                                    op: UnaryOp::Not, ..
+                                } => Op::PrintBool,
+                                ResolvedExpr::Unary {
+                                    op: UnaryOp::Neg,
+                                    operand,
+                                } => match operand.as_ref() {
+                                    ResolvedExpr::Int(_) => Op::PrintI64,
+                                    ResolvedExpr::Float(_) => Op::PrintF64,
+                                    _ => Op::PrintDebug,
+                                },
+                                ResolvedExpr::Binary {
+                                    op:
+                                        BinaryOp::Eq
+                                        | BinaryOp::Ne
+                                        | BinaryOp::Lt
+                                        | BinaryOp::Le
+                                        | BinaryOp::Gt
+                                        | BinaryOp::Ge
+                                        | BinaryOp::And
+                                        | BinaryOp::Or,
+                                    ..
+                                } => Op::PrintBool,
+                                _ => Op::PrintDebug,
+                            };
+                            ops.push(print_op);
                         }
                     }
                     "__syscall" => {
@@ -1697,7 +1731,7 @@ mod tests {
     fn test_simple_print() {
         let chunk = compile("print_debug(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::I64Const(42)));
-        assert!(chunk.main.code.contains(&Op::PrintDebug));
+        assert!(chunk.main.code.contains(&Op::PrintI64));
     }
 
     #[test]

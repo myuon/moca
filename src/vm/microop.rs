@@ -497,6 +497,37 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
+    /// Type-specific print: print i64 value
+    PrintI64 {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Type-specific print: print f64 value
+    PrintF64 {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Type-specific print: print bool value
+    PrintBool {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Type-specific print: print string value
+    PrintString {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Type-specific print: print nil
+    PrintNil {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Content-based string equality
+    StringEq {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
     // ========================================
     // Stack Bridge (for Raw op interop)
     // ========================================
