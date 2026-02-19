@@ -1,6 +1,6 @@
 // Map with integer keys test
 
-let m: map<int, string> = map::`new`();
+let m: Map<int, string> = Map<int, string>::`new`();
 
 // Test put and get
 m.put(1, "one");

@@ -302,7 +302,8 @@ pub fn default_rules() -> Vec<Box<dyn LintRule>> {
 // Rules
 // ============================================================================
 
-/// Suggests using `new Vec<T> {}` instead of `vec::new()`.
+/// Suggests using `new Vec<T> {}` / `new Map<K, V> {}` instead of
+/// `Vec<T>::\`new\`()` / `Map<K, V>::\`new\`()`.
 pub struct PreferNewLiteral;
 
 impl LintRule for PreferNewLiteral {
@@ -313,18 +314,34 @@ impl LintRule for PreferNewLiteral {
     fn check_expr(&self, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
         if let Expr::AssociatedFunctionCall {
             type_name,
+            type_args,
             function,
             args,
             span,
             ..
         } = expr
-            && type_name == "vec"
+            && (type_name == "Vec" || type_name == "Map")
             && function == "new"
             && args.is_empty()
         {
+            let type_params = if type_args.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<{}>",
+                    type_args
+                        .iter()
+                        .map(|a| format!("{}", a))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
             diagnostics.push(Diagnostic {
                 rule: self.name().to_string(),
-                message: "use `new Vec<T> {}` instead of `vec::\\`new\\`()`".to_string(),
+                message: format!(
+                    "use `new {}{} {{}}` instead of `{}{}::\\`new\\`()`",
+                    type_name, type_params, type_name, type_params
+                ),
                 span: *span,
             });
         }

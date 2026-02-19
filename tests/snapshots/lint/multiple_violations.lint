@@ -1,2 +1,2 @@
-prefer-new-literal:1:10
-prefer-new-literal:2:10
+prefer-new-literal:1:20
+redundant-type-annotation:2:1

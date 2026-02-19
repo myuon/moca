@@ -1,7 +1,7 @@
 // Test Vector [] syntax for index access and assignment
 
 // Create a vector and push some elements
-let vec: vec<any> = vec::`new`();
+let vec: Vec<int> = Vec<int>::`new`();
 vec.push(10);
 vec.push(20);
 vec.push(30);

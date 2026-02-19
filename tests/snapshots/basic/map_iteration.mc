@@ -1,6 +1,6 @@
 // Map iteration test - keys and values methods
 
-let m: map<int, int> = map::`new`();
+let m: Map<int, int> = Map<int, int>::`new`();
 
 // Add some entries
 m.put(1, 100);
@@ -8,8 +8,8 @@ m.put(2, 200);
 m.put(3, 300);
 
 // Get keys and values
-let keys: vec<any> = m.keys();
-let values: vec<any> = m.values();
+let keys: Vec<int> = m.keys();
+let values: Vec<int> = m.values();
 
 // Check counts
 print(keys.len());

@@ -3,7 +3,7 @@ let arr: array<int> = [1, 2, 3];
 print(len(arr));
 
 // Test Vector push/pop operations
-let vec: vec<any> = vec::`new`();
+let vec: Vec<int> = Vec<int>::`new`();
 vec.push(1);
 vec.push(2);
 vec.push(3);

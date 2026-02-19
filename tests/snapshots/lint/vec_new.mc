@@ -1,1 +1,1 @@
-let _v = vec::`new`();
+let _v: Vec<int> = Vec<int>::`new`();

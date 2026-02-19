@@ -1,1 +1,1 @@
-map::new expects 0 arguments, got 1
+Map::new expects 0 arguments, got 1
