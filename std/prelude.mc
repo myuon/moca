@@ -1188,9 +1188,9 @@ impl vec {
 // HashMapEntry struct - represents a key-value pair in the map.
 // Layout: [hm_key, hm_value, hm_next]
 // hm_next: pointer to next entry in the chain (0 if end of chain)
-struct HashMapEntry {
-    hm_key: any,
-    hm_value: any,
+struct HashMapEntry<K, V> {
+    hm_key: K,
+    hm_value: V,
     hm_next: ptr<any>
 }
 
@@ -1382,15 +1382,10 @@ impl<K, V> Map<K, V> {
             _map_rehash_int(self);
         }
 
-        // Create new entry
-        let entry = __alloc_heap(3);
-        __heap_store(entry, 0, key);
-        __heap_store(entry, 1, val);
-
         // Insert at head of bucket
         let bucket_idx = _map_hash_int(key) % self.hm_capacity;
         let old_head = self.hm_buckets[bucket_idx];
-        __heap_store(entry, 2, old_head);
+        let entry = HashMapEntry<int, V> { hm_key: key, hm_value: val, hm_next: old_head };
         self.hm_buckets[bucket_idx] = entry;
 
         self.hm_size = self.hm_size + 1;
@@ -1413,15 +1408,10 @@ impl<K, V> Map<K, V> {
             _map_rehash_string(self);
         }
 
-        // Create new entry
-        let entry = __alloc_heap(3);
-        __heap_store(entry, 0, key);
-        __heap_store(entry, 1, val);
-
         // Insert at head of bucket
         let bucket_idx = _map_hash_string(key) % self.hm_capacity;
         let old_head = self.hm_buckets[bucket_idx];
-        __heap_store(entry, 2, old_head);
+        let entry = HashMapEntry<string, V> { hm_key: key, hm_value: val, hm_next: old_head };
         self.hm_buckets[bucket_idx] = entry;
 
         self.hm_size = self.hm_size + 1;
