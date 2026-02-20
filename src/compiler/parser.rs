@@ -748,11 +748,6 @@ impl<'a> Parser<'a> {
             return self.parse_function_type();
         }
 
-        // Check for object type: {field: T, ...}
-        if self.check(&TokenKind::LBrace) {
-            return self.parse_object_type();
-        }
-
         // Named type (int, float, bool, string, nil) or array<T>
         let name = self.expect_ident()?;
 
@@ -815,31 +810,6 @@ impl<'a> Parser<'a> {
             params,
             ret: Box::new(ret),
         })
-    }
-
-    fn parse_object_type(&mut self) -> Result<TypeAnnotation, String> {
-        self.expect(&TokenKind::LBrace)?;
-
-        let mut fields = Vec::new();
-        if !self.check(&TokenKind::RBrace) {
-            let field_name = self.expect_ident()?;
-            self.expect(&TokenKind::Colon)?;
-            let field_type = self.parse_type_annotation()?;
-            fields.push((field_name, field_type));
-
-            while self.match_token(&TokenKind::Comma) {
-                if self.check(&TokenKind::RBrace) {
-                    break; // Allow trailing comma
-                }
-                let field_name = self.expect_ident()?;
-                self.expect(&TokenKind::Colon)?;
-                let field_type = self.parse_type_annotation()?;
-                fields.push((field_name, field_type));
-            }
-        }
-        self.expect(&TokenKind::RBrace)?;
-
-        Ok(TypeAnnotation::Object(fields))
     }
 
     // Expression parsing with precedence climbing

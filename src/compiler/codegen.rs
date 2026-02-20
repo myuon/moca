@@ -95,7 +95,6 @@ impl Codegen {
             | Type::Map(_, _)
             | Type::Struct { .. }
             | Type::GenericStruct { .. }
-            | Type::Object(_)
             | Type::Nullable(_)
             | Type::Ptr(_)
             | Type::Dyn => ValueType::Ref,
