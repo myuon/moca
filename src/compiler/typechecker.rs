@@ -2783,12 +2783,12 @@ impl TypeChecker {
         span: Span,
     ) -> Option<Type> {
         match name {
-            "print_debug" => {
-                // print_debug accepts any type
+            "__value_to_string" => {
+                // __value_to_string accepts any type, returns string
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
-                Some(Type::Nil)
+                Some(Type::String)
             }
             "__syscall" => {
                 // __syscall(num, ...args) -> Int | String

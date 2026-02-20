@@ -681,7 +681,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -770,7 +770,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -854,7 +854,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -933,7 +933,7 @@ impl VM {
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
             float_to_string_helper: jit_float_to_string_helper,
-            print_debug_helper: jit_print_debug_helper,
+
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
             jit_function_table: self.jit_function_table.base_ptr(),
@@ -1579,12 +1579,12 @@ impl VM {
                     let r = self.heap.alloc_string(s)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
-                MicroOp::PrintDebug { dst, src } => {
+                MicroOp::ValueToString { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let value = self.stack[sb + src.0];
                     let s = self.value_to_string(&value)?;
-                    writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
-                    self.stack[sb + dst.0] = value;
+                    let r = self.heap.alloc_string(s)?;
+                    self.stack[sb + dst.0] = Value::Ref(r);
                 }
                 MicroOp::HeapAllocDynSimple { dst, size } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -2773,12 +2773,11 @@ impl VM {
             Op::TryEnd => {
                 self.try_frames.pop();
             }
-            Op::PrintDebug => {
+            Op::ValueToString => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
-                writeln!(self.output, "{}", s).map_err(|e| format!("io error: {}", e))?;
-                // print returns the value it printed (for expression statements)
-                self.stack.push(value);
+                let r = self.heap.alloc_string(s)?;
+                self.stack.push(Value::Ref(r));
             }
             Op::GcHint(_bytes) => {
                 // Hint about upcoming allocation - might trigger GC
@@ -4149,27 +4148,6 @@ unsafe extern "C" fn jit_float_to_string_helper(
             payload: 0,
         },
     }
-}
-
-/// JIT printDebug helper function.
-/// Prints a value to output and returns the same value.
-#[cfg(feature = "jit")]
-unsafe extern "C" fn jit_print_debug_helper(
-    ctx: *mut JitCallContext,
-    tag: u64,
-    payload: u64,
-) -> JitReturn {
-    let ctx_ref = unsafe { &mut *ctx };
-    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
-
-    vm.record_opcode("PrintDebug");
-
-    let value = JitValue { tag, payload }.to_value();
-    if let Ok(s) = vm.value_to_string(&value) {
-        let _ = writeln!(vm.output, "{}", s);
-    }
-    // Return the original value
-    JitReturn { tag, payload }
 }
 
 /// JIT HeapAllocDynSimple helper function.

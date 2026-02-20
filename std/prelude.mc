@@ -852,6 +852,17 @@ fun print<T: ToString>(v: T) {
     print_str("\n");
 }
 
+// Convert any value to its string representation (runtime type dispatch).
+fun debug(v: any) -> string {
+    return __value_to_string(v);
+}
+
+// Print any value to stdout with a trailing newline (runtime type dispatch).
+fun print_debug(v: any) {
+    print_str(__value_to_string(v));
+    print_str("\n");
+}
+
 // Print a string to stderr without a newline.
 fun eprint_str(s: string) {
     let n = len(s);

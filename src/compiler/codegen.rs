@@ -164,7 +164,8 @@ impl Codegen {
                     ValueType::Ref
                 }
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
-                "send" | "join" | "print" | "print_debug" | "__heap_store" => ValueType::Ref, // returns null
+                "__value_to_string" => ValueType::Ref, // returns string
+                "send" | "join" | "print" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
             },
             ResolvedExpr::AsmBlock { .. } => ValueType::I64,
@@ -1043,12 +1044,12 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args, .. } => {
                 match name.as_str() {
-                    "print_debug" => {
+                    "__value_to_string" => {
                         if args.len() != 1 {
-                            return Err("print_debug takes exactly 1 argument".to_string());
+                            return Err("__value_to_string takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::PrintDebug);
+                        ops.push(Op::ValueToString);
                     }
                     "__syscall" => {
                         // __syscall(num, ...args) -> result
@@ -1652,7 +1653,7 @@ impl Codegen {
             "TryEnd" => Ok(Op::TryEnd),
 
             // Builtins
-            "PrintDebug" => Ok(Op::PrintDebug),
+            "ValueToString" => Ok(Op::ValueToString),
 
             // GC hint
             "GcHint" => {
@@ -1763,20 +1764,20 @@ mod tests {
 
     #[test]
     fn test_simple_print() {
-        let chunk = compile("print_debug(42);").unwrap();
+        let chunk = compile("__value_to_string(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::I64Const(42)));
-        assert!(chunk.main.code.contains(&Op::PrintDebug));
+        assert!(chunk.main.code.contains(&Op::ValueToString));
     }
 
     #[test]
     fn test_arithmetic() {
-        let chunk = compile("print_debug(1 + 2);").unwrap();
+        let chunk = compile("__value_to_string(1 + 2);").unwrap();
         assert!(chunk.main.code.contains(&Op::I64Add));
     }
 
     #[test]
     fn test_function_call() {
-        let chunk = compile("fun foo() { return 42; } print_debug(foo());").unwrap();
+        let chunk = compile("fun foo() { return 42; } __value_to_string(foo());").unwrap();
         assert_eq!(chunk.functions.len(), 1);
         assert_eq!(chunk.functions[0].name, "foo");
     }

@@ -312,7 +312,7 @@ impl<'a> Resolver<'a> {
             filename,
             functions: HashMap::new(),
             builtins: vec![
-                "print_debug".to_string(),
+                "__value_to_string".to_string(),
                 "len".to_string(),
                 "type_of".to_string(),
                 "__float_to_string".to_string(),
@@ -2579,13 +2579,13 @@ mod tests {
 
     #[test]
     fn test_simple_resolution() {
-        let program = resolve("let x = 42; print_debug(x);").unwrap();
+        let program = resolve("let x = 42; __value_to_string(x);").unwrap();
         assert_eq!(program.main_body.len(), 2);
     }
 
     #[test]
     fn test_undefined_variable() {
-        let result = resolve("print_debug(x);");
+        let result = resolve("__value_to_string(x);");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("undefined variable"));
     }
