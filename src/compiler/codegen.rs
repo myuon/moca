@@ -97,7 +97,8 @@ impl Codegen {
             | Type::GenericStruct { .. }
             | Type::Object(_)
             | Type::Nullable(_)
-            | Type::Ptr(_) => ValueType::Ref,
+            | Type::Ptr(_)
+            | Type::Dyn => ValueType::Ref,
             Type::Nil => ValueType::Ref,
             _ => ValueType::I64, // Default to I64 for unknown types
         }
@@ -176,6 +177,7 @@ impl Codegen {
             ResolvedExpr::CaptureStore { .. } => ValueType::Ref, // HeapStore result
             ResolvedExpr::RefCellNew { .. } => ValueType::Ref,   // Returns a Ref
             ResolvedExpr::RefCellLoad { .. } => ValueType::I64,  // Default; dynamic
+            ResolvedExpr::AsDyn { .. } => ValueType::Ref,        // Dyn values are heap-allocated
         }
     }
 
@@ -688,6 +690,60 @@ impl Codegen {
                 ops.push(Op::LocalGet(*slot + self.local_offset));
                 self.compile_expr(value, ops)?;
                 ops.push(Op::HeapStore(0));
+            }
+            ResolvedStatement::MatchDyn {
+                dyn_slot,
+                expr,
+                arms,
+                default_block,
+            } => {
+                // Compile the dyn expression and store in the dyn_slot
+                self.compile_expr(expr, ops)?;
+                ops.push(Op::LocalSet(*dyn_slot));
+
+                // Compile as if-else chain on type tags
+                let mut jump_to_end_patches = Vec::new();
+
+                for arm in arms {
+                    // Load dyn value and get type tag via HeapLoad(0)
+                    ops.push(Op::LocalGet(*dyn_slot));
+                    ops.push(Op::HeapLoad(0));
+                    ops.push(Op::I64Const(arm.type_tag as i64));
+                    ops.push(Op::I64Eq);
+
+                    // Branch to next arm if tag doesn't match
+                    let jump_to_next = ops.len();
+                    ops.push(Op::BrIfFalse(0)); // placeholder
+
+                    // Unbox the value via HeapLoad(1) and bind to the arm's variable
+                    ops.push(Op::LocalGet(*dyn_slot));
+                    ops.push(Op::HeapLoad(1));
+                    ops.push(Op::LocalSet(arm.var_slot));
+
+                    // Compile arm body
+                    for stmt in &arm.body {
+                        self.compile_statement(stmt, ops)?;
+                    }
+
+                    // Jump to end of match
+                    jump_to_end_patches.push(ops.len());
+                    ops.push(Op::Jmp(0)); // placeholder
+
+                    // Patch jump to next arm
+                    let next_arm = ops.len();
+                    ops[jump_to_next] = Op::BrIfFalse(next_arm);
+                }
+
+                // Default block
+                for stmt in default_block {
+                    self.compile_statement(stmt, ops)?;
+                }
+
+                // Patch all jumps to end
+                let end = ops.len();
+                for patch_idx in jump_to_end_patches {
+                    ops[patch_idx] = Op::Jmp(end);
+                }
             }
         }
 
@@ -1339,6 +1395,17 @@ impl Codegen {
                 // Load value from RefCell: LocalGet(slot) gives the RefCell ref, HeapLoad(0) reads the value
                 ops.push(Op::LocalGet(*slot + self.local_offset));
                 ops.push(Op::HeapLoad(0));
+            }
+            ResolvedExpr::AsDyn { expr, type_tag } => {
+                // Push arguments: tag, value
+                ops.push(Op::I64Const(*type_tag as i64));
+                self.compile_expr(expr, ops)?;
+                // Call __dyn_box(tag, value)
+                let func_idx = self
+                    .function_indices
+                    .get("__dyn_box")
+                    .ok_or("__dyn_box not found in stdlib")?;
+                ops.push(Op::Call(*func_idx, 2));
             }
         }
 

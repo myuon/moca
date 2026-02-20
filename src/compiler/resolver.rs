@@ -100,6 +100,21 @@ pub enum ResolvedStatement {
         slot: usize,
         value: ResolvedExpr,
     },
+    /// Match dyn statement: runtime type dispatch on a dyn value.
+    MatchDyn {
+        dyn_slot: usize,
+        expr: ResolvedExpr,
+        arms: Vec<ResolvedMatchDynArm>,
+        default_block: Vec<ResolvedStatement>,
+    },
+}
+
+/// An arm in a resolved match dyn statement.
+#[derive(Debug, Clone)]
+pub struct ResolvedMatchDynArm {
+    pub var_slot: usize,
+    pub type_tag: u8,
+    pub body: Vec<ResolvedStatement>,
 }
 
 /// Information about a captured variable in a closure.
@@ -239,6 +254,11 @@ pub enum ResolvedExpr {
     RefCellLoad {
         slot: usize,
     },
+    /// As dyn expression: boxes a value with a runtime type tag.
+    AsDyn {
+        expr: Box<ResolvedExpr>,
+        type_tag: u8,
+    },
 }
 
 /// An element in a resolved new literal.
@@ -365,6 +385,16 @@ impl<'a> Resolver<'a> {
                 } => {
                     Self::collect_var_types_inner(&try_block.statements, type_map);
                     Self::collect_var_types_inner(&catch_block.statements, type_map);
+                }
+                Statement::MatchDyn {
+                    arms,
+                    default_block,
+                    ..
+                } => {
+                    for arm in arms {
+                        Self::collect_var_types_inner(&arm.body.statements, type_map);
+                    }
+                    Self::collect_var_types_inner(&default_block.statements, type_map);
                 }
                 _ => {}
             }
@@ -974,6 +1004,18 @@ impl<'a> Resolver<'a> {
                 unreachable!("ForRange should be desugared before resolution")
             }
             Statement::Const { .. } => {}
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                ..
+            } => {
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+                for arm in arms {
+                    Self::scan_lambdas_for_captures(&arm.body.statements, var_names, captured);
+                }
+                Self::scan_lambdas_for_captures(&default_block.statements, var_names, captured);
+            }
         }
     }
 
@@ -1058,6 +1100,9 @@ impl<'a> Resolver<'a> {
                 statements, expr, ..
             } => {
                 Self::scan_lambdas_for_captures(statements, var_names, captured);
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+            }
+            Expr::AsDyn { expr, .. } => {
                 Self::scan_expr_for_lambdas(expr, var_names, captured);
             }
             _ => {}
@@ -1319,6 +1364,47 @@ impl<'a> Resolver<'a> {
                     try_block: try_resolved,
                     catch_slot,
                     catch_block: catch_resolved,
+                })
+            }
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                ..
+            } => {
+                // Allocate a local slot for the dyn value
+                let dyn_slot = scope.declare("__match_dyn".to_string(), false);
+                let resolved_expr = self.resolve_expr(expr, scope)?;
+
+                // Resolve each arm
+                let mut resolved_arms = Vec::new();
+                for arm in arms {
+                    scope.enter_scope();
+                    let var_slot = scope.declare(arm.var_name, false);
+                    let type_tag = type_to_dyn_tag(
+                        &arm.type_annotation
+                            .to_type()
+                            .expect("MatchDyn arm type annotation must be valid"),
+                    );
+                    let body = self.resolve_statements(arm.body.statements, scope)?;
+                    scope.exit_scope();
+                    resolved_arms.push(ResolvedMatchDynArm {
+                        var_slot,
+                        type_tag,
+                        body,
+                    });
+                }
+
+                // Resolve default block
+                scope.enter_scope();
+                let resolved_default = self.resolve_statements(default_block.statements, scope)?;
+                scope.exit_scope();
+
+                Ok(ResolvedStatement::MatchDyn {
+                    dyn_slot,
+                    expr: resolved_expr,
+                    arms: resolved_arms,
+                    default_block: resolved_default,
                 })
             }
         }
@@ -1852,6 +1938,20 @@ impl<'a> Resolver<'a> {
             Expr::StringInterpolation { .. } => {
                 unreachable!("StringInterpolation should be desugared before resolution")
             }
+
+            Expr::AsDyn { expr, .. } => {
+                // Get the inner expression's inferred type for the type tag
+                let inner_type = expr
+                    .inferred_type()
+                    .cloned()
+                    .expect("AsDyn inner expr must have inferred_type");
+                let type_tag = type_to_dyn_tag(&inner_type);
+                let resolved_expr = self.resolve_expr(*expr, scope)?;
+                Ok(ResolvedExpr::AsDyn {
+                    expr: Box::new(resolved_expr),
+                    type_tag,
+                })
+            }
         }
     }
 
@@ -1920,6 +2020,18 @@ impl<'a> Resolver<'a> {
             ResolvedStatement::RefCellStore { value, .. } => {
                 self.expr_calls_function(value, target_index)
             }
+            ResolvedStatement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                ..
+            } => {
+                self.expr_calls_function(expr, target_index)
+                    || arms
+                        .iter()
+                        .any(|arm| self.body_calls_function(&arm.body, target_index))
+                    || self.body_calls_function(default_block, target_index)
+            }
         }
     }
 
@@ -1980,6 +2092,7 @@ impl<'a> Resolver<'a> {
                 self.expr_calls_function(value, target_index)
             }
             ResolvedExpr::RefCellNew { value } => self.expr_calls_function(value, target_index),
+            ResolvedExpr::AsDyn { expr, .. } => self.expr_calls_function(expr, target_index),
             _ => false,
         }
     }
@@ -1989,6 +2102,18 @@ impl<'a> Resolver<'a> {
             "error: {}\n  --> {}:{}:{}",
             message, self.filename, span.line, span.column
         )
+    }
+}
+
+/// Convert a Type to a dyn type tag.
+fn type_to_dyn_tag(ty: &Type) -> u8 {
+    match ty {
+        Type::Int => 0,
+        Type::Float => 1,
+        Type::Bool => 2,
+        Type::String => 3,
+        Type::Nil => 4,
+        _ => panic!("unsupported type for dyn: {}", ty),
     }
 }
 
@@ -2236,6 +2361,24 @@ fn collect_free_vars_statement(
         Statement::Expr { expr, .. } => {
             collect_free_vars_expr(expr, bound, free);
         }
+        Statement::MatchDyn {
+            expr,
+            arms,
+            default_block,
+            ..
+        } => {
+            collect_free_vars_expr(expr, bound, free);
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                arm_bound.insert(arm.var_name.clone());
+                for s in &arm.body.statements {
+                    collect_free_vars_statement(s, &mut arm_bound, free);
+                }
+            }
+            for s in &default_block.statements {
+                collect_free_vars_statement(s, bound, free);
+            }
+        }
     }
 }
 
@@ -2331,6 +2474,9 @@ fn collect_free_vars_expr(
                     collect_free_vars_expr(e, bound, free);
                 }
             }
+        }
+        Expr::AsDyn { expr, .. } => {
+            collect_free_vars_expr(expr, bound, free);
         }
         Expr::Int { .. }
         | Expr::Float { .. }

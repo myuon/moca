@@ -12,6 +12,8 @@ pub struct Parser<'a> {
     filename: &'a str,
     tokens: Vec<Token>,
     current: usize,
+    /// When true, struct literal parsing is suppressed (used inside `match dyn` etc.)
+    no_struct_literal: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -20,6 +22,7 @@ impl<'a> Parser<'a> {
             filename,
             tokens,
             current: 0,
+            no_struct_literal: false,
         }
     }
 
@@ -331,6 +334,8 @@ impl<'a> Parser<'a> {
             self.throw_stmt()
         } else if self.check(&TokenKind::Try) {
             self.try_stmt()
+        } else if self.check(&TokenKind::Match) {
+            self.match_dyn_stmt()
         } else if self.check_ident() && self.check_ahead(&TokenKind::Eq, 1) {
             self.assign_stmt()
         } else {
@@ -559,6 +564,66 @@ impl<'a> Parser<'a> {
             try_block,
             catch_var,
             catch_block,
+            span,
+        })
+    }
+
+    fn match_dyn_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Match)?;
+
+        // Expect `dyn` after `match`
+        if !self.check_ident_value("dyn") {
+            return Err(self.error("expected 'dyn' after 'match'"));
+        }
+        self.advance();
+
+        // Suppress struct literal parsing so `match dyn d { v: int => ... }`
+        // doesn't parse `d { v: int ... }` as a struct literal
+        self.no_struct_literal = true;
+        let expr = self.expression()?;
+        self.no_struct_literal = false;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut arms = Vec::new();
+        let mut default_block = None;
+
+        while !self.check(&TokenKind::RBrace) {
+            let arm_span = self.current_span();
+
+            // Check for default arm: `_ => { ... }`
+            if self.check_ident_value("_") {
+                self.advance();
+                self.expect(&TokenKind::FatArrow)?;
+                default_block = Some(self.block()?);
+                // Default arm must be last
+                break;
+            }
+
+            // Regular arm: `var_name: type => { ... }`
+            let var_name = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let type_annotation = self.parse_type_annotation()?;
+            self.expect(&TokenKind::FatArrow)?;
+            let body = self.block()?;
+
+            arms.push(MatchDynArm {
+                var_name,
+                type_annotation,
+                body,
+                span: arm_span,
+            });
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+
+        let default_block =
+            default_block.ok_or_else(|| self.error("match dyn requires a default arm '_'"))?;
+
+        Ok(Statement::MatchDyn {
+            expr,
+            arms,
+            default_block,
             span,
         })
     }
@@ -1184,6 +1249,20 @@ impl<'a> Parser<'a> {
                 } else {
                     return Err(self.error("expected type name before '::'"));
                 }
+            } else if self.match_token(&TokenKind::As) {
+                // Cast: `expr as dyn`
+                let span = expr.span();
+                // Currently only `as dyn` is supported
+                if self.check_ident_value("dyn") {
+                    self.advance();
+                    expr = Expr::AsDyn {
+                        expr: Box::new(expr),
+                        span,
+                        inferred_type: None,
+                    };
+                } else {
+                    return Err(self.error("expected 'dyn' after 'as'"));
+                }
             } else {
                 break;
             }
@@ -1287,7 +1366,10 @@ impl<'a> Parser<'a> {
 
             // Check if this is a struct literal: Name { field: value, ... }
             // Use lookahead to distinguish from blocks: { must be followed by ident :
-            if self.check(&TokenKind::LBrace) && self.is_struct_literal_start() {
+            if !self.no_struct_literal
+                && self.check(&TokenKind::LBrace)
+                && self.is_struct_literal_start()
+            {
                 return self.struct_literal(name, span);
             }
 
@@ -1616,6 +1698,10 @@ impl<'a> Parser<'a> {
             self.tokens.get(self.current + offset).map(|t| &t.kind),
             Some(TokenKind::Ident(_))
         )
+    }
+
+    fn check_ident_value(&self, name: &str) -> bool {
+        matches!(self.peek_kind(), Some(TokenKind::Ident(s)) if s == name)
     }
 
     /// Check if the current position looks like the start of a struct literal.

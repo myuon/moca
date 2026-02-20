@@ -612,13 +612,15 @@ impl MicroOpJitCompiler {
         if dst == src {
             return Ok(());
         }
+        let src_shadow_off = self.shadow_tag_offset(src);
+        let dst_shadow_off = self.shadow_tag_offset(dst);
         let mut asm = AArch64Assembler::new(&mut self.buf);
         // Copy payload
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.str(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst));
         // Copy shadow tag
-        asm.ldr(regs::TMP0, regs::FRAME_BASE, self.shadow_tag_offset(src));
-        asm.str(regs::TMP0, regs::FRAME_BASE, self.shadow_tag_offset(dst));
+        asm.ldr(regs::TMP0, regs::FRAME_BASE, src_shadow_off);
+        asm.str(regs::TMP0, regs::FRAME_BASE, dst_shadow_off);
         Ok(())
     }
 
@@ -1431,8 +1433,9 @@ impl MicroOpJitCompiler {
     fn emit_ret(&mut self, src: Option<&VReg>) -> Result<(), String> {
         if let Some(vreg) = src {
             // Read tag from shadow area, payload from frame
+            let shadow_off = self.shadow_tag_offset(vreg);
             let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.ldr(Reg::X0, regs::FRAME_BASE, self.shadow_tag_offset(vreg));
+            asm.ldr(Reg::X0, regs::FRAME_BASE, shadow_off);
             asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(vreg));
         } else {
             let mut asm = AArch64Assembler::new(&mut self.buf);
@@ -2017,7 +2020,7 @@ impl MicroOpJitCompiler {
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(data_ref));
             asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_offset(len));
-            asm.movz(Reg::X3, kind as u16, 0);
+            asm.mov_imm(Reg::X3, kind as u16);
             asm.ldr(regs::TMP4, regs::VM_CTX, 96);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);

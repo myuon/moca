@@ -449,6 +449,25 @@ impl Desugar {
                 span,
             },
             Statement::Const { name, init, span } => Statement::Const { name, init, span },
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                span,
+            } => Statement::MatchDyn {
+                expr: self.desugar_expr(expr),
+                arms: arms
+                    .into_iter()
+                    .map(|arm| crate::compiler::ast::MatchDynArm {
+                        var_name: arm.var_name,
+                        type_annotation: arm.type_annotation,
+                        body: self.desugar_block(arm.body),
+                        span: arm.span,
+                    })
+                    .collect(),
+                default_block: self.desugar_block(default_block),
+                span,
+            },
         }
     }
 
@@ -763,6 +782,17 @@ impl Desugar {
             } => Expr::CallExpr {
                 callee: Box::new(self.desugar_expr(*callee)),
                 args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                span,
+                inferred_type,
+            },
+
+            // AsDyn - desugar inner expression
+            Expr::AsDyn {
+                expr,
+                span,
+                inferred_type,
+            } => Expr::AsDyn {
+                expr: Box::new(self.desugar_expr(*expr)),
                 span,
                 inferred_type,
             },

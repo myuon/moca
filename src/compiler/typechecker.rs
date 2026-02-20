@@ -120,10 +120,14 @@ impl Substitution {
             },
             // Type parameters are unchanged (they are not inference variables)
             Type::Param { .. } => ty.clone(),
-            // Primitive types and Any are unchanged
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
-                ty.clone()
-            }
+            // Primitive types, Any, and Dyn are unchanged
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::String
+            | Type::Nil
+            | Type::Any
+            | Type::Dyn => ty.clone(),
         }
     }
 
@@ -261,6 +265,7 @@ impl TypeChecker {
                     "string" => Ok(Type::String),
                     "nil" => Ok(Type::Nil),
                     "any" => Ok(Type::Any),
+                    "dyn" => Ok(Type::Dyn),
                     _ => {
                         // Check if it's a type parameter in scope
                         if self.current_type_params.contains(name) {
@@ -395,6 +400,9 @@ impl TypeChecker {
             // any ~ T -> T (any adapts to the other type)
             // any ~ any -> any
             (Type::Any, _) | (_, Type::Any) => Ok(Substitution::new()),
+
+            // Dyn only unifies with Dyn (unlike Any which unifies with everything)
+            (Type::Dyn, Type::Dyn) => Ok(Substitution::new()),
 
             // Type variable unification
             (Type::Var(id), other) | (other, Type::Var(id)) => {
@@ -1269,6 +1277,40 @@ impl TypeChecker {
 
             Statement::Throw { value, .. } => {
                 self.infer_expr(value, env);
+                Type::Nil
+            }
+
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                span,
+            } => {
+                // The matched expression must be of type Dyn
+                let expr_type = self.infer_expr(expr, env);
+                if let Err(e) = self.unify(&expr_type, &Type::Dyn, *span) {
+                    self.errors.push(e);
+                }
+
+                // Type-check each arm: bind var_name with the annotated type, then check the body
+                for arm in arms.iter_mut() {
+                    let arm_type =
+                        match self.resolve_type_annotation(&arm.type_annotation, arm.span) {
+                            Ok(ty) => ty,
+                            Err(e) => {
+                                self.errors.push(e);
+                                self.fresh_var()
+                            }
+                        };
+                    env.enter_scope();
+                    env.bind(arm.var_name.clone(), arm_type);
+                    self.infer_block(&mut arm.body, env);
+                    env.exit_scope();
+                }
+
+                // Type-check the default block
+                self.infer_block(default_block, env);
+
                 Type::Nil
             }
 
@@ -2341,6 +2383,12 @@ impl TypeChecker {
                         .collect(),
                     ret: Box::new(self.substitution.apply(&expected_ret)),
                 }
+            }
+
+            Expr::AsDyn { expr, .. } => {
+                // Infer the inner expression type, then wrap as Dyn
+                self.infer_expr(expr, env);
+                Type::Dyn
             }
 
             Expr::CallExpr {

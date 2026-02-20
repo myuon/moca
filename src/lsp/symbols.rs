@@ -224,6 +224,18 @@ impl SymbolTable {
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                ..
+            } => {
+                self.collect_expr(expr);
+                for arm in arms {
+                    self.collect_block(&arm.body);
+                }
+                self.collect_block(default_block);
+            }
         }
     }
 
@@ -322,6 +334,9 @@ impl SymbolTable {
                         self.collect_expr(e);
                     }
                 }
+            }
+            Expr::AsDyn { expr, .. } => {
+                self.collect_expr(expr);
             }
             // Literals and asm blocks have no symbol references to collect
             Expr::Int { .. }

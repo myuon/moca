@@ -180,6 +180,18 @@ fn lint_statement(
             lint_expr(expr, rules, diagnostics);
         }
         Statement::Const { .. } => {}
+        Statement::MatchDyn {
+            expr,
+            arms,
+            default_block,
+            ..
+        } => {
+            lint_expr(expr, rules, diagnostics);
+            for arm in arms {
+                lint_block(&arm.body, rules, diagnostics);
+            }
+            lint_block(default_block, rules, diagnostics);
+        }
     }
 }
 
@@ -265,6 +277,9 @@ fn lint_expr(expr: &Expr, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Dia
                     lint_expr(e, rules, diagnostics);
                 }
             }
+        }
+        Expr::AsDyn { expr, .. } => {
+            lint_expr(expr, rules, diagnostics);
         }
         // Leaf expressions: no sub-expressions to recurse into
         Expr::Int { .. }
@@ -670,6 +685,22 @@ fn collect_usages_stmt(stmt: &Statement, used: &mut HashSet<String>) {
             collect_usages_expr(expr, used);
         }
         Statement::Const { .. } => {}
+        Statement::MatchDyn {
+            expr,
+            arms,
+            default_block,
+            ..
+        } => {
+            collect_usages_expr(expr, used);
+            for arm in arms {
+                for s in &arm.body.statements {
+                    collect_usages_stmt(s, used);
+                }
+            }
+            for s in &default_block.statements {
+                collect_usages_stmt(s, used);
+            }
+        }
     }
 }
 
@@ -756,6 +787,9 @@ fn collect_usages_expr(expr: &Expr, used: &mut HashSet<String>) {
                     collect_usages_expr(e, used);
                 }
             }
+        }
+        Expr::AsDyn { expr, .. } => {
+            collect_usages_expr(expr, used);
         }
         // Leaf expressions: no identifiers to collect
         Expr::Int { .. }

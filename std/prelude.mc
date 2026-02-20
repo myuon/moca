@@ -1765,3 +1765,19 @@ fun sort_float(v: Vec<float>) {
     }
     _sort_float_impl(v, 0, n - 1);
 }
+
+// ============================================================================
+// Dynamic Type (dyn) Operations
+// ============================================================================
+// dyn values are 2-slot heap objects: [type_tag, value]
+// Type tags: 0=int, 1=float, 2=bool, 3=string, 4=nil
+
+// Box a value with a type tag into a dyn value.
+// tag: type tag (0=int, 1=float, 2=bool, 3=string, 4=nil)
+// value: the value to box
+fun __dyn_box(tag: int, value: any) -> any {
+    let obj = __alloc_heap(2);
+    __heap_store(obj, 0, tag);
+    __heap_store(obj, 1, value);
+    return obj;
+}
