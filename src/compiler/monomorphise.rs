@@ -9,7 +9,9 @@
 //! 3. Generate specialized versions of the generic definitions
 //! 4. Rewrite call sites to use the specialized versions
 
-use crate::compiler::ast::{Block, Expr, FnDef, ImplBlock, Item, Program, Statement, StructDef};
+use crate::compiler::ast::{
+    Block, Expr, FnDef, ImplBlock, Item, MatchDynArm, Program, Statement, StructDef,
+};
 use crate::compiler::types::Type;
 use std::collections::{HashMap, HashSet};
 
@@ -58,6 +60,7 @@ fn mangle_type(ty: &Type) -> String {
         Type::Nil => "nil".to_string(),
         Type::Ptr(elem) => format!("ptr_{}", mangle_type(elem)),
         Type::Any => "any".to_string(),
+        Type::Dyn => "dyn".to_string(),
         Type::Array(elem) => format!("array_{}", mangle_type(elem)),
         Type::Vector(elem) => format!("vec_{}", mangle_type(elem)),
         Type::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
@@ -234,6 +237,18 @@ impl InstantiationCollector {
             } => {
                 self.collect_block(try_block);
                 self.collect_block(catch_block);
+            }
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                ..
+            } => {
+                self.collect_expr(expr);
+                for arm in arms {
+                    self.collect_block(&arm.body);
+                }
+                self.collect_block(default_block);
             }
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
@@ -420,6 +435,9 @@ impl InstantiationCollector {
                         self.collect_expr(e);
                     }
                 }
+            }
+            Expr::AsDyn { expr, .. } => {
+                self.collect_expr(expr);
             }
             // Literals and asm blocks don't contain generic calls
             Expr::Int { .. }
@@ -744,6 +762,7 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
         },
         Type::Var(_) => TypeAnnotation::Named("any".to_string()), // Fallback for unresolved vars
         Type::Param { name } => TypeAnnotation::Named(name.clone()),
+        Type::Dyn => TypeAnnotation::Named("dyn".to_string()),
     }
 }
 
@@ -857,6 +876,25 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
             try_block: substitute_block(try_block, type_map),
             catch_var: catch_var.clone(),
             catch_block: substitute_block(catch_block, type_map),
+            span: *span,
+        },
+        Statement::MatchDyn {
+            expr,
+            arms,
+            default_block,
+            span,
+        } => Statement::MatchDyn {
+            expr: substitute_expr(expr, type_map),
+            arms: arms
+                .iter()
+                .map(|arm| MatchDynArm {
+                    var_name: arm.var_name.clone(),
+                    type_annotation: arm.type_annotation.clone(),
+                    body: substitute_block(&arm.body, type_map),
+                    span: arm.span,
+                })
+                .collect(),
+            default_block: substitute_block(default_block, type_map),
             span: *span,
         },
         Statement::Expr { expr, span } => Statement::Expr {
@@ -1134,6 +1172,15 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             span: *span,
             inferred_type: inferred_type.clone(),
         },
+        Expr::AsDyn {
+            expr,
+            span,
+            inferred_type,
+        } => Expr::AsDyn {
+            expr: Box::new(substitute_expr(expr, type_map)),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
         Expr::StringInterpolation {
             parts,
             span,
@@ -1339,6 +1386,25 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
             try_block: rewrite_block(try_block, instantiations),
             catch_var: catch_var.clone(),
             catch_block: rewrite_block(catch_block, instantiations),
+            span: *span,
+        },
+        Statement::MatchDyn {
+            expr,
+            arms,
+            default_block,
+            span,
+        } => Statement::MatchDyn {
+            expr: rewrite_expr(expr, instantiations),
+            arms: arms
+                .iter()
+                .map(|arm| MatchDynArm {
+                    var_name: arm.var_name.clone(),
+                    type_annotation: arm.type_annotation.clone(),
+                    body: rewrite_block(&arm.body, instantiations),
+                    span: arm.span,
+                })
+                .collect(),
+            default_block: rewrite_block(default_block, instantiations),
             span: *span,
         },
         Statement::Expr { expr, span } => Statement::Expr {
@@ -1549,6 +1615,15 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
                 .iter()
                 .map(|a| rewrite_expr(a, instantiations))
                 .collect(),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
+        Expr::AsDyn {
+            expr,
+            span,
+            inferred_type,
+        } => Expr::AsDyn {
+            expr: Box::new(rewrite_expr(expr, instantiations)),
             span: *span,
             inferred_type: inferred_type.clone(),
         },

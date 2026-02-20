@@ -459,6 +459,26 @@ pub enum MicroOp {
     },
 
     // ========================================
+    // Dynamic type operations
+    // ========================================
+    /// Box a value with a type tag: dst = box(src, tag)
+    DynBox {
+        dst: VReg,
+        src: VReg,
+        tag: u8,
+    },
+    /// Get type tag from a dyn value: dst = type_tag(src)
+    DynTypeTag {
+        dst: VReg,
+        src: VReg,
+    },
+    /// Unbox a dyn value: dst = unbox(src)
+    DynUnbox {
+        dst: VReg,
+        src: VReg,
+    },
+
+    // ========================================
     // Heap allocation operations
     // ========================================
     /// Allocate a heap object with `size` null-initialized slots.

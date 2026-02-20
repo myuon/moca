@@ -322,6 +322,45 @@ impl<'a> AstPrinter<'a> {
                 self.write_indent_with(parent_prefix);
                 self.print_expr(init, "└── ", true, parent_prefix);
             }
+
+            Statement::MatchDyn {
+                expr,
+                arms,
+                default_block,
+                ..
+            } => {
+                self.write_prefixed(prefix, "MatchDyn");
+                self.newline();
+                self.write_indent_with(parent_prefix);
+                self.print_expr(expr, "├── expr: ", false, parent_prefix);
+                for (i, arm) in arms.iter().enumerate() {
+                    self.write_indent_with(parent_prefix);
+                    let is_last_arm = i == arms.len() - 1 && default_block.statements.is_empty();
+                    let arm_prefix = if is_last_arm {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
+                    self.write(&format!(
+                        "{}arm {}: {} =>",
+                        arm_prefix, arm.var_name, arm.type_annotation
+                    ));
+                    self.newline();
+                    let arm_child = if is_last_arm {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.print_block_contents(&arm.body, &arm_child);
+                }
+                if !default_block.statements.is_empty() {
+                    self.write_indent_with(parent_prefix);
+                    self.write("└── default:");
+                    self.newline();
+                    let default_child = format!("{}    ", parent_prefix);
+                    self.print_block_contents(default_block, &default_child);
+                }
+            }
         }
     }
 
@@ -674,6 +713,14 @@ impl<'a> AstPrinter<'a> {
                         &child_prefix,
                     );
                 }
+            }
+
+            Expr::AsDyn { expr: inner, .. } => {
+                self.write(&format!("{}AsDyn", prefix));
+                self.write_type_suffix(expr);
+                self.newline();
+                self.write_indent_with(&child_prefix);
+                self.print_expr(inner, "└── ", true, &child_prefix);
             }
 
             Expr::StringInterpolation { parts, .. } => {
@@ -1071,6 +1118,33 @@ impl ResolvedProgramPrinter {
                 let expr_child = format!("{}    ", parent_prefix);
                 self.print_expr(value, "└── value: ", &expr_child);
             }
+            ResolvedStatement::MatchDyn {
+                dyn_slot,
+                expr,
+                arms,
+                default_block,
+            } => {
+                self.write(&format!("{}MatchDyn dyn_slot:{}", prefix, dyn_slot));
+                self.newline();
+                let expr_child = format!("{}│   ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(expr, "├── expr: ", &expr_child);
+                for (i, arm) in arms.iter().enumerate() {
+                    self.write_indent_with(parent_prefix);
+                    self.write(&format!(
+                        "├── arm[{}] var_slot:{} type_tag:{}",
+                        i, arm.var_slot, arm.type_tag
+                    ));
+                    self.newline();
+                    let arm_child = format!("{}│   ", parent_prefix);
+                    self.print_block(&arm.body, &arm_child);
+                }
+                self.write_indent_with(parent_prefix);
+                self.write("└── default:");
+                self.newline();
+                let default_child = format!("{}    ", parent_prefix);
+                self.print_block(default_block, &default_child);
+            }
         }
     }
 
@@ -1460,6 +1534,13 @@ impl ResolvedProgramPrinter {
                 self.write(&format!("{}RefCellLoad(slot:{})", prefix, slot));
                 self.newline();
             }
+            ResolvedExpr::AsDyn { expr, type_tag } => {
+                self.write(&format!("{}AsDyn type_tag:{}", prefix, type_tag));
+                self.newline();
+                self.write_indent_with(parent_prefix);
+                let expr_child = format!("{}    ", parent_prefix);
+                self.print_expr(expr, "└── expr: ", &expr_child);
+            }
         }
     }
 
@@ -1761,6 +1842,13 @@ impl<'a> Disassembler<'a> {
             Op::CallIndirect(argc) => {
                 self.output.push_str(&format!("CallIndirect {}", argc));
             }
+
+            // Dynamic Type (dyn)
+            Op::DynBox(tag) => {
+                self.output.push_str(&format!("DynBox {}", tag));
+            }
+            Op::DynTypeTag => self.output.push_str("DynTypeTag"),
+            Op::DynUnbox => self.output.push_str("DynUnbox"),
         }
     }
 }
@@ -2290,6 +2378,24 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),
+
+        // Dynamic type operations
+        MicroOp::DynBox { dst, src, tag } => output.push_str(&format!(
+            "DynBox {} = box({}, tag={})",
+            format_vreg(dst),
+            format_vreg(src),
+            tag
+        )),
+        MicroOp::DynTypeTag { dst, src } => output.push_str(&format!(
+            "DynTypeTag {} = type_tag({})",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
+        MicroOp::DynUnbox { dst, src } => output.push_str(&format!(
+            "DynUnbox {} = unbox({})",
+            format_vreg(dst),
+            format_vreg(src)
+        )),
 
         // Raw fallback
         MicroOp::Raw { op } => {

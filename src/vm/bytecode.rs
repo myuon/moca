@@ -415,6 +415,11 @@ const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
 
+// Dynamic Type (dyn)
+const OP_DYN_BOX: u8 = 119;
+const OP_DYN_TYPE_TAG: u8 = 120;
+const OP_DYN_UNBOX: u8 = 121;
+
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
         // Constants
@@ -635,6 +640,14 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_CALL_INDIRECT])?;
             write_u32(w, *argc as u32)?;
         }
+
+        // Dynamic Type (dyn)
+        Op::DynBox(tag) => {
+            w.write_all(&[OP_DYN_BOX])?;
+            w.write_all(&[*tag])?;
+        }
+        Op::DynTypeTag => w.write_all(&[OP_DYN_TYPE_TAG])?,
+        Op::DynUnbox => w.write_all(&[OP_DYN_UNBOX])?,
     }
     Ok(())
 }
@@ -802,6 +815,11 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
 
         // Closures
         OP_CALL_INDIRECT => Op::CallIndirect(read_u32(r)? as usize),
+
+        // Dynamic Type (dyn)
+        OP_DYN_BOX => Op::DynBox(read_u8(r)?),
+        OP_DYN_TYPE_TAG => Op::DynTypeTag,
+        OP_DYN_UNBOX => Op::DynUnbox,
 
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
@@ -1225,6 +1243,10 @@ mod tests {
             Op::ChannelSend,
             Op::ChannelRecv,
             Op::ThreadJoin,
+            // Dynamic Type (dyn)
+            Op::DynBox(3),
+            Op::DynTypeTag,
+            Op::DynUnbox,
         ];
 
         let chunk = Chunk {

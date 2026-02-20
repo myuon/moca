@@ -50,6 +50,9 @@ pub enum Type {
     /// Any type: bypasses type checking, unifies with any other type.
     /// When unified with another type T, the result is T.
     Any,
+    /// Dynamic type: boxed value with runtime type information.
+    /// Unlike Any, Dyn carries a type tag at runtime and only unifies with Dyn.
+    Dyn,
     /// Type parameter (generic type variable): `T`, `U`, etc.
     /// Used in generic function/struct definitions.
     Param { name: std::string::String },
@@ -105,7 +108,13 @@ impl Type {
     /// Check if this type contains any type variables.
     pub fn has_type_vars(&self) -> bool {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => false,
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::String
+            | Type::Nil
+            | Type::Any
+            | Type::Dyn => false,
             Type::Var(_) => true,
             Type::Param { .. } => false, // Type params are not inference variables
             Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
@@ -134,7 +143,13 @@ impl Type {
 
     fn collect_type_vars(&self, vars: &mut Vec<TypeVarId>) {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {}
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::String
+            | Type::Nil
+            | Type::Any
+            | Type::Dyn => {}
             Type::Param { .. } => {} // Type params are not inference variables
             Type::Var(id) => {
                 if !vars.contains(id) {
@@ -182,9 +197,13 @@ impl Type {
     /// Returns a new type with all occurrences of `Type::Param { name }` replaced with `replacement`.
     pub fn substitute_param(&self, param_name: &str, replacement: &Type) -> Type {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
-                self.clone()
-            }
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::String
+            | Type::Nil
+            | Type::Any
+            | Type::Dyn => self.clone(),
             Type::Var(_) => self.clone(),
             Type::Param { name } => {
                 if name == param_name {
@@ -285,6 +304,7 @@ impl fmt::Display for Type {
             Type::Var(id) => write!(f, "?T{}", id),
             Type::Ptr(elem) => write!(f, "ptr<{}>", elem),
             Type::Any => write!(f, "any"),
+            Type::Dyn => write!(f, "dyn"),
             Type::Param { name } => write!(f, "{}", name),
             Type::GenericStruct {
                 name, type_args, ..
@@ -344,6 +364,7 @@ impl TypeAnnotation {
                 "string" => Ok(Type::String),
                 "nil" => Ok(Type::Nil),
                 "any" => Ok(Type::Any),
+                "dyn" => Ok(Type::Dyn),
                 _ => Err(format!("unknown type: {}", name)),
             },
             TypeAnnotation::Array(elem) => Ok(Type::array(elem.to_type()?)),

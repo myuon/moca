@@ -1776,6 +1776,65 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             }
 
             // ============================================================
+            // Dynamic type operations → register-based
+            // ============================================================
+            Op::DynBox(tag) => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::DynBox {
+                    dst,
+                    src,
+                    tag: *tag,
+                });
+                vstack.push(Vse::RegRef(dst));
+            }
+            Op::DynTypeTag => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::DynTypeTag { dst, src });
+                vstack.push(Vse::Reg(dst));
+            }
+            Op::DynUnbox => {
+                let src = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::DynUnbox { dst, src });
+                vstack.push(Vse::Reg(dst));
+            }
+
+            // ============================================================
             // Raw fallback (everything else)
             // ============================================================
             _ => {
