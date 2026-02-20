@@ -10,4 +10,4 @@ fun worker() {
 
 let handle = spawn(worker);
 let result = join(handle);
-print(result);
+print_debug(result);
