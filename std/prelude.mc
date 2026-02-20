@@ -132,7 +132,9 @@ fun _int_digit_count(n: int) -> int {
     let val = n;
     if val < 0 {
         count = 1;
-        val = -val;
+        val = -(val / 10);
+        count = count + 1;
+        // val is now positive (works even for i64::MIN)
     }
     while val > 0 {
         val = val / 10;
@@ -148,20 +150,27 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int) -> int {
         buf[off] = 48;
         return off + 1;
     }
-    let negative = n < 0;
-    let val = n;
-    if negative {
-        val = -val;
-    }
     let dcount = _int_digit_count(n);
-    if negative {
+    let val = n;
+    if val < 0 {
         buf[off] = 45;
-    }
-    let pos = off + dcount - 1;
-    while val > 0 {
-        buf[pos] = val % 10 + 48;
-        val = val / 10;
+        // Extract last digit safely: -(MIN % 10) won't overflow
+        let pos = off + dcount - 1;
+        buf[pos] = -(val % 10) + 48;
+        val = -(val / 10);
         pos = pos - 1;
+        while val > 0 {
+            buf[pos] = val % 10 + 48;
+            val = val / 10;
+            pos = pos - 1;
+        }
+    } else {
+        let pos = off + dcount - 1;
+        while val > 0 {
+            buf[pos] = val % 10 + 48;
+            val = val / 10;
+            pos = pos - 1;
+        }
     }
     return off + dcount;
 }
@@ -619,10 +628,6 @@ fun _float_write_to(buf: ptr<int>, off: int, f: float) -> int {
 fun _int_to_string(n: int) -> string {
     if n == 0 {
         return "0";
-    }
-    // MIN_INT cannot be negated without overflow
-    if n == 1 << 63 {
-        return "-9223372036854775808";
     }
     let dcount = _int_digit_count(n);
     let data = __alloc_heap(dcount);
