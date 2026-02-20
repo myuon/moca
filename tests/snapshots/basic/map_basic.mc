@@ -32,4 +32,4 @@ if removed {
 print(m.len());
 
 // Test get non-existent key returns 0
-print(m.get("city"));
+print_debug(m.get("city"));

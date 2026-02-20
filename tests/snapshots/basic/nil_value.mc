@@ -1,4 +1,4 @@
 let x = nil;
-print(x);
+print_debug(x);
 print(x == nil);
 print(x != nil);

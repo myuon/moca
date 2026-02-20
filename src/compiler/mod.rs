@@ -689,7 +689,10 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
     let mut loader = ModuleLoader::new(root_dir);
 
     // Load main file with all imports
-    let mut program = loader.load_with_imports(path)?;
+    let user_program = loader.load_with_imports(path)?;
+
+    // Prepend standard library
+    let mut program = prepend_stdlib(user_program)?;
 
     let filename = path.to_string_lossy().to_string();
 

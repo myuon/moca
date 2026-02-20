@@ -6,7 +6,7 @@ print(result1);
 
 // Test 2: Read from invalid fd (should return EBADF = -1)
 let result2 = read(99, 100);
-print(result2);
+print_debug(result2);
 
 // Test 3: Close invalid fd (should return EBADF = -1)
 let result3 = close(99);

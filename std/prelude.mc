@@ -620,6 +620,10 @@ fun _int_to_string(n: int) -> string {
     if n == 0 {
         return "0";
     }
+    // MIN_INT cannot be negated without overflow
+    if n == 1 << 63 {
+        return "-9223372036854775808";
+    }
     let dcount = _int_digit_count(n);
     let data = __alloc_heap(dcount);
     _int_write_to(data, 0, n);
@@ -640,25 +644,33 @@ fun _bool_to_string(b: bool) -> string {
     return "false";
 }
 
-impl int {
+// ============================================================================
+// ToString Interface
+// ============================================================================
+
+interface ToString {
+    fun to_string(self) -> string;
+}
+
+impl ToString for int {
     fun to_string(self) -> string {
         return _int_to_string(self);
     }
 }
 
-impl float {
+impl ToString for float {
     fun to_string(self) -> string {
         return _float_to_string(self);
     }
 }
 
-impl bool {
+impl ToString for bool {
     fun to_string(self) -> string {
         return _bool_to_string(self);
     }
 }
 
-impl string {
+impl ToString for string {
     fun to_string(self) -> string {
         return self;
     }
@@ -826,6 +838,13 @@ fun string_join(parts: array<string>) -> string {
 fun print_str(s: string) {
     let n = len(s);
     write(1, s, n);
+}
+
+// Print a value to stdout with a trailing newline.
+// Requires the value's type to implement the ToString interface.
+fun print<T: ToString>(v: T) {
+    print_str(v.to_string());
+    print_str("\n");
 }
 
 // Print a string to stderr without a newline.

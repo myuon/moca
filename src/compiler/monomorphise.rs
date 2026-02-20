@@ -152,7 +152,7 @@ impl InstantiationCollector {
         }
     }
 
-    fn collect_item(&mut self, item: &Item) {
+    pub fn collect_item(&mut self, item: &Item) {
         match item {
             Item::FnDef(fn_def) => {
                 self.collect_block(&fn_def.body);
@@ -1263,19 +1263,53 @@ pub fn monomorphise_program(program: Program) -> Program {
         return program;
     }
 
-    // Step 2: Generate specialized items
+    // Step 2: Generate specialized items, transitively collecting new instantiations
     let monomorphiser = Monomorphiser::from_collector(&collector);
-    let specialized_items = monomorphiser.generate_all(collector.instantiations());
+    let mut all_instantiations = collector.instantiations().clone();
+    let mut pending = all_instantiations.clone();
+    let mut all_specialized_items = Vec::new();
+
+    loop {
+        let specialized_items = monomorphiser.generate_all(&pending);
+        if specialized_items.is_empty() {
+            break;
+        }
+
+        // Collect new instantiations from the specialized items' bodies
+        let mut new_instantiations = HashSet::new();
+        for item in &specialized_items {
+            collector.collect_item(item);
+        }
+        for inst in collector.instantiations() {
+            if !all_instantiations.contains(inst) {
+                new_instantiations.insert(inst.clone());
+                all_instantiations.insert(inst.clone());
+            }
+        }
+
+        all_specialized_items.extend(specialized_items);
+
+        if new_instantiations.is_empty() {
+            break;
+        }
+        pending = new_instantiations;
+    }
 
     // Step 3: Rewrite call sites in the original program
     let rewritten_items: Vec<Item> = program
         .items
         .into_iter()
-        .map(|item| rewrite_item(item, collector.instantiations()))
+        .map(|item| rewrite_item(item, &all_instantiations))
         .collect();
 
-    // Step 4: Combine specialized items with rewritten items
-    let mut final_items = specialized_items;
+    // Step 4: Rewrite call sites in specialized items too
+    let rewritten_specialized: Vec<Item> = all_specialized_items
+        .into_iter()
+        .map(|item| rewrite_item(item, &all_instantiations))
+        .collect();
+
+    // Step 5: Combine specialized items with rewritten items
+    let mut final_items = rewritten_specialized;
     final_items.extend(rewritten_items);
 
     Program { items: final_items }

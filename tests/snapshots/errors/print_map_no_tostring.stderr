@@ -1,0 +1,1 @@
+type `Map<string, int>` does not implement interface `ToString`
