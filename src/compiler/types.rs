@@ -3,7 +3,6 @@
 //! This module defines the core type representations used for
 //! Hindley-Milner type inference (Algorithm W).
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 /// A unique identifier for type variables during inference.
@@ -28,15 +27,12 @@ pub enum Type {
     Vector(Box<Type>),
     /// Map type: `map<K, V>` (hash map)
     Map(Box<Type>, Box<Type>),
-    /// Object type with named fields: `{field1: T1, field2: T2, ...}`
-    /// Uses BTreeMap for deterministic ordering.
-    Object(BTreeMap<std::string::String, Type>),
     /// Nullable type: `T?` (equivalent to T | nil)
     Nullable(Box<Type>),
     /// Function type: `(T1, T2, ...) -> R`
     Function { params: Vec<Type>, ret: Box<Type> },
     /// Struct type: a named type with fixed fields in declaration order.
-    /// Unlike Object, structs use nominal typing (name must match).
+    /// Structs use nominal typing (name must match).
     Struct {
         name: std::string::String,
         /// Fields in declaration order (name, type)
@@ -95,16 +91,6 @@ impl Type {
         }
     }
 
-    /// Create an empty object type.
-    pub fn empty_object() -> Type {
-        Type::Object(BTreeMap::new())
-    }
-
-    /// Create an object type from field definitions.
-    pub fn object(fields: impl IntoIterator<Item = (std::string::String, Type)>) -> Type {
-        Type::Object(fields.into_iter().collect())
-    }
-
     /// Check if this type contains any type variables.
     pub fn has_type_vars(&self) -> bool {
         match self {
@@ -120,7 +106,6 @@ impl Type {
             Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
             Type::Map(key, value) => key.has_type_vars() || value.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
-            Type::Object(fields) => fields.values().any(|t| t.has_type_vars()),
             Type::Struct { fields, .. } => fields.iter().any(|(_, t)| t.has_type_vars()),
             Type::GenericStruct {
                 type_args, fields, ..
@@ -164,11 +149,6 @@ impl Type {
                 value.collect_type_vars(vars);
             }
             Type::Nullable(inner) => inner.collect_type_vars(vars),
-            Type::Object(fields) => {
-                for t in fields.values() {
-                    t.collect_type_vars(vars);
-                }
-            }
             Type::Struct { fields, .. } => {
                 for (_, t) in fields {
                     t.collect_type_vars(vars);
@@ -211,13 +191,6 @@ impl Type {
                 Box::new(key.to_type_annotation()?),
                 Box::new(value.to_type_annotation()?),
             )),
-            Type::Object(fields) => {
-                let mut ann_fields = Vec::new();
-                for (name, ty) in fields {
-                    ann_fields.push((name.clone(), ty.to_type_annotation()?));
-                }
-                Some(TypeAnnotation::Object(ann_fields))
-            }
             Type::Nullable(inner) => Some(TypeAnnotation::Nullable(Box::new(
                 inner.to_type_annotation()?,
             ))),
@@ -281,13 +254,6 @@ impl Type {
             Type::Nullable(inner) => {
                 Type::Nullable(Box::new(inner.substitute_param(param_name, replacement)))
             }
-            Type::Object(fields) => {
-                let new_fields: BTreeMap<std::string::String, Type> = fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.substitute_param(param_name, replacement)))
-                    .collect();
-                Type::Object(new_fields)
-            }
             Type::Struct { name, fields } => Type::Struct {
                 name: name.clone(),
                 fields: fields
@@ -333,18 +299,6 @@ impl fmt::Display for Type {
             Type::Vector(elem) => write!(f, "vec<{}>", elem),
             Type::Map(key, value) => write!(f, "map<{}, {}>", key, value),
             Type::Nullable(inner) => write!(f, "{}?", inner),
-            Type::Object(fields) => {
-                write!(f, "{{")?;
-                let mut first = true;
-                for (name, ty) in fields {
-                    if !first {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}: {}", name, ty)?;
-                    first = false;
-                }
-                write!(f, "}}")
-            }
             Type::Function { params, ret } => {
                 write!(f, "(")?;
                 for (i, param) in params.iter().enumerate() {
@@ -389,8 +343,6 @@ pub enum TypeAnnotation {
     Vec(Box<TypeAnnotation>),
     /// Map type: `map<K, V>`
     Map(Box<TypeAnnotation>, Box<TypeAnnotation>),
-    /// Object type: `{field1: T1, field2: T2}`
-    Object(Vec<(std::string::String, TypeAnnotation)>),
     /// Nullable type: `T?`
     Nullable(Box<TypeAnnotation>),
     /// Function type: `(T1, T2) -> R`
@@ -428,13 +380,6 @@ impl TypeAnnotation {
             TypeAnnotation::Array(elem) => Ok(Type::array(elem.to_type()?)),
             TypeAnnotation::Vec(elem) => Ok(Type::vector(elem.to_type()?)),
             TypeAnnotation::Map(key, value) => Ok(Type::map(key.to_type()?, value.to_type()?)),
-            TypeAnnotation::Object(fields) => {
-                let mut type_fields = BTreeMap::new();
-                for (name, ann) in fields {
-                    type_fields.insert(name.clone(), ann.to_type()?);
-                }
-                Ok(Type::Object(type_fields))
-            }
             TypeAnnotation::Nullable(inner) => Ok(Type::nullable(inner.to_type()?)),
             TypeAnnotation::Function { params, ret } => {
                 let param_types: Result<Vec<_>, _> = params.iter().map(|p| p.to_type()).collect();
@@ -465,18 +410,6 @@ impl fmt::Display for TypeAnnotation {
             TypeAnnotation::Array(elem) => write!(f, "array<{}>", elem),
             TypeAnnotation::Vec(elem) => write!(f, "vec<{}>", elem),
             TypeAnnotation::Map(key, value) => write!(f, "map<{}, {}>", key, value),
-            TypeAnnotation::Object(fields) => {
-                write!(f, "{{")?;
-                let mut first = true;
-                for (name, ty) in fields {
-                    if !first {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}: {}", name, ty)?;
-                    first = false;
-                }
-                write!(f, "}}")
-            }
             TypeAnnotation::Nullable(inner) => write!(f, "{}?", inner),
             TypeAnnotation::Function { params, ret } => {
                 write!(f, "(")?;
@@ -522,12 +455,6 @@ mod tests {
         );
         assert_eq!(Type::nullable(Type::String).to_string(), "string?");
         assert_eq!(Type::Var(0).to_string(), "?T0");
-
-        let obj = Type::object([
-            ("x".to_string(), Type::Int),
-            ("y".to_string(), Type::String),
-        ]);
-        assert_eq!(obj.to_string(), "{x: int, y: string}");
 
         let func = Type::function(vec![Type::Int, Type::Int], Type::Int);
         assert_eq!(func.to_string(), "(int, int) -> int");

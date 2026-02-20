@@ -65,7 +65,6 @@ fn mangle_type(ty: &Type) -> String {
         Type::Vector(elem) => format!("vec_{}", mangle_type(elem)),
         Type::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
         Type::Nullable(inner) => format!("opt_{}", mangle_type(inner)),
-        Type::Object(_) => "obj".to_string(),
         Type::Function { params, ret } => {
             let params_str = params.iter().map(mangle_type).collect::<Vec<_>>().join("_");
             format!("fn_{}_{}", params_str, mangle_type(ret))
@@ -734,12 +733,6 @@ fn substitute_type_annotation(
             Box::new(substitute_type_annotation(key, type_map)),
             Box::new(substitute_type_annotation(value, type_map)),
         ),
-        TypeAnnotation::Object(fields) => TypeAnnotation::Object(
-            fields
-                .iter()
-                .map(|(name, ann)| (name.clone(), substitute_type_annotation(ann, type_map)))
-                .collect(),
-        ),
         TypeAnnotation::Nullable(inner) => {
             TypeAnnotation::Nullable(Box::new(substitute_type_annotation(inner, type_map)))
         }
@@ -782,12 +775,6 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
             Box::new(type_to_annotation(value)),
         ),
         Type::Nullable(inner) => TypeAnnotation::Nullable(Box::new(type_to_annotation(inner))),
-        Type::Object(fields) => TypeAnnotation::Object(
-            fields
-                .iter()
-                .map(|(name, ty)| (name.clone(), type_to_annotation(ty)))
-                .collect(),
-        ),
         Type::Function { params, ret } => TypeAnnotation::Function {
             params: params.iter().map(type_to_annotation).collect(),
             ret: Box::new(type_to_annotation(ret)),

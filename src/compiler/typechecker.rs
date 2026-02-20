@@ -15,7 +15,7 @@ use crate::compiler::ast::{
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// Information about a struct definition.
 #[derive(Debug, Clone)]
@@ -88,13 +88,6 @@ impl Substitution {
                 Type::Map(Box::new(self.apply(key)), Box::new(self.apply(value)))
             }
             Type::Nullable(inner) => Type::Nullable(Box::new(self.apply(inner))),
-            Type::Object(fields) => {
-                let new_fields: BTreeMap<String, Type> = fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), self.apply(v)))
-                    .collect();
-                Type::Object(new_fields)
-            }
             Type::Function { params, ret } => Type::Function {
                 params: params.iter().map(|p| self.apply(p)).collect(),
                 ret: Box::new(self.apply(ret)),
@@ -315,13 +308,6 @@ impl TypeChecker {
                 let value_type = self.resolve_type_annotation(value, span)?;
                 Ok(Type::map(key_type, value_type))
             }
-            TypeAnnotation::Object(fields) => {
-                let mut type_fields = BTreeMap::new();
-                for (name, ann) in fields {
-                    type_fields.insert(name.clone(), self.resolve_type_annotation(ann, span)?);
-                }
-                Ok(Type::Object(type_fields))
-            }
             TypeAnnotation::Nullable(inner) => {
                 let inner_type = self.resolve_type_annotation(inner, span)?;
                 Ok(Type::nullable(inner_type))
@@ -510,21 +496,6 @@ impl TypeChecker {
                 if !matches!(other, Type::Nullable(_)) && !matches!(other, Type::Nil) =>
             {
                 self.unify(inner, other, span)
-            }
-
-            // Object types - must have same fields
-            (Type::Object(fields1), Type::Object(fields2)) => {
-                if fields1.keys().collect::<Vec<_>>() != fields2.keys().collect::<Vec<_>>() {
-                    return Err(TypeError::mismatch(t1.clone(), t2.clone(), span));
-                }
-                let mut result = Substitution::new();
-                for (k, v1) in fields1 {
-                    if let Some(v2) = fields2.get(k) {
-                        let s = self.unify(v1, v2, span)?;
-                        result = result.compose(&s);
-                    }
-                }
-                Ok(result)
             }
 
             // Function types
@@ -1347,14 +1318,6 @@ impl TypeChecker {
 
                 // Check field exists and type matches
                 match self.substitution.apply(&obj_type) {
-                    Type::Object(fields) => {
-                        if let Some(field_type) = fields.get(field)
-                            && let Err(e) = self.unify(&val_type, field_type, *span)
-                        {
-                            self.errors.push(e);
-                        }
-                        // Allow dynamic field addition (no error for unknown fields)
-                    }
                     Type::Struct { name, fields } => {
                         // Look up field in struct definition
                         let mut found = false;
@@ -1632,14 +1595,6 @@ impl TypeChecker {
                 let obj_type = self.infer_expr(object, env);
 
                 match self.substitution.apply(&obj_type) {
-                    Type::Object(fields) => {
-                        if let Some(field_type) = fields.get(field) {
-                            field_type.clone()
-                        } else {
-                            // Allow dynamic field access (returns unknown type)
-                            self.fresh_var()
-                        }
-                    }
                     Type::Struct { name, fields } => {
                         // Look up field in struct definition
                         for (field_name, field_type) in &fields {
