@@ -1044,31 +1044,12 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args, .. } => {
                 match name.as_str() {
-                    "print" | "print_debug" => {
+                    "print_debug" => {
                         if args.len() != 1 {
-                            return Err("print/print_debug takes exactly 1 argument".to_string());
+                            return Err("print_debug takes exactly 1 argument".to_string());
                         }
-                        // If argument is a string literal, call print_str from stdlib
-                        if matches!(&args[0], ResolvedExpr::Str(_)) {
-                            if let Some(&func_idx) = self.function_indices.get("print_str") {
-                                // Call print_str(s)
-                                self.compile_expr(&args[0], ops)?;
-                                ops.push(Op::Call(func_idx, 1));
-                                ops.push(Op::Drop); // discard return value
-                                // Call print_str("\n")
-                                let newline_idx = self.add_string("\n".to_string());
-                                ops.push(Op::StringConst(newline_idx));
-                                ops.push(Op::Call(func_idx, 1));
-                                // print_str returns nil, which is what print should return
-                            } else {
-                                // Fallback if print_str not available
-                                self.compile_expr(&args[0], ops)?;
-                                ops.push(Op::PrintDebug);
-                            }
-                        } else {
-                            self.compile_expr(&args[0], ops)?;
-                            ops.push(Op::PrintDebug);
-                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::PrintDebug);
                     }
                     "__syscall" => {
                         // __syscall(num, ...args) -> result

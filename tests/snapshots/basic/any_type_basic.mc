@@ -6,9 +6,9 @@ let arr: any = [1, 2, 3];
 let b: any = true;
 let f: any = 3.14;
 
-print(x);
-print(y);
-print(z);
-print(arr);
-print(b);
-print(f);
+print_debug(x);
+print_debug(y);
+print_debug(z);
+print_debug(arr);
+print_debug(b);
+print_debug(f);

@@ -2828,8 +2828,8 @@ impl TypeChecker {
         span: Span,
     ) -> Option<Type> {
         match name {
-            "print" | "print_debug" => {
-                // print/print_debug accepts any type
+            "print_debug" => {
+                // print_debug accepts any type
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
