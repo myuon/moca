@@ -29,6 +29,7 @@ pub enum TokenKind {
     Import,
     Struct,
     Impl,
+    Interface,
     Asm,
     Type,
     New,   // new literal keyword
@@ -662,6 +663,7 @@ impl<'a> Lexer<'a> {
             "import" => TokenKind::Import,
             "struct" => TokenKind::Struct,
             "impl" => TokenKind::Impl,
+            "interface" => TokenKind::Interface,
             "asm" => TokenKind::Asm,
             "type" => TokenKind::Type,
             "new" => TokenKind::New,

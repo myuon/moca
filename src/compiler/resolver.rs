@@ -435,6 +435,9 @@ impl<'a> Resolver<'a> {
                 Item::FnDef(fn_def) => {
                     func_defs.push(fn_def);
                 }
+                Item::InterfaceDef(_) => {
+                    // Interface definitions are handled elsewhere
+                }
                 Item::Statement(stmt) => {
                     main_stmts.push(stmt);
                 }
@@ -1642,6 +1645,25 @@ impl<'a> Resolver<'a> {
                     Type::String => Some("string"),
                     _ => None,
                 });
+
+                // Handle Type::Param — method calls on generic type parameters.
+                // The generic function body is never executed directly (only
+                // monomorphised versions are), so use a placeholder func_index.
+                if matches!(object_type.as_ref(), Some(Type::Param { .. })) {
+                    let resolved_object = self.resolve_expr(*object, scope)?;
+                    let resolved_args: Vec<_> = args
+                        .into_iter()
+                        .map(|a| self.resolve_expr(a, scope))
+                        .collect::<Result<_, _>>()?;
+
+                    return Ok(ResolvedExpr::MethodCall {
+                        object: Box::new(resolved_object),
+                        method,
+                        func_index: 0, // placeholder — never executed
+                        args: resolved_args,
+                        return_struct_name: None,
+                    });
+                }
 
                 if let Some(type_name) = primitive_type_name {
                     // Resolve primitive type method call

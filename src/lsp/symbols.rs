@@ -51,6 +51,7 @@ impl SymbolTable {
                 Item::ImplBlock(_impl_block) => {
                     // TODO: Collect impl block methods for LSP
                 }
+                Item::InterfaceDef(_) => {}
                 Item::Statement(stmt) => {
                     self.collect_statement(stmt);
                 }

@@ -60,6 +60,10 @@ impl<'a> AstPrinter<'a> {
             Item::FnDef(fn_def) => self.print_fn_def(fn_def, prefix, child_prefix),
             Item::StructDef(struct_def) => self.print_struct_def(struct_def, prefix, child_prefix),
             Item::ImplBlock(impl_block) => self.print_impl_block(impl_block, prefix, child_prefix),
+            Item::InterfaceDef(_) => {
+                self.write_prefixed(prefix, "InterfaceDef");
+                self.newline();
+            }
             Item::Statement(stmt) => self.print_statement(stmt, prefix, child_prefix),
         }
     }

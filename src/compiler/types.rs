@@ -365,7 +365,10 @@ impl TypeAnnotation {
                 "nil" => Ok(Type::Nil),
                 "any" => Ok(Type::Any),
                 "dyn" => Ok(Type::Dyn),
-                _ => Err(format!("unknown type: {}", name)),
+                _ => Ok(Type::Struct {
+                    name: name.clone(),
+                    fields: Vec::new(),
+                }),
             },
             TypeAnnotation::Array(elem) => Ok(Type::array(elem.to_type()?)),
             TypeAnnotation::Vec(elem) => Ok(Type::vector(elem.to_type()?)),
@@ -519,11 +522,15 @@ mod tests {
             Type::nullable(Type::String)
         );
 
-        // Unknown type should error
-        assert!(
-            TypeAnnotation::Named("unknown".to_string())
+        // Unknown named type becomes a struct type (for monomorphise support)
+        assert_eq!(
+            TypeAnnotation::Named("MyStruct".to_string())
                 .to_type()
-                .is_err()
+                .unwrap(),
+            Type::Struct {
+                name: "MyStruct".to_string(),
+                fields: Vec::new(),
+            }
         );
     }
 

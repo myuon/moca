@@ -10,12 +10,12 @@
 #![allow(clippy::result_large_err)]
 
 use crate::compiler::ast::{
-    BinaryOp, Block, Expr, FnDef, ImplBlock, Item, NewLiteralElement, Program, Statement,
-    StructDef, UnaryOp,
+    BinaryOp, Block, Expr, FnDef, ImplBlock, InterfaceDef, Item, NewLiteralElement, Program,
+    Statement, StructDef, UnaryOp,
 };
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Information about a struct definition.
 #[derive(Debug, Clone)]
@@ -205,8 +205,18 @@ impl TypeEnv {
 pub struct GenericFunctionInfo {
     /// Type parameters: T, U, etc.
     pub type_params: Vec<String>,
+    /// Interface bounds for each type parameter (parallel to `type_params`)
+    pub type_param_bounds: Vec<Vec<String>>,
     /// Function type (with Type::Param for generic parameters)
     pub fn_type: Type,
+}
+
+/// Information about an interface definition
+#[derive(Debug, Clone)]
+pub struct InterfaceInfo {
+    pub name: String,
+    /// Method signatures: method_name -> function type (params excluding self -> ret)
+    pub methods: HashMap<String, Type>,
 }
 
 /// The type checker with inference support.
@@ -222,10 +232,16 @@ pub struct TypeChecker {
     structs: HashMap<String, StructInfo>,
     /// Primitive type methods: type_name -> (method_name -> method_type)
     primitive_methods: HashMap<String, HashMap<String, Type>>,
+    /// Interface definitions: name -> InterfaceInfo
+    interfaces: HashMap<String, InterfaceInfo>,
+    /// Interface implementations: (interface_name, type_name)
+    interface_impls: HashSet<(String, String)>,
     /// Substitution accumulated during inference
     substitution: Substitution,
     /// Current type parameters in scope (during function signature inference)
     current_type_params: Vec<String>,
+    /// Current type parameter bounds in scope: param_name -> interface names
+    current_type_param_bounds: HashMap<String, Vec<String>>,
     /// Name of the function currently being type-checked (None for top-level)
     current_function_name: Option<String>,
 }
@@ -240,8 +256,11 @@ impl TypeChecker {
             generic_functions: HashMap::new(),
             structs: HashMap::new(),
             primitive_methods: HashMap::new(),
+            interfaces: HashMap::new(),
+            interface_impls: HashSet::new(),
             substitution: Substitution::new(),
             current_type_params: Vec::new(),
+            current_type_param_bounds: HashMap::new(),
             current_function_name: None,
         }
     }
@@ -594,10 +613,16 @@ impl TypeChecker {
 
     /// Type check a program.
     pub fn check_program(&mut self, program: &mut Program) -> Result<(), Vec<TypeError>> {
-        // First pass: collect struct definitions
+        // First pass: collect struct definitions and interface definitions
         for item in &program.items {
-            if let Item::StructDef(struct_def) = item {
-                self.register_struct(struct_def);
+            match item {
+                Item::StructDef(struct_def) => {
+                    self.register_struct(struct_def);
+                }
+                Item::InterfaceDef(interface_def) => {
+                    self.register_interface(interface_def);
+                }
+                _ => {}
             }
         }
 
@@ -611,6 +636,7 @@ impl TypeChecker {
                             fn_def.name.clone(),
                             GenericFunctionInfo {
                                 type_params: fn_def.type_params.clone(),
+                                type_param_bounds: fn_def.type_param_bounds.clone(),
                                 fn_type: fn_type.clone(),
                             },
                         );
@@ -619,6 +645,7 @@ impl TypeChecker {
                 }
                 Item::ImplBlock(impl_block) => {
                     self.register_impl_methods(impl_block);
+                    self.register_interface_impl(impl_block);
                 }
                 _ => {}
             }
@@ -640,6 +667,9 @@ impl TypeChecker {
                 Item::Statement(stmt) => {
                     // Use shared environment for top-level statements
                     self.infer_statement(stmt, &mut main_env);
+                }
+                Item::InterfaceDef(_) => {
+                    // Already handled in first pass
                 }
                 Item::Import(_) => {
                     // Imports are handled elsewhere
@@ -704,6 +734,19 @@ impl TypeChecker {
         // Set current type params for generic functions
         self.current_type_params = fn_def.type_params.clone();
 
+        // Set current type parameter bounds
+        self.current_type_param_bounds.clear();
+        for (param, bounds) in fn_def
+            .type_params
+            .iter()
+            .zip(fn_def.type_param_bounds.iter())
+        {
+            if !bounds.is_empty() {
+                self.current_type_param_bounds
+                    .insert(param.clone(), bounds.clone());
+            }
+        }
+
         // Track current function name for local variable type collection
         self.current_function_name = Some(fn_def.name.clone());
 
@@ -731,8 +774,9 @@ impl TypeChecker {
             self.errors.push(e);
         }
 
-        // Clear current type params and function name
+        // Clear current type params, bounds, and function name
         self.current_type_params.clear();
+        self.current_type_param_bounds.clear();
         self.current_function_name = None;
     }
 
@@ -762,6 +806,93 @@ impl TypeChecker {
             methods: HashMap::new(),
         };
         self.structs.insert(struct_def.name.clone(), info);
+    }
+
+    /// Register an interface definition.
+    fn register_interface(&mut self, interface_def: &InterfaceDef) {
+        let mut methods = HashMap::new();
+        for method_sig in &interface_def.methods {
+            // Build the method type (params excluding self -> return type)
+            let param_types: Vec<Type> = method_sig
+                .params
+                .iter()
+                .filter(|p| p.name != "self")
+                .map(|p| {
+                    if let Some(ann) = &p.type_annotation {
+                        self.resolve_type_annotation(ann, p.span)
+                            .unwrap_or_else(|e| {
+                                self.errors.push(e);
+                                self.fresh_var()
+                            })
+                    } else {
+                        self.fresh_var()
+                    }
+                })
+                .collect();
+
+            let ret_type = if let Some(ann) = &method_sig.return_type {
+                self.resolve_type_annotation(ann, method_sig.span)
+                    .unwrap_or_else(|e| {
+                        self.errors.push(e);
+                        self.fresh_var()
+                    })
+            } else {
+                Type::Nil
+            };
+
+            let fn_type = Type::function(param_types, ret_type);
+            methods.insert(method_sig.name.clone(), fn_type);
+        }
+
+        self.interfaces.insert(
+            interface_def.name.clone(),
+            InterfaceInfo {
+                name: interface_def.name.clone(),
+                methods,
+            },
+        );
+    }
+
+    /// Register and validate an interface implementation.
+    /// Checks that all required methods are provided with matching signatures.
+    fn register_interface_impl(&mut self, impl_block: &ImplBlock) {
+        let interface_name = match &impl_block.interface_name {
+            Some(name) => name.clone(),
+            None => return,
+        };
+        let type_name = &impl_block.struct_name;
+
+        // Check that the interface exists
+        let interface_info = match self.interfaces.get(&interface_name) {
+            Some(info) => info.clone(),
+            None => {
+                self.errors.push(TypeError::new(
+                    format!("undefined interface `{}`", interface_name),
+                    impl_block.span,
+                ));
+                return;
+            }
+        };
+
+        // Check that all interface methods are implemented
+        let impl_method_names: HashSet<String> =
+            impl_block.methods.iter().map(|m| m.name.clone()).collect();
+
+        for method_name in interface_info.methods.keys() {
+            if !impl_method_names.contains(method_name) {
+                self.errors.push(TypeError::new(
+                    format!(
+                        "missing method `{}` in impl `{}` for `{}`",
+                        method_name, interface_name, type_name
+                    ),
+                    impl_block.span,
+                ));
+            }
+        }
+
+        // Register the implementation
+        self.interface_impls
+            .insert((interface_name, type_name.clone()));
     }
 
     /// Register methods from an impl block.
@@ -1735,6 +1866,7 @@ impl TypeChecker {
                         } else {
                             // Substitute type parameters with type arguments
                             let mut instantiated = generic_info.fn_type.clone();
+                            let mut resolved_args = Vec::new();
                             for (param_name, type_arg) in
                                 generic_info.type_params.iter().zip(type_args.iter())
                             {
@@ -1746,9 +1878,34 @@ impl TypeChecker {
                                             self.fresh_var()
                                         }
                                     };
+                                resolved_args.push(resolved_arg.clone());
                                 instantiated =
                                     instantiated.substitute_param(param_name, &resolved_arg);
                             }
+
+                            // Check interface bounds
+                            for (i, bounds) in generic_info.type_param_bounds.iter().enumerate() {
+                                if bounds.is_empty() {
+                                    continue;
+                                }
+                                let concrete_type = &resolved_args[i];
+                                let type_name = self.type_to_impl_name(concrete_type);
+                                for bound in bounds {
+                                    if !self
+                                        .interface_impls
+                                        .contains(&(bound.clone(), type_name.clone()))
+                                    {
+                                        self.errors.push(TypeError::new(
+                                            format!(
+                                                "type `{}` does not implement interface `{}`",
+                                                concrete_type, bound
+                                            ),
+                                            *span,
+                                        ));
+                                    }
+                                }
+                            }
+
                             instantiated
                         }
                     } else {
@@ -2094,6 +2251,63 @@ impl TypeChecker {
                 };
                 if let Some(type_name) = primitive_type_name {
                     return self.check_primitive_method(type_name, method, args, env, *span);
+                }
+
+                // Handle Type::Param — resolve method via interface bounds
+                if let Type::Param { name: param_name } = &resolved_obj_type {
+                    if let Some(bounds) = self.current_type_param_bounds.get(param_name).cloned() {
+                        // Search through bounds to find the method
+                        for bound in &bounds {
+                            if let Some(interface_info) = self.interfaces.get(bound).cloned()
+                                && let Some(Type::Function { params, ret }) =
+                                    interface_info.methods.get(method)
+                            {
+                                // Check argument count
+                                if args.len() != params.len() {
+                                    self.errors.push(TypeError::new(
+                                        format!(
+                                            "method `{}` expects {} arguments, got {}",
+                                            method,
+                                            params.len(),
+                                            args.len()
+                                        ),
+                                        *span,
+                                    ));
+                                    return self.substitution.apply(ret);
+                                }
+
+                                // Type check arguments
+                                for (arg, param_type) in args.iter_mut().zip(params.iter()) {
+                                    let arg_type = self.infer_expr(arg, env);
+                                    if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                                        self.errors.push(e);
+                                    }
+                                }
+
+                                return self.substitution.apply(ret);
+                            }
+                        }
+                        // Method not found in any bound
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "method `{}` not found in interface bounds {:?} for type parameter `{}`",
+                                method, bounds, param_name
+                            ),
+                            *span,
+                        ));
+                    } else {
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "cannot call method `{}` on unbounded type parameter `{}`",
+                                method, param_name
+                            ),
+                            *span,
+                        ));
+                    }
+                    for arg in args {
+                        self.infer_expr(arg, env);
+                    }
+                    return self.fresh_var();
                 }
 
                 // Get struct name and type args from object type
@@ -3165,6 +3379,21 @@ impl TypeChecker {
                 }
                 self.fresh_var()
             }
+        }
+    }
+
+    /// Convert a concrete Type to the name used in interface_impls lookup.
+    fn type_to_impl_name(&self, ty: &Type) -> String {
+        match ty {
+            Type::Int => "int".to_string(),
+            Type::Float => "float".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::String => "string".to_string(),
+            Type::Struct { name, .. } => name.clone(),
+            Type::GenericStruct { name, .. } => name.clone(),
+            Type::Vector(_) => "vec".to_string(),
+            Type::Map(_, _) => "map".to_string(),
+            _ => ty.to_string(),
         }
     }
 

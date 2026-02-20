@@ -202,6 +202,9 @@ impl ModuleLoader {
                     Item::ImplBlock(impl_block) => {
                         all_items.push(Item::ImplBlock(impl_block.clone()));
                     }
+                    Item::InterfaceDef(interface_def) => {
+                        all_items.push(Item::InterfaceDef(interface_def.clone()));
+                    }
                     Item::Statement(_) => {
                         // Module-level statements are not imported
                     }
