@@ -244,6 +244,11 @@ fn snapshot_generics() {
 }
 
 #[test]
+fn snapshot_interface() {
+    run_snapshot_dir("interface");
+}
+
+#[test]
 fn snapshot_gc() {
     run_gc_snapshot_dir("gc");
 }

@@ -15,6 +15,7 @@ pub enum Item {
     FnDef(FnDef),
     StructDef(StructDef),
     ImplBlock(ImplBlock),
+    InterfaceDef(InterfaceDef),
     Statement(Statement),
 }
 
@@ -46,11 +47,30 @@ pub struct StructDef {
     pub span: Span,
 }
 
+/// An interface definition (similar to Rust traits).
+#[derive(Debug, Clone)]
+pub struct InterfaceDef {
+    pub name: String,
+    pub methods: Vec<InterfaceMethodSig>,
+    pub span: Span,
+}
+
+/// A method signature within an interface definition.
+#[derive(Debug, Clone)]
+pub struct InterfaceMethodSig {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeAnnotation>,
+    pub span: Span,
+}
+
 /// An impl block containing methods for a struct.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     /// Type parameters for the impl block: `impl<T> Container<T> { ... }`
     pub type_params: Vec<String>,
+    /// If Some, this is `impl InterfaceName for StructName { ... }`
+    pub interface_name: Option<String>,
     pub struct_name: String,
     /// Type arguments for the struct: `impl<T> Container<T> { ... }` has `[T]`
     pub struct_type_args: Vec<TypeAnnotation>,
@@ -79,6 +99,9 @@ pub struct FnDef {
     pub name: String,
     /// Type parameters for generic functions: `fun identity<T>(x: T) -> T { ... }`
     pub type_params: Vec<String>,
+    /// Interface bounds for each type parameter (parallel to `type_params`).
+    /// `type_param_bounds[i]` is the list of interface names constraining `type_params[i]`.
+    pub type_param_bounds: Vec<Vec<String>>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeAnnotation>,
     pub body: Block,

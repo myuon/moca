@@ -133,6 +133,7 @@ impl Desugar {
             Item::ImplBlock(impl_block) => {
                 vec![Item::ImplBlock(self.desugar_impl_block(impl_block))]
             }
+            Item::InterfaceDef(i) => vec![Item::InterfaceDef(i)],
             Item::Statement(stmt) => self
                 .desugar_statement_to_stmts(stmt)
                 .into_iter()
@@ -146,6 +147,7 @@ impl Desugar {
         FnDef {
             name: fn_def.name,
             type_params: fn_def.type_params,
+            type_param_bounds: fn_def.type_param_bounds,
             params: fn_def
                 .params
                 .into_iter()
@@ -186,6 +188,7 @@ impl Desugar {
     fn desugar_impl_block(&mut self, impl_block: ImplBlock) -> ImplBlock {
         ImplBlock {
             type_params: impl_block.type_params,
+            interface_name: impl_block.interface_name,
             struct_name: impl_block.struct_name,
             struct_type_args: impl_block.struct_type_args,
             methods: impl_block

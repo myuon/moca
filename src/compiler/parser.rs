@@ -61,6 +61,8 @@ impl<'a> Parser<'a> {
             Ok(Item::FnDef(self.fn_def()?))
         } else if self.check(&TokenKind::Struct) {
             Ok(Item::StructDef(self.struct_def()?))
+        } else if self.check(&TokenKind::Interface) {
+            Ok(Item::InterfaceDef(self.interface_def()?))
         } else if self.check(&TokenKind::Impl) {
             Ok(Item::ImplBlock(self.impl_block()?))
         } else {
@@ -113,12 +115,45 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
+    /// Parse type parameters with optional bounds: `<T: Display>`, `<T, U: Clone>`, etc.
+    fn parse_type_params_with_bounds(&mut self) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+        if !self.match_token(&TokenKind::Lt) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let mut params = Vec::new();
+        let mut bounds = Vec::new();
+
+        let name = self.expect_ident()?;
+        let bound = if self.match_token(&TokenKind::Colon) {
+            vec![self.expect_ident()?]
+        } else {
+            Vec::new()
+        };
+        params.push(name);
+        bounds.push(bound);
+
+        while self.match_token(&TokenKind::Comma) {
+            let name = self.expect_ident()?;
+            let bound = if self.match_token(&TokenKind::Colon) {
+                vec![self.expect_ident()?]
+            } else {
+                Vec::new()
+            };
+            params.push(name);
+            bounds.push(bound);
+        }
+
+        self.expect(&TokenKind::Gt)?;
+        Ok((params, bounds))
+    }
+
     fn fn_def_with_attributes(&mut self, attributes: Vec<Attribute>) -> Result<FnDef, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Fun)?;
 
         let name = self.expect_ident()?;
-        let type_params = self.parse_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_type_params_with_bounds()?;
         self.expect(&TokenKind::LParen)?;
 
         let mut params = Vec::new();
@@ -142,6 +177,7 @@ impl<'a> Parser<'a> {
         Ok(FnDef {
             name,
             type_params,
+            type_param_bounds,
             params,
             return_type,
             body,
@@ -230,7 +266,60 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an impl block: `impl Point { ... }` or `impl<T> Container<T> { ... }`
+    /// Parse an interface definition: `interface Display { fun to_string(self) -> string; }`
+    fn interface_def(&mut self) -> Result<InterfaceDef, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Interface)?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            methods.push(self.interface_method_sig()?);
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        Ok(InterfaceDef {
+            name,
+            methods,
+            span,
+        })
+    }
+
+    /// Parse an interface method signature: `fun to_string(self) -> string;`
+    fn interface_method_sig(&mut self) -> Result<InterfaceMethodSig, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Fun)?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LParen)?;
+
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            params.push(self.parse_param()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.parse_param()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+
+        let return_type = if self.match_token(&TokenKind::Arrow) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::Semi)?;
+
+        Ok(InterfaceMethodSig {
+            name,
+            params,
+            return_type,
+            span,
+        })
+    }
+
+    /// Parse an impl block: `impl Point { ... }`, `impl<T> Container<T> { ... }`,
+    /// or `impl Display for Point { ... }`
     fn impl_block(&mut self) -> Result<ImplBlock, String> {
         let span = self.current_span();
         self.expect(&TokenKind::Impl)?;
@@ -238,10 +327,18 @@ impl<'a> Parser<'a> {
         // Parse optional type parameters: impl<T> ...
         let type_params = self.parse_type_params()?;
 
-        let struct_name = self.expect_ident()?;
+        let first_name = self.expect_ident()?;
 
-        // Parse optional type arguments for the struct: Container<T>
-        let struct_type_args = self.parse_type_args()?;
+        // Check for `impl Interface for Type { ... }` pattern
+        let (interface_name, struct_name, struct_type_args) = if self.check(&TokenKind::For) {
+            self.advance(); // consume 'for'
+            let struct_name = self.expect_ident()?;
+            let struct_type_args = self.parse_type_args()?;
+            (Some(first_name), struct_name, struct_type_args)
+        } else {
+            let struct_type_args = self.parse_type_args()?;
+            (None, first_name, struct_type_args)
+        };
 
         self.expect(&TokenKind::LBrace)?;
 
@@ -254,6 +351,7 @@ impl<'a> Parser<'a> {
 
         Ok(ImplBlock {
             type_params,
+            interface_name,
             struct_name,
             struct_type_args,
             methods,

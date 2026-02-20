@@ -529,7 +529,8 @@ impl Monomorphiser {
         // Create specialized function
         let specialized = FnDef {
             name: instantiation.mangled_name(),
-            type_params: Vec::new(), // No longer generic
+            type_params: Vec::new(),       // No longer generic
+            type_param_bounds: Vec::new(), // No longer generic
             params: generic_fn
                 .params
                 .iter()
@@ -610,6 +611,7 @@ impl Monomorphiser {
         // Create specialized impl block
         let specialized = ImplBlock {
             type_params: Vec::new(), // No longer generic
+            interface_name: generic_impl.interface_name.clone(),
             struct_name: instantiation.mangled_name(),
             struct_type_args: Vec::new(), // No longer generic
             methods: generic_impl
@@ -618,6 +620,7 @@ impl Monomorphiser {
                 .map(|m| FnDef {
                     name: m.name.clone(),
                     type_params: m.type_params.clone(), // Keep method-level type params
+                    type_param_bounds: m.type_param_bounds.clone(),
                     params: m
                         .params
                         .iter()
@@ -666,6 +669,42 @@ impl Monomorphiser {
         }
 
         items
+    }
+}
+
+/// Substitute type parameters in a Type value with concrete types from type_map.
+fn substitute_type_in_type(ty: &Type, type_map: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::Param { name } => type_map.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Function { params, ret } => Type::Function {
+            params: params
+                .iter()
+                .map(|p| substitute_type_in_type(p, type_map))
+                .collect(),
+            ret: Box::new(substitute_type_in_type(ret, type_map)),
+        },
+        Type::Vector(elem) => Type::Vector(Box::new(substitute_type_in_type(elem, type_map))),
+        Type::Map(k, v) => Type::Map(
+            Box::new(substitute_type_in_type(k, type_map)),
+            Box::new(substitute_type_in_type(v, type_map)),
+        ),
+        Type::GenericStruct {
+            name,
+            type_args,
+            fields,
+        } => Type::GenericStruct {
+            name: name.clone(),
+            type_args: type_args
+                .iter()
+                .map(|t| substitute_type_in_type(t, type_map))
+                .collect(),
+            fields: fields
+                .iter()
+                .map(|(n, t): &(String, Type)| (n.clone(), substitute_type_in_type(t, type_map)))
+                .collect(),
+        },
+        Type::Ptr(inner) => Type::Ptr(Box::new(substitute_type_in_type(inner, type_map))),
+        _ => ty.clone(),
     }
 }
 
@@ -1076,7 +1115,9 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .collect(),
             args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
             span: *span,
-            object_type: object_type.clone(),
+            object_type: object_type
+                .as_ref()
+                .map(|t| substitute_type_in_type(t, type_map)),
             inferred_type: inferred_type.clone(),
         },
         Expr::AssociatedFunctionCall {
@@ -1246,6 +1287,7 @@ fn rewrite_item(item: Item, instantiations: &HashSet<Instantiation>) -> Item {
         Item::FnDef(fn_def) => Item::FnDef(FnDef {
             name: fn_def.name,
             type_params: fn_def.type_params,
+            type_param_bounds: fn_def.type_param_bounds,
             params: fn_def.params,
             return_type: fn_def.return_type,
             body: rewrite_block(&fn_def.body, instantiations),
@@ -1254,6 +1296,7 @@ fn rewrite_item(item: Item, instantiations: &HashSet<Instantiation>) -> Item {
         }),
         Item::ImplBlock(impl_block) => Item::ImplBlock(ImplBlock {
             type_params: impl_block.type_params,
+            interface_name: impl_block.interface_name,
             struct_name: impl_block.struct_name,
             struct_type_args: impl_block.struct_type_args,
             methods: impl_block
@@ -1262,6 +1305,7 @@ fn rewrite_item(item: Item, instantiations: &HashSet<Instantiation>) -> Item {
                 .map(|m| FnDef {
                     name: m.name,
                     type_params: m.type_params,
+                    type_param_bounds: m.type_param_bounds,
                     params: m.params,
                     return_type: m.return_type,
                     body: rewrite_block(&m.body, instantiations),
