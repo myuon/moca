@@ -182,13 +182,6 @@ pub enum Op {
     UMul128Hi,
 
     // ========================================
-    // Dynamic Type (dyn)
-    // ========================================
-    DynBox(u8), // [value] → [ref] — box value with type tag
-    DynTypeTag, // [ref] → [i64] — get type tag from dyn value
-    DynUnbox,   // [ref] → [value] — unbox dyn value
-
-    // ========================================
     // Exception Handling
     // ========================================
     Throw,
@@ -328,9 +321,6 @@ impl Op {
             Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",
             Op::UMul128Hi => "UMul128Hi",
-            Op::DynBox(_) => "DynBox",
-            Op::DynTypeTag => "DynTypeTag",
-            Op::DynUnbox => "DynUnbox",
             Op::Throw => "Throw",
             Op::TryBegin(_) => "TryBegin",
             Op::TryEnd => "TryEnd",

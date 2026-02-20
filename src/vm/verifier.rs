@@ -472,9 +472,6 @@ impl Verifier {
             Op::TypeOf => (1, 1),        // pops value, pushes type string
             Op::FloatToString => (1, 1), // pops value, pushes string
             Op::ParseInt => (1, 1),      // pops string, pushes int
-            // Dynamic type (dyn)
-            Op::DynBox(_) | Op::DynTypeTag | Op::DynUnbox => (1, 1),
-
             // Exception handling
             Op::Throw => (1, 0),
             Op::TryBegin(_) => (0, 0),

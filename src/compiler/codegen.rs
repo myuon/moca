@@ -705,9 +705,9 @@ impl Codegen {
                 let mut jump_to_end_patches = Vec::new();
 
                 for arm in arms {
-                    // Load dyn value and get type tag
+                    // Load dyn value and get type tag via HeapLoad(0)
                     ops.push(Op::LocalGet(*dyn_slot));
-                    ops.push(Op::DynTypeTag);
+                    ops.push(Op::HeapLoad(0));
                     ops.push(Op::I64Const(arm.type_tag as i64));
                     ops.push(Op::I64Eq);
 
@@ -715,9 +715,9 @@ impl Codegen {
                     let jump_to_next = ops.len();
                     ops.push(Op::BrIfFalse(0)); // placeholder
 
-                    // Unbox the value and bind to the arm's variable
+                    // Unbox the value via HeapLoad(1) and bind to the arm's variable
                     ops.push(Op::LocalGet(*dyn_slot));
-                    ops.push(Op::DynUnbox);
+                    ops.push(Op::HeapLoad(1));
                     ops.push(Op::LocalSet(arm.var_slot));
 
                     // Compile arm body
@@ -1397,8 +1397,15 @@ impl Codegen {
                 ops.push(Op::HeapLoad(0));
             }
             ResolvedExpr::AsDyn { expr, type_tag } => {
+                // Push arguments: tag, value
+                ops.push(Op::I64Const(*type_tag as i64));
                 self.compile_expr(expr, ops)?;
-                ops.push(Op::DynBox(*type_tag));
+                // Call __dyn_box(tag, value)
+                let func_idx = self
+                    .function_indices
+                    .get("__dyn_box")
+                    .ok_or("__dyn_box not found in stdlib")?;
+                ops.push(Op::Call(*func_idx, 2));
             }
         }
 

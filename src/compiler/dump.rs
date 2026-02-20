@@ -1842,13 +1842,6 @@ impl<'a> Disassembler<'a> {
             Op::CallIndirect(argc) => {
                 self.output.push_str(&format!("CallIndirect {}", argc));
             }
-
-            // Dynamic Type (dyn)
-            Op::DynBox(tag) => {
-                self.output.push_str(&format!("DynBox {}", tag));
-            }
-            Op::DynTypeTag => self.output.push_str("DynTypeTag"),
-            Op::DynUnbox => self.output.push_str("DynUnbox"),
         }
     }
 }
@@ -2378,24 +2371,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),
-
-        // Dynamic type operations
-        MicroOp::DynBox { dst, src, tag } => output.push_str(&format!(
-            "DynBox {} = box({}, tag={})",
-            format_vreg(dst),
-            format_vreg(src),
-            tag
-        )),
-        MicroOp::DynTypeTag { dst, src } => output.push_str(&format!(
-            "DynTypeTag {} = type_tag({})",
-            format_vreg(dst),
-            format_vreg(src)
-        )),
-        MicroOp::DynUnbox { dst, src } => output.push_str(&format!(
-            "DynUnbox {} = unbox({})",
-            format_vreg(dst),
-            format_vreg(src)
-        )),
 
         // Raw fallback
         MicroOp::Raw { op } => {

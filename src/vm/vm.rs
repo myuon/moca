@@ -2058,37 +2058,6 @@ impl VM {
                     let v = self.stack[sb + src.0];
                     self.stack[sb + dst.0] = Value::Bool(v.is_null());
                 }
-                MicroOp::DynBox { dst, src, tag } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let val = self.stack[sb + src.0];
-                    // Allocate a 2-slot heap object: [type_tag, value]
-                    let obj_ref = self.heap.alloc_slots(vec![Value::I64(tag as i64), val])?;
-                    self.stack[sb + dst.0] = Value::Ref(obj_ref);
-                }
-                MicroOp::DynTypeTag { dst, src } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let r = self.stack[sb + src.0]
-                        .as_ref()
-                        .ok_or("runtime error: DynTypeTag expected ref")?;
-                    let tag = self
-                        .heap
-                        .read_slot(r, 0)
-                        .ok_or("runtime error: DynTypeTag slot 0 out of bounds")?;
-                    let sb = self.frames.last().unwrap().stack_base;
-                    self.stack[sb + dst.0] = tag;
-                }
-                MicroOp::DynUnbox { dst, src } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let r = self.stack[sb + src.0]
-                        .as_ref()
-                        .ok_or("runtime error: DynUnbox expected ref")?;
-                    let val = self
-                        .heap
-                        .read_slot(r, 1)
-                        .ok_or("runtime error: DynUnbox slot 1 out of bounds")?;
-                    let sb = self.frames.last().unwrap().stack_base;
-                    self.stack[sb + dst.0] = val;
-                }
             }
         }
 
@@ -3142,41 +3111,6 @@ impl VM {
                     ret_vreg: None,
                     stack_floor: 0,
                 });
-            }
-
-            // ========================================
-            // Dynamic Type (dyn)
-            // ========================================
-            Op::DynBox(tag) => {
-                let val = self.stack.pop().ok_or("stack underflow")?;
-                let obj_ref = self.heap.alloc_slots(vec![Value::I64(tag as i64), val])?;
-                self.stack.push(Value::Ref(obj_ref));
-            }
-            Op::DynTypeTag => {
-                let r = self
-                    .stack
-                    .pop()
-                    .ok_or("stack underflow")?
-                    .as_ref()
-                    .ok_or("DynTypeTag: expected ref")?;
-                let tag = self
-                    .heap
-                    .read_slot(r, 0)
-                    .ok_or("runtime error: DynTypeTag slot 0 out of bounds")?;
-                self.stack.push(tag);
-            }
-            Op::DynUnbox => {
-                let r = self
-                    .stack
-                    .pop()
-                    .ok_or("stack underflow")?
-                    .as_ref()
-                    .ok_or("DynUnbox: expected ref")?;
-                let val = self
-                    .heap
-                    .read_slot(r, 1)
-                    .ok_or("runtime error: DynUnbox slot 1 out of bounds")?;
-                self.stack.push(val);
             }
         }
 
