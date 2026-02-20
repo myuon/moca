@@ -193,6 +193,61 @@ impl Type {
         }
     }
 
+    /// Convert a Type back to a TypeAnnotation.
+    /// Used by the typechecker to write inferred type arguments back to the AST.
+    /// Returns None for types that cannot be represented as TypeAnnotation (e.g., unresolved Var).
+    pub fn to_type_annotation(&self) -> Option<TypeAnnotation> {
+        match self {
+            Type::Int => Some(TypeAnnotation::Named("int".to_string())),
+            Type::Float => Some(TypeAnnotation::Named("float".to_string())),
+            Type::Bool => Some(TypeAnnotation::Named("bool".to_string())),
+            Type::String => Some(TypeAnnotation::Named("string".to_string())),
+            Type::Nil => Some(TypeAnnotation::Named("nil".to_string())),
+            Type::Any => Some(TypeAnnotation::Named("any".to_string())),
+            Type::Dyn => Some(TypeAnnotation::Named("dyn".to_string())),
+            Type::Array(elem) => Some(TypeAnnotation::Array(Box::new(elem.to_type_annotation()?))),
+            Type::Vector(elem) => Some(TypeAnnotation::Vec(Box::new(elem.to_type_annotation()?))),
+            Type::Map(key, value) => Some(TypeAnnotation::Map(
+                Box::new(key.to_type_annotation()?),
+                Box::new(value.to_type_annotation()?),
+            )),
+            Type::Object(fields) => {
+                let mut ann_fields = Vec::new();
+                for (name, ty) in fields {
+                    ann_fields.push((name.clone(), ty.to_type_annotation()?));
+                }
+                Some(TypeAnnotation::Object(ann_fields))
+            }
+            Type::Nullable(inner) => Some(TypeAnnotation::Nullable(Box::new(
+                inner.to_type_annotation()?,
+            ))),
+            Type::Function { params, ret } => {
+                let param_anns: Option<Vec<_>> =
+                    params.iter().map(|p| p.to_type_annotation()).collect();
+                Some(TypeAnnotation::Function {
+                    params: param_anns?,
+                    ret: Box::new(ret.to_type_annotation()?),
+                })
+            }
+            Type::Struct { name, .. } => Some(TypeAnnotation::Named(name.clone())),
+            Type::GenericStruct {
+                name, type_args, ..
+            } => {
+                let ta: Option<Vec<_>> = type_args.iter().map(|t| t.to_type_annotation()).collect();
+                Some(TypeAnnotation::Generic {
+                    name: name.clone(),
+                    type_args: ta?,
+                })
+            }
+            Type::Ptr(elem) => Some(TypeAnnotation::Generic {
+                name: "ptr".to_string(),
+                type_args: vec![elem.to_type_annotation()?],
+            }),
+            Type::Param { name } => Some(TypeAnnotation::Named(name.clone())),
+            Type::Var(_) => None, // Unresolved type variable
+        }
+    }
+
     /// Substitute a type parameter with a concrete type.
     /// Returns a new type with all occurrences of `Type::Param { name }` replaced with `replacement`.
     pub fn substitute_param(&self, param_name: &str, replacement: &Type) -> Type {
