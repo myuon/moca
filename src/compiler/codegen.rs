@@ -705,10 +705,12 @@ impl Codegen {
                 let mut jump_to_end_patches = Vec::new();
 
                 for arm in arms {
-                    // Load dyn value and get type tag via HeapLoad(0)
+                    // Load dyn value → type_info ref → tag_id
                     ops.push(Op::LocalGet(*dyn_slot));
-                    ops.push(Op::HeapLoad(0));
-                    ops.push(Op::I64Const(arm.type_tag as i64));
+                    ops.push(Op::HeapLoad(0)); // dyn slot 0 → type_info ref
+                    ops.push(Op::HeapLoad(0)); // type_info slot 0 → tag_id
+                    let tag_id = self.add_string(arm.type_tag_name.clone()) as i64;
+                    ops.push(Op::I64Const(tag_id));
                     ops.push(Op::I64Eq);
 
                     // Branch to next arm if tag doesn't match
@@ -1396,11 +1398,30 @@ impl Codegen {
                 ops.push(Op::LocalGet(*slot + self.local_offset));
                 ops.push(Op::HeapLoad(0));
             }
-            ResolvedExpr::AsDyn { expr, type_tag } => {
-                // Push arguments: tag, value
-                ops.push(Op::I64Const(*type_tag as i64));
+            ResolvedExpr::AsDyn {
+                expr,
+                type_tag_name,
+                field_names,
+            } => {
+                // Build type_info object: [tag_id, type_name, field_count, ...field_names]
+                let tag_id = self.add_string(type_tag_name.clone()) as i64;
+                let type_info_slots = 3 + field_names.len();
+
+                // Allocate type_info
+                ops.push(Op::I64Const(tag_id));
+                let name_idx = self.add_string(type_tag_name.clone());
+                ops.push(Op::StringConst(name_idx));
+                ops.push(Op::I64Const(field_names.len() as i64));
+                for field_name in field_names {
+                    let field_idx = self.add_string(field_name.clone());
+                    ops.push(Op::StringConst(field_idx));
+                }
+                ops.push(Op::HeapAlloc(type_info_slots));
+
+                // Compile the value expression
                 self.compile_expr(expr, ops)?;
-                // Call __dyn_box(tag, value)
+
+                // Call __dyn_box(type_info, value)
                 let func_idx = self
                     .function_indices
                     .get("__dyn_box")

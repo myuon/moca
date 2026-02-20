@@ -1133,7 +1133,7 @@ impl ResolvedProgramPrinter {
                     self.write_indent_with(parent_prefix);
                     self.write(&format!(
                         "├── arm[{}] var_slot:{} type_tag:{}",
-                        i, arm.var_slot, arm.type_tag
+                        i, arm.var_slot, arm.type_tag_name
                     ));
                     self.newline();
                     let arm_child = format!("{}│   ", parent_prefix);
@@ -1534,8 +1534,15 @@ impl ResolvedProgramPrinter {
                 self.write(&format!("{}RefCellLoad(slot:{})", prefix, slot));
                 self.newline();
             }
-            ResolvedExpr::AsDyn { expr, type_tag } => {
-                self.write(&format!("{}AsDyn type_tag:{}", prefix, type_tag));
+            ResolvedExpr::AsDyn {
+                expr,
+                type_tag_name,
+                field_names,
+            } => {
+                self.write(&format!(
+                    "{}AsDyn type:{} fields:{:?}",
+                    prefix, type_tag_name, field_names
+                ));
                 self.newline();
                 self.write_indent_with(parent_prefix);
                 let expr_child = format!("{}    ", parent_prefix);
