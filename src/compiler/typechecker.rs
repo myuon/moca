@@ -1849,6 +1849,8 @@ impl TypeChecker {
 
                 // Check if it's a generic function with explicit type arguments
                 if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
+                    // Track fresh type variables for implicit generic calls
+                    let mut fresh_vars: Vec<Type> = Vec::new();
                     // Instantiate the generic function with the provided type arguments
                     let fn_type = if !type_args.is_empty() {
                         // Check that the number of type arguments matches
@@ -1914,6 +1916,7 @@ impl TypeChecker {
                         let mut instantiated = generic_info.fn_type.clone();
                         for param_name in &generic_info.type_params {
                             let fresh = self.fresh_var();
+                            fresh_vars.push(fresh.clone());
                             instantiated = instantiated.substitute_param(param_name, &fresh);
                         }
                         instantiated
@@ -1938,6 +1941,53 @@ impl TypeChecker {
                                 let arg_type = self.infer_expr(arg, env);
                                 if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
                                     self.errors.push(e);
+                                }
+                            }
+
+                            // Write back inferred type arguments for implicit generic calls
+                            if type_args.is_empty() && !fresh_vars.is_empty() {
+                                let mut inferred_type_args = Vec::new();
+                                let mut all_resolved = true;
+                                for fresh in &fresh_vars {
+                                    let resolved = self.substitution.apply(fresh);
+                                    if let Some(ta) = resolved.to_type_annotation() {
+                                        inferred_type_args.push(ta);
+                                    } else {
+                                        all_resolved = false;
+                                        break;
+                                    }
+                                }
+                                if all_resolved {
+                                    *type_args = inferred_type_args;
+
+                                    // Check interface bounds for inferred types
+                                    let resolved_args: Vec<Type> = fresh_vars
+                                        .iter()
+                                        .map(|f| self.substitution.apply(f))
+                                        .collect();
+                                    for (i, bounds) in
+                                        generic_info.type_param_bounds.iter().enumerate()
+                                    {
+                                        if bounds.is_empty() {
+                                            continue;
+                                        }
+                                        let concrete_type = &resolved_args[i];
+                                        let type_name = self.type_to_impl_name(concrete_type);
+                                        for bound in bounds {
+                                            if !self
+                                                .interface_impls
+                                                .contains(&(bound.clone(), type_name.clone()))
+                                            {
+                                                self.errors.push(TypeError::new(
+                                                    format!(
+                                                        "type `{}` does not implement interface `{}`",
+                                                        concrete_type, bound
+                                                    ),
+                                                    *span,
+                                                ));
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
