@@ -1391,6 +1391,21 @@ impl<'a> Resolver<'a> {
                                 Err(_) => name.clone(),
                             }
                         }
+                        TypeAnnotation::Generic { name, type_args } => {
+                            // Build tag name matching the format from type_to_dyn_tag_name
+                            let args = type_args
+                                .iter()
+                                .map(|ta| match ta.to_type() {
+                                    Ok(ty) => type_to_dyn_tag_name(&ty),
+                                    Err(_) => match ta {
+                                        TypeAnnotation::Named(n) => n.clone(),
+                                        _ => ta.to_string(),
+                                    },
+                                })
+                                .collect::<Vec<_>>()
+                                .join("_");
+                            format!("{}_{}", name, args)
+                        }
                         _ => {
                             let ty = arm
                                 .type_annotation
@@ -1959,17 +1974,12 @@ impl<'a> Resolver<'a> {
                     .cloned()
                     .expect("AsDyn inner expr must have inferred_type");
                 let type_tag_name = type_to_dyn_tag_name(&inner_type);
-                let field_names = match &inner_type {
-                    Type::Struct { name, .. } => {
-                        // Look up struct field names
-                        self.resolved_structs
-                            .iter()
-                            .find(|s| &s.name == name)
-                            .map(|s| s.fields.clone())
-                            .unwrap_or_default()
-                    }
-                    _ => Vec::new(),
-                };
+                let field_names = self
+                    .resolved_structs
+                    .iter()
+                    .find(|s| s.name == type_tag_name)
+                    .map(|s| s.fields.clone())
+                    .unwrap_or_default();
                 let resolved_expr = self.resolve_expr(*expr, scope)?;
                 Ok(ResolvedExpr::AsDyn {
                     expr: Box::new(resolved_expr),
@@ -2130,7 +2140,9 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Convert a Type to a dyn type tag.
+/// Convert a Type to a dyn type tag name.
+/// For generic types, includes type parameters (e.g. "Container_int")
+/// using the same mangling format as monomorphise.
 fn type_to_dyn_tag_name(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
@@ -2139,6 +2151,22 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
         Type::String => "string".to_string(),
         Type::Nil => "nil".to_string(),
         Type::Struct { name, .. } => name.clone(),
+        Type::GenericStruct {
+            name, type_args, ..
+        } => {
+            let args = type_args
+                .iter()
+                .map(type_to_dyn_tag_name)
+                .collect::<Vec<_>>()
+                .join("_");
+            format!("{}_{}", name, args)
+        }
+        Type::Vector(elem) => format!("Vec_{}", type_to_dyn_tag_name(elem)),
+        Type::Map(k, v) => format!(
+            "Map_{}_{}",
+            type_to_dyn_tag_name(k),
+            type_to_dyn_tag_name(v)
+        ),
         _ => ty.to_string(),
     }
 }

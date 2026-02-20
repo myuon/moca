@@ -56,3 +56,22 @@ print(__dyn_type_name(dr));
 print(__dyn_field_count(dr));
 print(__dyn_field_name(dr, 0));
 print(__dyn_field_name(dr, 1));
+
+// Generic struct as dyn — type parameters must be included in tag
+struct Container<T> { value: T }
+
+fun match_container(d: dyn) {
+    match dyn d {
+        v: Container<int> => { print(v.value); }
+        v: Container<string> => { print(v.value); }
+        _ => { print("other"); }
+    }
+}
+
+match_container(Container<int> { value: 99 } as dyn);
+match_container(Container<string> { value: "world" } as dyn);
+match_container(42 as dyn);
+
+// Reflection on generic struct
+let dg = Container<int> { value: 7 } as dyn;
+print(__dyn_type_name(dg));
