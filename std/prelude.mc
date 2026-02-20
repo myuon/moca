@@ -1769,15 +1769,38 @@ fun sort_float(v: Vec<float>) {
 // ============================================================================
 // Dynamic Type (dyn) Operations
 // ============================================================================
-// dyn values are 2-slot heap objects: [type_tag, value]
-// Type tags: 0=int, 1=float, 2=bool, 3=string, 4=nil
+// dyn values are 2-slot heap objects: [type_info_ref, value]
+//
+// type_info is a heap object:
+//   slot 0: tag_id (int, string pool index for fast matching)
+//   slot 1: type_name (string, e.g. "int", "Point")
+//   slot 2: field_count (int, 0 for primitives)
+//   slot 3+: field_names (strings)
 
-// Box a value with a type tag into a dyn value.
-// tag: type tag (0=int, 1=float, 2=bool, 3=string, 4=nil)
+// Box a value with type info into a dyn value.
+// type_info: reference to a type_info heap object (created by codegen)
 // value: the value to box
-fun __dyn_box(tag: int, value: any) -> any {
+fun __dyn_box(type_info: any, value: any) -> any {
     let obj = __alloc_heap(2);
-    __heap_store(obj, 0, tag);
+    __heap_store(obj, 0, type_info);
     __heap_store(obj, 1, value);
     return obj;
+}
+
+// Get the type name of a dyn value.
+fun __dyn_type_name(d: dyn) -> string {
+    let type_info = __heap_load(d, 0);
+    return __heap_load(type_info, 1);
+}
+
+// Get the number of fields of a dyn value (0 for primitives).
+fun __dyn_field_count(d: dyn) -> int {
+    let type_info = __heap_load(d, 0);
+    return __heap_load(type_info, 2);
+}
+
+// Get the name of the i-th field of a dyn value.
+fun __dyn_field_name(d: dyn, i: int) -> string {
+    let type_info = __heap_load(d, 0);
+    return __heap_load(type_info, 3 + i);
 }

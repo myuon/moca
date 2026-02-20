@@ -34,3 +34,25 @@ fun double_int(d: dyn) {
 
 double_int(10 as dyn);
 double_int("hello" as dyn);
+
+// Struct type as dyn
+struct Point { x: int, y: int }
+
+fun describe(d: dyn) {
+    match dyn d {
+        v: int => { print(v); }
+        v: Point => { print(v.x + v.y); }
+        _ => { print("other"); }
+    }
+}
+
+describe(42 as dyn);
+describe(Point { x: 10, y: 20 } as dyn);
+describe("hello" as dyn);
+
+// Reflection
+let dr = Point { x: 3, y: 4 } as dyn;
+print(__dyn_type_name(dr));
+print(__dyn_field_count(dr));
+print(__dyn_field_name(dr, 0));
+print(__dyn_field_name(dr, 1));

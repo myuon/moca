@@ -113,7 +113,7 @@ pub enum ResolvedStatement {
 #[derive(Debug, Clone)]
 pub struct ResolvedMatchDynArm {
     pub var_slot: usize,
-    pub type_tag: u8,
+    pub type_tag_name: String,
     pub body: Vec<ResolvedStatement>,
 }
 
@@ -257,7 +257,8 @@ pub enum ResolvedExpr {
     /// As dyn expression: boxes a value with a runtime type tag.
     AsDyn {
         expr: Box<ResolvedExpr>,
-        type_tag: u8,
+        type_tag_name: String,
+        field_names: Vec<String>,
     },
 }
 
@@ -1381,16 +1382,28 @@ impl<'a> Resolver<'a> {
                 for arm in arms {
                     scope.enter_scope();
                     let var_slot = scope.declare(arm.var_name, false);
-                    let type_tag = type_to_dyn_tag(
-                        &arm.type_annotation
-                            .to_type()
-                            .expect("MatchDyn arm type annotation must be valid"),
-                    );
+                    let type_tag_name = match &arm.type_annotation {
+                        TypeAnnotation::Named(name) => {
+                            // Try to convert to a known type first, otherwise use the name directly
+                            // (e.g. struct names like "Point" that to_type() doesn't handle)
+                            match arm.type_annotation.to_type() {
+                                Ok(ty) => type_to_dyn_tag_name(&ty),
+                                Err(_) => name.clone(),
+                            }
+                        }
+                        _ => {
+                            let ty = arm
+                                .type_annotation
+                                .to_type()
+                                .expect("MatchDyn arm type annotation must be valid");
+                            type_to_dyn_tag_name(&ty)
+                        }
+                    };
                     let body = self.resolve_statements(arm.body.statements, scope)?;
                     scope.exit_scope();
                     resolved_arms.push(ResolvedMatchDynArm {
                         var_slot,
-                        type_tag,
+                        type_tag_name,
                         body,
                     });
                 }
@@ -1945,11 +1958,23 @@ impl<'a> Resolver<'a> {
                     .inferred_type()
                     .cloned()
                     .expect("AsDyn inner expr must have inferred_type");
-                let type_tag = type_to_dyn_tag(&inner_type);
+                let type_tag_name = type_to_dyn_tag_name(&inner_type);
+                let field_names = match &inner_type {
+                    Type::Struct { name, .. } => {
+                        // Look up struct field names
+                        self.resolved_structs
+                            .iter()
+                            .find(|s| &s.name == name)
+                            .map(|s| s.fields.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                };
                 let resolved_expr = self.resolve_expr(*expr, scope)?;
                 Ok(ResolvedExpr::AsDyn {
                     expr: Box::new(resolved_expr),
-                    type_tag,
+                    type_tag_name,
+                    field_names,
                 })
             }
         }
@@ -2106,14 +2131,15 @@ impl<'a> Resolver<'a> {
 }
 
 /// Convert a Type to a dyn type tag.
-fn type_to_dyn_tag(ty: &Type) -> u8 {
+fn type_to_dyn_tag_name(ty: &Type) -> String {
     match ty {
-        Type::Int => 0,
-        Type::Float => 1,
-        Type::Bool => 2,
-        Type::String => 3,
-        Type::Nil => 4,
-        _ => panic!("unsupported type for dyn: {}", ty),
+        Type::Int => "int".to_string(),
+        Type::Float => "float".to_string(),
+        Type::Bool => "bool".to_string(),
+        Type::String => "string".to_string(),
+        Type::Nil => "nil".to_string(),
+        Type::Struct { name, .. } => name.clone(),
+        _ => ty.to_string(),
     }
 }
 
