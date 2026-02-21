@@ -1438,21 +1438,21 @@ impl<K, V> Map<K, V> {
     }
 
     // Get a value from the map by int key
-    // Returns nil if key not found
-    fun get_int(self, key: int) -> V? {
+    // Throws if key not found
+    fun get_int(self, key: int) -> V {
         let entry_ptr = self._find_entry_int(key);
         if entry_ptr == 0 {
-            return nil;
+            throw "key not found";
         }
         return __heap_load(entry_ptr, 1);
     }
 
     // Get a value from the map by string key
-    // Returns nil if key not found
-    fun get_string(self, key: string) -> V? {
+    // Throws if key not found
+    fun get_string(self, key: string) -> V {
         let entry_ptr = self._find_entry_string(key);
         if entry_ptr == 0 {
-            return nil;
+            throw "key not found";
         }
         return __heap_load(entry_ptr, 1);
     }

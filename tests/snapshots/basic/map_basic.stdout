@@ -7,4 +7,5 @@ Bob
 2
 removed city
 1
-nil
+runtime error: key not found
+true

@@ -31,5 +31,12 @@ if removed {
 }
 print(m.len());
 
-// Test get non-existent key returns nil
-print(m.get("city"));
+// Test get non-existent key throws
+let got_error = false;
+try {
+    m.get("city");
+} catch e {
+    got_error = true;
+    print(e);
+}
+print(got_error);
