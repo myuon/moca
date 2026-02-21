@@ -1386,7 +1386,8 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
 
-                // Type-check each arm: bind var_name with the annotated type, then check the body
+                // Type-check each arm and collect block types for unification
+                let mut result_type: Option<Type> = None;
                 for arm in arms.iter_mut() {
                     let arm_type =
                         match self.resolve_type_annotation(&arm.type_annotation, arm.span) {
@@ -1398,14 +1399,27 @@ impl TypeChecker {
                         };
                     env.enter_scope();
                     env.bind(arm.var_name.clone(), arm_type);
-                    self.infer_block(&mut arm.body, env);
+                    let block_type = self.infer_block(&mut arm.body, env);
                     env.exit_scope();
+
+                    if let Some(ref prev) = result_type
+                        && let Err(e) = self.unify(prev, &block_type, *span)
+                    {
+                        self.errors.push(e);
+                    }
+                    result_type = Some(block_type);
                 }
 
-                // Type-check the default block
-                self.infer_block(default_block, env);
+                // Type-check the default block and unify with arm types
+                let default_type = self.infer_block(default_block, env);
+                if let Some(ref prev) = result_type
+                    && let Err(e) = self.unify(prev, &default_type, *span)
+                {
+                    self.errors.push(e);
+                }
+                result_type = Some(default_type);
 
-                Type::Nil
+                result_type.unwrap_or(Type::Nil)
             }
 
             Statement::Try {
