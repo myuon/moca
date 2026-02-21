@@ -70,25 +70,23 @@ match dyn d1 {
 
 // Function that takes dyn and dispatches
 fun describe(d: dyn) -> string {
-    let result = "unknown";
     match dyn d {
         v: int => {
-            result = "integer=" + v.to_string();
+            return "integer=" + v.to_string();
         }
         v: string => {
-            result = "string=" + v;
+            return "string=" + v;
         }
         v: bool => {
-            result = "bool=" + v.to_string();
+            return "bool=" + v.to_string();
         }
         v: float => {
-            result = "float=" + v.to_string();
+            return "float=" + v.to_string();
         }
         _ => {
-            result = "unknown";
+            return "unknown";
         }
     }
-    return result;
 }
 
 print(describe(42 as dyn));

@@ -1299,30 +1299,40 @@ impl TypeChecker {
                 if let Err(e) = self.unify(&resolved, &Type::Dyn, *span) {
                     self.errors.push(e);
                 }
+                let mut result_type: Option<Type> = None;
                 for arm in arms.iter_mut() {
-                    if let Some(type_ann) = &arm.type_annotation {
+                    let arm_type = if let Some(type_ann) = &arm.type_annotation {
                         match self.resolve_type_annotation(type_ann, arm.span) {
                             Ok(arm_type) => {
                                 env.enter_scope();
                                 env.bind(arm.var.clone(), arm_type);
-                                self.infer_block(&mut arm.body, env);
+                                let block_type = self.infer_block(&mut arm.body, env);
                                 env.exit_scope();
+                                block_type
                             }
                             Err(e) => {
                                 self.errors.push(e);
                                 env.enter_scope();
-                                self.infer_block(&mut arm.body, env);
+                                let block_type = self.infer_block(&mut arm.body, env);
                                 env.exit_scope();
+                                block_type
                             }
                         }
                     } else {
                         // Default arm ("_") - no variable binding
                         env.enter_scope();
-                        self.infer_block(&mut arm.body, env);
+                        let block_type = self.infer_block(&mut arm.body, env);
                         env.exit_scope();
+                        block_type
+                    };
+                    if let Some(ref prev) = result_type
+                        && let Err(e) = self.unify(prev, &arm_type, *span)
+                    {
+                        self.errors.push(e);
                     }
+                    result_type = Some(arm_type);
                 }
-                Type::Nil
+                result_type.unwrap_or(Type::Nil)
             }
         }
     }
