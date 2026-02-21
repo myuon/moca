@@ -1844,6 +1844,9 @@ impl TypeChecker {
                 if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
                     // Track fresh type variables for implicit generic calls
                     let mut fresh_vars: Vec<Type> = Vec::new();
+                    // Flag for print fallback: when print(v) is called but T doesn't implement ToString,
+                    // we rename the callee to __print_dyn_fallback so desugar can transform it.
+                    let mut print_fallback = false;
                     // Instantiate the generic function with the provided type arguments
                     let fn_type = if !type_args.is_empty() {
                         // Check that the number of type arguments matches
@@ -1890,13 +1893,18 @@ impl TypeChecker {
                                         .interface_impls
                                         .contains(&(bound.clone(), type_name.clone()))
                                     {
-                                        self.errors.push(TypeError::new(
-                                            format!(
-                                                "type `{}` does not implement interface `{}`",
-                                                concrete_type, bound
-                                            ),
-                                            *span,
-                                        ));
+                                        // print fallback: suppress error and use dyn-based formatter
+                                        if callee.as_str() == "print" && bound == "ToString" {
+                                            print_fallback = true;
+                                        } else {
+                                            self.errors.push(TypeError::new(
+                                                format!(
+                                                    "type `{}` does not implement interface `{}`",
+                                                    concrete_type, bound
+                                                ),
+                                                *span,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -1971,20 +1979,34 @@ impl TypeChecker {
                                                 .interface_impls
                                                 .contains(&(bound.clone(), type_name.clone()))
                                             {
-                                                self.errors.push(TypeError::new(
-                                                    format!(
-                                                        "type `{}` does not implement interface `{}`",
-                                                        concrete_type, bound
-                                                    ),
-                                                    *span,
-                                                ));
+                                                // print fallback: suppress error and use dyn-based formatter
+                                                if callee.as_str() == "print" && bound == "ToString"
+                                                {
+                                                    print_fallback = true;
+                                                } else {
+                                                    self.errors.push(TypeError::new(
+                                                        format!(
+                                                            "type `{}` does not implement interface `{}`",
+                                                            concrete_type, bound
+                                                        ),
+                                                        *span,
+                                                    ));
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
 
-                            self.substitution.apply(&ret)
+                            let result = self.substitution.apply(&ret);
+
+                            // Apply print fallback: rename callee so desugar transforms it
+                            if print_fallback {
+                                *callee = "__print_dyn_fallback".to_string();
+                                type_args.clear();
+                            }
+
+                            result
                         }
                         _ => {
                             self.errors.push(TypeError::new(

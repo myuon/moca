@@ -643,13 +643,34 @@ impl Desugar {
                 args,
                 span,
                 inferred_type,
-            } => Expr::Call {
-                callee,
-                type_args,
-                args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
-                span,
-                inferred_type,
-            },
+            } => {
+                // print fallback: transform __print_dyn_fallback(v) → inspect(v as dyn)
+                if callee == "__print_dyn_fallback" {
+                    let arg = args
+                        .into_iter()
+                        .next()
+                        .map(|e| self.desugar_expr(e))
+                        .expect("__print_dyn_fallback requires 1 argument");
+                    return Expr::Call {
+                        callee: "inspect".to_string(),
+                        type_args: vec![],
+                        args: vec![Expr::AsDyn {
+                            expr: Box::new(arg),
+                            span,
+                            inferred_type: Some(Type::Dyn),
+                        }],
+                        span,
+                        inferred_type: Some(Type::Nil),
+                    };
+                }
+                Expr::Call {
+                    callee,
+                    type_args,
+                    args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                    span,
+                    inferred_type,
+                }
+            }
 
             // Struct literal - desugar field values
             Expr::StructLiteral {
