@@ -491,6 +491,9 @@ impl Verifier {
 
             // Indirect call
             Op::CallIndirect(argc) => (argc + 1, 1), // pops callable ref + argc args, pushes result
+
+            // Type Descriptor
+            Op::TypeDescLoad(_) => (0, 1), // pushes type descriptor ref
         }
     }
 }

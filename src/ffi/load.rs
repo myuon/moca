@@ -193,6 +193,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -267,6 +268,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec!["test".to_string()],
+            type_descriptors: vec![],
             debug: None,
         };
 

@@ -485,6 +485,12 @@ pub enum MicroOp {
         dst: VReg,
         idx: usize,
     },
+    /// Load pre-allocated type descriptor reference.
+    /// dst = type_descriptor_refs[idx]
+    TypeDescLoad {
+        dst: VReg,
+        idx: usize,
+    },
     /// Convert value to string representation.
     /// dst = to_string(src) (Ref to newly allocated heap string)
     FloatToString {

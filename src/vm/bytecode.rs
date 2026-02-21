@@ -95,6 +95,16 @@ pub fn write_chunk<W: Write>(w: &mut W, chunk: &Chunk) -> io::Result<()> {
     // Main function
     write_function(w, &chunk.main)?;
 
+    // Type descriptors
+    write_u32(w, chunk.type_descriptors.len() as u32)?;
+    for td in &chunk.type_descriptors {
+        write_string(w, &td.tag_name)?;
+        write_u32(w, td.field_names.len() as u32)?;
+        for field_name in &td.field_names {
+            write_string(w, field_name)?;
+        }
+    }
+
     // Debug info (not serialized for now)
     w.write_all(&[0u8])?; // has_debug = false
 
@@ -134,6 +144,22 @@ pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
     // Main function
     let main = read_function(r)?;
 
+    // Type descriptors
+    let td_count = read_u32(r)? as usize;
+    let mut type_descriptors = Vec::with_capacity(td_count);
+    for _ in 0..td_count {
+        let tag_name = read_string(r)?;
+        let field_count = read_u32(r)? as usize;
+        let mut field_names = Vec::with_capacity(field_count);
+        for _ in 0..field_count {
+            field_names.push(read_string(r)?);
+        }
+        type_descriptors.push(super::TypeDescriptor {
+            tag_name,
+            field_names,
+        });
+    }
+
     // Debug info
     let has_debug = read_u8(r)?;
     let debug = if has_debug != 0 {
@@ -147,6 +173,7 @@ pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
         functions,
         main,
         strings,
+        type_descriptors,
         debug,
     })
 }
@@ -414,6 +441,7 @@ const OP_I64_SHR_U: u8 = 115;
 const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
+const OP_TYPE_DESC_LOAD: u8 = 119;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -635,6 +663,12 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_CALL_INDIRECT])?;
             write_u32(w, *argc as u32)?;
         }
+
+        // Type Descriptor
+        Op::TypeDescLoad(idx) => {
+            w.write_all(&[OP_TYPE_DESC_LOAD])?;
+            write_u32(w, *idx as u32)?;
+        }
     }
     Ok(())
 }
@@ -803,6 +837,9 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // Closures
         OP_CALL_INDIRECT => Op::CallIndirect(read_u32(r)? as usize),
 
+        // Type Descriptor
+        OP_TYPE_DESC_LOAD => Op::TypeDescLoad(read_u32(r)? as usize),
+
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
@@ -969,6 +1006,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec!["hello".to_string(), "world".to_string()],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -1008,6 +1046,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -1048,6 +1087,7 @@ mod tests {
                 ],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -1238,6 +1278,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -1276,6 +1317,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -1311,6 +1353,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -1345,6 +1388,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 

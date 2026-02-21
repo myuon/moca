@@ -1817,16 +1817,6 @@ fun sort_float(v: Vec<float>) {
 //   slot 2: field_count (int, 0 for primitives)
 //   slot 3+: field_names (strings)
 
-// Box a value with type info into a dyn value.
-// type_info: reference to a type_info heap object (created by codegen)
-// value: the value to box
-fun __dyn_box(type_info: any, value: any) -> any {
-    let obj = __alloc_heap(2);
-    __heap_store(obj, 0, type_info);
-    __heap_store(obj, 1, value);
-    return obj;
-}
-
 // Get the type name of a dyn value.
 fun __dyn_type_name(d: dyn) -> string {
     let type_info = __heap_load(d, 0);
