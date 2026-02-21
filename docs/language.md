@@ -438,10 +438,10 @@ Functions for getting and formatting the current time (UTC).
 ```
 let now = time();
 let formatted = time_format(now);
-print_debug(formatted);  // "2026-02-08 12:34:56"
+print(formatted);  // "2026-02-08 12:34:56"
 
 let nanos = time_nanos();
-print_debug(nanos);  // 1770508496000000000
+print(nanos);  // 1770508496000000000
 ```
 
 ### Random Number Generation
