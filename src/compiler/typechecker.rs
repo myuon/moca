@@ -2924,16 +2924,6 @@ impl TypeChecker {
                 }
                 Some(Type::String)
             }
-            "__float_to_string" => {
-                if args.len() != 1 {
-                    self.errors
-                        .push(TypeError::new("__float_to_string expects 1 argument", span));
-                }
-                for arg in args {
-                    self.infer_expr(arg, env);
-                }
-                Some(Type::String)
-            }
             "parse_int" => {
                 if args.len() != 1 {
                     self.errors

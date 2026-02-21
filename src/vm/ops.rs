@@ -173,7 +173,6 @@ pub enum Op {
     Syscall(usize, usize),
     GcHint(usize),
     ValueToString,
-    FloatToString,
     ParseInt,
     UMul128Hi,
 
@@ -319,7 +318,6 @@ impl Op {
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::ValueToString => "ValueToString",
-            Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",
             Op::UMul128Hi => "UMul128Hi",
             Op::Throw => "Throw",

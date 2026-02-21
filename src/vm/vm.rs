@@ -718,7 +718,6 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             // heap_alloc_typed_helper removed
@@ -807,7 +806,6 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             // heap_alloc_typed_helper removed
@@ -891,7 +889,6 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             // heap_alloc_typed_helper removed
@@ -970,7 +967,6 @@ impl VM {
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
-            float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
             // heap_alloc_typed_helper removed
@@ -1623,13 +1619,6 @@ impl VM {
                         .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = Value::Ref(*gc_ref);
-                }
-                MicroOp::FloatToString { dst, src } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let value = self.stack[sb + src.0];
-                    let s = self.value_to_string(&value)?;
-                    let r = self.heap.alloc_string(s)?;
-                    self.stack[sb + dst.0] = Value::Ref(r);
                 }
                 MicroOp::ValueToString { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -2748,12 +2737,6 @@ impl VM {
                 self.stack.push(return_value);
 
                 return Ok(ControlFlow::Return);
-            }
-            Op::FloatToString => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let s = self.value_to_string(&value)?;
-                let r = self.heap.alloc_string(s)?;
-                self.stack.push(Value::Ref(r));
             }
             Op::ParseInt => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -4126,42 +4109,6 @@ unsafe extern "C" fn jit_syscall_helper(
                 payload: jit_result.payload,
             }
         }
-        Err(_) => JitReturn {
-            tag: 3, // TAG_NIL
-            payload: 0,
-        },
-    }
-}
-
-/// JIT toString helper function.
-/// Converts a value to its string representation and allocates on heap.
-#[cfg(feature = "jit")]
-unsafe extern "C" fn jit_float_to_string_helper(
-    ctx: *mut JitCallContext,
-    tag: u64,
-    payload: u64,
-) -> JitReturn {
-    let ctx_ref = unsafe { &mut *ctx };
-    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
-
-    vm.record_opcode("FloatToString");
-
-    let value = JitValue { tag, payload }.to_value();
-    match vm.value_to_string(&value) {
-        Ok(s) => match vm.heap.alloc_string(s) {
-            Ok(r) => {
-                // Update heap_base in case GC moved the heap
-                ctx_ref.heap_base = vm.heap.memory_base_ptr();
-                JitReturn {
-                    tag: 4, // TAG_PTR
-                    payload: r.index as u64,
-                }
-            }
-            Err(_) => JitReturn {
-                tag: 3, // TAG_NIL
-                payload: 0,
-            },
-        },
         Err(_) => JitReturn {
             tag: 3, // TAG_NIL
             payload: 0,

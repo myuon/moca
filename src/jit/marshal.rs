@@ -193,8 +193,6 @@ pub struct JitCallContext {
     pub string_cache: *const u64,
     /// Number of entries in the string cache
     pub string_cache_len: u64,
-    /// FloatToString helper: (ctx, tag, payload) -> JitReturn (returns Ref to string)
-    pub float_to_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
     /// HeapAllocDynSimple helper: (ctx, size) -> JitReturn (returns Ref)
     pub heap_alloc_dyn_simple_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
     /// Pointer to JIT function table for direct call dispatch.

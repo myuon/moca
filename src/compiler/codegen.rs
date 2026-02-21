@@ -167,8 +167,8 @@ impl Codegen {
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
                 "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
-                "__float_to_string" | "channel" | "recv" | "argv" | "args" | "__alloc_heap"
-                | "__alloc_string" | "__null_ptr" | "__ptr_offset" => ValueType::Ref,
+                "channel" | "recv" | "argv" | "args" | "__alloc_heap" | "__alloc_string"
+                | "__null_ptr" | "__ptr_offset" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
                 "__value_to_string" => ValueType::Ref, // returns string
                 "send" | "join" | "print" | "__heap_store" => ValueType::Ref, // returns null
@@ -1119,13 +1119,6 @@ impl Codegen {
                         // Both Array<T> and String have [ptr, len] layout
                         ops.push(Op::HeapLoad(1));
                     }
-                    "__float_to_string" => {
-                        if args.len() != 1 {
-                            return Err("__float_to_string takes exactly 1 argument".to_string());
-                        }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::FloatToString);
-                    }
                     "parse_int" => {
                         if args.len() != 1 {
                             return Err("parse_int takes exactly 1 argument".to_string());
@@ -1652,7 +1645,6 @@ impl Codegen {
             "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
 
             // Type operations
-            "FloatToString" => Ok(Op::FloatToString),
             "ParseInt" => Ok(Op::ParseInt),
             // Exception handling
             "Throw" => Ok(Op::Throw),
