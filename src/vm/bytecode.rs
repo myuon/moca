@@ -103,6 +103,10 @@ pub fn write_chunk<W: Write>(w: &mut W, chunk: &Chunk) -> io::Result<()> {
         for field_name in &td.field_names {
             write_string(w, field_name)?;
         }
+        write_u32(w, td.field_type_tags.len() as u32)?;
+        for field_type_tag in &td.field_type_tags {
+            write_string(w, field_type_tag)?;
+        }
     }
 
     // Debug info (not serialized for now)
@@ -154,9 +158,15 @@ pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
         for _ in 0..field_count {
             field_names.push(read_string(r)?);
         }
+        let field_type_count = read_u32(r)? as usize;
+        let mut field_type_tags = Vec::with_capacity(field_type_count);
+        for _ in 0..field_type_count {
+            field_type_tags.push(read_string(r)?);
+        }
         type_descriptors.push(super::TypeDescriptor {
             tag_name,
             field_names,
+            field_type_tags,
         });
     }
 

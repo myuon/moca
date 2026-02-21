@@ -1,0 +1,8 @@
+Point { x: 1, y: 2 }
+42
+"hello"
+true
+3.14
+nil
+Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }
+Named { name: "alice", age: 30 }

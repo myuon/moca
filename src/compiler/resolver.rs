@@ -261,6 +261,7 @@ pub enum ResolvedExpr {
         expr: Box<ResolvedExpr>,
         type_tag_name: String,
         field_names: Vec<String>,
+        field_type_tags: Vec<String>,
     },
 }
 
@@ -1998,17 +1999,26 @@ impl<'a> Resolver<'a> {
                     .cloned()
                     .expect("AsDyn inner expr must have inferred_type");
                 let type_tag_name = type_to_dyn_tag_name(&inner_type);
-                let field_names = self
-                    .resolved_structs
-                    .iter()
-                    .find(|s| s.name == type_tag_name)
-                    .map(|s| s.fields.clone())
-                    .unwrap_or_default();
+                // Extract field names and field type tags from the inferred type.
+                // Using the Type directly (instead of resolved_structs) ensures
+                // generic structs like Container<int> get correct field info.
+                let (field_names, field_type_tags) = match &inner_type {
+                    Type::Struct { fields, .. } | Type::GenericStruct { fields, .. } => {
+                        let names = fields.iter().map(|(n, _)| n.clone()).collect();
+                        let type_tags = fields
+                            .iter()
+                            .map(|(_, ty)| type_to_dyn_tag_name(ty))
+                            .collect();
+                        (names, type_tags)
+                    }
+                    _ => (vec![], vec![]),
+                };
                 let resolved_expr = self.resolve_expr(*expr, scope)?;
                 Ok(ResolvedExpr::AsDyn {
                     expr: Box::new(resolved_expr),
                     type_tag_name,
                     field_names,
+                    field_type_tags,
                 })
             }
         }

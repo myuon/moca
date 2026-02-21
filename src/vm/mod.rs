@@ -69,6 +69,9 @@ pub struct TypeDescriptor {
     pub tag_name: String,
     /// Field names for struct types (empty for primitives)
     pub field_names: Vec<String>,
+    /// Field type tag names for struct types (parallel to field_names).
+    /// Each entry is the tag_name of the field's type descriptor.
+    pub field_type_tags: Vec<String>,
 }
 
 /// A compiled chunk of bytecode.
