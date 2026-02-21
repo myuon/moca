@@ -2093,13 +2093,6 @@ impl VM {
                     let result = self.values_equal(&va, &vb);
                     self.stack[sb + dst.0] = Value::Bool(result);
                 }
-                MicroOp::StringEq { dst, a, b } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let va = self.stack[sb + a.0];
-                    let vb = self.stack[sb + b.0];
-                    let result = self.strings_equal(&va, &vb);
-                    self.stack[sb + dst.0] = Value::Bool(result);
-                }
                 MicroOp::RefIsNull { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let v = self.stack[sb + src.0];
@@ -2531,12 +2524,6 @@ impl VM {
             Op::RefIsNull => {
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 self.stack.push(Value::Bool(a == Value::Null));
-            }
-            Op::StringEq => {
-                let b = self.stack.pop().ok_or("stack underflow")?;
-                let a = self.stack.pop().ok_or("stack underflow")?;
-                let result = self.strings_equal(&a, &b);
-                self.stack.push(Value::Bool(result));
             }
 
             // ========================================
@@ -3256,46 +3243,8 @@ impl VM {
             (Value::Null, Value::Null) => true,
             (Value::Ref(a_ref), Value::Ref(b_ref)) => {
                 // Reference identity comparison.
-                // String equality is handled by StringEq opcode.
+                // String equality is handled by _string_eq in prelude.
                 a_ref.index == b_ref.index
-            }
-            _ => false,
-        }
-    }
-
-    /// Compare two values as strings by content.
-    /// Follows [ptr, len] layout: compares data arrays element-by-element.
-    /// Handles null values: (null, null) → true, (null, ref) → false.
-    fn strings_equal(&self, a: &Value, b: &Value) -> bool {
-        match (a, b) {
-            (Value::Null, Value::Null) => true,
-            (Value::Ref(a_ref), Value::Ref(b_ref)) => {
-                if a_ref.index == b_ref.index {
-                    return true;
-                }
-                // Follow [ptr, len] layout: slot 0 = data ref, slot 1 = len
-                let a_len = self.heap.read_slot(*a_ref, 1);
-                let b_len = self.heap.read_slot(*b_ref, 1);
-                if a_len != b_len {
-                    return false;
-                }
-                let a_data = self.heap.read_slot(*a_ref, 0);
-                let b_data = self.heap.read_slot(*b_ref, 0);
-                match (a_data, b_data) {
-                    (Some(Value::Ref(a_ptr)), Some(Value::Ref(b_ptr))) => {
-                        if a_ptr.index == b_ptr.index {
-                            return true;
-                        }
-                        let len = a_len.and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-                        for i in 0..len {
-                            if self.heap.read_slot(a_ptr, i) != self.heap.read_slot(b_ptr, i) {
-                                return false;
-                            }
-                        }
-                        true
-                    }
-                    _ => false,
-                }
             }
             _ => false,
         }

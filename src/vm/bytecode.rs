@@ -561,7 +561,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         // Ref Comparison
         Op::RefEq => w.write_all(&[OP_REF_EQ])?,
         Op::RefIsNull => w.write_all(&[OP_REF_IS_NULL])?,
-        Op::StringEq => w.write_all(&[OP_STRING_EQ])?,
+        // OP_STRING_EQ (120) is retired — StringEq is now handled by _string_eq in prelude
 
         // Type Conversion
         Op::I32WrapI64 => w.write_all(&[OP_I32_WRAP_I64])?,
@@ -764,7 +764,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // Ref Comparison
         OP_REF_EQ => Op::RefEq,
         OP_REF_IS_NULL => Op::RefIsNull,
-        OP_STRING_EQ => Op::StringEq,
+        // OP_STRING_EQ (120) is retired
 
         // Type Conversion
         OP_I32_WRAP_I64 => Op::I32WrapI64,

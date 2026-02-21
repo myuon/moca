@@ -122,9 +122,6 @@ pub enum Op {
     // ========================================
     RefEq,
     RefIsNull,
-    /// String content equality: pops two string refs (or null), pushes i32 bool.
-    /// Follows [ptr, len] layout to compare character data.
-    StringEq,
 
     // ========================================
     // Type Conversion
@@ -290,7 +287,6 @@ impl Op {
             Op::F64Ge => "F64Ge",
             Op::RefEq => "RefEq",
             Op::RefIsNull => "RefIsNull",
-            Op::StringEq => "StringEq",
             Op::I32WrapI64 => "I32WrapI64",
             Op::I64ExtendI32S => "I64ExtendI32S",
             Op::I64ExtendI32U => "I64ExtendI32U",

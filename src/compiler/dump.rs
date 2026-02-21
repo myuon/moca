@@ -1811,7 +1811,6 @@ impl<'a> Disassembler<'a> {
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::ValueToString => self.output.push_str("ValueToString"),
-            Op::StringEq => self.output.push_str("StringEq"),
             Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
             Op::UMul128Hi => self.output.push_str("UMul128Hi"),
@@ -2261,12 +2260,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         // Ref operations
         MicroOp::RefEq { dst, a, b } => output.push_str(&format!(
             "RefEq {}, {}, {}",
-            format_vreg(dst),
-            format_vreg(a),
-            format_vreg(b)
-        )),
-        MicroOp::StringEq { dst, a, b } => output.push_str(&format!(
-            "StringEq {}, {}, {}",
             format_vreg(dst),
             format_vreg(a),
             format_vreg(b)

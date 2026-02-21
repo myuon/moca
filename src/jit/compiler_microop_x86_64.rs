@@ -136,7 +136,6 @@ impl MicroOpJitCompiler {
                 | MicroOp::EqzI32 { dst, .. }
                 | MicroOp::CmpI32 { dst, .. }
                 | MicroOp::RefEq { dst, .. }
-                | MicroOp::StringEq { dst, .. }
                 | MicroOp::RefIsNull { dst, .. }
                 | MicroOp::F64ReinterpretAsI64 { dst, .. }
                 | MicroOp::I32WrapI64 { dst, .. }
@@ -588,7 +587,6 @@ impl MicroOpJitCompiler {
 
             // Ref ops
             MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
-            MicroOp::StringEq { .. } => Err("StringEq not supported in JIT".to_string()),
             MicroOp::RefIsNull { dst, src } => self.emit_ref_is_null(dst, src),
             MicroOp::RefNull { dst } => self.emit_ref_null(dst),
 

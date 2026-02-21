@@ -364,7 +364,6 @@ impl MicroOpJitCompiler {
                 | MicroOp::I32TruncF64S { dst, .. }
                 | MicroOp::I64TruncF32S { dst, .. }
                 | MicroOp::RefEq { dst, .. }
-                | MicroOp::StringEq { dst, .. }
                 | MicroOp::RefIsNull { dst, .. }
                 | MicroOp::F64ReinterpretAsI64 { dst, .. } => {
                     record(&mut vreg_tags, dst.0, value_tags::TAG_INT);
@@ -561,7 +560,6 @@ impl MicroOpJitCompiler {
 
             // Ref ops
             MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
-            MicroOp::StringEq { .. } => return false, // Too complex for JIT, bail to interpreter
             MicroOp::RefIsNull { dst, src } => self.emit_ref_is_null(dst, src),
             MicroOp::RefNull { dst } => self.emit_ref_null(dst),
 

@@ -879,7 +879,7 @@ impl Codegen {
                 op,
                 left,
                 right,
-                operand_type,
+                operand_type: _,
             } => {
                 // Handle short-circuit evaluation for && and ||
                 // BrIfFalse/BrIf pop the condition value, so we need to Dup first
@@ -975,11 +975,7 @@ impl Codegen {
                         ValueType::I32 => ops.push(Op::I32Eq),
                         ValueType::F32 => ops.push(Op::F32Eq),
                         ValueType::Ref => {
-                            if *operand_type == Some(Type::String) {
-                                ops.push(Op::StringEq);
-                            } else {
-                                ops.push(Op::RefEq);
-                            }
+                            ops.push(Op::RefEq);
                         }
                     },
                     BinaryOp::Ne => match self.infer_expr_type(left) {
@@ -988,11 +984,7 @@ impl Codegen {
                         ValueType::I32 => ops.push(Op::I32Ne),
                         ValueType::F32 => ops.push(Op::F32Ne),
                         ValueType::Ref => {
-                            if *operand_type == Some(Type::String) {
-                                ops.push(Op::StringEq);
-                            } else {
-                                ops.push(Op::RefEq);
-                            }
+                            ops.push(Op::RefEq);
                             ops.push(Op::I32Eqz);
                         }
                     },
@@ -1599,7 +1591,6 @@ impl Codegen {
             // ========================
             "RefEq" => Ok(Op::RefEq),
             "RefIsNull" => Ok(Op::RefIsNull),
-            "StringEq" => Ok(Op::StringEq),
 
             // ========================
             // Type Conversion
