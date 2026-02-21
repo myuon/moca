@@ -643,13 +643,75 @@ impl Desugar {
                 args,
                 span,
                 inferred_type,
-            } => Expr::Call {
-                callee,
-                type_args,
-                args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
-                span,
-                inferred_type,
-            },
+            } => {
+                // print fallback: transform __print_dyn_fallback(v)
+                if callee == "__print_dyn_fallback" {
+                    let mut args_iter = args.into_iter();
+                    let arg = args_iter
+                        .next()
+                        .map(|e| self.desugar_expr(e))
+                        .expect("__print_dyn_fallback requires 1 argument");
+
+                    // For struct types: use inspect(v as dyn) for rich field formatting
+                    if matches!(
+                        arg.inferred_type(),
+                        Some(Type::Struct { .. } | Type::GenericStruct { .. })
+                    ) {
+                        return Expr::Call {
+                            callee: "inspect".to_string(),
+                            type_args: vec![],
+                            args: vec![Expr::AsDyn {
+                                expr: Box::new(arg),
+                                span,
+                                inferred_type: Some(Type::Dyn),
+                            }],
+                            span,
+                            inferred_type: Some(Type::Nil),
+                        };
+                    }
+
+                    // For all other types (any, nullable, array, vec, map, etc.):
+                    // use __value_to_string (runtime dispatch)
+                    return Expr::Block {
+                        statements: vec![Statement::Expr {
+                            expr: Expr::Call {
+                                callee: "print_str".to_string(),
+                                type_args: vec![],
+                                args: vec![Expr::Call {
+                                    callee: "__value_to_string".to_string(),
+                                    type_args: vec![],
+                                    args: vec![arg],
+                                    span,
+                                    inferred_type: Some(Type::String),
+                                }],
+                                span,
+                                inferred_type: Some(Type::Nil),
+                            },
+                            span,
+                        }],
+                        expr: Box::new(Expr::Call {
+                            callee: "print_str".to_string(),
+                            type_args: vec![],
+                            args: vec![Expr::Str {
+                                value: "\n".to_string(),
+                                span,
+                                inferred_type: Some(Type::String),
+                            }],
+                            span,
+                            inferred_type: Some(Type::Nil),
+                        }),
+                        span,
+                        inferred_type: Some(Type::Nil),
+                    };
+                }
+                Expr::Call {
+                    callee,
+                    type_args,
+                    args: args.into_iter().map(|e| self.desugar_expr(e)).collect(),
+                    span,
+                    inferred_type,
+                }
+            }
 
             // Struct literal - desugar field values
             Expr::StructLiteral {

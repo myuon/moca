@@ -1,0 +1,10 @@
+Point { x: 1, y: 2 }
+42
+hello
+true
+3.14
+100
+42
+nil
+Point { x: 10, y: 20 }
+99

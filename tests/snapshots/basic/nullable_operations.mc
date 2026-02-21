@@ -8,18 +8,18 @@ fun no_value() -> int? {
 }
 
 let a = maybe_value();
-print_debug(a);
+print(a);
 
 let b = no_value();
-print_debug(b);
+print(b);
 
 // Nullable in let statement
 let c: int? = 100;
-print_debug(c);
+print(c);
 
 let d: int? = nil;
-print_debug(d);
+print(d);
 
 // Nullable array
 let arr: array<int>? = [1, 2, 3];
-print_debug(arr);
+print(arr);
