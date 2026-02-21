@@ -1201,6 +1201,11 @@ impl<T> Vec<T> {
     fun len(self) -> int {
         return self.len;
     }
+
+    // Get the first element of the vector
+    fun first(self) -> T {
+        return self.data[0];
+    }
 }
 
 // Associated functions for vec<T> (syntax sugar for Vec<T>)
