@@ -1544,6 +1544,7 @@ impl ResolvedProgramPrinter {
                 expr,
                 type_tag_name,
                 field_names,
+                ..
             } => {
                 self.write(&format!(
                     "{}AsDyn type:{} fields:{:?}",

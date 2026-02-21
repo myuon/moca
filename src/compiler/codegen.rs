@@ -170,7 +170,7 @@ impl Codegen {
                 "channel" | "recv" | "argv" | "args" | "__alloc_heap" | "__alloc_string"
                 | "__null_ptr" | "__ptr_offset" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
-                "__value_to_string" => ValueType::Ref, // returns string
+                "__value_to_string" => ValueType::Ref, // returns string ref
                 "send" | "join" | "print" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
             },
@@ -286,12 +286,22 @@ impl Codegen {
     }
 
     /// Add a type descriptor (or return existing index) for dyn type info.
-    /// If the tag_name already exists but field_names is more complete, update it.
-    fn add_type_descriptor(&mut self, tag_name: &str, field_names: &[String]) -> usize {
+    /// If the tag_name already exists but field_names/field_type_tags are more complete, update them.
+    fn add_type_descriptor(
+        &mut self,
+        tag_name: &str,
+        field_names: &[String],
+        field_type_tags: &[String],
+    ) -> usize {
         if let Some(&idx) = self.type_descriptor_indices.get(tag_name) {
             // Update field_names if the existing entry has none but new request has some
             if !field_names.is_empty() && self.type_descriptors[idx].field_names.is_empty() {
                 self.type_descriptors[idx].field_names = field_names.to_vec();
+            }
+            // Update field_type_tags if the existing entry has none but new request has some
+            if !field_type_tags.is_empty() && self.type_descriptors[idx].field_type_tags.is_empty()
+            {
+                self.type_descriptors[idx].field_type_tags = field_type_tags.to_vec();
             }
             return idx;
         }
@@ -301,6 +311,7 @@ impl Codegen {
         self.type_descriptors.push(crate::vm::TypeDescriptor {
             tag_name: tag_name.to_string(),
             field_names: field_names.to_vec(),
+            field_type_tags: field_type_tags.to_vec(),
         });
         self.type_descriptor_indices
             .insert(tag_name.to_string(), idx);
@@ -735,7 +746,7 @@ impl Codegen {
 
                 for arm in arms {
                     // Register type descriptor for this arm's type
-                    let td_idx = self.add_type_descriptor(&arm.type_tag_name, &[]);
+                    let td_idx = self.add_type_descriptor(&arm.type_tag_name, &[], &[]);
 
                     // Load dyn value → type_info ref, compare with expected type descriptor
                     ops.push(Op::LocalGet(*dyn_slot));
@@ -1406,9 +1417,14 @@ impl Codegen {
                 expr,
                 type_tag_name,
                 field_names,
+                field_type_tags,
             } => {
+                // Register type descriptors for field types first (so they exist when parent is created)
+                for ft_tag in field_type_tags.iter() {
+                    self.add_type_descriptor(ft_tag, &[], &[]);
+                }
                 // Register type descriptor (pre-allocated at VM startup)
-                let td_idx = self.add_type_descriptor(type_tag_name, field_names);
+                let td_idx = self.add_type_descriptor(type_tag_name, field_names, field_type_tags);
 
                 // Push type_info ref (pre-allocated) and value, then alloc dyn object inline
                 ops.push(Op::TypeDescLoad(td_idx));

@@ -1814,8 +1814,9 @@ fun sort_float(v: Vec<float>) {
 // type_info is a heap object:
 //   slot 0: tag_id (int, string pool index for fast matching)
 //   slot 1: type_name (string, e.g. "int", "Point")
-//   slot 2: field_count (int, 0 for primitives)
-//   slot 3+: field_names (strings)
+//   slot 2: field_count (int, n; 0 for primitives)
+//   slot 3..3+n: field_names (strings)
+//   slot 3+n..3+2n: field_type_descriptor_refs (refs to type_info objects)
 
 // Get the type name of a dyn value.
 fun __dyn_type_name(d: dyn) -> string {
@@ -1833,4 +1834,75 @@ fun __dyn_field_count(d: dyn) -> int {
 fun __dyn_field_name(d: dyn, i: int) -> string {
     let type_info = __heap_load(d, 0);
     return __heap_load(type_info, 3 + i);
+}
+
+// Get the i-th field value of a dyn value as a new dyn.
+// Uses the field type descriptor stored in the type_info to wrap the field value.
+fun __dyn_field_value(d: dyn, i: int) -> any {
+    let type_info = __heap_load(d, 0);
+    let field_count: int = __heap_load(type_info, 2);
+    let field_td_ref = __heap_load(type_info, 3 + field_count + i);
+    let struct_val = __heap_load(d, 1);
+    let field_val = __heap_load(struct_val, i);
+    let result = __alloc_heap(2);
+    __heap_store(result, 0, field_td_ref);
+    __heap_store(result, 1, field_val);
+    return result;
+}
+
+// ============================================================================
+// Dyn-based Generic Formatter
+// ============================================================================
+
+// Convert a dyn value to its string representation.
+// Handles primitives and structs recursively.
+// Output format: "StructName { field1: value1, field2: value2 }"
+fun _dyn_to_string(d: any) -> string {
+    let type_name: string = __dyn_type_name(d);
+    let field_count: int = __dyn_field_count(d);
+
+    // Primitive types (field_count == 0)
+    if field_count == 0 {
+        if type_name == "int" {
+            let v: int = __heap_load(d, 1);
+            return _int_to_string(v);
+        }
+        if type_name == "float" {
+            let v: float = __heap_load(d, 1);
+            return _float_to_string(v);
+        }
+        if type_name == "bool" {
+            let v: bool = __heap_load(d, 1);
+            return _bool_to_string(v);
+        }
+        if type_name == "string" {
+            let v: string = __heap_load(d, 1);
+            return "\"" + v + "\"";
+        }
+        if type_name == "nil" {
+            return "nil";
+        }
+        return type_name;
+    }
+
+    // Struct types: "TypeName { field1: value1, field2: value2 }"
+    let result = type_name + " { ";
+    let i = 0;
+    while i < field_count {
+        if i > 0 {
+            result = result + ", ";
+        }
+        let fname: string = __dyn_field_name(d, i);
+        let fval = __dyn_field_value(d, i);
+        result = result + fname + ": " + _dyn_to_string(fval);
+        i = i + 1;
+    }
+    result = result + " }";
+    return result;
+}
+
+// Print a dyn value's string representation to stdout with a trailing newline.
+fun inspect(d: dyn) {
+    print_str(_dyn_to_string(d));
+    print_str("\n");
 }
