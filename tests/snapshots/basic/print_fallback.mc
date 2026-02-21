@@ -12,6 +12,16 @@ print("hello");
 print(true);
 print(3.14);
 
+// print on any type — should use __value_to_string fallback
+let a: any = 100;
+print(a);
+
+// print on nullable type — should use __value_to_string fallback
+let n: int? = 42;
+print(n);
+let m: int? = nil;
+print(m);
+
 // implicit dyn coercion: inspect takes dyn, no explicit "as dyn" needed
 inspect(Point { x: 10, y: 20 });
 inspect(99);

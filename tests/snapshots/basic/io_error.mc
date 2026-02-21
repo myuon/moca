@@ -6,7 +6,7 @@ print(result1);
 
 // Test 2: Read from invalid fd (should return EBADF = -1)
 // Note: read() returns string but error values are integers (type-unsafe),
-// so print_debug (runtime dispatch) is needed here.
+// so print_debug (runtime dispatch) is needed here. See #195.
 let result2 = read(99, 100);
 print_debug(result2);
 

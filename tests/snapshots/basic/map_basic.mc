@@ -33,5 +33,5 @@ print(m.len());
 
 // Test get non-existent key returns 0
 // Note: map.get returns type-unsafe default (int 0) for missing keys,
-// so print_debug (runtime dispatch) is needed here.
+// so print_debug (runtime dispatch) is needed here. See #195.
 print_debug(m.get("city"));
