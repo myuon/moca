@@ -407,12 +407,6 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
-    /// dst = (a == b) as string content equality (follows [ptr, len] layout)
-    StringEq {
-        dst: VReg,
-        a: VReg,
-        b: VReg,
-    },
     /// dst = null ref
     RefNull {
         dst: VReg,

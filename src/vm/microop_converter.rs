@@ -1170,17 +1170,6 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     |dst, a, b| MicroOp::RefEq { dst, a, b },
                 );
             }
-            Op::StringEq => {
-                emit_binop(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                    ValueType::I64,
-                    |dst, a, b| MicroOp::StringEq { dst, a, b },
-                );
-            }
             Op::RefIsNull => {
                 let src = pop_vreg(
                     &mut vstack,
@@ -2085,7 +2074,6 @@ fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
         | MicroOp::CmpF32 { dst, .. }
         // Ref binary
         | MicroOp::RefEq { dst, .. }
-        | MicroOp::StringEq { dst, .. }
         // Unary ops
         | MicroOp::NegI64 { dst, .. }
         | MicroOp::NegF64 { dst, .. }
