@@ -1407,7 +1407,7 @@ impl<K, V> Map<K, V> {
     }
 
     // Put a key-value pair into the map (string key version)
-    fun put_string(self, key: string, val) {
+    fun put_string(self, key: string, val: V) {
         // Check if key already exists
         let existing = self._find_entry_string(key);
         if existing != 0 {
@@ -1434,7 +1434,7 @@ impl<K, V> Map<K, V> {
 
     // Get a value from the map by int key
     // Returns 0 if key not found
-    fun get_int(self, key: int) {
+    fun get_int(self, key: int) -> V {
         let entry_ptr = self._find_entry_int(key);
         if entry_ptr == 0 {
             return 0;
@@ -1444,7 +1444,7 @@ impl<K, V> Map<K, V> {
 
     // Get a value from the map by string key
     // Returns 0 if key not found
-    fun get_string(self, key: string) {
+    fun get_string(self, key: string) -> V {
         let entry_ptr = self._find_entry_string(key);
         if entry_ptr == 0 {
             return 0;

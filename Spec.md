@@ -1,93 +1,80 @@
-# Spec.md — Phase 1: Map の any 型依存削減
+# Spec.md — #166: Map/Vecメソッドの型チェックをimplブロック定義から自動導出する
 
 ## 1. Goal
-- Map<K, V> の `put/get/contains/remove/set` からランタイム `type_of()` ディスパッチを除去し、コンパイル時の型情報（desugar パスの既存機能）に基づく型別メソッド直接呼び出しのみで動作するようにする
+- `typechecker.rs` の `check_vec_method` / `check_map_method` のハードコードを廃止し、`impl` ブロックの定義から型情報を自動導出する
+- prelude.mc の impl ブロックが唯一の型情報ソース（Single Source of Truth）になる
 
 ## 2. Non-Goals
-- `to_string` の型別特殊化（Phase 2）
-- 型別命令の追加（`Op::StringEq` 等、Phase 3）
-- ObjectKind の廃止（Phase 4）
-- `any` 型そのものの言語仕様からの削除
-- `keys()` / `values()` の返り値型の改善（`vec<any>` → `vec<K>` / `vec<V>` は別途対応）
-- `HashMapEntry` の型パラメータ化（`__heap_load`/`__heap_store` の型付けとの整合性を優先し据え置き）
+- `check_ptr_method` の統合（ptr は1メソッドのみなので今回は対象外）
+- `check_builtin` のグローバル関数（len, push, pop 等）の整理
+- prelude.mc のメソッド実装の変更（型チェックの仕組みのみ変更）
+- 新しい言語機能の追加
 
 ## 3. Target Users
-- moca 言語のユーザー（Map を使用するプログラムの作者）
-- moca コンパイラ / VM の開発者（Phase 2〜4 への土台）
+- moca 言語の開発者（コンパイラ保守者）
+- prelude.mc にメソッドを追加する人
 
 ## 4. Core User Flow
-- ユーザーは `map<string, int>` や `map<int, string>` のように型付きMapを使う
-- `m.put(key, val)`, `m.get(key)`, `m[key]`, `m[key] = val` 等の操作は、既存の desugar パスが K 型を見て `put_string` / `put_int` 等に自動書き換え済み
-- **変更点**: prelude から generic ディスパッチメソッド（`put/set/get/contains/remove`）を削除
-- **変更点**: ヘルパー関数 `_map_find_entry_int/string` / `_map_rehash_int/string` の引数型を `Map<any, any>` から適切な型に修正
-- **変更点**: basic テスト群（map_basic, map_collision, map_int_keys, map_iteration, map_resize）を `map<any, any>` から型付き Map に移行
-- **変更点**: `impl map` の `map::new()` を対処
-- **変更点**: desugar の `set` メソッドに対する型別書き換え対応を確認・追加
+1. 開発者が `std/prelude.mc` の `impl<T> Vec<T>` や `impl<K, V> Map<K, V>` にメソッドを追加する
+2. `typechecker.rs` の修正なしで、そのメソッドの型チェックが正しく動作する
+3. moca プログラムからそのメソッドを呼び出せる
 
 ## 5. Inputs & Outputs
-- **入力**: 既存の Map 実装（std/prelude.mc）、既存テスト群（tests/snapshots/basic/map_*.mc）
-- **出力**: `type_of()` を使わない Map 実装、型付き Map を使うテスト
+- **入力**: `impl<T> Vec<T>` / `impl<K, V> Map<K, V>` ブロック内のメソッドシグネチャ
+- **出力**: メソッド呼び出し時の自動的な型チェック（引数の型・個数、戻り値の型）
 
 ## 6. Tech Stack
-- Rust（コンパイラ）
-- moca（prelude/テスト）
-- テスト: `cargo test`（snapshot tests）
+- 言語: Rust（既存コードベース）
+- テスト: `cargo test`（既存の snapshot テスト + 新規テスト）
 
 ## 7. Rules & Constraints
-- 既存 snapshot テストの**外部挙動（出力）は維持**する（.stdout の内容は変わらない）
-- テストの .mc ファイルは型付きMap への書き換えが許容される
-- `cargo fmt && cargo check && cargo test && cargo clippy` が全パスすること
-- desugar パスの `specialize_map_method` は既に `put/get/contains/remove` → `put_int/put_string` 等の書き換えを行っている（変更不要の見込み）
-- desugar で `set` → `put_int/put_string` への書き換えが正しく動くか確認が必要
+- 既存の全 snapshot テストが変更なしでパスすること
+- primitive 型（int, float, bool, string）の `check_primitive_method` は変更しない（既に lookup テーブル方式）
+- Vec/Map の型パラメータ（`T`, `K`, `V`）が呼び出し側の具体型に正しく置換されること
+- 内部ヘルパー（`_find_entry_int`, `_rehash_int` 等）も自動導出の対象にする
+- `self` パラメータは型チェック時にスキップし、残りの引数で型チェックする（現行動作を維持）
 
 ## 8. Open Questions
-- `map::new()` の `impl map` ブロックが `map<any, any>` を返している。呼び出し側で型付きMap を使うなら不要になる可能性あり → 実際の使用状況を調べて判断
+- `register_impl_methods` で Vec/Map メソッドが `self.structs[name].methods` に登録される際、ジェネリック型パラメータがどう保持されるか → 実装時に調査
 
 ## 9. Acceptance Criteria
-1. prelude の `Map<K,V>` impl から `put(self, key: any, val: any)` が削除されている
-2. prelude の `Map<K,V>` impl から `set(self, key: any, val: any)` が削除されている
-3. prelude の `Map<K,V>` impl から `get(self, key: any) -> any` が削除されている
-4. prelude の `Map<K,V>` impl から `contains(self, key: any) -> bool` が削除されている
-5. prelude の `Map<K,V>` impl から `remove(self, key: any) -> bool` が削除されている
-6. `_map_find_entry_int/string` の引数が `Map<any, any>` ではなくなっている
-7. `_map_rehash_int/string` の引数が `Map<any, any>` ではなくなっている
-8. basic テスト群が型付き Map (`map<string, ...>` / `map<int, ...>`) を使用している
-9. 全テスト（`cargo test`）がパスする
-10. `cargo clippy` に警告がない
+1. `check_vec_method` 関数が `typechecker.rs` から削除されている
+2. `check_map_method` 関数が `typechecker.rs` から削除されている
+3. Vec のメソッド呼び出し（push, pop, get, set, len）の型チェックが `structs["Vec"].methods` のルックアップで行われている
+4. Map のメソッド呼び出し（put_int, get_int, contains_int, remove_int, keys, values, len, _find_entry_int, _rehash_int 等）の型チェックが `structs["Map"].methods` のルックアップで行われている
+5. 既存の全 snapshot テスト（basic, generics, errors, lint 等）がパスする
+6. `cargo clippy` が警告なしでパスする
+7. prelude.mc の Vec impl に新メソッド（例: `first`）を追加し、コンパイラ変更なしで型チェックが通ることを示す新テストが存在する
 
 ## 10. Verification Strategy
-- **進捗検証**: 各タスク完了後に `cargo check && cargo test` を実行
-- **達成検証**: `grep "type_of" std/prelude.mc` で Map メソッド内の type_of 使用がゼロ、`grep "key: any" std/prelude.mc` で Map メソッドに any 残留なし
-- **漏れ検出**: 全 Acceptance Criteria をチェックリストで確認
+
+- **進捗検証**: 各フェーズ完了後に `cargo test` を実行し、既存テストの回帰がないことを確認
+- **達成検証**: AC 1-7 のチェックリストを全て満たすこと。特に AC7（新メソッド追加テスト）が本リファクタの真の価値を証明する
+- **漏れ検出**: `check_vec_method` / `check_map_method` への参照が typechecker.rs に残っていないことを grep で確認
 
 ## 11. Test Plan
 
-### Scenario 1: 型付き Map<string, V> の基本操作
-- **Given**: `let m: map<string, int> = Map<string, int>::new();` で Map 作成
-- **When**: `m.put("key", 42)`, `m.get("key")`, `m.contains("key")`, `m.remove("key")` を実行
-- **Then**: desugar が put_string/get_string/contains_string/remove_string に書き換え、正しい結果を返す
+### Test 1: Vec メソッドの型チェックが自動導出で動作する
+- **Given**: 既存の `tests/snapshots/basic/simple_vec.mc`, `vec_push_realloc.mc`, `vector_index_syntax.mc` 等
+- **When**: `cargo test snapshot_basic` を実行
+- **Then**: 全テストがパスする
 
-### Scenario 2: 型付き Map<int, V> の基本操作
-- **Given**: `let m: map<int, string> = Map<int, string>::new();` で Map 作成
-- **When**: `m.put(1, "one")`, `m.get(1)`, `m.contains(1)`, `m.remove(1)` を実行
-- **Then**: desugar が put_int/get_int/contains_int/remove_int に書き換え、正しい結果を返す
+### Test 2: Map メソッドの型チェックが自動導出で動作する
+- **Given**: 既存の `tests/snapshots/basic/map_basic.mc`, `map_collision.mc`, `map_int_keys.mc`, `map_iteration.mc` 等
+- **When**: `cargo test snapshot_basic` を実行
+- **Then**: 全テストがパスする
 
-### Scenario 3: リサイズ後のデータ整合性
-- **Given**: 型付き Map に 20 エントリを追加（リサイズ発生）
-- **When**: 全エントリの存在確認と値の検証
-- **Then**: 全エントリが正しく取得でき、リサイズ後もデータが保持されている
+### Test 3: prelude にメソッド追加でコンパイラ変更不要
+- **Given**: `impl<T> Vec<T>` に `fun first(self) -> T` メソッドを追加
+- **When**: テストコードから `v.first()` を呼び出す
+- **Then**: `typechecker.rs` を変更せずに型チェックがパスし、正しい結果が得られる
 
 ---
 
 ## TODO
 
-- [ ] 1. desugar: `set` メソッドの型別書き換え対応を確認（`put_int`/`put_string` に書き換わるか）
-- [ ] 2. prelude: Map<K,V> impl から generic ディスパッチメソッド (put/set/get/contains/remove) を削除
-- [ ] 3. prelude: `_map_find_entry_int/string` と `_map_rehash_int/string` の引数型を `Map<any, any>` から修正
-- [ ] 4. prelude: `impl map` の `map::new()` を対処
-- [ ] 5. テスト: map_basic.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 6. テスト: map_collision.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 7. テスト: map_int_keys.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 8. テスト: map_iteration.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 9. テスト: map_resize.mc を型付き Map に移行（.stdout は変更なし）
-- [ ] 10. 全テスト通過確認 (`cargo fmt && cargo check && cargo test && cargo clippy`)
+- [ ] 1. 調査: `register_impl_methods` での Vec/Map メソッドの登録状況とジェネリック型パラメータの保持方法を確認
+- [ ] 2. Core: Vec メソッド呼び出しを `structs["Vec"].methods` ルックアップに切り替え、`check_vec_method` を削除
+- [ ] 3. Core: Map メソッド呼び出しを `structs["Map"].methods` ルックアップに切り替え、`check_map_method` を削除
+- [ ] 4. Test: prelude に Vec::first メソッドを追加し、コンパイラ変更なしで型チェックが通る新テストを追加
+- [ ] 5. Polish: 全テスト通過確認 (`cargo fmt && cargo check && cargo test && cargo clippy`)

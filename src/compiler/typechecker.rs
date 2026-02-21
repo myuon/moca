@@ -241,13 +241,36 @@ pub struct TypeChecker {
 
 impl TypeChecker {
     pub fn new(filename: &str) -> Self {
+        let mut structs = HashMap::new();
+
+        // Pre-register builtin generic types so impl block methods
+        // are stored in their StructInfo (just like user-defined structs).
+        structs.insert(
+            "Vec".to_string(),
+            StructInfo {
+                name: "Vec".to_string(),
+                type_params: vec!["T".to_string()],
+                fields: vec![],
+                methods: HashMap::new(),
+            },
+        );
+        structs.insert(
+            "Map".to_string(),
+            StructInfo {
+                name: "Map".to_string(),
+                type_params: vec!["K".to_string(), "V".to_string()],
+                fields: vec![],
+                methods: HashMap::new(),
+            },
+        );
+
         Self {
             filename: filename.to_string(),
             next_var_id: 0,
             errors: Vec::new(),
             functions: HashMap::new(),
             generic_functions: HashMap::new(),
-            structs: HashMap::new(),
+            structs,
             primitive_methods: HashMap::new(),
             interfaces: HashMap::new(),
             interface_impls: HashSet::new(),
@@ -950,7 +973,7 @@ impl TypeChecker {
     /// Type check an impl block.
     fn check_impl_block(&mut self, impl_block: &mut ImplBlock) {
         let struct_name = &impl_block.struct_name;
-        let is_builtin_type = struct_name == "vec" || struct_name == "map";
+        let is_builtin_type = matches!(struct_name.as_str(), "vec" | "map" | "Vec" | "Map");
         let is_primitive_type = matches!(struct_name.as_str(), "int" | "float" | "bool" | "string");
 
         // Get struct type for 'self'
@@ -962,6 +985,8 @@ impl TypeChecker {
                 "string" => Type::String,
                 _ => unreachable!(),
             })
+        } else if is_builtin_type {
+            None // Builtin types don't have a struct definition
         } else if let Some(info) = self.structs.get(struct_name).cloned() {
             // For generic structs, create GenericStruct with type params
             if !impl_block.type_params.is_empty() {
@@ -981,8 +1006,6 @@ impl TypeChecker {
                     fields: info.fields.clone(),
                 })
             }
-        } else if is_builtin_type {
-            None // Builtin types don't have a struct definition
         } else {
             return; // Error already reported in register_impl_methods
         };
@@ -1002,10 +1025,11 @@ impl TypeChecker {
                     .get(struct_name)
                     .and_then(|methods| methods.get(&method.name))
                     .cloned()
-            } else if is_builtin_type && !has_self {
-                // For builtin types, look up the function by {type}_{func} name
-                let func_name = format!("{}_{}", struct_name, method.name);
-                self.functions.get(&func_name).cloned()
+            } else if is_builtin_type {
+                // For builtin types (Vec/Map), skip body checking entirely.
+                // Bodies use low-level intrinsics that aren't type-checkable.
+                // Method signatures are already registered via register_impl_methods.
+                None
             } else {
                 // For struct methods, look up in the struct's method table
                 self.structs
@@ -2233,28 +2257,6 @@ impl TypeChecker {
                 // Write the object type directly to the AST node
                 *object_type = Some(resolved_obj_type.clone());
 
-                // Handle vec<T> methods
-                if let Type::Vector(elem_type) = &resolved_obj_type {
-                    return self.check_vec_method(method, args, elem_type, env, *span);
-                }
-
-                // Handle map<K, V> methods
-                if let Type::Map(key_type, value_type) = &resolved_obj_type {
-                    return self.check_map_method(method, args, key_type, value_type, env, *span);
-                }
-
-                // Handle Map<K, V> (GenericStruct form) methods
-                if let Type::GenericStruct {
-                    name, type_args, ..
-                } = &resolved_obj_type
-                    && name == "Map"
-                    && type_args.len() == 2
-                {
-                    let key_type = type_args[0].clone();
-                    let value_type = type_args[1].clone();
-                    return self.check_map_method(method, args, &key_type, &value_type, env, *span);
-                }
-
                 // Handle ptr<T> methods
                 if let Type::Ptr(ref elem) = resolved_obj_type {
                     return self.check_ptr_method(method, args, elem, env, *span);
@@ -2331,6 +2333,8 @@ impl TypeChecker {
 
                 // Get struct name and type args from object type
                 let (struct_name, type_args) = match &resolved_obj_type {
+                    Type::Vector(elem) => ("Vec".to_string(), vec![*elem.clone()]),
+                    Type::Map(key, val) => ("Map".to_string(), vec![*key.clone(), *val.clone()]),
                     Type::Struct { name, .. } => (name.clone(), Vec::new()),
                     Type::GenericStruct {
                         name, type_args, ..
@@ -2359,18 +2363,47 @@ impl TypeChecker {
 
                 // Look up method in struct's method table
                 let struct_info = self.structs.get(&struct_name).cloned();
-                let method_type = struct_info
+                let mut method_type = struct_info
                     .as_ref()
                     .and_then(|info| info.methods.get(method))
                     .cloned();
+
+                // Fallback for Map generic method names (put, get, contains, remove)
+                // The typechecker runs before desugar, so user code uses generic names
+                // but prelude only defines specialized versions (put_int, put_string, etc.)
+                if method_type.is_none() && struct_name == "Map" && !type_args.is_empty() {
+                    let suffix = match &type_args[0] {
+                        Type::Int => Some("int"),
+                        Type::String => Some("string"),
+                        _ => None,
+                    };
+                    if let Some(suffix) = suffix {
+                        let specialized = match method.as_str() {
+                            "put" | "set" => Some(format!("put_{}", suffix)),
+                            "get" => Some(format!("get_{}", suffix)),
+                            "contains" => Some(format!("contains_{}", suffix)),
+                            "remove" => Some(format!("remove_{}", suffix)),
+                            _ => None,
+                        };
+                        if let Some(ref specialized_name) = specialized {
+                            method_type = struct_info
+                                .as_ref()
+                                .and_then(|info| info.methods.get(specialized_name))
+                                .cloned();
+                        }
+                    }
+                }
 
                 match method_type {
                     Some(Type::Function { params, ret }) => {
                         // For generic structs, substitute type params with actual type args
                         let (params, ret) = if !type_args.is_empty() {
                             if let Some(ref info) = struct_info {
-                                let mut substituted_params = params;
-                                let mut substituted_ret = *ret.clone();
+                                // First, apply current substitution to resolve any Var bindings
+                                // (e.g., Var(17) → Param("V") from impl block body checking)
+                                let mut substituted_params: Vec<Type> =
+                                    params.iter().map(|p| self.substitution.apply(p)).collect();
+                                let mut substituted_ret = self.substitution.apply(&ret);
                                 for (param_name, type_arg) in
                                     info.type_params.iter().zip(type_args.iter())
                                 {
@@ -3049,98 +3082,6 @@ impl TypeChecker {
         }
     }
 
-    /// Type check method calls on vec<T>.
-    fn check_vec_method(
-        &mut self,
-        method: &str,
-        args: &mut [Expr],
-        elem_type: &Type,
-        env: &mut TypeEnv,
-        span: Span,
-    ) -> Type {
-        match method {
-            "push" => {
-                // push(value: T) -> nil
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!("vec.push expects 1 argument, got {}", args.len()),
-                        span,
-                    ));
-                    return Type::Nil;
-                }
-                let arg_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&arg_type, elem_type, args[0].span()) {
-                    self.errors.push(e);
-                }
-                Type::Nil
-            }
-            "pop" => {
-                // pop() -> T
-                if !args.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("vec.pop expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                self.substitution.apply(elem_type)
-            }
-            "get" => {
-                // get(index: int) -> T
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!("vec.get expects 1 argument, got {}", args.len()),
-                        span,
-                    ));
-                    return self.substitution.apply(elem_type);
-                }
-                let index_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&index_type, &Type::Int, args[0].span()) {
-                    self.errors.push(e);
-                }
-                self.substitution.apply(elem_type)
-            }
-            "set" => {
-                // set(index: int, value: T) -> nil
-                if args.len() != 2 {
-                    self.errors.push(TypeError::new(
-                        format!("vec.set expects 2 arguments, got {}", args.len()),
-                        span,
-                    ));
-                    return Type::Nil;
-                }
-                let index_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&index_type, &Type::Int, args[0].span()) {
-                    self.errors.push(e);
-                }
-                let value_type = self.infer_expr(&mut args[1], env);
-                if let Err(e) = self.unify(&value_type, elem_type, args[1].span()) {
-                    self.errors.push(e);
-                }
-                Type::Nil
-            }
-            "len" => {
-                // len() -> int
-                if !args.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("vec.len expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Type::Int
-            }
-            _ => {
-                self.errors.push(TypeError::new(
-                    format!("undefined method `{}` on vec<{}>", method, elem_type),
-                    span,
-                ));
-                for arg in args {
-                    self.infer_expr(arg, env);
-                }
-                self.fresh_var()
-            }
-        }
-    }
-
     /// Type check method calls on ptr<T>.
     fn check_ptr_method(
         &mut self,
@@ -3227,170 +3168,6 @@ impl TypeChecker {
             None => {
                 self.errors.push(TypeError::new(
                     format!("undefined method `{}` on `{}`", method, type_name),
-                    span,
-                ));
-                for arg in args {
-                    self.infer_expr(arg, env);
-                }
-                self.fresh_var()
-            }
-        }
-    }
-
-    /// Type check method calls on map<K, V>.
-    fn check_map_method(
-        &mut self,
-        method: &str,
-        args: &mut [Expr],
-        key_type: &Type,
-        value_type: &Type,
-        env: &mut TypeEnv,
-        span: Span,
-    ) -> Type {
-        match method {
-            "put" | "set" | "put_int" | "put_string" => {
-                // put/set/put_int/put_string(key: K, value: V) -> nil
-                if args.len() != 2 {
-                    self.errors.push(TypeError::new(
-                        format!("map.{} expects 2 arguments, got {}", method, args.len()),
-                        span,
-                    ));
-                    return Type::Nil;
-                }
-                let k_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
-                    self.errors.push(e);
-                }
-                let v_type = self.infer_expr(&mut args[1], env);
-                if let Err(e) = self.unify(&v_type, value_type, args[1].span()) {
-                    self.errors.push(e);
-                }
-                Type::Nil
-            }
-            "get" | "get_int" | "get_string" => {
-                // get(key: K) -> V
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!("map.get expects 1 argument, got {}", args.len()),
-                        span,
-                    ));
-                    return self.substitution.apply(value_type);
-                }
-                let k_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
-                    self.errors.push(e);
-                }
-                self.substitution.apply(value_type)
-            }
-            "contains" | "contains_int" | "contains_string" => {
-                // contains(key: K) -> bool
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!("map.contains expects 1 argument, got {}", args.len()),
-                        span,
-                    ));
-                    return Type::Bool;
-                }
-                let k_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
-                    self.errors.push(e);
-                }
-                Type::Bool
-            }
-            "remove" | "remove_int" | "remove_string" => {
-                // remove(key: K) -> bool
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!("map.remove expects 1 argument, got {}", args.len()),
-                        span,
-                    ));
-                    return Type::Bool;
-                }
-                let k_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&k_type, key_type, args[0].span()) {
-                    self.errors.push(e);
-                }
-                Type::Bool
-            }
-            "keys" => {
-                // keys() -> vec<K>
-                if !args.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("map.keys expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Type::Vector(Box::new(self.substitution.apply(key_type)))
-            }
-            "values" => {
-                // values() -> vec<V>
-                if !args.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("map.values expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Type::Vector(Box::new(self.substitution.apply(value_type)))
-            }
-            "len" => {
-                // len() -> int
-                if !args.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("map.len expects 0 arguments, got {}", args.len()),
-                        span,
-                    ));
-                }
-                Type::Int
-            }
-            "_find_entry_int" => {
-                // _find_entry_int(key: int) -> int (internal)
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!("map._find_entry_int expects 1 argument, got {}", args.len()),
-                        span,
-                    ));
-                    return Type::Int;
-                }
-                let k_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&k_type, &Type::Int, args[0].span()) {
-                    self.errors.push(e);
-                }
-                Type::Int
-            }
-            "_find_entry_string" => {
-                // _find_entry_string(key: string) -> int (internal)
-                if args.len() != 1 {
-                    self.errors.push(TypeError::new(
-                        format!(
-                            "map._find_entry_string expects 1 argument, got {}",
-                            args.len()
-                        ),
-                        span,
-                    ));
-                    return Type::Int;
-                }
-                let k_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&k_type, &Type::String, args[0].span()) {
-                    self.errors.push(e);
-                }
-                Type::Int
-            }
-            "_rehash_int" | "_rehash_string" => {
-                // _rehash_int() / _rehash_string() (internal)
-                if !args.is_empty() {
-                    self.errors.push(TypeError::new(
-                        format!("map.{} expects 0 arguments, got {}", method, args.len()),
-                        span,
-                    ));
-                }
-                Type::Nil
-            }
-            _ => {
-                self.errors.push(TypeError::new(
-                    format!(
-                        "undefined method `{}` on map<{}, {}>",
-                        method, key_type, value_type
-                    ),
                     span,
                 ));
                 for arg in args {
