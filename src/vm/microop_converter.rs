@@ -1706,7 +1706,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::UMul128Hi { dst, a, b });
                 vstack.push(Vse::Reg(dst));
             }
-            Op::PrintDebug => {
+            Op::ValueToString => {
                 let src = pop_vreg(
                     &mut vstack,
                     &mut micro_ops,
@@ -1720,7 +1720,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     &mut vreg_types,
                     ValueType::I64,
                 );
-                micro_ops.push(MicroOp::PrintDebug { dst, src });
+                micro_ops.push(MicroOp::ValueToString { dst, src });
                 vstack.push(Vse::Reg(dst));
             }
 

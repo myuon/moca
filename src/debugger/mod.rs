@@ -162,10 +162,12 @@ impl Debugger {
                     self.stack.push(Value::I64(-v));
                 }
             }
-            Op::PrintDebug => {
+            Op::ValueToString => {
                 if let Some(val) = self.stack.last() {
-                    self.output.push(self.format_value(val).to_string());
+                    let s = self.format_value(val).to_string();
+                    self.output.push(s);
                 }
+                // ValueToString pops value and pushes a string, but in debugger we simplify
                 self.stack.pop();
             }
             Op::Ret => {

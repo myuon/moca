@@ -491,9 +491,9 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
-    /// Print value to output and return original value.
-    /// dst = src (after printing src to output)
-    PrintDebug {
+    /// Convert any value to its string representation.
+    /// dst = to_string(src) (Ref to newly allocated heap string)
+    ValueToString {
         dst: VReg,
         src: VReg,
     },

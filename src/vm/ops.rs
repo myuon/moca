@@ -175,7 +175,7 @@ pub enum Op {
     // ========================================
     Syscall(usize, usize),
     GcHint(usize),
-    PrintDebug,
+    ValueToString,
     TypeOf,
     FloatToString,
     ParseInt,
@@ -316,7 +316,7 @@ impl Op {
             Op::HeapOffsetRef => "HeapOffsetRef",
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
-            Op::PrintDebug => "PrintDebug",
+            Op::ValueToString => "ValueToString",
             Op::TypeOf => "TypeOf",
             Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",

@@ -1,5 +1,5 @@
-// Basic asm block with PushInt and PrintDebug
+// Basic asm block with PushInt and ValueToString
 asm {
     __emit("PushInt", 42);
-    __emit("PrintDebug");
+    __emit("ValueToString");
 };
