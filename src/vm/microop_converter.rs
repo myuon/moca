@@ -1675,23 +1675,6 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::TypeDescLoad { dst, idx: *idx });
                 vstack.push(Vse::RegRef(dst));
             }
-            Op::FloatToString => {
-                let src = pop_vreg(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                );
-                let dst = alloc_temp(
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                    ValueType::Ref,
-                );
-                micro_ops.push(MicroOp::FloatToString { dst, src });
-                vstack.push(Vse::RegRef(dst));
-            }
             Op::UMul128Hi => {
                 let b = pop_vreg(
                     &mut vstack,

@@ -396,7 +396,6 @@ impl MicroOpJitCompiler {
                 | MicroOp::HeapLoadDyn { dst, .. }
                 | MicroOp::HeapLoad2 { dst, .. }
                 | MicroOp::StackPop { dst }
-                | MicroOp::FloatToString { dst, .. }
                 | MicroOp::ValueToString { dst, .. }
                 | MicroOp::HeapAlloc { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
@@ -570,7 +569,6 @@ impl MicroOpJitCompiler {
 
             // String operations
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
-            MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
             MicroOp::ValueToString { .. } => Err("ValueToString not supported in JIT".to_string()),
             // Heap allocation operations
             MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
@@ -1049,7 +1047,7 @@ impl MicroOpJitCompiler {
     }
 
     /// JitCallContext offset for jit_function_table pointer.
-    const JIT_FUNC_TABLE_OFFSET: u16 = 88;
+    const JIT_FUNC_TABLE_OFFSET: u16 = 80;
 
     /// Emit a function call that looks up the callee in the JIT function table at runtime.
     /// If the callee is compiled (entry != 0), calls it directly. Otherwise falls back to
@@ -1936,28 +1934,6 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit FloatToString: call float_to_string_helper(ctx, tag, payload) -> (tag, payload)
-    /// Reads source tag from shadow area.
-    fn emit_float_to_string(&mut self, dst: &VReg, src: &VReg) -> Result<(), String> {
-        let src_shadow_off = self.shadow_tag_offset(src);
-        let dst_shadow_off = self.shadow_tag_offset(dst);
-        {
-            let mut asm = AArch64Assembler::new(&mut self.buf);
-            asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
-            asm.mov(Reg::X0, regs::VM_CTX);
-            // X1 = tag from shadow area
-            asm.ldr(Reg::X1, regs::FRAME_BASE, src_shadow_off);
-            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_offset(src));
-            asm.ldr(regs::TMP4, regs::VM_CTX, 72);
-            asm.blr(regs::TMP4);
-            asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
-            // Store payload to frame, tag to shadow
-            asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(dst));
-            asm.str(Reg::X0, regs::FRAME_BASE, dst_shadow_off);
-        }
-        Ok(())
-    }
-
     // ==================== Heap Allocation ====================
 
     /// Emit HeapAllocDynSimple: call helper(ctx, size_payload) -> (tag, payload)
@@ -1968,7 +1944,7 @@ impl MicroOpJitCompiler {
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(size));
-            asm.ldr(regs::TMP4, regs::VM_CTX, 80);
+            asm.ldr(regs::TMP4, regs::VM_CTX, 72);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
             // Store payload to frame, tag to shadow
@@ -1988,8 +1964,8 @@ impl MicroOpJitCompiler {
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.mov_imm(Reg::X1, size as u16);
-            // Load heap_alloc_dyn_simple_helper from JitCallContext offset 80
-            asm.ldr(regs::TMP4, regs::VM_CTX, 80);
+            // Load heap_alloc_dyn_simple_helper from JitCallContext offset 72
+            asm.ldr(regs::TMP4, regs::VM_CTX, 72);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
             // Store payload to frame, tag to shadow
