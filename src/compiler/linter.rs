@@ -180,6 +180,12 @@ fn lint_statement(
             lint_expr(expr, rules, diagnostics);
         }
         Statement::Const { .. } => {}
+        Statement::MatchDyn { expr, arms, .. } => {
+            lint_expr(expr, rules, diagnostics);
+            for arm in arms {
+                lint_block(&arm.body, rules, diagnostics);
+            }
+        }
     }
 }
 
@@ -203,6 +209,9 @@ fn lint_expr(expr: &Expr, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Dia
         }
         Expr::Unary { operand, .. } => {
             lint_expr(operand, rules, diagnostics);
+        }
+        Expr::AsDyn { expr: inner, .. } => {
+            lint_expr(inner, rules, diagnostics);
         }
         Expr::Binary { left, right, .. } => {
             lint_expr(left, rules, diagnostics);
@@ -653,6 +662,14 @@ fn collect_usages_stmt(stmt: &Statement, used: &mut HashSet<String>) {
             collect_usages_expr(expr, used);
         }
         Statement::Const { .. } => {}
+        Statement::MatchDyn { expr, arms, .. } => {
+            collect_usages_expr(expr, used);
+            for arm in arms {
+                for s in &arm.body.statements {
+                    collect_usages_stmt(s, used);
+                }
+            }
+        }
     }
 }
 
@@ -676,6 +693,9 @@ fn collect_usages_expr(expr: &Expr, used: &mut HashSet<String>) {
         }
         Expr::Unary { operand, .. } => {
             collect_usages_expr(operand, used);
+        }
+        Expr::AsDyn { expr: inner, .. } => {
+            collect_usages_expr(inner, used);
         }
         Expr::Binary { left, right, .. } => {
             collect_usages_expr(left, used);

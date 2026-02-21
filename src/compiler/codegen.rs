@@ -37,6 +37,9 @@ pub struct Codegen {
     /// Tracks total locals count for the current function being compiled
     /// (grows as inline expansions add locals)
     current_locals_count: usize,
+    /// Type table for dyn runtime type information.
+    /// Populated during codegen; stored in the Chunk for VM use.
+    type_table: Vec<Type>,
 }
 
 impl Default for Codegen {
@@ -61,6 +64,7 @@ impl Codegen {
             local_offset: 0,
             inline_return_patches_stack: Vec::new(),
             current_locals_count: 0,
+            type_table: Vec::new(),
         }
     }
 
@@ -80,6 +84,7 @@ impl Codegen {
             local_offset: 0,
             inline_return_patches_stack: Vec::new(),
             current_locals_count: 0,
+            type_table: Vec::new(),
         }
     }
 
@@ -90,6 +95,7 @@ impl Codegen {
             Type::Float => ValueType::F64,
             Type::Bool => ValueType::I32,
             Type::String => ValueType::Ref,
+            Type::Dyn => ValueType::Ref,
             Type::Array(_)
             | Type::Vector(_)
             | Type::Map(_, _)
@@ -101,6 +107,17 @@ impl Codegen {
             Type::Nil => ValueType::Ref,
             _ => ValueType::I64, // Default to I64 for unknown types
         }
+    }
+
+    /// Register a type in the type table, deduplicating by equality.
+    /// Returns the index into the type table.
+    fn register_type(&mut self, ty: &Type) -> usize {
+        if let Some(idx) = self.type_table.iter().position(|t| t == ty) {
+            return idx;
+        }
+        let idx = self.type_table.len();
+        self.type_table.push(ty.clone());
+        idx
     }
 
     fn infer_index_element_type(object_type: &Option<Type>) -> ValueType {
@@ -176,6 +193,7 @@ impl Codegen {
             ResolvedExpr::CaptureStore { .. } => ValueType::Ref, // HeapStore result
             ResolvedExpr::RefCellNew { .. } => ValueType::Ref,   // Returns a Ref
             ResolvedExpr::RefCellLoad { .. } => ValueType::I64,  // Default; dynamic
+            ResolvedExpr::AsDyn { .. } => ValueType::Ref,
         }
     }
 
@@ -234,6 +252,16 @@ impl Codegen {
                 for s in catch_block {
                     if let Some(vt) = self.scan_return_type(s) {
                         return Some(vt);
+                    }
+                }
+                None
+            }
+            ResolvedStatement::MatchDyn { arms, .. } => {
+                for arm in arms {
+                    for s in &arm.body {
+                        if let Some(vt) = self.scan_return_type(s) {
+                            return Some(vt);
+                        }
                     }
                 }
                 None
@@ -356,6 +384,7 @@ impl Codegen {
             main: main_func,
             strings: self.strings.clone(),
             debug,
+            type_table: self.type_table.clone(),
         })
     }
 
@@ -688,6 +717,70 @@ impl Codegen {
                 ops.push(Op::LocalGet(*slot + self.local_offset));
                 self.compile_expr(value, ops)?;
                 ops.push(Op::HeapStore(0));
+            }
+            ResolvedStatement::MatchDyn {
+                expr,
+                dyn_slot,
+                arms,
+            } => {
+                // Compile the dyn expression and store in a temporary slot
+                self.compile_expr(expr, ops)?;
+                ops.push(Op::LocalSet(*dyn_slot + self.local_offset));
+
+                let mut end_jumps = Vec::new();
+
+                for (i, arm) in arms.iter().enumerate() {
+                    if let Some(ref arm_type) = arm.arm_type {
+                        // Typed arm: check type_id
+                        let type_id = self.register_type(arm_type);
+
+                        // Load the dyn object and get its type_id (slot 0)
+                        ops.push(Op::LocalGet(*dyn_slot + self.local_offset));
+                        ops.push(Op::HeapLoad(0));
+                        ops.push(Op::I64Const(type_id as i64));
+                        ops.push(Op::I64Eq);
+
+                        // If type doesn't match, jump to next arm
+                        let jump_to_next = ops.len();
+                        ops.push(Op::BrIfFalse(0)); // Placeholder
+
+                        // Type matches: extract the value (slot 1) and store in var slot
+                        if let Some(var_slot) = arm.var_slot {
+                            ops.push(Op::LocalGet(*dyn_slot + self.local_offset));
+                            ops.push(Op::HeapLoad(1));
+                            ops.push(Op::LocalSet(var_slot + self.local_offset));
+                        }
+
+                        // Compile body
+                        for stmt in &arm.body {
+                            self.compile_statement(stmt, ops)?;
+                        }
+
+                        // Jump to end of match
+                        end_jumps.push(ops.len());
+                        ops.push(Op::Jmp(0)); // Placeholder
+
+                        // Patch jump to next arm
+                        let next_arm_start = ops.len();
+                        ops[jump_to_next] = Op::BrIfFalse(next_arm_start);
+                    } else {
+                        // Default arm: no type check, just compile body
+                        for stmt in &arm.body {
+                            self.compile_statement(stmt, ops)?;
+                        }
+                        // If this is not the last arm, jump to end
+                        if i < arms.len() - 1 {
+                            end_jumps.push(ops.len());
+                            ops.push(Op::Jmp(0)); // Placeholder
+                        }
+                    }
+                }
+
+                // Patch all end jumps
+                let end = ops.len();
+                for jump_idx in end_jumps {
+                    ops[jump_idx] = Op::Jmp(end);
+                }
             }
         }
 
@@ -1320,6 +1413,12 @@ impl Codegen {
                 // Load value from RefCell: LocalGet(slot) gives the RefCell ref, HeapLoad(0) reads the value
                 ops.push(Op::LocalGet(*slot + self.local_offset));
                 ops.push(Op::HeapLoad(0));
+            }
+            ResolvedExpr::AsDyn { expr, inner_type } => {
+                self.compile_expr(expr, ops)?;
+                let type_id = self.register_type(inner_type);
+                ops.push(Op::I64Const(type_id as i64));
+                ops.push(Op::DynBox);
             }
         }
 

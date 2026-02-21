@@ -58,6 +58,7 @@ fn mangle_type(ty: &Type) -> String {
         Type::Nil => "nil".to_string(),
         Type::Ptr(elem) => format!("ptr_{}", mangle_type(elem)),
         Type::Any => "any".to_string(),
+        Type::Dyn => "dyn".to_string(),
         Type::Array(elem) => format!("array_{}", mangle_type(elem)),
         Type::Vector(elem) => format!("vec_{}", mangle_type(elem)),
         Type::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
@@ -239,6 +240,12 @@ impl InstantiationCollector {
                 self.collect_expr(expr);
             }
             Statement::Const { .. } => {}
+            Statement::MatchDyn { expr, arms, .. } => {
+                self.collect_expr(expr);
+                for arm in arms {
+                    self.collect_block(&arm.body);
+                }
+            }
         }
     }
 
@@ -356,6 +363,9 @@ impl InstantiationCollector {
             }
             Expr::Unary { operand, .. } => {
                 self.collect_expr(operand);
+            }
+            Expr::AsDyn { expr: inner, .. } => {
+                self.collect_expr(inner);
             }
             Expr::Binary { left, right, .. } => {
                 self.collect_expr(left);
@@ -718,6 +728,7 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
             type_args: vec![type_to_annotation(elem)],
         },
         Type::Any => TypeAnnotation::Named("any".to_string()),
+        Type::Dyn => TypeAnnotation::Named("dyn".to_string()),
         Type::Array(elem) => TypeAnnotation::Array(Box::new(type_to_annotation(elem))),
         Type::Vector(elem) => TypeAnnotation::Vec(Box::new(type_to_annotation(elem))),
         Type::Map(key, value) => TypeAnnotation::Map(
@@ -868,6 +879,22 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
             init: init.clone(),
             span: *span,
         },
+        Statement::MatchDyn { expr, arms, span } => Statement::MatchDyn {
+            expr: substitute_expr(expr, type_map),
+            arms: arms
+                .iter()
+                .map(|arm| crate::compiler::ast::MatchDynArm {
+                    var: arm.var.clone(),
+                    type_annotation: arm
+                        .type_annotation
+                        .as_ref()
+                        .map(|ta| substitute_type_annotation(ta, type_map)),
+                    body: substitute_block(&arm.body, type_map),
+                    span: arm.span,
+                })
+                .collect(),
+            span: *span,
+        },
     }
 }
 
@@ -970,6 +997,17 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::Unary {
             op: *op,
             operand: Box::new(substitute_expr(operand, type_map)),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
+        Expr::AsDyn {
+            expr: inner,
+            inner_type,
+            span,
+            inferred_type,
+        } => Expr::AsDyn {
+            expr: Box::new(substitute_expr(inner, type_map)),
+            inner_type: inner_type.clone(),
             span: *span,
             inferred_type: inferred_type.clone(),
         },
@@ -1350,6 +1388,19 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
             init: init.clone(),
             span: *span,
         },
+        Statement::MatchDyn { expr, arms, span } => Statement::MatchDyn {
+            expr: rewrite_expr(expr, instantiations),
+            arms: arms
+                .iter()
+                .map(|arm| crate::compiler::ast::MatchDynArm {
+                    var: arm.var.clone(),
+                    type_annotation: arm.type_annotation.clone(),
+                    body: rewrite_block(&arm.body, instantiations),
+                    span: arm.span,
+                })
+                .collect(),
+            span: *span,
+        },
     }
 }
 
@@ -1496,6 +1547,17 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
         } => Expr::Unary {
             op: *op,
             operand: Box::new(rewrite_expr(operand, instantiations)),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
+        Expr::AsDyn {
+            expr: inner,
+            inner_type,
+            span,
+            inferred_type,
+        } => Expr::AsDyn {
+            expr: Box::new(rewrite_expr(inner, instantiations)),
+            inner_type: inner_type.clone(),
             span: *span,
             inferred_type: inferred_type.clone(),
         },

@@ -194,6 +194,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         // Serialize it
@@ -268,6 +269,7 @@ mod tests {
             },
             strings: vec!["test".to_string()],
             debug: None,
+            type_table: vec![],
         };
 
         // Use a temp file

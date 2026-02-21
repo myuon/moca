@@ -2719,6 +2719,7 @@ impl VM {
                                 ObjectKind::String => "string",
                                 ObjectKind::Array => "array",
                                 ObjectKind::Slots => "slots",
+                                ObjectKind::Dyn => "dyn",
                             }
                         } else {
                             "unknown"
@@ -2726,6 +2727,15 @@ impl VM {
                     }
                 };
                 let r = self.heap.alloc_string(type_name.to_string())?;
+                self.stack.push(Value::Ref(r));
+            }
+            Op::DynBox => {
+                use crate::vm::heap::ObjectKind;
+                let type_id = self.stack.pop().ok_or("stack underflow")?;
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let r = self
+                    .heap
+                    .alloc_slots_with_kind(vec![type_id, value], ObjectKind::Dyn)?;
                 self.stack.push(Value::Ref(r));
             }
             Op::FloatToString => {
@@ -2810,6 +2820,7 @@ impl VM {
                         main: wrapper_main,
                         strings: chunk_clone.strings.clone(),
                         debug: None,
+                        type_table: chunk_clone.type_table.clone(),
                     };
 
                     match vm.run_and_get_result(&thread_chunk) {
@@ -4245,6 +4256,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let mut vm = VM::new();
@@ -4267,6 +4279,7 @@ mod tests {
             },
             strings,
             debug: None,
+            type_table: vec![],
         };
 
         let mut vm = VM::new();
@@ -4480,6 +4493,7 @@ mod tests {
             },
             strings: vec![path_str.clone(), "hello".to_string()],
             debug: None,
+            type_table: vec![],
         };
 
         let mut vm = VM::new();
@@ -4567,6 +4581,7 @@ mod tests {
             },
             strings: vec![path_str.clone()],
             debug: None,
+            type_table: vec![],
         };
 
         let mut vm = VM::new();
@@ -4640,6 +4655,7 @@ mod tests {
             },
             strings: vec![path_str.clone()],
             debug: None,
+            type_table: vec![],
         };
 
         let mut vm = VM::new();
@@ -4811,6 +4827,7 @@ mod tests {
             },
             strings: vec!["127.0.0.1".to_string(), http_request],
             debug: None,
+            type_table: vec![],
         };
 
         let mut vm = VM::new();

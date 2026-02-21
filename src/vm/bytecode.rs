@@ -148,6 +148,7 @@ pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
         main,
         strings,
         debug,
+        type_table: Vec::new(),
     })
 }
 
@@ -414,6 +415,7 @@ const OP_I64_SHR_U: u8 = 115;
 const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
+const OP_DYN_BOX: u8 = 120;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -635,6 +637,9 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_CALL_INDIRECT])?;
             write_u32(w, *argc as u32)?;
         }
+
+        // Dyn boxing
+        Op::DynBox => w.write_all(&[OP_DYN_BOX])?,
     }
     Ok(())
 }
@@ -803,6 +808,9 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // Closures
         OP_CALL_INDIRECT => Op::CallIndirect(read_u32(r)? as usize),
 
+        // Dyn boxing
+        OP_DYN_BOX => Op::DynBox,
+
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
     Ok(op)
@@ -970,6 +978,7 @@ mod tests {
             },
             strings: vec!["hello".to_string(), "world".to_string()],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);
@@ -1010,6 +1019,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);
@@ -1050,6 +1060,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);
@@ -1239,6 +1250,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);
@@ -1277,6 +1289,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);
@@ -1312,6 +1325,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);
@@ -1346,6 +1360,7 @@ mod tests {
             },
             strings: vec![],
             debug: None,
+            type_table: vec![],
         };
 
         let bytes = serialize(&chunk);

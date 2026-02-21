@@ -120,10 +120,14 @@ impl Substitution {
             },
             // Type parameters are unchanged (they are not inference variables)
             Type::Param { .. } => ty.clone(),
-            // Primitive types and Any are unchanged
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Nil | Type::Any => {
-                ty.clone()
-            }
+            // Primitive types, Any, and Dyn are unchanged
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::String
+            | Type::Nil
+            | Type::Any
+            | Type::Dyn => ty.clone(),
         }
     }
 
@@ -261,6 +265,7 @@ impl TypeChecker {
                     "string" => Ok(Type::String),
                     "nil" => Ok(Type::Nil),
                     "any" => Ok(Type::Any),
+                    "dyn" => Ok(Type::Dyn),
                     _ => {
                         // Check if it's a type parameter in scope
                         if self.current_type_params.contains(name) {
@@ -386,7 +391,8 @@ impl TypeChecker {
             | (Type::Float, Type::Float)
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
-            | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
+            | (Type::Nil, Type::Nil)
+            | (Type::Dyn, Type::Dyn) => Ok(Substitution::new()),
 
             // Ptr<T> unification
             (Type::Ptr(a), Type::Ptr(b)) => self.unify(a, b, span),
@@ -1286,6 +1292,38 @@ impl TypeChecker {
                 env.exit_scope();
                 Type::Nil
             }
+
+            Statement::MatchDyn { expr, arms, span } => {
+                let expr_type = self.infer_expr(expr, env);
+                let resolved = self.substitution.apply(&expr_type);
+                if let Err(e) = self.unify(&resolved, &Type::Dyn, *span) {
+                    self.errors.push(e);
+                }
+                for arm in arms.iter_mut() {
+                    if let Some(type_ann) = &arm.type_annotation {
+                        match self.resolve_type_annotation(type_ann, arm.span) {
+                            Ok(arm_type) => {
+                                env.enter_scope();
+                                env.bind(arm.var.clone(), arm_type);
+                                self.infer_block(&mut arm.body, env);
+                                env.exit_scope();
+                            }
+                            Err(e) => {
+                                self.errors.push(e);
+                                env.enter_scope();
+                                self.infer_block(&mut arm.body, env);
+                                env.exit_scope();
+                            }
+                        }
+                    } else {
+                        // Default arm ("_") - no variable binding
+                        env.enter_scope();
+                        self.infer_block(&mut arm.body, env);
+                        env.exit_scope();
+                    }
+                }
+                Type::Nil
+            }
         }
     }
 
@@ -1547,6 +1585,16 @@ impl TypeChecker {
                         Type::Bool
                     }
                 }
+            }
+
+            Expr::AsDyn {
+                expr: inner,
+                inner_type,
+                ..
+            } => {
+                let inferred = self.infer_expr(inner, env);
+                *inner_type = Some(inferred);
+                Type::Dyn
             }
 
             Expr::Binary {

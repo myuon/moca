@@ -14,7 +14,7 @@ use super::Value;
 // - Bit 63: marked flag for GC
 // - Bit 62: free flag (1 = free block in free list, 0 = allocated)
 // - Bits 30-61: slot count (max 2^32 - 1 slots)
-// - Bits 28-29: object kind (0=slots, 1=string, 2=array, 3=reserved)
+// - Bits 28-29: object kind (0=slots, 1=string, 2=array, 3=dyn)
 // - Bits 0-27: reserved for future use
 //
 // Free block layout:
@@ -36,7 +36,8 @@ const HEADER_KIND_MASK: u64 = 0x3 << HEADER_KIND_SHIFT;
 pub enum ObjectKind {
     Slots = 0,  // Default: structs, vectors, etc.
     String = 1, // String objects
-    Array = 2,  // Arrays (for future use)
+    Array = 2,  // Arrays
+    Dyn = 3,    // Dyn boxed value with runtime type info
 }
 
 impl ObjectKind {
@@ -44,6 +45,7 @@ impl ObjectKind {
         match value {
             1 => ObjectKind::String,
             2 => ObjectKind::Array,
+            3 => ObjectKind::Dyn,
             _ => ObjectKind::Slots,
         }
     }

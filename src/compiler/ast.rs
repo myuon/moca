@@ -175,6 +175,24 @@ pub enum Statement {
         init: Expr,
         span: Span,
     },
+    /// Type switch on dyn value: `match dyn expr { v: int => { ... } _ => { ... } }`
+    MatchDyn {
+        expr: Expr,
+        arms: Vec<MatchDynArm>,
+        span: Span,
+    },
+}
+
+/// A single arm in a match dyn statement.
+#[derive(Debug, Clone)]
+pub struct MatchDynArm {
+    /// Variable name bound in this arm (or "_" for default)
+    pub var: String,
+    /// Type annotation (None for default "_" arm)
+    pub type_annotation: Option<TypeAnnotation>,
+    /// Body block
+    pub body: Block,
+    pub span: Span,
 }
 
 /// A part of a string interpolation expression.
@@ -336,6 +354,14 @@ pub enum Expr {
         span: Span,
         inferred_type: Option<Type>,
     },
+    /// Cast to dyn: `expr as dyn`
+    AsDyn {
+        expr: Box<Expr>,
+        /// Type of the inner expression (set by typechecker)
+        inner_type: Option<Type>,
+        span: Span,
+        inferred_type: Option<Type>,
+    },
 }
 
 impl Expr {
@@ -362,6 +388,7 @@ impl Expr {
             Expr::Lambda { span, .. } => *span,
             Expr::CallExpr { span, .. } => *span,
             Expr::StringInterpolation { span, .. } => *span,
+            Expr::AsDyn { span, .. } => *span,
         }
     }
 
@@ -387,7 +414,8 @@ impl Expr {
             | Expr::NewLiteral { inferred_type, .. }
             | Expr::Block { inferred_type, .. }
             | Expr::Lambda { inferred_type, .. }
-            | Expr::CallExpr { inferred_type, .. } => *inferred_type = Some(ty),
+            | Expr::CallExpr { inferred_type, .. }
+            | Expr::AsDyn { inferred_type, .. } => *inferred_type = Some(ty),
             Expr::Asm(_) => {}
         }
     }
@@ -414,7 +442,8 @@ impl Expr {
             | Expr::Block { inferred_type, .. }
             | Expr::Lambda { inferred_type, .. }
             | Expr::CallExpr { inferred_type, .. }
-            | Expr::StringInterpolation { inferred_type, .. } => inferred_type.as_ref(),
+            | Expr::StringInterpolation { inferred_type, .. }
+            | Expr::AsDyn { inferred_type, .. } => inferred_type.as_ref(),
             Expr::Asm(_) => None,
         }
     }

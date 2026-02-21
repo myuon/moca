@@ -224,6 +224,12 @@ impl SymbolTable {
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }
+            Statement::MatchDyn { expr, arms, .. } => {
+                self.collect_expr(expr);
+                for arm in arms {
+                    self.collect_block(&arm.body);
+                }
+            }
         }
     }
 
@@ -247,6 +253,9 @@ impl SymbolTable {
             }
             Expr::Unary { operand, .. } => {
                 self.collect_expr(operand);
+            }
+            Expr::AsDyn { expr: inner, .. } => {
+                self.collect_expr(inner);
             }
             Expr::Binary { left, right, .. } => {
                 self.collect_expr(left);

@@ -177,6 +177,9 @@ pub enum Op {
     GcHint(usize),
     Debug,
     TypeOf,
+    /// Box a value as dyn: pops type_id (i64), pops value, allocates Dyn object.
+    /// Stack: [value, type_id] -> [ref]
+    DynBox,
     FloatToString,
     ParseInt,
     UMul128Hi,
@@ -318,6 +321,7 @@ impl Op {
             Op::GcHint(_) => "GcHint",
             Op::Debug => "Debug",
             Op::TypeOf => "TypeOf",
+            Op::DynBox => "DynBox",
             Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",
             Op::UMul128Hi => "UMul128Hi",

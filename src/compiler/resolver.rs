@@ -100,6 +100,23 @@ pub enum ResolvedStatement {
         slot: usize,
         value: ResolvedExpr,
     },
+    /// Type switch on a dyn value.
+    MatchDyn {
+        expr: ResolvedExpr,
+        dyn_slot: usize,
+        arms: Vec<ResolvedMatchDynArm>,
+    },
+}
+
+/// A single arm in a resolved match dyn statement.
+#[derive(Debug, Clone)]
+pub struct ResolvedMatchDynArm {
+    /// Slot for the typed variable (None for default arm).
+    pub var_slot: Option<usize>,
+    /// The concrete type for this arm (None for default arm).
+    pub arm_type: Option<Type>,
+    /// Resolved body statements.
+    pub body: Vec<ResolvedStatement>,
 }
 
 /// Information about a captured variable in a closure.
@@ -238,6 +255,11 @@ pub enum ResolvedExpr {
     /// Compiles to: LocalGet(slot) + HeapLoad(0)
     RefCellLoad {
         slot: usize,
+    },
+    /// Cast to dyn: `expr as dyn`
+    AsDyn {
+        expr: Box<ResolvedExpr>,
+        inner_type: Type,
     },
 }
 
@@ -748,6 +770,36 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Convert a TypeAnnotation to a Type for match dyn arm type comparison.
+    fn resolve_type_annotation_to_type(&self, ann: &TypeAnnotation) -> Type {
+        match ann {
+            TypeAnnotation::Named(name) => match name.as_str() {
+                "int" => Type::Int,
+                "float" => Type::Float,
+                "bool" => Type::Bool,
+                "string" => Type::String,
+                "nil" => Type::Nil,
+                "any" => Type::Any,
+                "dyn" => Type::Dyn,
+                _ => Type::Struct {
+                    name: name.clone(),
+                    fields: vec![],
+                },
+            },
+            TypeAnnotation::Array(elem) => {
+                Type::Array(Box::new(self.resolve_type_annotation_to_type(elem)))
+            }
+            TypeAnnotation::Vec(elem) => {
+                Type::Vector(Box::new(self.resolve_type_annotation_to_type(elem)))
+            }
+            TypeAnnotation::Map(key, val) => Type::Map(
+                Box::new(self.resolve_type_annotation_to_type(key)),
+                Box::new(self.resolve_type_annotation_to_type(val)),
+            ),
+            _ => Type::Any,
+        }
+    }
+
     /// Get struct name from a ResolvedExpr if it evaluates to a struct
     fn get_struct_name(&self, expr: &ResolvedExpr) -> Option<String> {
         match expr {
@@ -973,6 +1025,12 @@ impl<'a> Resolver<'a> {
                 unreachable!("ForRange should be desugared before resolution")
             }
             Statement::Const { .. } => {}
+            Statement::MatchDyn { expr, arms, .. } => {
+                Self::scan_expr_for_lambdas(expr, var_names, captured);
+                for arm in arms {
+                    Self::scan_lambdas_for_captures(&arm.body.statements, var_names, captured);
+                }
+            }
         }
     }
 
@@ -1320,6 +1378,52 @@ impl<'a> Resolver<'a> {
                     catch_block: catch_resolved,
                 })
             }
+            Statement::MatchDyn {
+                expr,
+                arms,
+                span: _,
+            } => {
+                let resolved_expr = self.resolve_expr(expr, scope)?;
+
+                // Allocate a temporary slot for the dyn reference
+                scope.enter_scope();
+                let dyn_slot = scope.declare("__match_dyn_tmp".to_string(), false);
+
+                let mut resolved_arms = Vec::new();
+                for arm in arms {
+                    if let Some(ref type_ann) = arm.type_annotation {
+                        // Typed arm: allocate a slot for the variable
+                        scope.enter_scope();
+                        let var_slot = scope.declare(arm.var.clone(), false);
+                        let arm_type = self.resolve_type_annotation_to_type(type_ann);
+                        let body_resolved = self.resolve_statements(arm.body.statements, scope)?;
+                        scope.exit_scope();
+                        resolved_arms.push(ResolvedMatchDynArm {
+                            var_slot: Some(var_slot),
+                            arm_type: Some(arm_type),
+                            body: body_resolved,
+                        });
+                    } else {
+                        // Default arm ("_"): no variable binding
+                        scope.enter_scope();
+                        let body_resolved = self.resolve_statements(arm.body.statements, scope)?;
+                        scope.exit_scope();
+                        resolved_arms.push(ResolvedMatchDynArm {
+                            var_slot: None,
+                            arm_type: None,
+                            body: body_resolved,
+                        });
+                    }
+                }
+
+                scope.exit_scope();
+
+                Ok(ResolvedStatement::MatchDyn {
+                    expr: resolved_expr,
+                    dyn_slot,
+                    arms: resolved_arms,
+                })
+            }
         }
     }
 
@@ -1387,6 +1491,18 @@ impl<'a> Resolver<'a> {
                 Ok(ResolvedExpr::Unary {
                     op,
                     operand: Box::new(operand),
+                })
+            }
+            Expr::AsDyn {
+                expr: inner,
+                inner_type,
+                ..
+            } => {
+                let inner_resolved = self.resolve_expr(*inner, scope)?;
+                let inner_ty = inner_type.unwrap_or(Type::Dyn);
+                Ok(ResolvedExpr::AsDyn {
+                    expr: Box::new(inner_resolved),
+                    inner_type: inner_ty,
                 })
             }
             Expr::Binary {
@@ -1919,6 +2035,12 @@ impl<'a> Resolver<'a> {
             ResolvedStatement::RefCellStore { value, .. } => {
                 self.expr_calls_function(value, target_index)
             }
+            ResolvedStatement::MatchDyn { expr, arms, .. } => {
+                self.expr_calls_function(expr, target_index)
+                    || arms
+                        .iter()
+                        .any(|arm| self.body_calls_function(&arm.body, target_index))
+            }
         }
     }
 
@@ -2235,6 +2357,14 @@ fn collect_free_vars_statement(
         Statement::Expr { expr, .. } => {
             collect_free_vars_expr(expr, bound, free);
         }
+        Statement::MatchDyn { expr, arms, .. } => {
+            collect_free_vars_expr(expr, bound, free);
+            for arm in arms {
+                for s in &arm.body.statements {
+                    collect_free_vars_statement(s, bound, free);
+                }
+            }
+        }
     }
 }
 
@@ -2260,6 +2390,7 @@ fn collect_free_vars_expr(
         }
         Expr::Field { object, .. } => collect_free_vars_expr(object, bound, free),
         Expr::Unary { operand, .. } => collect_free_vars_expr(operand, bound, free),
+        Expr::AsDyn { expr: inner, .. } => collect_free_vars_expr(inner, bound, free),
         Expr::Binary { left, right, .. } => {
             collect_free_vars_expr(left, bound, free);
             collect_free_vars_expr(right, bound, free);

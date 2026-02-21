@@ -322,6 +322,31 @@ impl<'a> AstPrinter<'a> {
                 self.write_indent_with(parent_prefix);
                 self.print_expr(init, "└── ", true, parent_prefix);
             }
+
+            Statement::MatchDyn { expr, arms, .. } => {
+                self.write_prefixed(prefix, "MatchDyn");
+                self.newline();
+                self.write_indent_with(parent_prefix);
+                self.print_expr(expr, "├── expr: ", false, parent_prefix);
+                for (i, arm) in arms.iter().enumerate() {
+                    let is_last = i == arms.len() - 1;
+                    let arm_prefix = if is_last { "└── " } else { "├── " };
+                    let arm_label = if let Some(ref ta) = arm.type_annotation {
+                        format!("{}: {}", arm.var, ta)
+                    } else {
+                        format!("_ ({})", arm.var)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.write(&format!("{}arm: {}", arm_prefix, arm_label));
+                    self.newline();
+                    let arm_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.print_block_contents(&arm.body, &arm_child);
+                }
+            }
         }
     }
 
@@ -414,6 +439,14 @@ impl<'a> AstPrinter<'a> {
                 self.newline();
                 self.write_indent_with(&child_prefix);
                 self.print_expr(operand, "└── ", true, &child_prefix);
+            }
+
+            Expr::AsDyn { expr: inner, .. } => {
+                self.write(&format!("{}AsDyn", prefix));
+                self.write_type_suffix(expr);
+                self.newline();
+                self.write_indent_with(&child_prefix);
+                self.print_expr(inner, "└── ", true, &child_prefix);
             }
 
             Expr::Binary {
@@ -1071,6 +1104,35 @@ impl ResolvedProgramPrinter {
                 let expr_child = format!("{}    ", parent_prefix);
                 self.print_expr(value, "└── value: ", &expr_child);
             }
+
+            ResolvedStatement::MatchDyn {
+                expr,
+                dyn_slot,
+                arms,
+            } => {
+                self.write(&format!("{}MatchDyn dyn_slot:{}", prefix, dyn_slot));
+                self.newline();
+                let expr_child = format!("{}│   ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(expr, "├── expr: ", &expr_child);
+                for (i, arm) in arms.iter().enumerate() {
+                    let is_last = i == arms.len() - 1;
+                    let arm_prefix = if is_last { "└── " } else { "├── " };
+                    let arm_label = match (&arm.var_slot, &arm.arm_type) {
+                        (Some(slot), Some(ty)) => format!("arm slot:{} type:{:?}", slot, ty),
+                        _ => "arm default".to_string(),
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.write(&format!("{}{}", arm_prefix, arm_label));
+                    self.newline();
+                    let arm_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.print_block(&arm.body, &arm_child);
+                }
+            }
         }
     }
 
@@ -1166,6 +1228,14 @@ impl ResolvedProgramPrinter {
                 let operand_child = format!("{}    ", parent_prefix);
                 self.write_indent_with(parent_prefix);
                 self.print_expr(operand, "└── ", &operand_child);
+            }
+
+            ResolvedExpr::AsDyn { expr: inner, .. } => {
+                self.write(&format!("{}AsDyn", prefix));
+                self.newline();
+                let inner_child = format!("{}    ", parent_prefix);
+                self.write_indent_with(parent_prefix);
+                self.print_expr(inner, "└── ", &inner_child);
             }
 
             ResolvedExpr::Binary { op, left, right } => {
@@ -1761,6 +1831,9 @@ impl<'a> Disassembler<'a> {
             Op::CallIndirect(argc) => {
                 self.output.push_str(&format!("CallIndirect {}", argc));
             }
+
+            // Dyn boxing
+            Op::DynBox => self.output.push_str("DynBox"),
         }
     }
 }

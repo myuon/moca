@@ -71,4 +71,7 @@ pub struct Chunk {
     pub strings: Vec<String>,
     /// Debug information (optional)
     pub debug: Option<DebugInfo>,
+    /// Type table for dyn runtime type information.
+    /// Each entry is a concrete type; dyn objects store an index into this table.
+    pub type_table: Vec<crate::compiler::types::Type>,
 }

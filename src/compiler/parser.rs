@@ -12,6 +12,8 @@ pub struct Parser<'a> {
     filename: &'a str,
     tokens: Vec<Token>,
     current: usize,
+    /// When true, suppress struct literal parsing (used in `match dyn expr { ... }`)
+    no_struct_literal: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -20,6 +22,7 @@ impl<'a> Parser<'a> {
             filename,
             tokens,
             current: 0,
+            no_struct_literal: false,
         }
     }
 
@@ -331,6 +334,8 @@ impl<'a> Parser<'a> {
             self.throw_stmt()
         } else if self.check(&TokenKind::Try) {
             self.try_stmt()
+        } else if self.check(&TokenKind::Match) {
+            self.match_dyn_stmt()
         } else if self.check_ident() && self.check_ahead(&TokenKind::Eq, 1) {
             self.assign_stmt()
         } else {
@@ -563,6 +568,67 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a match dyn statement: `match dyn expr { v: int => { ... } _ => { ... } }`
+    fn match_dyn_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Match)?;
+        self.expect(&TokenKind::Dyn)?;
+
+        // Suppress struct literal parsing to avoid `d { v: int => ... }` being
+        // parsed as struct literal `d { v: int }`.
+        self.no_struct_literal = true;
+        let expr = self.expression()?;
+        self.no_struct_literal = false;
+
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut arms = Vec::new();
+        let mut has_default = false;
+
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let arm_span = self.current_span();
+
+            // Check for default arm: _ => { ... }
+            if let Some(TokenKind::Ident(name)) = self.peek_kind()
+                && name == "_"
+            {
+                self.advance(); // consume '_'
+                self.expect(&TokenKind::EqGt)?;
+                let body = self.block()?;
+                arms.push(MatchDynArm {
+                    var: "_".to_string(),
+                    type_annotation: None,
+                    body,
+                    span: arm_span,
+                });
+                has_default = true;
+                continue;
+            }
+
+            // Typed arm: varname: type => { ... }
+            let var = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let type_ann = self.parse_type_annotation()?;
+            self.expect(&TokenKind::EqGt)?;
+            let body = self.block()?;
+
+            arms.push(MatchDynArm {
+                var,
+                type_annotation: Some(type_ann),
+                body,
+                span: arm_span,
+            });
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+
+        if !has_default {
+            return Err(self.error("match dyn requires a default '_' arm"));
+        }
+
+        Ok(Statement::MatchDyn { expr, arms, span })
+    }
+
     // Type annotation parsing
 
     /// Parse a type annotation.
@@ -588,6 +654,11 @@ impl<'a> Parser<'a> {
         // Check for object type: {field: T, ...}
         if self.check(&TokenKind::LBrace) {
             return self.parse_object_type();
+        }
+
+        // Handle `dyn` keyword as a type annotation
+        if self.match_token(&TokenKind::Dyn) {
+            return Ok(TypeAnnotation::Named("dyn".to_string()));
         }
 
         // Named type (int, float, bool, string, nil) or array<T>
@@ -1184,6 +1255,17 @@ impl<'a> Parser<'a> {
                 } else {
                     return Err(self.error("expected type name before '::'"));
                 }
+            } else if self.check(&TokenKind::As) {
+                // Cast: `expr as dyn`
+                self.advance(); // consume 'as'
+                self.expect(&TokenKind::Dyn)?;
+                let span = expr.span();
+                expr = Expr::AsDyn {
+                    expr: Box::new(expr),
+                    inner_type: None,
+                    span,
+                    inferred_type: None,
+                };
             } else {
                 break;
             }
@@ -1287,7 +1369,11 @@ impl<'a> Parser<'a> {
 
             // Check if this is a struct literal: Name { field: value, ... }
             // Use lookahead to distinguish from blocks: { must be followed by ident :
-            if self.check(&TokenKind::LBrace) && self.is_struct_literal_start() {
+            // Suppressed when parsing match dyn expression to avoid ambiguity
+            if !self.no_struct_literal
+                && self.check(&TokenKind::LBrace)
+                && self.is_struct_literal_start()
+            {
                 return self.struct_literal(name, span);
             }
 

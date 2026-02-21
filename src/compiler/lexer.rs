@@ -33,6 +33,9 @@ pub enum TokenKind {
     Type,
     New,   // new literal keyword
     Const, // const keyword
+    As,    // as keyword (cast)
+    Dyn,   // dyn keyword (dynamic type)
+    Match, // match keyword
 
     // Literals
     Int(i64),
@@ -66,6 +69,7 @@ pub enum TokenKind {
     Eq,
     Dot,
     Arrow,    // ->
+    EqGt,     // =>
     Question, // ?
     At,       // @
     DotDot,   // ..
@@ -241,6 +245,8 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     if self.match_char('=') {
                         TokenKind::EqEq
+                    } else if self.match_char('>') {
+                        TokenKind::EqGt
                     } else {
                         TokenKind::Eq
                     }
@@ -661,6 +667,9 @@ impl<'a> Lexer<'a> {
             "type" => TokenKind::Type,
             "new" => TokenKind::New,
             "const" => TokenKind::Const,
+            "as" => TokenKind::As,
+            "dyn" => TokenKind::Dyn,
+            "match" => TokenKind::Match,
             _ => TokenKind::Ident(ident.to_string()),
         }
     }

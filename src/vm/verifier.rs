@@ -470,6 +470,7 @@ impl Verifier {
             Op::GcHint(_) => (0, 0),
             Op::Debug => (1, 1),         // pops value, pushes debug string
             Op::TypeOf => (1, 1),        // pops value, pushes type string
+            Op::DynBox => (2, 1),        // pops type_id and value, pushes ref
             Op::FloatToString => (1, 1), // pops value, pushes string
             Op::ParseInt => (1, 1),      // pops string, pushes int
             // Exception handling
