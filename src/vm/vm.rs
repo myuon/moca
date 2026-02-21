@@ -144,6 +144,8 @@ pub struct VM {
     jit_loops: HashMap<(usize, usize), CompiledLoop>,
     /// Whether to use the MicroOp interpreter instead of the stack-based interpreter
     use_microop: bool,
+    /// Pre-allocated type descriptor heap references (indexed by type descriptor table index)
+    type_descriptor_refs: Vec<GcRef>,
 }
 
 impl VM {
@@ -219,7 +221,43 @@ impl VM {
             #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_loops: HashMap::new(),
             use_microop: true,
+            type_descriptor_refs: Vec::new(),
         }
+    }
+
+    /// Pre-allocate type descriptor heap objects from the chunk's type descriptor table.
+    fn init_type_descriptors(&mut self, chunk: &Chunk) -> Result<(), String> {
+        self.type_descriptor_refs = Vec::with_capacity(chunk.type_descriptors.len());
+        for td in &chunk.type_descriptors {
+            // Build type_info heap object: [tag_id, type_name, field_count, ...field_names]
+            let type_info_slots = 3 + td.field_names.len();
+            let mut slots = Vec::with_capacity(type_info_slots);
+
+            // slot 0: tag_id (string pool index as i64)
+            let tag_idx = chunk
+                .strings
+                .iter()
+                .position(|s| s == &td.tag_name)
+                .unwrap_or(0);
+            slots.push(Value::I64(tag_idx as i64));
+
+            // slot 1: type_name (allocated string)
+            let name_ref = self.heap.alloc_string(td.tag_name.clone())?;
+            slots.push(Value::Ref(name_ref));
+
+            // slot 2: field_count
+            slots.push(Value::I64(td.field_names.len() as i64));
+
+            // slot 3+: field_names (allocated strings)
+            for field_name in &td.field_names {
+                let field_ref = self.heap.alloc_string(field_name.clone())?;
+                slots.push(Value::Ref(field_ref));
+            }
+
+            let gc_ref = self.heap.alloc_slots(slots)?;
+            self.type_descriptor_refs.push(gc_ref);
+        }
+        Ok(())
     }
 
     /// Initialize string constant cache for a chunk.
@@ -978,6 +1016,8 @@ impl VM {
         self.init_call_counts(chunk);
         // Initialize string constant cache
         self.init_string_cache(chunk);
+        // Initialize type descriptor heap objects
+        self.init_type_descriptors(chunk)?;
         // Initialize JIT function table
         #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
         {
@@ -1042,6 +1082,9 @@ impl VM {
 
     /// Run a chunk and return the result value (used for thread execution).
     pub fn run_and_get_result(&mut self, chunk: &Chunk) -> Result<Value, String> {
+        // Initialize type descriptors for this chunk
+        self.init_type_descriptors(chunk)?;
+
         // Start with main
         self.frames.push(Frame {
             func_index: usize::MAX, // Marker for main
@@ -1118,6 +1161,7 @@ impl VM {
         // Initialize (same as run())
         self.init_call_counts(chunk);
         self.init_string_cache(chunk);
+        self.init_type_descriptors(chunk)?;
         #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
         {
             self.jit_function_table = JitFunctionTable::new(chunk.functions.len());
@@ -1571,6 +1615,14 @@ impl VM {
                     let r = self.get_or_alloc_string(idx, chunk)?;
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = Value::Ref(r);
+                }
+                MicroOp::TypeDescLoad { dst, idx } => {
+                    let gc_ref = self
+                        .type_descriptor_refs
+                        .get(idx)
+                        .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Ref(*gc_ref);
                 }
                 MicroOp::FloatToString { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -2813,6 +2865,7 @@ impl VM {
                         functions: chunk_clone.functions.clone(),
                         main: wrapper_main,
                         strings: chunk_clone.strings.clone(),
+                        type_descriptors: chunk_clone.type_descriptors.clone(),
                         debug: None,
                     };
 
@@ -3111,6 +3164,17 @@ impl VM {
                     stack_floor: 0,
                 });
             }
+
+            // ========================================
+            // Type Descriptor
+            // ========================================
+            Op::TypeDescLoad(idx) => {
+                let gc_ref = self
+                    .type_descriptor_refs
+                    .get(idx)
+                    .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
+                self.stack.push(Value::Ref(*gc_ref));
+            }
         }
 
         Ok(ControlFlow::Continue)
@@ -3226,6 +3290,10 @@ impl VM {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Ref(a_ref), Value::Ref(b_ref)) => {
+                // Short-circuit: same reference means same object
+                if a_ref.index == b_ref.index {
+                    return true;
+                }
                 // Compare by content for strings (String struct: [ptr, len])
                 let a_obj = self.heap.get(*a_ref);
                 let b_obj = self.heap.get(*b_ref);
@@ -3401,6 +3469,11 @@ impl VM {
 
         // Add string cache references as roots
         for r in self.string_cache.iter().flatten() {
+            roots.push(Value::Ref(*r));
+        }
+
+        // Add type descriptor references as roots
+        for r in &self.type_descriptor_refs {
             roots.push(Value::Ref(*r));
         }
 
@@ -4248,6 +4321,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -4270,6 +4344,7 @@ mod tests {
                 local_types: vec![],
             },
             strings,
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -4483,6 +4558,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![path_str.clone(), "hello".to_string()],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -4570,6 +4646,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![path_str.clone()],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -4643,6 +4720,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec![path_str.clone()],
+            type_descriptors: vec![],
             debug: None,
         };
 
@@ -4814,6 +4892,7 @@ mod tests {
                 local_types: vec![],
             },
             strings: vec!["127.0.0.1".to_string(), http_request],
+            type_descriptors: vec![],
             debug: None,
         };
 

@@ -62,6 +62,15 @@ pub struct Function {
     pub local_types: Vec<ValueType>,
 }
 
+/// A type descriptor for pre-allocated dyn type info objects.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeDescriptor {
+    /// Tag name for type matching (e.g., "int", "Point", "Vec_string")
+    pub tag_name: String,
+    /// Field names for struct types (empty for primitives)
+    pub field_names: Vec<String>,
+}
+
 /// A compiled chunk of bytecode.
 #[derive(Debug, Clone)]
 pub struct Chunk {
@@ -69,6 +78,8 @@ pub struct Chunk {
     pub main: Function,
     /// String constants pool
     pub strings: Vec<String>,
+    /// Type descriptor table for dyn type info
+    pub type_descriptors: Vec<TypeDescriptor>,
     /// Debug information (optional)
     pub debug: Option<DebugInfo>,
 }

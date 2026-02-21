@@ -37,6 +37,10 @@ pub struct Codegen {
     /// Tracks total locals count for the current function being compiled
     /// (grows as inline expansions add locals)
     current_locals_count: usize,
+    /// Type descriptor table for dyn type info (tag_name -> index)
+    type_descriptor_indices: HashMap<String, usize>,
+    /// Type descriptors collected during compilation
+    type_descriptors: Vec<crate::vm::TypeDescriptor>,
 }
 
 impl Default for Codegen {
@@ -61,6 +65,8 @@ impl Codegen {
             local_offset: 0,
             inline_return_patches_stack: Vec::new(),
             current_locals_count: 0,
+            type_descriptor_indices: HashMap::new(),
+            type_descriptors: Vec::new(),
         }
     }
 
@@ -80,6 +86,8 @@ impl Codegen {
             local_offset: 0,
             inline_return_patches_stack: Vec::new(),
             current_locals_count: 0,
+            type_descriptor_indices: HashMap::new(),
+            type_descriptors: Vec::new(),
         }
     }
 
@@ -279,6 +287,28 @@ impl Codegen {
         }
     }
 
+    /// Add a type descriptor (or return existing index) for dyn type info.
+    /// If the tag_name already exists but field_names is more complete, update it.
+    fn add_type_descriptor(&mut self, tag_name: &str, field_names: &[String]) -> usize {
+        if let Some(&idx) = self.type_descriptor_indices.get(tag_name) {
+            // Update field_names if the existing entry has none but new request has some
+            if !field_names.is_empty() && self.type_descriptors[idx].field_names.is_empty() {
+                self.type_descriptors[idx].field_names = field_names.to_vec();
+            }
+            return idx;
+        }
+        let idx = self.type_descriptors.len();
+        // Ensure tag_name is in string pool (needed for type_info heap object)
+        self.add_string(tag_name.to_string());
+        self.type_descriptors.push(crate::vm::TypeDescriptor {
+            tag_name: tag_name.to_string(),
+            field_names: field_names.to_vec(),
+        });
+        self.type_descriptor_indices
+            .insert(tag_name.to_string(), idx);
+        idx
+    }
+
     pub fn compile(&mut self, program: ResolvedProgram) -> Result<Chunk, String> {
         // Initialize struct field indices for field access resolution
         self.init_structs(program.structs);
@@ -357,6 +387,7 @@ impl Codegen {
             functions: self.functions.clone(),
             main: main_func,
             strings: self.strings.clone(),
+            type_descriptors: self.type_descriptors.clone(),
             debug,
         })
     }
@@ -701,17 +732,18 @@ impl Codegen {
                 self.compile_expr(expr, ops)?;
                 ops.push(Op::LocalSet(*dyn_slot));
 
-                // Compile as if-else chain on type tags
+                // Compile as if-else chain on type tags using pointer comparison
                 let mut jump_to_end_patches = Vec::new();
 
                 for arm in arms {
-                    // Load dyn value → type_info ref → tag_id
+                    // Register type descriptor for this arm's type
+                    let td_idx = self.add_type_descriptor(&arm.type_tag_name, &[]);
+
+                    // Load dyn value → type_info ref, compare with expected type descriptor
                     ops.push(Op::LocalGet(*dyn_slot));
                     ops.push(Op::HeapLoad(0)); // dyn slot 0 → type_info ref
-                    ops.push(Op::HeapLoad(0)); // type_info slot 0 → tag_id
-                    let tag_id = self.add_string(arm.type_tag_name.clone()) as i64;
-                    ops.push(Op::I64Const(tag_id));
-                    ops.push(Op::I64Eq);
+                    ops.push(Op::TypeDescLoad(td_idx)); // expected type descriptor ref
+                    ops.push(Op::RefEq); // pointer comparison (O(1) via identity check)
 
                     // Branch to next arm if tag doesn't match
                     let jump_to_next = ops.len();
@@ -1384,30 +1416,14 @@ impl Codegen {
                 type_tag_name,
                 field_names,
             } => {
-                // Build type_info object: [tag_id, type_name, field_count, ...field_names]
-                let tag_id = self.add_string(type_tag_name.clone()) as i64;
-                let type_info_slots = 3 + field_names.len();
+                // Register type descriptor (pre-allocated at VM startup)
+                let td_idx = self.add_type_descriptor(type_tag_name, field_names);
 
-                // Allocate type_info
-                ops.push(Op::I64Const(tag_id));
-                let name_idx = self.add_string(type_tag_name.clone());
-                ops.push(Op::StringConst(name_idx));
-                ops.push(Op::I64Const(field_names.len() as i64));
-                for field_name in field_names {
-                    let field_idx = self.add_string(field_name.clone());
-                    ops.push(Op::StringConst(field_idx));
-                }
-                ops.push(Op::HeapAlloc(type_info_slots));
-
-                // Compile the value expression
+                // Push type_info ref (pre-allocated) and value, then alloc dyn object inline
+                ops.push(Op::TypeDescLoad(td_idx));
                 self.compile_expr(expr, ops)?;
-
-                // Call __dyn_box(type_info, value)
-                let func_idx = self
-                    .function_indices
-                    .get("__dyn_box")
-                    .ok_or("__dyn_box not found in stdlib")?;
-                ops.push(Op::Call(*func_idx, 2));
+                // HeapAlloc(2) pops [type_info_ref, value] → dyn object [slot0=type_info, slot1=value]
+                ops.push(Op::HeapAlloc(2));
             }
         }
 

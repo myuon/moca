@@ -212,6 +212,13 @@ pub enum Op {
     /// Reads func_index from slot 0, extra args (captures) from slots 1..,
     /// then calls the function with (extra_args + argc) arguments.
     CallIndirect(usize), // (argc) — number of user-visible arguments
+
+    // ========================================
+    // Type Descriptor
+    // ========================================
+    /// Push pre-allocated type descriptor reference onto the stack.
+    /// The index refers to the type_descriptors table in the Chunk.
+    TypeDescLoad(usize),
 }
 
 impl Op {
@@ -333,6 +340,7 @@ impl Op {
             Op::ChannelRecv => "ChannelRecv",
             Op::ThreadJoin => "ThreadJoin",
             Op::CallIndirect(_) => "CallIndirect",
+            Op::TypeDescLoad(_) => "TypeDescLoad",
         }
     }
 }

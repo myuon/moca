@@ -1853,6 +1853,11 @@ impl<'a> Disassembler<'a> {
             Op::CallIndirect(argc) => {
                 self.output.push_str(&format!("CallIndirect {}", argc));
             }
+
+            // Type Descriptor
+            Op::TypeDescLoad(idx) => {
+                self.output.push_str(&format!("TypeDescLoad {}", idx));
+            }
         }
     }
 }
@@ -2347,6 +2352,19 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
                 format_vreg(data_ref),
                 format_vreg(len),
                 kind_str
+            ));
+        }
+        MicroOp::TypeDescLoad { dst, idx } => {
+            let tag = chunk
+                .type_descriptors
+                .get(*idx)
+                .map(|td| td.tag_name.as_str())
+                .unwrap_or("<unknown>");
+            output.push_str(&format!(
+                "{} = TypeDescLoad {} ; \"{}\"",
+                format_vreg(dst),
+                idx,
+                tag
             ));
         }
         MicroOp::StringConst { dst, idx } => {
