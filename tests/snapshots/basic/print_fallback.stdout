@@ -3,3 +3,5 @@ Point { x: 1, y: 2 }
 hello
 true
 3.14
+Point { x: 10, y: 20 }
+99

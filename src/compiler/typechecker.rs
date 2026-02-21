@@ -16,6 +16,7 @@ use crate::compiler::ast::{
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation, TypeVarId};
 use std::collections::{HashMap, HashSet};
+use std::mem;
 
 /// Information about a struct definition.
 #[derive(Debug, Clone)]
@@ -1840,6 +1841,21 @@ impl TypeChecker {
                     return result_type;
                 }
 
+                // print fallback for types that can't resolve through the generic path:
+                // `any` unifies with everything (empty substitution), `Var` is unresolved,
+                // `Nullable` doesn't implement ToString. Handle these before generic function check.
+                if callee == "print" && args.len() == 1 && type_args.is_empty() {
+                    let arg_type = self.infer_expr(&mut args[0], env);
+                    let resolved_arg_type = self.substitution.apply(&arg_type);
+                    if matches!(
+                        resolved_arg_type,
+                        Type::Any | Type::Nullable(_) | Type::Var(_)
+                    ) {
+                        *callee = "__print_dyn_fallback".to_string();
+                        return Type::Nil;
+                    }
+                }
+
                 // Check if it's a generic function with explicit type arguments
                 if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
                     // Track fresh type variables for implicit generic calls
@@ -1938,12 +1954,7 @@ impl TypeChecker {
                                 return self.substitution.apply(&ret);
                             }
 
-                            for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                                let arg_type = self.infer_expr(arg, env);
-                                if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                                    self.errors.push(e);
-                                }
-                            }
+                            self.check_call_args(args, &params, env);
 
                             // Write back inferred type arguments for implicit generic calls
                             if type_args.is_empty() && !fresh_vars.is_empty() {
@@ -2033,12 +2044,7 @@ impl TypeChecker {
                                 return self.substitution.apply(&ret);
                             }
 
-                            for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                                let arg_type = self.infer_expr(arg, env);
-                                if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                                    self.errors.push(e);
-                                }
-                            }
+                            self.check_call_args(args, &params, env);
 
                             self.substitution.apply(&ret)
                         }
@@ -2067,12 +2073,7 @@ impl TypeChecker {
                                 ));
                                 return self.substitution.apply(&ret);
                             }
-                            for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                                let arg_type = self.infer_expr(arg, env);
-                                if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                                    self.errors.push(e);
-                                }
-                            }
+                            self.check_call_args(args, &params, env);
                             self.substitution.apply(&ret)
                         }
                         Type::Var(_) => {
@@ -2320,12 +2321,7 @@ impl TypeChecker {
                                 }
 
                                 // Type check arguments
-                                for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                                    let arg_type = self.infer_expr(arg, env);
-                                    if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                                        self.errors.push(e);
-                                    }
-                                }
+                                self.check_call_args(args, params, env);
 
                                 return self.substitution.apply(ret);
                             }
@@ -2459,12 +2455,7 @@ impl TypeChecker {
                         }
 
                         // Type check arguments
-                        for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                            let arg_type = self.infer_expr(arg, env);
-                            if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                                self.errors.push(e);
-                            }
-                        }
+                        self.check_call_args(args, &params, env);
 
                         self.substitution.apply(&ret)
                     }
@@ -2699,12 +2690,7 @@ impl TypeChecker {
                             return self.substitution.apply(&ret);
                         }
 
-                        for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                            let arg_type = self.infer_expr(arg, env);
-                            if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                                self.errors.push(e);
-                            }
-                        }
+                        self.check_call_args(args, &params, env);
 
                         self.substitution.apply(&ret)
                     }
@@ -2841,6 +2827,42 @@ impl TypeChecker {
             span,
         ));
         self.fresh_var()
+    }
+
+    /// Type-check call arguments against parameter types.
+    /// Inserts implicit `as dyn` coercion when a parameter expects `dyn`
+    /// and the argument is a non-dyn concrete type.
+    fn check_call_args(&mut self, args: &mut [Expr], params: &[Type], env: &mut TypeEnv) {
+        for (arg, param_type) in args.iter_mut().zip(params.iter()) {
+            let arg_type = self.infer_expr(arg, env);
+            let resolved_param = self.substitution.apply(param_type);
+            let resolved_arg = self.substitution.apply(&arg_type);
+            // Implicit dyn coercion: only for concrete value types, not for
+            // types that are already compatible (dyn, any) or unresolved (Var, Param).
+            if matches!(resolved_param, Type::Dyn)
+                && !matches!(
+                    resolved_arg,
+                    Type::Dyn | Type::Any | Type::Var(_) | Type::Param { .. }
+                )
+            {
+                // Implicit dyn coercion: wrap argument in AsDyn
+                let span = arg.span();
+                let inner = mem::replace(
+                    arg,
+                    Expr::Nil {
+                        span,
+                        inferred_type: None,
+                    },
+                );
+                *arg = Expr::AsDyn {
+                    expr: Box::new(inner),
+                    span,
+                    inferred_type: Some(Type::Dyn),
+                };
+            } else if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
+                self.errors.push(e);
+            }
+        }
     }
 
     /// Check builtin function calls.
@@ -3162,12 +3184,7 @@ impl TypeChecker {
                     ));
                     return self.substitution.apply(&ret);
                 }
-                for (arg, param_type) in args.iter_mut().zip(params.iter()) {
-                    let arg_type = self.infer_expr(arg, env);
-                    if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
-                        self.errors.push(e);
-                    }
-                }
+                self.check_call_args(args, &params, env);
                 self.substitution.apply(&ret)
             }
             Some(_) => {

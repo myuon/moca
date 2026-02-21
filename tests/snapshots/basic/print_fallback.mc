@@ -11,3 +11,7 @@ print(42);
 print("hello");
 print(true);
 print(3.14);
+
+// implicit dyn coercion: inspect takes dyn, no explicit "as dyn" needed
+inspect(Point { x: 10, y: 20 });
+inspect(99);

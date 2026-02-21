@@ -11,4 +11,4 @@ print(y);
 print(s);
 print(b);
 print(len(arr));
-print_debug(nullable_int);
+print(nullable_int);
