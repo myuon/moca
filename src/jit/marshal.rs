@@ -197,9 +197,6 @@ pub struct JitCallContext {
     pub float_to_string_helper: unsafe extern "C" fn(*mut JitCallContext, u64, u64) -> JitReturn,
     /// HeapAllocDynSimple helper: (ctx, size) -> JitReturn (returns Ref)
     pub heap_alloc_dyn_simple_helper: unsafe extern "C" fn(*mut JitCallContext, u64) -> JitReturn,
-    /// HeapAllocTyped helper: (ctx, data_ref_payload, len_payload, kind) -> JitReturn (returns Ref)
-    pub heap_alloc_typed_helper:
-        unsafe extern "C" fn(*mut JitCallContext, u64, u64, u64) -> JitReturn,
     /// Pointer to JIT function table for direct call dispatch.
     /// Layout: [entry_0, total_regs_0, entry_1, total_regs_1, ...] (u64 pairs).
     /// entry == 0 means the function is not yet JIT-compiled.

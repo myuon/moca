@@ -156,6 +156,8 @@ pub enum ResolvedExpr {
         op: BinaryOp,
         left: Box<ResolvedExpr>,
         right: Box<ResolvedExpr>,
+        /// Type of the left operand (from typechecker, for codegen to emit type-specific ops)
+        operand_type: Option<Type>,
     },
     Call {
         func_index: usize,
@@ -1509,12 +1511,14 @@ impl<'a> Resolver<'a> {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                let operand_type = left.inferred_type().cloned();
                 let left = self.resolve_expr(*left, scope)?;
                 let right = self.resolve_expr(*right, scope)?;
                 Ok(ResolvedExpr::Binary {
                     op,
                     left: Box::new(left),
                     right: Box::new(right),
+                    operand_type,
                 })
             }
             Expr::Call {

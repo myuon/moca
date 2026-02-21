@@ -721,7 +721,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            // heap_alloc_typed_helper removed
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -810,7 +810,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            // heap_alloc_typed_helper removed
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -894,7 +894,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            // heap_alloc_typed_helper removed
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -973,7 +973,7 @@ impl VM {
             float_to_string_helper: jit_float_to_string_helper,
 
             heap_alloc_dyn_simple_helper: jit_heap_alloc_dyn_simple_helper,
-            heap_alloc_typed_helper: jit_heap_alloc_typed_helper,
+            // heap_alloc_typed_helper removed
             jit_function_table: self.jit_function_table.base_ptr(),
         };
 
@@ -1638,6 +1638,13 @@ impl VM {
                     let r = self.heap.alloc_string(s)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
+                MicroOp::HeapAlloc { dst, args } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let slots: Vec<Value> = args.iter().map(|a| self.stack[sb + a.0]).collect();
+                    let r = self.heap.alloc_slots(slots)?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Ref(r);
+                }
                 MicroOp::HeapAllocDynSimple { dst, size } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let size_val = self.stack[sb + size.0]
@@ -1646,25 +1653,6 @@ impl VM {
                         as usize;
                     let slots = vec![Value::Null; size_val];
                     let r = self.heap.alloc_slots(slots)?;
-                    self.stack[sb + dst.0] = Value::Ref(r);
-                }
-                MicroOp::HeapAllocTyped {
-                    dst,
-                    data_ref,
-                    len,
-                    kind,
-                } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let data_ref_val = self.stack[sb + data_ref.0];
-                    let len_val = self.stack[sb + len.0];
-                    let obj_kind = match kind {
-                        1 => crate::vm::heap::ObjectKind::String,
-                        2 => crate::vm::heap::ObjectKind::Array,
-                        _ => crate::vm::heap::ObjectKind::Slots,
-                    };
-                    let r = self
-                        .heap
-                        .alloc_slots_with_kind(vec![data_ref_val, len_val], obj_kind)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
                 MicroOp::Raw { op } => {
@@ -2105,6 +2093,13 @@ impl VM {
                     let result = self.values_equal(&va, &vb);
                     self.stack[sb + dst.0] = Value::Bool(result);
                 }
+                MicroOp::StringEq { dst, a, b } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let va = self.stack[sb + a.0];
+                    let vb = self.stack[sb + b.0];
+                    let result = self.strings_equal(&va, &vb);
+                    self.stack[sb + dst.0] = Value::Bool(result);
+                }
                 MicroOp::RefIsNull { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let v = self.stack[sb + src.0];
@@ -2537,6 +2532,12 @@ impl VM {
                 let a = self.stack.pop().ok_or("stack underflow")?;
                 self.stack.push(Value::Bool(a == Value::Null));
             }
+            Op::StringEq => {
+                let b = self.stack.pop().ok_or("stack underflow")?;
+                let a = self.stack.pop().ok_or("stack underflow")?;
+                let result = self.strings_equal(&a, &b);
+                self.stack.push(Value::Bool(result));
+            }
 
             // ========================================
             // Type Conversion
@@ -2761,29 +2762,6 @@ impl VM {
 
                 return Ok(ControlFlow::Return);
             }
-            Op::TypeOf => {
-                use crate::vm::heap::ObjectKind;
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let type_name = match &value {
-                    Value::I64(_) => "int",
-                    Value::F64(_) => "float",
-                    Value::Bool(_) => "bool",
-                    Value::Null => "nil",
-                    Value::Ref(r) => {
-                        if let Some(obj) = self.heap.get(*r) {
-                            match obj.kind {
-                                ObjectKind::String => "string",
-                                ObjectKind::Array => "array",
-                                ObjectKind::Slots => "slots",
-                            }
-                        } else {
-                            "unknown"
-                        }
-                    }
-                };
-                let r = self.heap.alloc_string(type_name.to_string())?;
-                self.stack.push(Value::Ref(r));
-            }
             Op::FloatToString => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let s = self.value_to_string(&value)?;
@@ -2934,20 +2912,7 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::HeapAllocArray(n, kind) => {
-                let mut slots = Vec::with_capacity(n);
-                for _ in 0..n {
-                    slots.push(self.stack.pop().ok_or("stack underflow")?);
-                }
-                slots.reverse();
-                let obj_kind = match kind {
-                    1 => crate::vm::heap::ObjectKind::String,
-                    2 => crate::vm::heap::ObjectKind::Array,
-                    _ => crate::vm::heap::ObjectKind::Slots,
-                };
-                let r = self.heap.alloc_slots_with_kind(slots, obj_kind)?;
-                self.stack.push(Value::Ref(r));
-            }
+            // HeapAllocArray removed — use HeapAlloc instead
             Op::HeapLoad(offset) => {
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
@@ -3070,7 +3035,7 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            // HeapAllocString removed — use HeapAllocArray(2, 1) instead
+            // HeapAllocString removed — use HeapAlloc(2) instead
             Op::Syscall(syscall_num, argc) => {
                 // Collect arguments from stack
                 let mut args = Vec::with_capacity(argc);
@@ -3290,28 +3255,45 @@ impl VM {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Ref(a_ref), Value::Ref(b_ref)) => {
-                // Short-circuit: same reference means same object
+                // Reference identity comparison.
+                // String equality is handled by StringEq opcode.
+                a_ref.index == b_ref.index
+            }
+            _ => false,
+        }
+    }
+
+    /// Compare two values as strings by content.
+    /// Follows [ptr, len] layout: compares data arrays element-by-element.
+    /// Handles null values: (null, null) → true, (null, ref) → false.
+    fn strings_equal(&self, a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Null, Value::Null) => true,
+            (Value::Ref(a_ref), Value::Ref(b_ref)) => {
                 if a_ref.index == b_ref.index {
                     return true;
                 }
-                // Compare by content for strings (String struct: [ptr, len])
-                let a_obj = self.heap.get(*a_ref);
-                let b_obj = self.heap.get(*b_ref);
-
-                match (a_obj, b_obj) {
-                    (Some(a), Some(b))
-                        if a.kind == crate::vm::heap::ObjectKind::String
-                            && b.kind == crate::vm::heap::ObjectKind::String =>
-                    {
-                        // Compare via data arrays pointed to by ptr (slot 0)
-                        let a_data = a.slots[0].as_ref().and_then(|r| self.heap.get(r));
-                        let b_data = b.slots[0].as_ref().and_then(|r| self.heap.get(r));
-                        match (a_data, b_data) {
-                            (Some(ad), Some(bd)) => ad.slots == bd.slots,
-                            _ => false,
+                // Follow [ptr, len] layout: slot 0 = data ref, slot 1 = len
+                let a_len = self.heap.read_slot(*a_ref, 1);
+                let b_len = self.heap.read_slot(*b_ref, 1);
+                if a_len != b_len {
+                    return false;
+                }
+                let a_data = self.heap.read_slot(*a_ref, 0);
+                let b_data = self.heap.read_slot(*b_ref, 0);
+                match (a_data, b_data) {
+                    (Some(Value::Ref(a_ptr)), Some(Value::Ref(b_ptr))) => {
+                        if a_ptr.index == b_ptr.index {
+                            return true;
                         }
+                        let len = a_len.and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+                        for i in 0..len {
+                            if self.heap.read_slot(a_ptr, i) != self.heap.read_slot(b_ptr, i) {
+                                return false;
+                            }
+                        }
+                        true
                     }
-                    (Some(a), Some(b)) => a.slots == b.slots,
                     _ => false,
                 }
             }
@@ -3337,31 +3319,46 @@ impl VM {
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
 
-                // String struct [ptr, len]: follow ptr to data array, read chars
-                if obj.kind == crate::vm::heap::ObjectKind::String
-                    && obj.slots.len() == 2
+                // Structural heuristic for 2-slot [Ref, I64] objects:
+                // Try to detect string vs array by checking if the data array
+                // contains only printable characters.
+                if obj.slots.len() == 2
                     && let (Some(data_ref), Some(len)) =
                         (obj.slots[0].as_ref(), obj.slots[1].as_i64())
                 {
+                    let len_usize = len as usize;
+                    // Check if data looks like a string (non-empty, all printable chars)
+                    let mut is_string = len_usize > 0;
                     let mut chars = String::new();
-                    for i in 0..(len as usize) {
-                        if let Some(Value::I64(c)) = self.heap.read_slot(data_ref, i)
-                            && let Some(ch) = char::from_u32(c as u32)
-                        {
-                            chars.push(ch);
+                    for i in 0..len_usize {
+                        match self.heap.read_slot(data_ref, i) {
+                            Some(Value::I64(c)) => {
+                                if let Some(ch) = char::from_u32(c as u32) {
+                                    // Accept printable chars + common whitespace
+                                    if ch >= ' ' || ch == '\n' || ch == '\r' || ch == '\t' {
+                                        chars.push(ch);
+                                    } else {
+                                        is_string = false;
+                                        break;
+                                    }
+                                } else {
+                                    is_string = false;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                is_string = false;
+                                break;
+                            }
                         }
                     }
-                    return Ok(chars);
-                }
-
-                // Array<T> struct: follow ptr to data array, use len for display
-                if obj.kind == crate::vm::heap::ObjectKind::Array
-                    && obj.slots.len() == 2
-                    && let (Some(data_ref), Some(len)) =
-                        (obj.slots[0].as_ref(), obj.slots[1].as_i64())
-                {
+                    // Empty 2-slot objects and string-like data → display as string
+                    if is_string {
+                        return Ok(chars);
+                    }
+                    // Otherwise display as array
                     let mut parts = Vec::new();
-                    for i in 0..(len as usize) {
+                    for i in 0..len_usize {
                         if let Some(elem) = self.heap.read_slot(data_ref, i) {
                             parts.push(self.value_to_string(&elem)?);
                         }
@@ -4252,47 +4249,6 @@ unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     }
 }
 
-/// JIT HeapAllocTyped helper function.
-/// Allocates [data_ref, len] with the specified ObjectKind.
-#[cfg(feature = "jit")]
-unsafe extern "C" fn jit_heap_alloc_typed_helper(
-    ctx: *mut JitCallContext,
-    data_ref_payload: u64,
-    len_payload: u64,
-    kind: u64,
-) -> JitReturn {
-    let ctx_ref = unsafe { &mut *ctx };
-    let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
-
-    vm.record_opcode("HeapAllocTyped");
-
-    let data_ref_val = Value::Ref(crate::vm::heap::GcRef {
-        index: data_ref_payload as usize,
-    });
-    let len_val = Value::I64(len_payload as i64);
-    let obj_kind = match kind {
-        1 => crate::vm::heap::ObjectKind::String,
-        2 => crate::vm::heap::ObjectKind::Array,
-        _ => crate::vm::heap::ObjectKind::Slots,
-    };
-    match vm
-        .heap
-        .alloc_slots_with_kind(vec![data_ref_val, len_val], obj_kind)
-    {
-        Ok(r) => {
-            ctx_ref.heap_base = vm.heap.memory_base_ptr();
-            JitReturn {
-                tag: 4, // TAG_PTR
-                payload: r.index as u64,
-            }
-        }
-        Err(_) => JitReturn {
-            tag: 3, // TAG_NIL
-            payload: 0,
-        },
-    }
-}
-
 enum ControlFlow {
     Continue,
     Return,
@@ -4423,13 +4379,13 @@ mod tests {
         // Array<T> struct layout: [ptr, len]
         // ptr points to data array, len is the element count
         let stack = run_code(vec![
-            Op::I64Const(1),          // element 0
-            Op::I64Const(2),          // element 1
-            Op::I64Const(3),          // element 2
-            Op::HeapAlloc(3),         // data array with 3 elements
-            Op::I64Const(3),          // length value
-            Op::HeapAllocArray(2, 2), // Array<T> struct [ptr, len]
-            Op::HeapLoad(1),          // read len field
+            Op::I64Const(1),  // element 0
+            Op::I64Const(2),  // element 1
+            Op::I64Const(3),  // element 2
+            Op::HeapAlloc(3), // data array with 3 elements
+            Op::I64Const(3),  // length value
+            Op::HeapAlloc(2), // Array<T> struct [ptr, len]
+            Op::HeapLoad(1),  // read len field
         ])
         .unwrap();
         assert_eq!(stack.len(), 1);

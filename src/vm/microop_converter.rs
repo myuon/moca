@@ -1170,6 +1170,17 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     |dst, a, b| MicroOp::RefEq { dst, a, b },
                 );
             }
+            Op::StringEq => {
+                emit_binop(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                    |dst, a, b| MicroOp::StringEq { dst, a, b },
+                );
+            }
             Op::RefIsNull => {
                 let src = pop_vreg(
                     &mut vstack,
@@ -1737,6 +1748,29 @@ pub fn convert(func: &Function) -> ConvertedFunction {
             // ============================================================
             // Heap allocation operations
             // ============================================================
+            Op::HeapAlloc(n) => {
+                // Pop n values from vstack (in reverse order, then reverse to get original order)
+                let mut args = Vec::with_capacity(*n);
+                for _ in 0..*n {
+                    let v = pop_vreg(
+                        &mut vstack,
+                        &mut micro_ops,
+                        &mut next_temp,
+                        &mut max_temp,
+                        &mut vreg_types,
+                    );
+                    args.push(v);
+                }
+                args.reverse();
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::HeapAlloc { dst, args });
+                vstack.push(Vse::RegRef(dst));
+            }
             Op::HeapAllocDynSimple => {
                 let size = pop_vreg(
                     &mut vstack,
@@ -1754,37 +1788,6 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::HeapAllocDynSimple { dst, size });
                 vstack.push(Vse::RegRef(dst));
             }
-            Op::HeapAllocArray(2, kind) if *kind == 1 || *kind == 2 => {
-                // Typed 2-slot alloc (String or Array with ptr+len layout)
-                let len = pop_vreg(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                );
-                let data_ref = pop_vreg(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                );
-                let dst = alloc_temp(
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                    ValueType::Ref,
-                );
-                micro_ops.push(MicroOp::HeapAllocTyped {
-                    dst,
-                    data_ref,
-                    len,
-                    kind: *kind,
-                });
-                vstack.push(Vse::RegRef(dst));
-            }
-
             // ============================================================
             // Raw fallback (everything else)
             // ============================================================
@@ -2082,6 +2085,7 @@ fn try_patch_dst(mop: &mut MicroOp, new_dst: VReg) -> Option<VReg> {
         | MicroOp::CmpF32 { dst, .. }
         // Ref binary
         | MicroOp::RefEq { dst, .. }
+        | MicroOp::StringEq { dst, .. }
         // Unary ops
         | MicroOp::NegI64 { dst, .. }
         | MicroOp::NegF64 { dst, .. }
@@ -2356,34 +2360,31 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_fallback_with_flush() {
-        // I64Const values are deferred, then materialized+flushed before Raw
+    fn test_heap_alloc_with_args() {
+        // HeapAlloc(2) pops 2 values from vstack and allocates with them.
         let func = make_func(vec![Op::I64Const(1), Op::I64Const(2), Op::HeapAlloc(2)]);
         let converted = convert(&func);
-        // ConstI64, StackPush, ConstI64, StackPush, Raw(HeapAlloc)
-        assert_eq!(converted.micro_ops.len(), 5);
-        assert!(matches!(
-            converted.micro_ops[4],
-            MicroOp::Raw {
-                op: Op::HeapAlloc(2)
-            }
-        ));
+        // ConstI64(1), ConstI64(2), HeapAlloc{args: [v0, v1]}
+        assert_eq!(converted.micro_ops.len(), 3);
+        if let MicroOp::HeapAlloc { args, .. } = &converted.micro_ops[2] {
+            assert_eq!(args.len(), 2);
+        } else {
+            panic!("expected HeapAlloc");
+        }
     }
 
     #[test]
-    fn test_raw_result_pop() {
+    fn test_heap_alloc_zero() {
         let func = make_func(vec![Op::HeapAlloc(0), Op::LocalSet(0)]);
         let converted = convert(&func);
-        // Raw, StackPop, Mov
-        assert_eq!(converted.micro_ops.len(), 3);
-        assert!(matches!(
-            converted.micro_ops[0],
-            MicroOp::Raw {
-                op: Op::HeapAlloc(0)
-            }
-        ));
-        assert!(matches!(converted.micro_ops[1], MicroOp::StackPop { .. }));
-        assert!(matches!(converted.micro_ops[2], MicroOp::Mov { .. }));
+        // HeapAlloc{args: []}, Mov (result captured via vstack)
+        assert_eq!(converted.micro_ops.len(), 2);
+        if let MicroOp::HeapAlloc { args, .. } = &converted.micro_ops[0] {
+            assert_eq!(args.len(), 0);
+        } else {
+            panic!("expected HeapAlloc");
+        }
+        assert!(matches!(converted.micro_ops[1], MicroOp::Mov { .. }));
     }
 
     #[test]

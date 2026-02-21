@@ -407,6 +407,12 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
+    /// dst = (a == b) as string content equality (follows [ptr, len] layout)
+    StringEq {
+        dst: VReg,
+        a: VReg,
+        b: VReg,
+    },
     /// dst = null ref
     RefNull {
         dst: VReg,
@@ -461,21 +467,19 @@ pub enum MicroOp {
     // ========================================
     // Heap allocation operations
     // ========================================
-    /// Allocate a heap object with `size` null-initialized slots.
+    /// Allocate a heap object with statically-known `size` slots.
+    /// Pops `size` values from the operand stack (or uses `args` vregs) to initialize slots.
+    /// dst = Ref to newly allocated object.
+    HeapAlloc {
+        dst: VReg,
+        args: Vec<VReg>,
+    },
+    /// Allocate a heap object with dynamically-known `size` null-initialized slots.
     /// dst = Ref to newly allocated object.
     HeapAllocDynSimple {
         dst: VReg,
         size: VReg,
     },
-    /// Allocate a typed 2-slot object: [data_ref, len] with specified ObjectKind.
-    /// kind: 0=Slots, 1=String, 2=Array.
-    HeapAllocTyped {
-        dst: VReg,
-        data_ref: VReg,
-        len: VReg,
-        kind: u8,
-    },
-
     // ========================================
     // String operations
     // ========================================

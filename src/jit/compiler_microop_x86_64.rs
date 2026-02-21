@@ -136,6 +136,7 @@ impl MicroOpJitCompiler {
                 | MicroOp::EqzI32 { dst, .. }
                 | MicroOp::CmpI32 { dst, .. }
                 | MicroOp::RefEq { dst, .. }
+                | MicroOp::StringEq { dst, .. }
                 | MicroOp::RefIsNull { dst, .. }
                 | MicroOp::F64ReinterpretAsI64 { dst, .. }
                 | MicroOp::I32WrapI64 { dst, .. }
@@ -178,8 +179,8 @@ impl MicroOpJitCompiler {
                 | MicroOp::StackPop { dst }
                 | MicroOp::FloatToString { dst, .. }
                 | MicroOp::ValueToString { dst, .. }
+                | MicroOp::HeapAlloc { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
-                | MicroOp::HeapAllocTyped { dst, .. }
                 | MicroOp::StringConst { dst, .. } => {
                     // These always write the correct shadow tag directly
                     // Mark with a sentinel tag (u64::MAX) to indicate "dynamic"
@@ -587,6 +588,7 @@ impl MicroOpJitCompiler {
 
             // Ref ops
             MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
+            MicroOp::StringEq { .. } => Err("StringEq not supported in JIT".to_string()),
             MicroOp::RefIsNull { dst, src } => self.emit_ref_is_null(dst, src),
             MicroOp::RefNull { dst } => self.emit_ref_null(dst),
 
@@ -600,13 +602,8 @@ impl MicroOpJitCompiler {
             MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
             MicroOp::ValueToString { .. } => Err("ValueToString not supported in JIT".to_string()),
             // Heap allocation operations
+            MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
-            MicroOp::HeapAllocTyped {
-                dst,
-                data_ref,
-                len,
-                kind,
-            } => self.emit_heap_alloc_typed(dst, data_ref, len, *kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1037,7 +1034,7 @@ impl MicroOpJitCompiler {
     // ==================== Call ====================
 
     /// JitCallContext offset for jit_function_table pointer.
-    const JIT_FUNC_TABLE_OFFSET: i32 = 96;
+    const JIT_FUNC_TABLE_OFFSET: i32 = 88;
 
     fn emit_call(
         &mut self,
@@ -1766,33 +1763,30 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit HeapAllocTyped: call helper(ctx, data_ref_payload, len_payload, kind) -> (tag, payload)
-    fn emit_heap_alloc_typed(
-        &mut self,
-        dst: &VReg,
-        data_ref: &VReg,
-        len: &VReg,
-        kind: u8,
-    ) -> Result<(), String> {
+    /// Emit HeapAlloc: allocate object with args.len() slots and initialize from args.
+    fn emit_heap_alloc(&mut self, dst: &VReg, args: &[VReg]) -> Result<(), String> {
+        let size = args.len();
         let dst_shadow_off = self.shadow_tag_offset(dst);
-        let mut asm = X86_64Assembler::new(&mut self.buf);
-        // Save callee-saved
-        asm.push(regs::VM_CTX);
-        asm.push(regs::FRAME_BASE);
-        // Args: RDI=ctx, RSI=data_ref_payload, RDX=len_payload, RCX=kind
-        asm.mov_rr(Reg::Rdi, regs::VM_CTX);
-        asm.mov_rm(Reg::Rsi, regs::FRAME_BASE, Self::vreg_offset(data_ref));
-        asm.mov_rm(Reg::Rdx, regs::FRAME_BASE, Self::vreg_offset(len));
-        asm.mov_ri32(Reg::Rcx, kind as i32);
-        // Load heap_alloc_typed_helper from JitCallContext offset 88
-        asm.mov_rm(regs::TMP4, regs::VM_CTX, 88);
-        asm.call_r(regs::TMP4);
-        // Restore callee-saved
-        asm.pop(regs::FRAME_BASE);
-        asm.pop(regs::VM_CTX);
-        // Store result: payload (RDX) to frame, tag (RAX) to shadow
-        asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
-        asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
+        // 1. Call alloc helper to allocate size null-initialized slots
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.push(regs::VM_CTX);
+            asm.push(regs::FRAME_BASE);
+            asm.mov_rr(Reg::Rdi, regs::VM_CTX);
+            asm.mov_ri64(Reg::Rsi, size as i64);
+            // Load heap_alloc_dyn_simple_helper from JitCallContext offset 80
+            asm.mov_rm(regs::TMP4, regs::VM_CTX, 80);
+            asm.call_r(regs::TMP4);
+            asm.pop(regs::FRAME_BASE);
+            asm.pop(regs::VM_CTX);
+            // Store result: payload (RDX) to frame, tag (RAX) to shadow
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), Reg::Rdx);
+            asm.mov_mr(regs::FRAME_BASE, dst_shadow_off, Reg::Rax);
+        }
+        // 2. Store each arg into the allocated object's slots
+        for (i, arg) in args.iter().enumerate() {
+            self.emit_heap_store(dst, i, arg)?;
+        }
         Ok(())
     }
 
