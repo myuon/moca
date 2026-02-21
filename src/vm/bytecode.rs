@@ -401,8 +401,6 @@ const OP_HEAP_STORE_DYN: u8 = 84;
 const OP_SYSCALL: u8 = 86;
 const OP_GC_HINT: u8 = 87;
 const OP_VALUE_TO_STRING: u8 = 88;
-const OP_TYPE_OF: u8 = 89;
-const _OP_FLOAT_TO_STRING: u8 = 90; // retired
 const OP_PARSE_INT: u8 = 91;
 // Exception Handling
 const OP_THROW: u8 = 93;
@@ -442,7 +440,6 @@ const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
 const OP_TYPE_DESC_LOAD: u8 = 119;
-const _OP_STRING_EQ: u8 = 120; // retired
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -561,7 +558,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         // Ref Comparison
         Op::RefEq => w.write_all(&[OP_REF_EQ])?,
         Op::RefIsNull => w.write_all(&[OP_REF_IS_NULL])?,
-        // OP_STRING_EQ (120) is retired — StringEq is now handled by _string_eq in prelude
 
         // Type Conversion
         Op::I32WrapI64 => w.write_all(&[OP_I32_WRAP_I64])?,
@@ -630,7 +626,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *size as u32)?;
         }
         Op::ValueToString => w.write_all(&[OP_VALUE_TO_STRING])?,
-        // OP_FLOAT_TO_STRING (90) is retired — now handled by _float_to_string in prelude
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
         // Exception Handling
         Op::Throw => w.write_all(&[OP_THROW])?,
@@ -764,7 +759,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // Ref Comparison
         OP_REF_EQ => Op::RefEq,
         OP_REF_IS_NULL => Op::RefIsNull,
-        // OP_STRING_EQ (120) is retired
 
         // Type Conversion
         OP_I32_WRAP_I64 => Op::I32WrapI64,
@@ -809,7 +803,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_VALUE_TO_STRING => Op::ValueToString,
-        // OP_FLOAT_TO_STRING (90) is retired
         OP_PARSE_INT => Op::ParseInt,
         // Exception Handling
         OP_THROW => Op::Throw,
