@@ -364,6 +364,7 @@ impl MicroOpJitCompiler {
                 | MicroOp::I32TruncF64S { dst, .. }
                 | MicroOp::I64TruncF32S { dst, .. }
                 | MicroOp::RefEq { dst, .. }
+                | MicroOp::StringEq { dst, .. }
                 | MicroOp::RefIsNull { dst, .. }
                 | MicroOp::F64ReinterpretAsI64 { dst, .. } => {
                     record(&mut vreg_tags, dst.0, value_tags::TAG_INT);
@@ -398,8 +399,8 @@ impl MicroOpJitCompiler {
                 | MicroOp::StackPop { dst }
                 | MicroOp::FloatToString { dst, .. }
                 | MicroOp::ValueToString { dst, .. }
+                | MicroOp::HeapAlloc { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
-                | MicroOp::HeapAllocTyped { dst, .. }
                 | MicroOp::StringConst { dst, .. } => {
                     record(&mut vreg_tags, dst.0, u64::MAX);
                 }
@@ -560,6 +561,7 @@ impl MicroOpJitCompiler {
 
             // Ref ops
             MicroOp::RefEq { dst, a, b } => self.emit_ref_eq(dst, a, b),
+            MicroOp::StringEq { .. } => return false, // Too complex for JIT, bail to interpreter
             MicroOp::RefIsNull { dst, src } => self.emit_ref_is_null(dst, src),
             MicroOp::RefNull { dst } => self.emit_ref_null(dst),
 
@@ -573,13 +575,8 @@ impl MicroOpJitCompiler {
             MicroOp::FloatToString { dst, src } => self.emit_float_to_string(dst, src),
             MicroOp::ValueToString { .. } => Err("ValueToString not supported in JIT".to_string()),
             // Heap allocation operations
+            MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
-            MicroOp::HeapAllocTyped {
-                dst,
-                data_ref,
-                len,
-                kind,
-            } => self.emit_heap_alloc_typed(dst, data_ref, len, *kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1054,7 +1051,7 @@ impl MicroOpJitCompiler {
     }
 
     /// JitCallContext offset for jit_function_table pointer.
-    const JIT_FUNC_TABLE_OFFSET: u16 = 96;
+    const JIT_FUNC_TABLE_OFFSET: u16 = 88;
 
     /// Emit a function call that looks up the callee in the JIT function table at runtime.
     /// If the callee is compiled (entry != 0), calls it directly. Otherwise falls back to
@@ -1983,28 +1980,27 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
-    /// Emit HeapAllocTyped: call helper(ctx, data_ref_payload, len_payload, kind) -> (tag, payload)
-    fn emit_heap_alloc_typed(
-        &mut self,
-        dst: &VReg,
-        data_ref: &VReg,
-        len: &VReg,
-        kind: u8,
-    ) -> Result<(), String> {
+    /// Emit HeapAlloc: allocate object with args.len() slots and initialize from args.
+    fn emit_heap_alloc(&mut self, dst: &VReg, args: &[VReg]) -> Result<(), String> {
+        let size = args.len();
         let dst_shadow_off = self.shadow_tag_offset(dst);
+        // 1. Call alloc helper to allocate size null-initialized slots
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
             asm.mov(Reg::X0, regs::VM_CTX);
-            asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(data_ref));
-            asm.ldr(Reg::X2, regs::FRAME_BASE, Self::vreg_offset(len));
-            asm.mov_imm(Reg::X3, kind as u16);
-            asm.ldr(regs::TMP4, regs::VM_CTX, 88);
+            asm.mov_imm(Reg::X1, size as u16);
+            // Load heap_alloc_dyn_simple_helper from JitCallContext offset 80
+            asm.ldr(regs::TMP4, regs::VM_CTX, 80);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
             // Store payload to frame, tag to shadow
             asm.str(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(dst));
             asm.str(Reg::X0, regs::FRAME_BASE, dst_shadow_off);
+        }
+        // 2. Store each arg into the allocated object's slots
+        for (i, arg) in args.iter().enumerate() {
+            self.emit_heap_store(dst, i, arg)?;
         }
         Ok(())
     }

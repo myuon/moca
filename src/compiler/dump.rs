@@ -1246,7 +1246,9 @@ impl ResolvedProgramPrinter {
                 self.print_expr(operand, "└── ", &operand_child);
             }
 
-            ResolvedExpr::Binary { op, left, right } => {
+            ResolvedExpr::Binary {
+                op, left, right, ..
+            } => {
                 let op_str = match op {
                     BinaryOp::Add => "+",
                     BinaryOp::Sub => "-",
@@ -1796,16 +1798,6 @@ impl<'a> Disassembler<'a> {
 
             // Heap operations
             Op::HeapAlloc(n) => self.output.push_str(&format!("HeapAlloc {}", n)),
-            Op::HeapAllocArray(n, kind) => {
-                let kind_str = match kind {
-                    0 => "Slots",
-                    1 => "String",
-                    2 => "Array",
-                    _ => "Unknown",
-                };
-                self.output
-                    .push_str(&format!("HeapAllocArray {} ({})", n, kind_str));
-            }
             Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
             Op::HeapAllocDynSimple => self.output.push_str("HeapAllocDynSimple"),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
@@ -1819,7 +1811,7 @@ impl<'a> Disassembler<'a> {
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::ValueToString => self.output.push_str("ValueToString"),
-            Op::TypeOf => self.output.push_str("TypeOf"),
+            Op::StringEq => self.output.push_str("StringEq"),
             Op::FloatToString => self.output.push_str("ToString"),
             Op::ParseInt => self.output.push_str("ParseInt"),
             Op::UMul128Hi => self.output.push_str("UMul128Hi"),
@@ -2273,6 +2265,12 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(a),
             format_vreg(b)
         )),
+        MicroOp::StringEq { dst, a, b } => output.push_str(&format!(
+            "StringEq {}, {}, {}",
+            format_vreg(dst),
+            format_vreg(a),
+            format_vreg(b)
+        )),
         MicroOp::RefIsNull { dst, src } => output.push_str(&format!(
             "RefIsNull {}, {}",
             format_vreg(dst),
@@ -2329,31 +2327,19 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         )),
 
         // Heap allocation operations
+        MicroOp::HeapAlloc { dst, args } => {
+            let args_str: Vec<String> = args.iter().map(format_vreg).collect();
+            output.push_str(&format!(
+                "HeapAlloc {}, [{}]",
+                format_vreg(dst),
+                args_str.join(", ")
+            ))
+        }
         MicroOp::HeapAllocDynSimple { dst, size } => output.push_str(&format!(
             "HeapAllocDynSimple {}, {}",
             format_vreg(dst),
             format_vreg(size)
         )),
-        MicroOp::HeapAllocTyped {
-            dst,
-            data_ref,
-            len,
-            kind,
-        } => {
-            let kind_str = match kind {
-                0 => "Slots",
-                1 => "String",
-                2 => "Array",
-                _ => "Unknown",
-            };
-            output.push_str(&format!(
-                "HeapAllocTyped {}, {}, {} ({})",
-                format_vreg(dst),
-                format_vreg(data_ref),
-                format_vreg(len),
-                kind_str
-            ));
-        }
         MicroOp::TypeDescLoad { dst, idx } => {
             let tag = chunk
                 .type_descriptors

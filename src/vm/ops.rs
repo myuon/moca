@@ -122,6 +122,9 @@ pub enum Op {
     // ========================================
     RefEq,
     RefIsNull,
+    /// String content equality: pops two string refs (or null), pushes i32 bool.
+    /// Follows [ptr, len] layout to compare character data.
+    StringEq,
 
     // ========================================
     // Type Conversion
@@ -154,9 +157,6 @@ pub enum Op {
     // Heap Operations
     // ========================================
     HeapAlloc(usize),
-    /// Like HeapAlloc but marks the object with a specific ObjectKind.
-    /// Second parameter is the kind: 0=Slots, 1=String, 2=Array.
-    HeapAllocArray(usize, u8),
     HeapAllocDyn,
     HeapAllocDynSimple,
     HeapLoad(usize),
@@ -176,7 +176,6 @@ pub enum Op {
     Syscall(usize, usize),
     GcHint(usize),
     ValueToString,
-    TypeOf,
     FloatToString,
     ParseInt,
     UMul128Hi,
@@ -291,6 +290,7 @@ impl Op {
             Op::F64Ge => "F64Ge",
             Op::RefEq => "RefEq",
             Op::RefIsNull => "RefIsNull",
+            Op::StringEq => "StringEq",
             Op::I32WrapI64 => "I32WrapI64",
             Op::I64ExtendI32S => "I64ExtendI32S",
             Op::I64ExtendI32U => "I64ExtendI32U",
@@ -311,7 +311,6 @@ impl Op {
             Op::Call(_, _) => "Call",
             Op::Ret => "Ret",
             Op::HeapAlloc(_) => "HeapAlloc",
-            Op::HeapAllocArray(_, _) => "HeapAllocArray",
             Op::HeapAllocDyn => "HeapAllocDyn",
             Op::HeapAllocDynSimple => "HeapAllocDynSimple",
             Op::HeapLoad(_) => "HeapLoad",
@@ -324,7 +323,6 @@ impl Op {
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::ValueToString => "ValueToString",
-            Op::TypeOf => "TypeOf",
             Op::FloatToString => "FloatToString",
             Op::ParseInt => "ParseInt",
             Op::UMul128Hi => "UMul128Hi",

@@ -167,10 +167,8 @@ impl Codegen {
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
                 "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
-                "type_of" | "__float_to_string" | "channel" | "recv" | "argv" | "args"
-                | "__alloc_heap" | "__alloc_string" | "__null_ptr" | "__ptr_offset" => {
-                    ValueType::Ref
-                }
+                "__float_to_string" | "channel" | "recv" | "argv" | "args" | "__alloc_heap"
+                | "__alloc_string" | "__null_ptr" | "__ptr_offset" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
                 "__value_to_string" => ValueType::Ref, // returns string
                 "send" | "join" | "print" | "__heap_store" => ValueType::Ref, // returns null
@@ -821,7 +819,7 @@ impl Codegen {
 
                 // 2. Create Array<T> struct: { ptr: data_ptr, len: n }
                 ops.push(Op::I64Const(n as i64));
-                ops.push(Op::HeapAllocArray(2, 2)); // Array struct with [ptr, len]
+                ops.push(Op::HeapAlloc(2)); // Array struct with [ptr, len]
             }
             ResolvedExpr::Index {
                 object,
@@ -877,7 +875,12 @@ impl Codegen {
                     UnaryOp::Not => ops.push(Op::I32Eqz),
                 }
             }
-            ResolvedExpr::Binary { op, left, right } => {
+            ResolvedExpr::Binary {
+                op,
+                left,
+                right,
+                operand_type,
+            } => {
                 // Handle short-circuit evaluation for && and ||
                 // BrIfFalse/BrIf pop the condition value, so we need to Dup first
                 // to keep the result on stack when short-circuiting
@@ -971,7 +974,13 @@ impl Codegen {
                         ValueType::F64 => ops.push(Op::F64Eq),
                         ValueType::I32 => ops.push(Op::I32Eq),
                         ValueType::F32 => ops.push(Op::F32Eq),
-                        ValueType::Ref => ops.push(Op::RefEq),
+                        ValueType::Ref => {
+                            if *operand_type == Some(Type::String) {
+                                ops.push(Op::StringEq);
+                            } else {
+                                ops.push(Op::RefEq);
+                            }
+                        }
                     },
                     BinaryOp::Ne => match self.infer_expr_type(left) {
                         ValueType::I64 => ops.push(Op::I64Ne),
@@ -979,7 +988,11 @@ impl Codegen {
                         ValueType::I32 => ops.push(Op::I32Ne),
                         ValueType::F32 => ops.push(Op::F32Ne),
                         ValueType::Ref => {
-                            ops.push(Op::RefEq);
+                            if *operand_type == Some(Type::String) {
+                                ops.push(Op::StringEq);
+                            } else {
+                                ops.push(Op::RefEq);
+                            }
                             ops.push(Op::I32Eqz);
                         }
                     },
@@ -1114,13 +1127,6 @@ impl Codegen {
                         // Both Array<T> and String have [ptr, len] layout
                         ops.push(Op::HeapLoad(1));
                     }
-                    "type_of" => {
-                        if args.len() != 1 {
-                            return Err("type_of takes exactly 1 argument".to_string());
-                        }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::TypeOf);
-                    }
                     "__float_to_string" => {
                         if args.len() != 1 {
                             return Err("__float_to_string takes exactly 1 argument".to_string());
@@ -1240,7 +1246,7 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
-                        ops.push(Op::HeapAllocArray(2, 1)); // String struct with [ptr, len]
+                        ops.push(Op::HeapAlloc(2)); // String struct with [ptr, len]
                     }
                     // CLI argument builtins
                     "argc" => {
@@ -1593,6 +1599,7 @@ impl Codegen {
             // ========================
             "RefEq" => Ok(Op::RefEq),
             "RefIsNull" => Ok(Op::RefIsNull),
+            "StringEq" => Ok(Op::StringEq),
 
             // ========================
             // Type Conversion
@@ -1639,10 +1646,7 @@ impl Codegen {
                 let n = self.expect_int_arg(args, 0, op_name)? as usize;
                 Ok(Op::HeapAlloc(n))
             }
-            "HeapAllocArray" => {
-                let n = self.expect_int_arg(args, 0, op_name)? as usize;
-                Ok(Op::HeapAllocArray(n, 2))
-            }
+            // HeapAllocArray removed — use HeapAlloc instead
             "HeapAllocDyn" | "AllocHeapDyn" => Ok(Op::HeapAllocDyn),
             "HeapAllocDynSimple" => Ok(Op::HeapAllocDynSimple),
             "HeapLoad" => {
@@ -1657,7 +1661,6 @@ impl Codegen {
             "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
 
             // Type operations
-            "TypeOf" => Ok(Op::TypeOf),
             "FloatToString" => Ok(Op::FloatToString),
             "ParseInt" => Ok(Op::ParseInt),
             // Exception handling

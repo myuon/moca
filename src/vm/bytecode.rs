@@ -442,6 +442,7 @@ const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
 const OP_TYPE_DESC_LOAD: u8 = 119;
+const OP_STRING_EQ: u8 = 120;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -560,6 +561,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         // Ref Comparison
         Op::RefEq => w.write_all(&[OP_REF_EQ])?,
         Op::RefIsNull => w.write_all(&[OP_REF_IS_NULL])?,
+        Op::StringEq => w.write_all(&[OP_STRING_EQ])?,
 
         // Type Conversion
         Op::I32WrapI64 => w.write_all(&[OP_I32_WRAP_I64])?,
@@ -601,11 +603,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_HEAP_ALLOC])?;
             write_u32(w, *size as u32)?;
         }
-        Op::HeapAllocArray(size, kind) => {
-            w.write_all(&[OP_HEAP_ALLOC_ARRAY])?;
-            write_u32(w, *size as u32)?;
-            w.write_all(&[*kind])?;
-        }
+        // HeapAllocArray removed — use HeapAlloc instead
         Op::HeapAllocDyn => w.write_all(&[OP_HEAP_ALLOC_DYN])?,
         Op::HeapAllocDynSimple => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
         Op::HeapLoad(offset) => {
@@ -632,7 +630,6 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *size as u32)?;
         }
         Op::ValueToString => w.write_all(&[OP_VALUE_TO_STRING])?,
-        Op::TypeOf => w.write_all(&[OP_TYPE_OF])?,
         Op::FloatToString => w.write_all(&[OP_FLOAT_TO_STRING])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
         // Exception Handling
@@ -767,6 +764,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // Ref Comparison
         OP_REF_EQ => Op::RefEq,
         OP_REF_IS_NULL => Op::RefIsNull,
+        OP_STRING_EQ => Op::StringEq,
 
         // Type Conversion
         OP_I32_WRAP_I64 => Op::I32WrapI64,
@@ -796,11 +794,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
 
         // Heap Operations
         OP_HEAP_ALLOC => Op::HeapAlloc(read_u32(r)? as usize),
-        OP_HEAP_ALLOC_ARRAY => {
-            let size = read_u32(r)? as usize;
-            let kind = read_u8(r)?;
-            Op::HeapAllocArray(size, kind)
-        }
+        // OP_HEAP_ALLOC_ARRAY removed — use HeapAlloc instead
+        OP_HEAP_ALLOC_ARRAY => Op::HeapAlloc(read_u32(r)? as usize),
         OP_HEAP_ALLOC_DYN => Op::HeapAllocDyn,
         OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple,
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
@@ -814,7 +809,6 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_VALUE_TO_STRING => Op::ValueToString,
-        OP_TYPE_OF => Op::TypeOf,
         OP_FLOAT_TO_STRING => Op::FloatToString,
         OP_PARSE_INT => Op::ParseInt,
         // Exception Handling
@@ -1236,7 +1230,7 @@ mod tests {
             Op::HeapAlloc(5),
             Op::HeapAllocDyn,
             Op::HeapAllocDynSimple,
-            Op::HeapAllocArray(2, 1),
+            // HeapAllocArray removed from test
             Op::HeapLoad(1),
             Op::HeapStore(2),
             Op::HeapLoadDyn,
@@ -1248,7 +1242,6 @@ mod tests {
             Op::Syscall(7, 2),
             Op::GcHint(1024),
             Op::ValueToString,
-            Op::TypeOf,
             Op::FloatToString,
             Op::ParseInt,
             // Exception Handling
