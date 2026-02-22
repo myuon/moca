@@ -707,6 +707,16 @@ fn substitute_type_in_type(ty: &Type, type_map: &HashMap<String, Type>) -> Type 
     }
 }
 
+/// Substitute type parameters in an optional inferred_type field.
+fn substitute_inferred_type(
+    inferred_type: &Option<Type>,
+    type_map: &HashMap<String, Type>,
+) -> Option<Type> {
+    inferred_type
+        .as_ref()
+        .map(|t| substitute_type_in_type(t, type_map))
+}
+
 /// Substitute type parameters in a type annotation with concrete types.
 fn substitute_type_annotation(
     ann: &crate::compiler::types::TypeAnnotation,
@@ -820,7 +830,7 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
                 .map(|ta| substitute_type_annotation(ta, type_map)),
             init: substitute_expr(init, type_map),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Statement::Assign { name, value, span } => Statement::Assign {
             name: name.clone(),
@@ -838,7 +848,7 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
             index: substitute_expr(index, type_map),
             value: substitute_expr(value, type_map),
             span: *span,
-            object_type: object_type.clone(),
+            object_type: substitute_inferred_type(object_type, type_map),
         },
         Statement::FieldAssign {
             object,
@@ -945,7 +955,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::Int {
             value: *value,
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Float {
             value,
@@ -954,7 +964,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::Float {
             value: *value,
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Bool {
             value,
@@ -963,7 +973,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::Bool {
             value: *value,
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Str {
             value,
@@ -972,14 +982,14 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::Str {
             value: value.clone(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Nil {
             span,
             inferred_type,
         } => Expr::Nil {
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Ident {
             name,
@@ -988,7 +998,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::Ident {
             name: name.clone(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Array {
             elements,
@@ -1000,7 +1010,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .map(|e| substitute_expr(e, type_map))
                 .collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Index {
             object,
@@ -1012,8 +1022,8 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             object: Box::new(substitute_expr(object, type_map)),
             index: Box::new(substitute_expr(index, type_map)),
             span: *span,
-            object_type: object_type.clone(),
-            inferred_type: inferred_type.clone(),
+            object_type: substitute_inferred_type(object_type, type_map),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Field {
             object,
@@ -1024,7 +1034,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             object: Box::new(substitute_expr(object, type_map)),
             field: field.clone(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Unary {
             op,
@@ -1035,7 +1045,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             op: *op,
             operand: Box::new(substitute_expr(operand, type_map)),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Binary {
             op,
@@ -1048,7 +1058,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             left: Box::new(substitute_expr(left, type_map)),
             right: Box::new(substitute_expr(right, type_map)),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Call {
             callee,
@@ -1064,7 +1074,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .collect(),
             args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::StructLiteral {
             name,
@@ -1083,7 +1093,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .map(|(n, e)| (n.clone(), substitute_expr(e, type_map)))
                 .collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::MethodCall {
             object,
@@ -1105,7 +1115,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             object_type: object_type
                 .as_ref()
                 .map(|t| substitute_type_in_type(t, type_map)),
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::AssociatedFunctionCall {
             type_name,
@@ -1128,7 +1138,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .collect(),
             args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Asm(asm_block) => Expr::Asm(asm_block.clone()),
         Expr::NewLiteral {
@@ -1158,7 +1168,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 })
                 .collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Block {
             statements,
@@ -1172,7 +1182,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .collect(),
             expr: Box::new(substitute_expr(expr, type_map)),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::Lambda {
             params,
@@ -1187,7 +1197,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 .map(|ta| substitute_type_annotation(ta, type_map)),
             body: substitute_block(body, type_map),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::CallExpr {
             callee,
@@ -1198,7 +1208,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             callee: Box::new(substitute_expr(callee, type_map)),
             args: args.iter().map(|a| substitute_expr(a, type_map)).collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::AsDyn {
             expr,
@@ -1207,7 +1217,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
         } => Expr::AsDyn {
             expr: Box::new(substitute_expr(expr, type_map)),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
         Expr::StringInterpolation {
             parts,
@@ -1228,7 +1238,7 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
                 })
                 .collect(),
             span: *span,
-            inferred_type: inferred_type.clone(),
+            inferred_type: substitute_inferred_type(inferred_type, type_map),
         },
     }
 }
