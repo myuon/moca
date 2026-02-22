@@ -865,13 +865,13 @@ fun _value_to_string(v: dyn) -> string {
     }
 }
 
-fun debug<T>(v: T) -> string {
-    return _value_to_string(v as dyn);
+fun debug(v: dyn) -> string {
+    return _value_to_string(v);
 }
 
 // Print any value to stdout with a trailing newline (runtime type dispatch).
-fun print_debug<T>(v: T) {
-    print_str(_value_to_string(v as dyn));
+fun print_debug(v: dyn) {
+    print_str(_value_to_string(v));
     print_str("\n");
 }
 
