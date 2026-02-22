@@ -316,6 +316,7 @@ impl<'a> Resolver<'a> {
             functions: HashMap::new(),
             builtins: vec![
                 "__value_to_string".to_string(),
+                "__value_tag".to_string(),
                 "len".to_string(),
                 "type_of".to_string(),
                 "parse_int".to_string(),

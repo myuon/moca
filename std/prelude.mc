@@ -853,13 +853,25 @@ fun print<T: ToString>(v: T) {
 }
 
 // Convert any value to its string representation (runtime type dispatch).
-fun debug(v: any) -> string {
+// Dispatches to type-specific moca functions for primitives.
+// Falls back to __value_to_string (VM opcode) for ref types.
+fun _value_to_string(v: any) -> string {
+    let tag = __value_tag(v);
+    if tag == 0 { return _int_to_string(v); }
+    if tag == 1 { return _float_to_string(v); }
+    if tag == 2 { return _bool_to_string(v); }
+    if tag == 3 { return "nil"; }
+    // ref case: use existing VM opcode for now
     return __value_to_string(v);
+}
+
+fun debug(v: any) -> string {
+    return _value_to_string(v);
 }
 
 // Print any value to stdout with a trailing newline (runtime type dispatch).
 fun print_debug(v: any) {
-    print_str(__value_to_string(v));
+    print_str(_value_to_string(v));
     print_str("\n");
 }
 

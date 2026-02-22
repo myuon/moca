@@ -495,6 +495,12 @@ pub enum MicroOp {
         dst: VReg,
         src: VReg,
     },
+    /// Return the runtime type tag of a value.
+    /// dst = value_tag(src) (0=int, 1=float, 2=bool, 3=nil, 4=ref)
+    ValueTag {
+        dst: VReg,
+        src: VReg,
+    },
     // ========================================
     // Stack Bridge (for Raw op interop)
     // ========================================

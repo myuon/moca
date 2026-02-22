@@ -450,6 +450,7 @@ const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
 const OP_TYPE_DESC_LOAD: u8 = 119;
+const OP_VALUE_TAG: u8 = 120;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -636,6 +637,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *size as u32)?;
         }
         Op::ValueToString => w.write_all(&[OP_VALUE_TO_STRING])?,
+        Op::ValueTag => w.write_all(&[OP_VALUE_TAG])?,
         Op::ParseInt => w.write_all(&[OP_PARSE_INT])?,
         // Exception Handling
         Op::Throw => w.write_all(&[OP_THROW])?,
@@ -813,6 +815,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_VALUE_TO_STRING => Op::ValueToString,
+        OP_VALUE_TAG => Op::ValueTag,
         OP_PARSE_INT => Op::ParseInt,
         // Exception Handling
         OP_THROW => Op::Throw,
@@ -1245,6 +1248,7 @@ mod tests {
             Op::Syscall(7, 2),
             Op::GcHint(1024),
             Op::ValueToString,
+            Op::ValueTag,
             Op::ParseInt,
             // Exception Handling
             Op::Throw,

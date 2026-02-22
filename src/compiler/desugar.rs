@@ -671,14 +671,14 @@ impl Desugar {
                     }
 
                     // For all other types (any, nullable, array, vec, map, etc.):
-                    // use __value_to_string (runtime dispatch)
+                    // use _value_to_string (prelude function with runtime type dispatch)
                     return Expr::Block {
                         statements: vec![Statement::Expr {
                             expr: Expr::Call {
                                 callee: "print_str".to_string(),
                                 type_args: vec![],
                                 args: vec![Expr::Call {
-                                    callee: "__value_to_string".to_string(),
+                                    callee: "_value_to_string".to_string(),
                                     type_args: vec![],
                                     args: vec![arg],
                                     span,
