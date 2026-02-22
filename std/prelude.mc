@@ -852,26 +852,26 @@ fun print<T: ToString>(v: T) {
     print_str("\n");
 }
 
-// Convert any value to its string representation (runtime type dispatch).
+// Convert a dyn value to its string representation using match dyn.
 // Dispatches to type-specific moca functions for primitives.
-// Falls back to __value_to_string (VM opcode) for ref types.
-fun _value_to_string(v: any) -> string {
-    let tag = __value_tag(v);
-    if tag == 0 { return _int_to_string(v); }
-    if tag == 1 { return _float_to_string(v); }
-    if tag == 2 { return _bool_to_string(v); }
-    if tag == 3 { return "nil"; }
-    // ref case: use existing VM opcode for now
-    return __value_to_string(v);
+// Falls back to __value_to_string (VM opcode) for unmatched types.
+fun _value_to_string(v: dyn) -> string {
+    match dyn v {
+        x: int => { return _int_to_string(x); }
+        x: float => { return _float_to_string(x); }
+        x: bool => { return _bool_to_string(x); }
+        x: string => { return x; }
+        _ => { return __value_to_string(__heap_load(v, 1)); }
+    }
 }
 
-fun debug(v: any) -> string {
-    return _value_to_string(v);
+fun debug<T>(v: T) -> string {
+    return _value_to_string(v as dyn);
 }
 
 // Print any value to stdout with a trailing newline (runtime type dispatch).
-fun print_debug(v: any) {
-    print_str(_value_to_string(v));
+fun print_debug<T>(v: T) {
+    print_str(_value_to_string(v as dyn));
     print_str("\n");
 }
 

@@ -671,7 +671,7 @@ impl Desugar {
                     }
 
                     // For all other types (any, nullable, array, vec, map, etc.):
-                    // use _value_to_string (prelude function with runtime type dispatch)
+                    // use _value_to_string(v as dyn) with match dyn dispatch
                     return Expr::Block {
                         statements: vec![Statement::Expr {
                             expr: Expr::Call {
@@ -680,7 +680,11 @@ impl Desugar {
                                 args: vec![Expr::Call {
                                     callee: "_value_to_string".to_string(),
                                     type_args: vec![],
-                                    args: vec![arg],
+                                    args: vec![Expr::AsDyn {
+                                        expr: Box::new(arg),
+                                        span,
+                                        inferred_type: Some(Type::Dyn),
+                                    }],
                                     span,
                                     inferred_type: Some(Type::String),
                                 }],
