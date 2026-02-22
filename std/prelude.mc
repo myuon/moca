@@ -861,18 +861,79 @@ fun _value_to_string(v: dyn) -> string {
         x: float => { return _float_to_string(x); }
         x: bool => { return _bool_to_string(x); }
         x: string => { return x; }
-        _ => { return __value_to_string(__heap_load(v, 1)); }
+        _ => {
+            let fc: int = __dyn_field_count(v);
+            if fc == 3 {
+                let fn0: string = __dyn_field_name(v, 0);
+                if fn0 == "data" && __dyn_field_name(v, 1) == "len" && __dyn_field_name(v, 2) == "cap" {
+                    // Vec: format as [elem1, elem2, ...]
+                    let raw = __heap_load(v, 1);
+                    let data = __heap_load(raw, 0);
+                    let vec_len: int = __heap_load(raw, 1);
+                    if vec_len == 0 {
+                        return "[]";
+                    }
+                    let result = "[";
+                    let i = 0;
+                    while i < vec_len {
+                        if i > 0 {
+                            result = result + ", ";
+                        }
+                        result = result + __value_to_string(__heap_load(data, i));
+                        i = i + 1;
+                    }
+                    return result + "]";
+                }
+                if fn0 == "hm_buckets" && __dyn_field_name(v, 1) == "hm_size" && __dyn_field_name(v, 2) == "hm_capacity" {
+                    // Map: format as {key1: val1, key2: val2}
+                    let raw = __heap_load(v, 1);
+                    let buckets = __heap_load(raw, 0);
+                    let map_size: int = __heap_load(raw, 1);
+                    let map_cap: int = __heap_load(raw, 2);
+                    if map_size == 0 {
+                        return "{}";
+                    }
+                    let result = "{";
+                    let first = true;
+                    let bi = 0;
+                    while bi < map_cap {
+                        let entry_ptr = __heap_load(buckets, bi);
+                        while entry_ptr != 0 {
+                            if !first {
+                                result = result + ", ";
+                            }
+                            first = false;
+                            result = result + __value_to_string(__heap_load(entry_ptr, 0)) + ": " + __value_to_string(__heap_load(entry_ptr, 1));
+                            entry_ptr = __heap_load(entry_ptr, 2);
+                        }
+                        bi = bi + 1;
+                    }
+                    return result + "}";
+                }
+            }
+            // Struct with named fields (not Array/Vec/Map)
+            if fc > 0 && !(fc == 2 && __dyn_field_name(v, 0) == "data") {
+                let type_name: string = __dyn_type_name(v);
+                let raw = __heap_load(v, 1);
+                let result = type_name + " { ";
+                let i = 0;
+                while i < fc {
+                    if i > 0 {
+                        result = result + ", ";
+                    }
+                    result = result + __dyn_field_name(v, i) + ": " + __value_to_string(__heap_load(raw, i));
+                    i = i + 1;
+                }
+                return result + " }";
+            }
+            // Fallback: array, nil, unknown
+            return __value_to_string(__heap_load(v, 1));
+        }
     }
 }
 
 fun debug(v: dyn) -> string {
     return _value_to_string(v);
-}
-
-// Print any value to stdout with a trailing newline (runtime type dispatch).
-fun print_debug(v: dyn) {
-    print_str(_value_to_string(v));
-    print_str("\n");
 }
 
 // Print a string to stderr without a newline.
