@@ -226,7 +226,7 @@ impl VM {
     }
 
     /// Pre-allocate type descriptor heap objects from the chunk's type descriptor table.
-    /// Layout: [tag_id, type_name, field_count, ...field_names, ...field_type_desc_refs]
+    /// Layout: [tag_id, type_name, field_count, ...field_names, ...field_type_desc_refs, aux_count, ...aux_type_desc_refs]
     fn init_type_descriptors(&mut self, chunk: &Chunk) -> Result<(), String> {
         // Build tag_name -> index map for resolving field type references
         let tag_to_idx: std::collections::HashMap<&str, usize> = chunk
@@ -236,11 +236,12 @@ impl VM {
             .map(|(i, td)| (td.tag_name.as_str(), i))
             .collect();
 
-        // Pass 1: Allocate all type descriptor heap objects with placeholder nils for field type refs
+        // Pass 1: Allocate all type descriptor heap objects with placeholder nils for type refs
         self.type_descriptor_refs = Vec::with_capacity(chunk.type_descriptors.len());
         for td in &chunk.type_descriptors {
             let n = td.field_names.len();
-            let type_info_slots = 3 + n + n; // field_names + field_type_desc_refs
+            let m = td.aux_type_tags.len();
+            let type_info_slots = 3 + n + n + 1 + m; // field_names + field_type_desc_refs + aux_count + aux_type_desc_refs
             let mut slots = Vec::with_capacity(type_info_slots);
 
             // slot 0: tag_id (string pool index as i64)
@@ -269,13 +270,22 @@ impl VM {
                 slots.push(Value::Null);
             }
 
+            // slot 3+2n: aux_count
+            slots.push(Value::I64(m as i64));
+
+            // slot 3+2n+1..3+2n+1+m: placeholder nils for aux type descriptor refs
+            for _ in 0..m {
+                slots.push(Value::Null);
+            }
+
             let gc_ref = self.heap.alloc_slots(slots)?;
             self.type_descriptor_refs.push(gc_ref);
         }
 
-        // Pass 2: Fill in field type descriptor refs
+        // Pass 2: Fill in field type descriptor refs and aux type descriptor refs
         for (i, td) in chunk.type_descriptors.iter().enumerate() {
             let n = td.field_names.len();
+            // Fill field type desc refs
             for (j, ft_tag) in td.field_type_tags.iter().enumerate() {
                 if let Some(&ft_idx) = tag_to_idx.get(ft_tag.as_str()) {
                     let ft_ref = self.type_descriptor_refs[ft_idx];
@@ -284,6 +294,18 @@ impl VM {
                         self.type_descriptor_refs[i],
                         slot_index,
                         Value::Ref(ft_ref),
+                    )?;
+                }
+            }
+            // Fill aux type desc refs
+            for (j, aux_tag) in td.aux_type_tags.iter().enumerate() {
+                if let Some(&aux_idx) = tag_to_idx.get(aux_tag.as_str()) {
+                    let aux_ref = self.type_descriptor_refs[aux_idx];
+                    let slot_index = 3 + 2 * n + 1 + j;
+                    self.heap.write_slot(
+                        self.type_descriptor_refs[i],
+                        slot_index,
+                        Value::Ref(aux_ref),
                     )?;
                 }
             }

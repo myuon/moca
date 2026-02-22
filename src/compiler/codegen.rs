@@ -286,12 +286,13 @@ impl Codegen {
     }
 
     /// Add a type descriptor (or return existing index) for dyn type info.
-    /// If the tag_name already exists but field_names/field_type_tags are more complete, update them.
+    /// If the tag_name already exists but field_names/field_type_tags/aux_type_tags are more complete, update them.
     fn add_type_descriptor(
         &mut self,
         tag_name: &str,
         field_names: &[String],
         field_type_tags: &[String],
+        aux_type_tags: &[String],
     ) -> usize {
         if let Some(&idx) = self.type_descriptor_indices.get(tag_name) {
             // Update field_names if the existing entry has none but new request has some
@@ -303,6 +304,10 @@ impl Codegen {
             {
                 self.type_descriptors[idx].field_type_tags = field_type_tags.to_vec();
             }
+            // Update aux_type_tags if the existing entry has none but new request has some
+            if !aux_type_tags.is_empty() && self.type_descriptors[idx].aux_type_tags.is_empty() {
+                self.type_descriptors[idx].aux_type_tags = aux_type_tags.to_vec();
+            }
             return idx;
         }
         let idx = self.type_descriptors.len();
@@ -312,6 +317,7 @@ impl Codegen {
             tag_name: tag_name.to_string(),
             field_names: field_names.to_vec(),
             field_type_tags: field_type_tags.to_vec(),
+            aux_type_tags: aux_type_tags.to_vec(),
         });
         self.type_descriptor_indices
             .insert(tag_name.to_string(), idx);
@@ -746,7 +752,7 @@ impl Codegen {
 
                 for arm in arms {
                     // Register type descriptor for this arm's type
-                    let td_idx = self.add_type_descriptor(&arm.type_tag_name, &[], &[]);
+                    let td_idx = self.add_type_descriptor(&arm.type_tag_name, &[], &[], &[]);
 
                     // Load dyn value → type_info ref, compare with expected type descriptor
                     ops.push(Op::LocalGet(*dyn_slot));
@@ -1418,13 +1424,23 @@ impl Codegen {
                 type_tag_name,
                 field_names,
                 field_type_tags,
+                aux_type_tags,
+                nested_type_descriptors,
             } => {
-                // Register type descriptors for field types first (so they exist when parent is created)
-                for ft_tag in field_type_tags.iter() {
-                    self.add_type_descriptor(ft_tag, &[], &[]);
+                // Register nested type descriptors first (with full field info)
+                // so that subsequent registrations with empty info don't overwrite them.
+                for (ntd_tag, ntd_fields, ntd_field_types, ntd_aux) in
+                    nested_type_descriptors.iter()
+                {
+                    self.add_type_descriptor(ntd_tag, ntd_fields, ntd_field_types, ntd_aux);
                 }
                 // Register type descriptor (pre-allocated at VM startup)
-                let td_idx = self.add_type_descriptor(type_tag_name, field_names, field_type_tags);
+                let td_idx = self.add_type_descriptor(
+                    type_tag_name,
+                    field_names,
+                    field_type_tags,
+                    aux_type_tags,
+                );
 
                 // Push type_info ref (pre-allocated) and value, then alloc dyn object inline
                 ops.push(Op::TypeDescLoad(td_idx));

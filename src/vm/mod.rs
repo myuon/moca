@@ -72,6 +72,9 @@ pub struct TypeDescriptor {
     /// Field type tag names for struct types (parallel to field_names).
     /// Each entry is the tag_name of the field's type descriptor.
     pub field_type_tags: Vec<String>,
+    /// Auxiliary type tag names for container element types.
+    /// Vec → [elem_tag], Map → [key_tag, val_tag], Array → [elem_tag], others → [].
+    pub aux_type_tags: Vec<String>,
 }
 
 /// A compiled chunk of bytecode.

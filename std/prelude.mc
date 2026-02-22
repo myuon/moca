@@ -852,9 +852,147 @@ fun print<T: ToString>(v: T) {
     print_str("\n");
 }
 
+// Recursively format a dyn-like wrapper [type_info_ref, raw_value].
+// Uses type_info heap layout to recurse into containers and structs.
+// type_info layout: [tag_id, type_name, fc, ...field_names, ...field_td_refs, aux_count, ...aux_td_refs]
+fun _any_to_string(d: any) -> string {
+    let ti = __heap_load(d, 0);
+    let tn: string = __heap_load(ti, 1);
+    let fc: int = __heap_load(ti, 2);
+
+    // Primitives (no fields)
+    if fc == 0 {
+        let raw = __heap_load(d, 1);
+        if tn == "int" {
+            return _int_to_string(raw);
+        }
+        if tn == "float" {
+            return _float_to_string(raw);
+        }
+        if tn == "bool" {
+            return _bool_to_string(raw);
+        }
+        if tn == "string" {
+            return raw;
+        }
+        if tn == "nil" {
+            return "nil";
+        }
+        return __value_to_string(raw);
+    }
+
+    let raw = __heap_load(d, 1);
+    let ac: int = __heap_load(ti, 3 + 2 * fc);
+    let fn0: string = __heap_load(ti, 3);
+
+    // Vec (fc == 3, data/len/cap)
+    if fc == 3 {
+        let fn1: string = __heap_load(ti, 4);
+        let fn2: string = __heap_load(ti, 5);
+        if fn0 == "data" && fn1 == "len" && fn2 == "cap" && ac >= 1 {
+            let data = __heap_load(raw, 0);
+            let vec_len: int = __heap_load(raw, 1);
+            if vec_len == 0 {
+                return "[]";
+            }
+            let elem_td = __heap_load(ti, 3 + 2 * fc + 1);
+            let result = "[";
+            let i = 0;
+            while i < vec_len {
+                if i > 0 {
+                    result = result + ", ";
+                }
+                let wrapper = __alloc_heap(2);
+                __heap_store(wrapper, 0, elem_td);
+                __heap_store(wrapper, 1, __heap_load(data, i));
+                result = result + _any_to_string(wrapper);
+                i = i + 1;
+            }
+            return result + "]";
+        }
+        // Map (fc == 3, hm_buckets/hm_size/hm_capacity)
+        if fn0 == "hm_buckets" && ac >= 2 {
+            let buckets = __heap_load(raw, 0);
+            let map_size: int = __heap_load(raw, 1);
+            let map_cap: int = __heap_load(raw, 2);
+            if map_size == 0 {
+                return "{}";
+            }
+            let key_td = __heap_load(ti, 3 + 2 * fc + 1);
+            let val_td = __heap_load(ti, 3 + 2 * fc + 2);
+            let result = "{";
+            let first = true;
+            let bi = 0;
+            while bi < map_cap {
+                let entry_ptr = __heap_load(buckets, bi);
+                while entry_ptr != 0 {
+                    if !first {
+                        result = result + ", ";
+                    }
+                    first = false;
+                    let kw = __alloc_heap(2);
+                    __heap_store(kw, 0, key_td);
+                    __heap_store(kw, 1, __heap_load(entry_ptr, 0));
+                    let vw = __alloc_heap(2);
+                    __heap_store(vw, 0, val_td);
+                    __heap_store(vw, 1, __heap_load(entry_ptr, 1));
+                    result = result + _any_to_string(kw) + ": " + _any_to_string(vw);
+                    entry_ptr = __heap_load(entry_ptr, 2);
+                }
+                bi = bi + 1;
+            }
+            return result + "}";
+        }
+    }
+
+    // Array (fc == 2, data/len)
+    if fc == 2 && fn0 == "data" && ac >= 1 {
+        let fn1: string = __heap_load(ti, 4);
+        if fn1 == "len" {
+            let data = __heap_load(raw, 0);
+            let arr_len: int = __heap_load(raw, 1);
+            if arr_len == 0 {
+                return "[]";
+            }
+            let elem_td = __heap_load(ti, 3 + 2 * fc + 1);
+            let result = "[";
+            let i = 0;
+            while i < arr_len {
+                if i > 0 {
+                    result = result + ", ";
+                }
+                let wrapper = __alloc_heap(2);
+                __heap_store(wrapper, 0, elem_td);
+                __heap_store(wrapper, 1, __heap_load(data, i));
+                result = result + _any_to_string(wrapper);
+                i = i + 1;
+            }
+            return result + "]";
+        }
+    }
+
+    // Struct with named fields
+    let result = tn + " { ";
+    let i = 0;
+    while i < fc {
+        if i > 0 {
+            result = result + ", ";
+        }
+        let field_name: string = __heap_load(ti, 3 + i);
+        let field_td = __heap_load(ti, 3 + fc + i);
+        let field_val = __heap_load(raw, i);
+        let wrapper = __alloc_heap(2);
+        __heap_store(wrapper, 0, field_td);
+        __heap_store(wrapper, 1, field_val);
+        result = result + field_name + ": " + _any_to_string(wrapper);
+        i = i + 1;
+    }
+    return result + " }";
+}
+
 // Convert a dyn value to its string representation using match dyn.
 // Dispatches to type-specific moca functions for primitives.
-// Falls back to __value_to_string (VM opcode) for unmatched types.
+// Falls back to _any_to_string for containers and structs.
 fun _value_to_string(v: dyn) -> string {
     match dyn v {
         x: int => { return _int_to_string(x); }
@@ -862,72 +1000,7 @@ fun _value_to_string(v: dyn) -> string {
         x: bool => { return _bool_to_string(x); }
         x: string => { return x; }
         _ => {
-            let fc: int = __dyn_field_count(v);
-            if fc == 3 {
-                let fn0: string = __dyn_field_name(v, 0);
-                if fn0 == "data" && __dyn_field_name(v, 1) == "len" && __dyn_field_name(v, 2) == "cap" {
-                    // Vec: format as [elem1, elem2, ...]
-                    let raw = __heap_load(v, 1);
-                    let data = __heap_load(raw, 0);
-                    let vec_len: int = __heap_load(raw, 1);
-                    if vec_len == 0 {
-                        return "[]";
-                    }
-                    let result = "[";
-                    let i = 0;
-                    while i < vec_len {
-                        if i > 0 {
-                            result = result + ", ";
-                        }
-                        result = result + __value_to_string(__heap_load(data, i));
-                        i = i + 1;
-                    }
-                    return result + "]";
-                }
-                if fn0 == "hm_buckets" && __dyn_field_name(v, 1) == "hm_size" && __dyn_field_name(v, 2) == "hm_capacity" {
-                    // Map: format as {key1: val1, key2: val2}
-                    let raw = __heap_load(v, 1);
-                    let buckets = __heap_load(raw, 0);
-                    let map_size: int = __heap_load(raw, 1);
-                    let map_cap: int = __heap_load(raw, 2);
-                    if map_size == 0 {
-                        return "{}";
-                    }
-                    let result = "{";
-                    let first = true;
-                    let bi = 0;
-                    while bi < map_cap {
-                        let entry_ptr = __heap_load(buckets, bi);
-                        while entry_ptr != 0 {
-                            if !first {
-                                result = result + ", ";
-                            }
-                            first = false;
-                            result = result + __value_to_string(__heap_load(entry_ptr, 0)) + ": " + __value_to_string(__heap_load(entry_ptr, 1));
-                            entry_ptr = __heap_load(entry_ptr, 2);
-                        }
-                        bi = bi + 1;
-                    }
-                    return result + "}";
-                }
-            }
-            // Struct with named fields (not Array/Vec/Map)
-            if fc > 0 && !(fc == 2 && __dyn_field_name(v, 0) == "data") {
-                let type_name: string = __dyn_type_name(v);
-                let raw = __heap_load(v, 1);
-                let result = type_name + " { ";
-                let i = 0;
-                while i < fc {
-                    if i > 0 {
-                        result = result + ", ";
-                    }
-                    result = result + __dyn_field_name(v, i) + ": " + __value_to_string(__heap_load(raw, i));
-                    i = i + 1;
-                }
-                return result + " }";
-            }
-            // Fallback: array, nil, unknown
-            return __value_to_string(__heap_load(v, 1));
+            return _any_to_string(v);
         }
     }
 }

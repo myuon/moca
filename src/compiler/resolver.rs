@@ -3,6 +3,9 @@ use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
 use std::collections::{HashMap, HashSet};
 
+/// A type descriptor entry: (tag_name, field_names, field_type_tags, aux_type_tags).
+type TypeDescriptorEntry = (String, Vec<String>, Vec<String>, Vec<String>);
+
 /// A resolved asm instruction.
 #[derive(Debug, Clone)]
 pub enum ResolvedAsmInstruction {
@@ -262,6 +265,11 @@ pub enum ResolvedExpr {
         type_tag_name: String,
         field_names: Vec<String>,
         field_type_tags: Vec<String>,
+        /// Auxiliary type tags for container element types.
+        /// Vec/Array → [elem_tag], Map → [key_tag, val_tag], others → [].
+        aux_type_tags: Vec<String>,
+        /// Recursively collected type descriptors for nested types.
+        nested_type_descriptors: Vec<TypeDescriptorEntry>,
     },
 }
 
@@ -2011,14 +2019,24 @@ impl<'a> Resolver<'a> {
                             .collect();
                         (names, type_tags)
                     }
+                    Type::Array(_) => {
+                        // Array<T> has runtime layout [data_ptr, len]
+                        (vec!["data".to_string(), "len".to_string()], vec![])
+                    }
                     _ => (vec![], vec![]),
                 };
+                // Compute auxiliary type tags for container element types
+                let aux_type_tags = compute_aux_type_tags(&inner_type);
+                // Recursively collect type descriptors for all nested types
+                let nested_type_descriptors = collect_nested_type_descriptors(&inner_type);
                 let resolved_expr = self.resolve_expr(*expr, scope)?;
                 Ok(ResolvedExpr::AsDyn {
                     expr: Box::new(resolved_expr),
                     type_tag_name,
                     field_names,
                     field_type_tags,
+                    aux_type_tags,
+                    nested_type_descriptors,
                 })
             }
         }
@@ -2195,6 +2213,7 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
                 .join("_");
             format!("{}_{}", name, args)
         }
+        Type::Array(elem) => format!("Array_{}", type_to_dyn_tag_name(elem)),
         Type::Vector(elem) => format!("Vec_{}", type_to_dyn_tag_name(elem)),
         Type::Map(k, v) => format!(
             "Map_{}_{}",
@@ -2202,6 +2221,131 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
             type_to_dyn_tag_name(v)
         ),
         _ => ty.to_string(),
+    }
+}
+
+/// Compute auxiliary type tags for container element types.
+/// Vec/Array → [elem_tag], Map → [key_tag, val_tag], Struct fields → field type tags.
+fn compute_aux_type_tags(ty: &Type) -> Vec<String> {
+    match ty {
+        Type::Vector(elem) | Type::Array(elem) => {
+            vec![type_to_dyn_tag_name(elem)]
+        }
+        Type::Map(k, v) => {
+            vec![type_to_dyn_tag_name(k), type_to_dyn_tag_name(v)]
+        }
+        Type::GenericStruct {
+            type_args, fields, ..
+        } => {
+            // Check field structure to detect Vec/Map/Array containers
+            let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+            if field_names == ["data", "len", "cap"] && !type_args.is_empty() {
+                // Vec-like: aux = [elem_tag]
+                vec![type_to_dyn_tag_name(&type_args[0])]
+            } else if field_names == ["hm_buckets", "hm_size", "hm_capacity"]
+                && type_args.len() >= 2
+            {
+                // Map-like: aux = [key_tag, val_tag]
+                vec![
+                    type_to_dyn_tag_name(&type_args[0]),
+                    type_to_dyn_tag_name(&type_args[1]),
+                ]
+            } else if field_names == ["data", "len"] && !type_args.is_empty() {
+                // Array-like: aux = [elem_tag]
+                vec![type_to_dyn_tag_name(&type_args[0])]
+            } else {
+                // Named struct with fields — use type_args if present
+                let mut aux = Vec::new();
+                for type_arg in type_args {
+                    aux.push(type_to_dyn_tag_name(type_arg));
+                }
+                aux
+            }
+        }
+        Type::Struct { name, fields } => {
+            // Check if this is a monomorphized container (name like "Vec_int")
+            if name.starts_with("Vec_") || name.starts_with("Array_") {
+                let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                if field_names == ["data", "len", "cap"] || field_names == ["data", "len"] {
+                    // Extract element type from field "data" which should be an Array
+                    if let Some((_, Type::Array(elem))) = fields.first() {
+                        return vec![type_to_dyn_tag_name(elem)];
+                    }
+                }
+            }
+            if name.starts_with("Map_") {
+                let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                if field_names == ["hm_buckets", "hm_size", "hm_capacity"] {
+                    // For monomorphized Map, extract key/val types from the bucket entry type
+                    // This is harder, so we fall through to empty
+                }
+            }
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+/// Recursively collect type descriptors for all nested types reachable from `ty`.
+/// Returns a list of (tag_name, field_names, field_type_tags, aux_type_tags) tuples
+/// that should be registered with full info in the codegen.
+fn collect_nested_type_descriptors(ty: &Type) -> Vec<TypeDescriptorEntry> {
+    let mut result = Vec::new();
+    let mut visited = HashSet::new();
+    collect_nested_type_descriptors_inner(ty, &mut result, &mut visited);
+    result
+}
+
+fn collect_nested_type_descriptors_inner(
+    ty: &Type,
+    result: &mut Vec<TypeDescriptorEntry>,
+    visited: &mut HashSet<String>,
+) {
+    let tag = type_to_dyn_tag_name(ty);
+    if visited.contains(&tag) {
+        return;
+    }
+    visited.insert(tag.clone());
+
+    // Extract field info for this type
+    let (field_names, field_type_tags): (Vec<String>, Vec<String>) = match ty {
+        Type::Struct { fields, .. } | Type::GenericStruct { fields, .. } => {
+            let names = fields.iter().map(|(n, _)| n.clone()).collect();
+            let tags = fields
+                .iter()
+                .map(|(_, t)| type_to_dyn_tag_name(t))
+                .collect();
+            (names, tags)
+        }
+        Type::Array(_) => (vec!["data".to_string(), "len".to_string()], vec![]),
+        _ => (vec![], vec![]),
+    };
+    let aux_type_tags = compute_aux_type_tags(ty);
+
+    result.push((tag, field_names, field_type_tags, aux_type_tags));
+
+    // Recurse into field types
+    if let Type::Struct { fields, .. } | Type::GenericStruct { fields, .. } = ty {
+        for (_, field_ty) in fields {
+            collect_nested_type_descriptors_inner(field_ty, result, visited);
+        }
+    }
+
+    // Recurse into element/key/value types
+    match ty {
+        Type::Vector(elem) | Type::Array(elem) => {
+            collect_nested_type_descriptors_inner(elem, result, visited);
+        }
+        Type::Map(key, val) => {
+            collect_nested_type_descriptors_inner(key, result, visited);
+            collect_nested_type_descriptors_inner(val, result, visited);
+        }
+        Type::GenericStruct { type_args, .. } => {
+            for arg in type_args {
+                collect_nested_type_descriptors_inner(arg, result, visited);
+            }
+        }
+        _ => {}
     }
 }
 
