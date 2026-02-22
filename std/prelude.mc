@@ -855,6 +855,26 @@ fun print<T: ToString>(v: T) {
 // Recursively format a dyn value [type_info_ref, raw_value].
 // Dispatches on type name prefix: int/float/bool/string/nil/Vec_/Map_/Array_/struct.
 // type_info layout: [tag_id, type_name, fc, ...field_names, ...field_td_refs, aux_count, ...aux_td_refs]
+// Look up the ToString vtable in a type_info and call to_string if found.
+// Returns the result string, or nil if ToString is not implemented.
+fun _try_to_string_vtable(ti: any, fc: int, raw: any) -> any {
+    let ac: int = __heap_load(ti, 3 + 2 * fc);
+    let vtable_base = 3 + 2 * fc + 1 + ac;
+    let vc: int = __heap_load(ti, vtable_base);
+    let vi = 0;
+    while vi < vc {
+        let iface_ref = __heap_load(ti, vtable_base + 1 + 2 * vi);
+        let iface_name: string = __heap_load(iface_ref, 0);
+        if iface_name == "ToString" {
+            let vtable_ref = __heap_load(ti, vtable_base + 1 + 2 * vi + 1);
+            let func_idx: int = __heap_load(vtable_ref, 0);
+            return __call_func(func_idx, raw);
+        }
+        vi = vi + 1;
+    }
+    return nil;
+}
+
 fun _any_to_string(d: any) -> string {
     let ti = __heap_load(d, 0);
     let tn: string = __heap_load(ti, 1);
@@ -866,6 +886,12 @@ fun _any_to_string(d: any) -> string {
     if tn == "bool" { return _bool_to_string(raw); }
     if tn == "string" { return raw; }
     if tn == "nil" { return "nil"; }
+
+    // Check ToString vtable before container/struct formatting
+    let ts_result = _try_to_string_vtable(ti, fc, raw);
+    if ts_result != nil {
+        return ts_result;
+    }
 
     // Vec_*
     if str_index_of(tn, "Vec_") == 0 {

@@ -24,6 +24,8 @@ pub struct ResolvedProgram {
     pub main_locals_count: usize,
     /// Type information for main body local variables (indexed by slot)
     pub main_local_types: Vec<Type>,
+    /// Interface definitions: interface_name -> method_names (sorted)
+    pub interface_methods: HashMap<String, Vec<String>>,
 }
 
 /// Information about a resolved struct.
@@ -47,6 +49,7 @@ pub struct ResolvedFunction {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum ResolvedStatement {
     Let {
         slot: usize,
@@ -68,6 +71,8 @@ pub enum ResolvedStatement {
         object: ResolvedExpr,
         field: String,
         value: ResolvedExpr,
+        /// Struct name for field index resolution (from typechecker)
+        struct_name: Option<String>,
     },
     If {
         condition: ResolvedExpr,
@@ -116,8 +121,20 @@ pub enum ResolvedStatement {
 #[derive(Debug, Clone)]
 pub struct ResolvedMatchDynArm {
     pub var_slot: usize,
-    pub type_tag_name: String,
+    pub kind: MatchDynArmKind,
     pub body: Vec<ResolvedStatement>,
+}
+
+/// Kind of match dyn arm: concrete type match or interface match.
+#[derive(Debug, Clone)]
+pub enum MatchDynArmKind {
+    /// Match by concrete type tag name (e.g., "int", "Point", "Vec_int").
+    TypeMatch { type_tag_name: String },
+    /// Match by interface vtable presence.
+    InterfaceMatch {
+        interface_name: String,
+        vtable_slot: usize,
+    },
 }
 
 /// Information about a captured variable in a closure.
@@ -150,6 +167,8 @@ pub enum ResolvedExpr {
     Field {
         object: Box<ResolvedExpr>,
         field: String,
+        /// Struct name for field index resolution (from typechecker)
+        struct_name: Option<String>,
     },
     Unary {
         op: UnaryOp,
@@ -270,6 +289,9 @@ pub enum ResolvedExpr {
         aux_type_tags: Vec<String>,
         /// Recursively collected type descriptors for nested types.
         nested_type_descriptors: Vec<TypeDescriptorEntry>,
+        /// Interface vtable entries: Vec<(interface_name, Vec<func_index>)>.
+        /// Method indices correspond to the sorted method names of each interface.
+        vtable_entries: Vec<(String, Vec<usize>)>,
     },
 }
 
@@ -315,6 +337,10 @@ pub struct Resolver<'a> {
     /// Total number of functions registered before lambda lifting
     /// (used to compute correct func_index for lifted lambdas)
     base_func_count: usize,
+    /// Interface implementations: (interface_name, type_name) set
+    interface_impls: HashSet<(String, String)>,
+    /// Interface definitions: interface_name -> method_names (sorted)
+    interface_methods: HashMap<String, Vec<String>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -322,6 +348,8 @@ impl<'a> Resolver<'a> {
         Self {
             filename,
             functions: HashMap::new(),
+            interface_impls: HashSet::new(),
+            interface_methods: HashMap::new(),
             builtins: vec![
                 "__value_to_string".to_string(),
                 "len".to_string(),
@@ -344,6 +372,8 @@ impl<'a> Resolver<'a> {
                 "__ptr_offset".to_string(),
                 // 128-bit multiply high
                 "__umul128_hi".to_string(),
+                // Dynamic call by function index
+                "__call_func".to_string(),
                 // CLI argument operations
                 "argc".to_string(),
                 "argv".to_string(),
@@ -356,6 +386,50 @@ impl<'a> Resolver<'a> {
             next_lambda_id: 0,
             base_func_count: 0,
         }
+    }
+
+    /// Compute vtable entries for a type's interface implementations.
+    /// Returns Vec<(interface_name, Vec<func_index>)> where func_indices
+    /// correspond to the sorted method names of each interface.
+    fn compute_vtable_entries(&self, ty: &Type) -> Vec<(String, Vec<usize>)> {
+        let impl_name = type_to_impl_name(ty);
+        let mut entries = Vec::new();
+
+        // Sort interface names for deterministic ordering
+        let mut iface_names: Vec<&String> = self.interface_methods.keys().collect();
+        iface_names.sort();
+
+        for iface_name in iface_names {
+            if self
+                .interface_impls
+                .contains(&(iface_name.clone(), impl_name.clone()))
+                && let Some(method_names) = self.interface_methods.get(iface_name)
+            {
+                let mut func_indices = Vec::new();
+                for method_name in method_names {
+                    // Look up func_index for Type::method_name
+                    let qualified_name = format!("{}::{}", impl_name, method_name);
+                    if let Some(&func_idx) = self.functions.get(&qualified_name) {
+                        func_indices.push(func_idx);
+                    }
+                }
+                if func_indices.len() == method_names.len() {
+                    entries.push((iface_name.clone(), func_indices));
+                }
+            }
+        }
+
+        entries
+    }
+
+    /// Set interface implementation data from the type checker.
+    pub fn set_interface_info(
+        &mut self,
+        impls: HashSet<(String, String)>,
+        methods: HashMap<String, Vec<String>>,
+    ) {
+        self.interface_impls = impls;
+        self.interface_methods = methods;
     }
 
     /// Collect variable types from AST Statement::Let.inferred_type fields.
@@ -612,6 +686,7 @@ impl<'a> Resolver<'a> {
             structs: self.resolved_structs.clone(),
             main_locals_count,
             main_local_types,
+            interface_methods: self.interface_methods.clone(),
         })
     }
 
@@ -1308,12 +1383,19 @@ impl<'a> Resolver<'a> {
                 value,
                 ..
             } => {
+                let struct_name = object.inferred_type().and_then(|ty| match ty {
+                    Type::Struct { name, .. } | Type::GenericStruct { name, .. } => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                });
                 let object = self.resolve_expr(object, scope)?;
                 let value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::FieldAssign {
                     object,
                     field,
                     value,
+                    struct_name,
                 })
             }
             Statement::ForIn {
@@ -1394,43 +1476,62 @@ impl<'a> Resolver<'a> {
                 for arm in arms {
                     scope.enter_scope();
                     let var_slot = scope.declare(arm.var_name, false);
-                    let type_tag_name = match &arm.type_annotation {
-                        TypeAnnotation::Named(name) => {
-                            // Try to convert to a known type first, otherwise use the name directly
-                            // (e.g. struct names like "Point" that to_type() doesn't handle)
-                            match arm.type_annotation.to_type() {
+
+                    // Check if arm type is an interface name
+                    let is_interface = if let TypeAnnotation::Named(name) = &arm.type_annotation {
+                        self.interface_methods.contains_key(name)
+                    } else {
+                        false
+                    };
+
+                    let kind = if is_interface {
+                        let interface_name =
+                            if let TypeAnnotation::Named(name) = &arm.type_annotation {
+                                name.clone()
+                            } else {
+                                unreachable!()
+                            };
+                        let vtable_slot = scope.declare("__vtable".to_string(), false);
+                        MatchDynArmKind::InterfaceMatch {
+                            interface_name,
+                            vtable_slot,
+                        }
+                    } else {
+                        let type_tag_name = match &arm.type_annotation {
+                            TypeAnnotation::Named(name) => match arm.type_annotation.to_type() {
                                 Ok(ty) => type_to_dyn_tag_name(&ty),
                                 Err(_) => name.clone(),
+                            },
+                            TypeAnnotation::Generic { name, type_args } => {
+                                let args = type_args
+                                    .iter()
+                                    .map(|ta| match ta.to_type() {
+                                        Ok(ty) => type_to_dyn_tag_name(&ty),
+                                        Err(_) => match ta {
+                                            TypeAnnotation::Named(n) => n.clone(),
+                                            _ => ta.to_string(),
+                                        },
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("_");
+                                format!("{}_{}", name, args)
                             }
-                        }
-                        TypeAnnotation::Generic { name, type_args } => {
-                            // Build tag name matching the format from type_to_dyn_tag_name
-                            let args = type_args
-                                .iter()
-                                .map(|ta| match ta.to_type() {
-                                    Ok(ty) => type_to_dyn_tag_name(&ty),
-                                    Err(_) => match ta {
-                                        TypeAnnotation::Named(n) => n.clone(),
-                                        _ => ta.to_string(),
-                                    },
-                                })
-                                .collect::<Vec<_>>()
-                                .join("_");
-                            format!("{}_{}", name, args)
-                        }
-                        _ => {
-                            let ty = arm
-                                .type_annotation
-                                .to_type()
-                                .expect("MatchDyn arm type annotation must be valid");
-                            type_to_dyn_tag_name(&ty)
-                        }
+                            _ => {
+                                let ty = arm
+                                    .type_annotation
+                                    .to_type()
+                                    .expect("MatchDyn arm type annotation must be valid");
+                                type_to_dyn_tag_name(&ty)
+                            }
+                        };
+                        MatchDynArmKind::TypeMatch { type_tag_name }
                     };
+
                     let body = self.resolve_statements(arm.body.statements, scope)?;
                     scope.exit_scope();
                     resolved_arms.push(ResolvedMatchDynArm {
                         var_slot,
-                        type_tag_name,
+                        kind,
                         body,
                     });
                 }
@@ -1503,10 +1604,17 @@ impl<'a> Resolver<'a> {
                 })
             }
             Expr::Field { object, field, .. } => {
+                let struct_name = object.inferred_type().and_then(|ty| match ty {
+                    Type::Struct { name, .. } | Type::GenericStruct { name, .. } => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                });
                 let object = self.resolve_expr(*object, scope)?;
                 Ok(ResolvedExpr::Field {
                     object: Box::new(object),
                     field,
+                    struct_name,
                 })
             }
             Expr::Unary { op, operand, .. } => {
@@ -2029,6 +2137,8 @@ impl<'a> Resolver<'a> {
                 let aux_type_tags = compute_aux_type_tags(&inner_type);
                 // Recursively collect type descriptors for all nested types
                 let nested_type_descriptors = collect_nested_type_descriptors(&inner_type);
+                // Compute vtable entries for interface implementations
+                let vtable_entries = self.compute_vtable_entries(&inner_type);
                 let resolved_expr = self.resolve_expr(*expr, scope)?;
                 Ok(ResolvedExpr::AsDyn {
                     expr: Box::new(resolved_expr),
@@ -2037,6 +2147,7 @@ impl<'a> Resolver<'a> {
                     field_type_tags,
                     aux_type_tags,
                     nested_type_descriptors,
+                    vtable_entries,
                 })
             }
         }
@@ -2220,6 +2331,22 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
             type_to_dyn_tag_name(k),
             type_to_dyn_tag_name(v)
         ),
+        _ => ty.to_string(),
+    }
+}
+
+/// Convert a Type to the name used in interface_impls lookup.
+/// This must match the typechecker's `type_to_impl_name`.
+fn type_to_impl_name(ty: &Type) -> String {
+    match ty {
+        Type::Int => "int".to_string(),
+        Type::Float => "float".to_string(),
+        Type::Bool => "bool".to_string(),
+        Type::String => "string".to_string(),
+        Type::Struct { name, .. } => name.clone(),
+        Type::GenericStruct { name, .. } => name.clone(),
+        Type::Vector(_) => "vec".to_string(),
+        Type::Map(_, _) => "map".to_string(),
         _ => ty.to_string(),
     }
 }

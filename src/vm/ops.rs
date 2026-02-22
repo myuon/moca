@@ -207,6 +207,10 @@ pub enum Op {
     /// Reads func_index from slot 0, extra args (captures) from slots 1..,
     /// then calls the function with (extra_args + argc) arguments.
     CallIndirect(usize), // (argc) — number of user-visible arguments
+    /// Dynamic function call by function index on the stack.
+    /// Pops `argc` arguments, then the func_index (i64).
+    /// Calls the function directly with `argc` arguments (no closure_ref).
+    CallDynamic(usize), // (argc) — number of arguments
 
     // ========================================
     // Type Descriptor
@@ -214,6 +218,18 @@ pub enum Op {
     /// Push pre-allocated type descriptor reference onto the stack.
     /// The index refers to the type_descriptors table in the Chunk.
     TypeDescLoad(usize),
+
+    // ========================================
+    // Interface Descriptor
+    // ========================================
+    /// Push pre-allocated interface descriptor reference onto the stack.
+    /// The index refers to the interface_descriptors table in the Chunk.
+    InterfaceDescLoad(usize),
+
+    /// Vtable lookup: pops iface_desc_ref and type_info_ref from stack.
+    /// Searches type_info's vtable entries for matching iface_desc_ref (by RefEq).
+    /// Pushes vtable_ref if found, or RefNull if not found.
+    VtableLookup,
 }
 
 impl Op {
@@ -332,7 +348,10 @@ impl Op {
             Op::ChannelRecv => "ChannelRecv",
             Op::ThreadJoin => "ThreadJoin",
             Op::CallIndirect(_) => "CallIndirect",
+            Op::CallDynamic(_) => "CallDynamic",
+            Op::VtableLookup => "VtableLookup",
             Op::TypeDescLoad(_) => "TypeDescLoad",
+            Op::InterfaceDescLoad(_) => "InterfaceDescLoad",
         }
     }
 }

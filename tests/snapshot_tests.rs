@@ -135,8 +135,8 @@ fn run_snapshot_test(test_path: &Path, dir_name: &str) {
             .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", stdout_path, e));
         assert_eq!(
             actual_stdout, expected_stdout,
-            "stdout mismatch for {:?}\n--- expected ---\n{}\n--- actual ---\n{}",
-            moca_path, expected_stdout, actual_stdout
+            "stdout mismatch for {:?} (exit_code: {})\n--- expected ---\n{}\n--- actual ---\n{}\n--- stderr ---\n{}",
+            moca_path, actual_exitcode, expected_stdout, actual_stdout, actual_stderr
         );
     }
 

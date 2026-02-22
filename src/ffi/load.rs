@@ -194,6 +194,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -269,6 +270,7 @@ mod tests {
             },
             strings: vec!["test".to_string()],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 

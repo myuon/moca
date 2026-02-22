@@ -1652,6 +1652,46 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 vstack.push(Vse::Reg(ret));
             }
 
+            Op::CallDynamic(argc) => {
+                let mut args = Vec::with_capacity(*argc);
+                for _ in 0..*argc {
+                    args.push(pop_vreg(
+                        &mut vstack,
+                        &mut micro_ops,
+                        &mut next_temp,
+                        &mut max_temp,
+                        &mut vreg_types,
+                    ));
+                }
+                args.reverse();
+                let func_idx = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                flush_vstack(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let ret = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::I64,
+                );
+                micro_ops.push(MicroOp::CallDynamic {
+                    func_idx,
+                    args,
+                    ret: Some(ret),
+                });
+                vstack.push(Vse::Reg(ret));
+            }
+
             // ============================================================
             // String operations → register-based
             // ============================================================
@@ -1673,6 +1713,44 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     ValueType::Ref,
                 );
                 micro_ops.push(MicroOp::TypeDescLoad { dst, idx: *idx });
+                vstack.push(Vse::RegRef(dst));
+            }
+            Op::InterfaceDescLoad(idx) => {
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::InterfaceDescLoad { dst, idx: *idx });
+                vstack.push(Vse::RegRef(dst));
+            }
+            Op::VtableLookup => {
+                let iface_desc = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let type_info = pop_vreg(
+                    &mut vstack,
+                    &mut micro_ops,
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                );
+                let dst = alloc_temp(
+                    &mut next_temp,
+                    &mut max_temp,
+                    &mut vreg_types,
+                    ValueType::Ref,
+                );
+                micro_ops.push(MicroOp::VtableLookup {
+                    dst,
+                    type_info,
+                    iface_desc,
+                });
                 vstack.push(Vse::RegRef(dst));
             }
             Op::UMul128Hi => {

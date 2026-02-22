@@ -1414,14 +1414,25 @@ impl TypeChecker {
                 // Type-check each arm and collect block types for unification
                 let mut result_type: Option<Type> = None;
                 for arm in arms.iter_mut() {
-                    let arm_type =
+                    // Check if the type annotation is an interface name
+                    let is_interface = if let TypeAnnotation::Named(name) = &arm.type_annotation {
+                        self.interfaces.contains_key(name)
+                    } else {
+                        false
+                    };
+
+                    let arm_type = if is_interface {
+                        // Interface match arm: variable is typed as Any (raw value)
+                        Type::Any
+                    } else {
                         match self.resolve_type_annotation(&arm.type_annotation, arm.span) {
                             Ok(ty) => ty,
                             Err(e) => {
                                 self.errors.push(e);
                                 self.fresh_var()
                             }
-                        };
+                        }
+                    };
                     env.enter_scope();
                     env.bind(arm.var_name.clone(), arm_type);
                     let block_type = self.infer_block(&mut arm.body, env);
@@ -2091,6 +2102,14 @@ impl TypeChecker {
                                 self.errors.push(e);
                             }
                             self.substitution.apply(&ret_type)
+                        }
+                        Type::Any => {
+                            // Dynamic call: any-typed value used as callable
+                            // Infer args but don't constrain types; return any
+                            for arg in args.iter_mut() {
+                                self.infer_expr(arg, env);
+                            }
+                            Type::Any
                         }
                         _ => {
                             self.errors.push(TypeError::new(
@@ -3083,6 +3102,20 @@ impl TypeChecker {
                 }
                 Some(Type::Any) // Returns a string reference
             }
+            "__call_func" => {
+                // __call_func(func_idx, arg) → any
+                // Calls function by dynamic index with one argument
+                if args.len() != 2 {
+                    self.errors.push(TypeError::new(
+                        "__call_func expects 2 arguments (func_idx, arg)",
+                        span,
+                    ));
+                }
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Any)
+            }
             // CLI argument operations
             "argc" => {
                 if !args.is_empty() {
@@ -3232,6 +3265,23 @@ impl TypeChecker {
     /// Get all collected errors.
     pub fn errors(&self) -> &[TypeError] {
         &self.errors
+    }
+
+    /// Get interface implementations: set of (interface_name, type_name).
+    pub fn interface_impls(&self) -> &HashSet<(String, String)> {
+        &self.interface_impls
+    }
+
+    /// Get interface definitions: name -> method names (in canonical order).
+    pub fn interface_method_names(&self) -> HashMap<String, Vec<String>> {
+        self.interfaces
+            .iter()
+            .map(|(name, info)| {
+                let mut methods: Vec<String> = info.methods.keys().cloned().collect();
+                methods.sort(); // canonical order
+                (name.clone(), methods)
+            })
+            .collect()
     }
 }
 

@@ -146,6 +146,8 @@ pub struct VM {
     use_microop: bool,
     /// Pre-allocated type descriptor heap references (indexed by type descriptor table index)
     type_descriptor_refs: Vec<GcRef>,
+    /// Pre-allocated interface descriptor heap references (indexed by interface descriptor table index)
+    interface_descriptor_refs: Vec<GcRef>,
 }
 
 impl VM {
@@ -222,11 +224,30 @@ impl VM {
             jit_loops: HashMap::new(),
             use_microop: true,
             type_descriptor_refs: Vec::new(),
+            interface_descriptor_refs: Vec::new(),
         }
     }
 
+    /// Pre-allocate interface descriptor heap objects from the chunk's interface descriptor table.
+    /// Layout: [iface_name, method_count]
+    fn init_interface_descriptors(&mut self, chunk: &Chunk) -> Result<(), String> {
+        self.interface_descriptor_refs = Vec::with_capacity(chunk.interface_descriptors.len());
+        for id in &chunk.interface_descriptors {
+            let name_ref = self.heap.alloc_string(id.name.clone())?;
+            let slots = vec![
+                Value::Ref(name_ref),                     // slot 0: iface_name
+                Value::I64(id.method_names.len() as i64), // slot 1: method_count
+            ];
+            let gc_ref = self.heap.alloc_slots(slots)?;
+            self.interface_descriptor_refs.push(gc_ref);
+        }
+        Ok(())
+    }
+
     /// Pre-allocate type descriptor heap objects from the chunk's type descriptor table.
-    /// Layout: [tag_id, type_name, field_count, ...field_names, ...field_type_desc_refs, aux_count, ...aux_type_desc_refs]
+    /// Layout: [tag_id, type_name, field_count, ...field_names, ...field_type_desc_refs,
+    ///          aux_count, ...aux_type_desc_refs,
+    ///          vtable_count, ...iface_desc_ref, vtable_ref pairs]
     fn init_type_descriptors(&mut self, chunk: &Chunk) -> Result<(), String> {
         // Build tag_name -> index map for resolving field type references
         let tag_to_idx: std::collections::HashMap<&str, usize> = chunk
@@ -241,7 +262,10 @@ impl VM {
         for td in &chunk.type_descriptors {
             let n = td.field_names.len();
             let m = td.aux_type_tags.len();
-            let type_info_slots = 3 + n + n + 1 + m; // field_names + field_type_desc_refs + aux_count + aux_type_desc_refs
+            let v = td.vtables.len();
+            // field_names + field_type_desc_refs + aux_count + aux_type_desc_refs
+            // + vtable_count + (iface_desc_ref + vtable_ref) * v
+            let type_info_slots = 3 + n + n + 1 + m + 1 + 2 * v;
             let mut slots = Vec::with_capacity(type_info_slots);
 
             // slot 0: tag_id (string pool index as i64)
@@ -278,13 +302,23 @@ impl VM {
                 slots.push(Value::Null);
             }
 
+            // slot BASE: vtable_count
+            slots.push(Value::I64(v as i64));
+
+            // slot BASE+1..: placeholder nils for (iface_desc_ref, vtable_ref) pairs
+            for _ in 0..v {
+                slots.push(Value::Null); // iface_desc_ref placeholder
+                slots.push(Value::Null); // vtable_ref placeholder
+            }
+
             let gc_ref = self.heap.alloc_slots(slots)?;
             self.type_descriptor_refs.push(gc_ref);
         }
 
-        // Pass 2: Fill in field type descriptor refs and aux type descriptor refs
+        // Pass 2: Fill in field type descriptor refs, aux type descriptor refs, and vtable refs
         for (i, td) in chunk.type_descriptors.iter().enumerate() {
             let n = td.field_names.len();
+            let m = td.aux_type_tags.len();
             // Fill field type desc refs
             for (j, ft_tag) in td.field_type_tags.iter().enumerate() {
                 if let Some(&ft_idx) = tag_to_idx.get(ft_tag.as_str()) {
@@ -308,6 +342,29 @@ impl VM {
                         Value::Ref(aux_ref),
                     )?;
                 }
+            }
+            // Fill vtable entries
+            let vtable_base = 3 + 2 * n + 1 + m + 1;
+            for (j, (iface_idx, func_indices)) in td.vtables.iter().enumerate() {
+                // Set iface_desc_ref
+                if let Some(&iface_ref) = self.interface_descriptor_refs.get(*iface_idx) {
+                    self.heap.write_slot(
+                        self.type_descriptor_refs[i],
+                        vtable_base + 2 * j,
+                        Value::Ref(iface_ref),
+                    )?;
+                }
+                // Allocate vtable heap object with func_indices
+                let vtable_slots: Vec<Value> = func_indices
+                    .iter()
+                    .map(|&fi| Value::I64(fi as i64))
+                    .collect();
+                let vtable_ref = self.heap.alloc_slots(vtable_slots)?;
+                self.heap.write_slot(
+                    self.type_descriptor_refs[i],
+                    vtable_base + 2 * j + 1,
+                    Value::Ref(vtable_ref),
+                )?;
             }
         }
 
@@ -1066,7 +1123,8 @@ impl VM {
         self.init_call_counts(chunk);
         // Initialize string constant cache
         self.init_string_cache(chunk);
-        // Initialize type descriptor heap objects
+        // Initialize interface and type descriptor heap objects
+        self.init_interface_descriptors(chunk)?;
         self.init_type_descriptors(chunk)?;
         // Initialize JIT function table
         #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
@@ -1132,7 +1190,8 @@ impl VM {
 
     /// Run a chunk and return the result value (used for thread execution).
     pub fn run_and_get_result(&mut self, chunk: &Chunk) -> Result<Value, String> {
-        // Initialize type descriptors for this chunk
+        // Initialize interface and type descriptors for this chunk
+        self.init_interface_descriptors(chunk)?;
         self.init_type_descriptors(chunk)?;
 
         // Start with main
@@ -1211,6 +1270,7 @@ impl VM {
         // Initialize (same as run())
         self.init_call_counts(chunk);
         self.init_string_cache(chunk);
+        self.init_interface_descriptors(chunk)?;
         self.init_type_descriptors(chunk)?;
         #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
         {
@@ -1513,6 +1573,52 @@ impl VM {
                 }
 
                 // ========================================
+                // Dynamic call by func_index (register-based)
+                // ========================================
+                MicroOp::CallDynamic {
+                    func_idx,
+                    ref args,
+                    ret,
+                } => {
+                    let caller_stack_base = self.frames.last().unwrap().stack_base;
+                    let func_index = self.stack[caller_stack_base + func_idx.0]
+                        .as_i64()
+                        .ok_or("runtime error: CallDynamic expects func_index as integer")?
+                        as usize;
+
+                    let callee_func = &chunk.functions[func_index];
+
+                    // Convert and cache if needed
+                    if func_cache.len() <= func_index {
+                        func_cache.resize(func_index + 1, None);
+                    }
+                    if func_cache[func_index].is_none() {
+                        func_cache[func_index] =
+                            Some(microop_converter::convert(&chunk.functions[func_index]));
+                    }
+                    let callee_temps = func_cache[func_index].as_ref().unwrap().temps_count;
+                    let callee_regs = callee_func.locals_count + callee_temps;
+
+                    let new_stack_base = self.stack.len();
+
+                    // Allocate register file for callee
+                    self.stack.resize(new_stack_base + callee_regs, Value::Null);
+
+                    // Copy args directly (no closure_ref prepended)
+                    for (i, arg) in args.iter().enumerate() {
+                        self.stack[new_stack_base + i] = self.stack[caller_stack_base + arg.0];
+                    }
+
+                    self.frames.push(Frame {
+                        func_index,
+                        pc: 0,
+                        stack_base: new_stack_base,
+                        ret_vreg: ret.map(|v| v.0),
+                        stack_floor: new_stack_base + callee_regs,
+                    });
+                }
+
+                // ========================================
                 // Heap operations (register-based)
                 // ========================================
                 MicroOp::HeapLoad { dst, src, offset } => {
@@ -1673,6 +1779,30 @@ impl VM {
                         .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = Value::Ref(*gc_ref);
+                }
+                MicroOp::InterfaceDescLoad { dst, idx } => {
+                    let gc_ref = self
+                        .interface_descriptor_refs
+                        .get(idx)
+                        .ok_or_else(|| format!("invalid interface descriptor index: {}", idx))?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = Value::Ref(*gc_ref);
+                }
+                MicroOp::VtableLookup {
+                    dst,
+                    type_info,
+                    iface_desc,
+                } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let ti_ref = self.stack[sb + type_info.0]
+                        .as_ref()
+                        .ok_or("runtime error: VtableLookup expects type_info reference")?;
+                    let iface_ref = self.stack[sb + iface_desc.0]
+                        .as_ref()
+                        .ok_or("runtime error: VtableLookup expects iface_desc reference")?;
+                    let result = self.vtable_lookup(ti_ref, iface_ref)?;
+                    let sb = self.frames.last().unwrap().stack_base;
+                    self.stack[sb + dst.0] = result;
                 }
                 MicroOp::ValueToString { dst, src } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -2868,6 +2998,7 @@ impl VM {
                         main: wrapper_main,
                         strings: chunk_clone.strings.clone(),
                         type_descriptors: chunk_clone.type_descriptors.clone(),
+                        interface_descriptors: chunk_clone.interface_descriptors.clone(),
                         debug: None,
                     };
 
@@ -3155,6 +3286,50 @@ impl VM {
             }
 
             // ========================================
+            // Dynamic call by func_index on stack
+            // ========================================
+            Op::CallDynamic(argc) => {
+                // Stack: [..., func_index, arg0, arg1, ..., arg_{argc-1}]
+                let stack_len = self.stack.len();
+                if stack_len < argc + 1 {
+                    return Err("stack underflow in CallDynamic".to_string());
+                }
+
+                // Pop argc args
+                let args_start = stack_len - argc;
+                let args: Vec<Value> = self.stack[args_start..].to_vec();
+                self.stack.truncate(args_start);
+
+                // Pop func_index
+                let func_index_val = self.stack.pop().ok_or("stack underflow in CallDynamic")?;
+                let func_index = func_index_val
+                    .as_i64()
+                    .ok_or("runtime error: CallDynamic expects func_index as integer")?
+                    as usize;
+
+                let func = &chunk.functions[func_index];
+                if func.arity != argc {
+                    return Err(format!(
+                        "runtime error: function '{}' expects {} arguments, got {}",
+                        func.name, func.arity, argc
+                    ));
+                }
+
+                let new_stack_base = self.stack.len();
+                for arg in args {
+                    self.stack.push(arg);
+                }
+
+                self.frames.push(Frame {
+                    func_index,
+                    pc: 0,
+                    stack_base: new_stack_base,
+                    ret_vreg: None,
+                    stack_floor: 0,
+                });
+            }
+
+            // ========================================
             // Type Descriptor
             // ========================================
             Op::TypeDescLoad(idx) => {
@@ -3164,9 +3339,70 @@ impl VM {
                     .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
                 self.stack.push(Value::Ref(*gc_ref));
             }
+
+            // ========================================
+            // Interface Descriptor
+            // ========================================
+            Op::InterfaceDescLoad(idx) => {
+                let gc_ref = self
+                    .interface_descriptor_refs
+                    .get(idx)
+                    .ok_or_else(|| format!("invalid interface descriptor index: {}", idx))?;
+                self.stack.push(Value::Ref(*gc_ref));
+            }
+
+            // ========================================
+            // Vtable Lookup
+            // ========================================
+            Op::VtableLookup => {
+                // Stack: [..., type_info_ref, iface_desc_ref]
+                let iface_val = self.stack.pop().ok_or("stack underflow in VtableLookup")?;
+                let ti_val = self.stack.pop().ok_or("stack underflow in VtableLookup")?;
+                let ti_ref = ti_val
+                    .as_ref()
+                    .ok_or("runtime error: VtableLookup expects type_info reference")?;
+                let iface_ref = iface_val
+                    .as_ref()
+                    .ok_or("runtime error: VtableLookup expects iface_desc reference")?;
+
+                let result = self.vtable_lookup(ti_ref, iface_ref)?;
+                self.stack.push(result);
+            }
         }
 
         Ok(ControlFlow::Continue)
+    }
+
+    /// Look up an interface vtable in a type_info heap object.
+    /// Walks the vtable entries comparing iface_desc_ref by pointer equality.
+    /// Returns vtable_ref (Value::Ref) if found, or Value::Null if not.
+    fn vtable_lookup(&self, ti_ref: GcRef, iface_ref: GcRef) -> Result<Value, String> {
+        let ti_obj = self
+            .heap
+            .get(ti_ref)
+            .ok_or("runtime error: invalid type_info reference")?;
+        let n = ti_obj.slots[2]
+            .as_i64()
+            .ok_or("runtime error: type_info slot 2 must be field_count")? as usize;
+        let aux_slot = 3 + 2 * n;
+        let m = ti_obj.slots[aux_slot]
+            .as_i64()
+            .ok_or("runtime error: type_info aux_count slot must be integer")?
+            as usize;
+        let vtable_base = aux_slot + 1 + m;
+        let v = ti_obj.slots[vtable_base]
+            .as_i64()
+            .ok_or("runtime error: type_info vtable_count slot must be integer")?
+            as usize;
+        for j in 0..v {
+            let entry_iface = &ti_obj.slots[vtable_base + 1 + 2 * j];
+            if let Some(entry_ref) = entry_iface.as_ref()
+                && entry_ref == iface_ref
+            {
+                return Ok(ti_obj.slots[vtable_base + 1 + 2 * j + 1]);
+            }
+        }
+        Ok(Value::Null)
     }
 
     fn add(&mut self, a: Value, b: Value) -> Result<Value, String> {
@@ -3457,6 +3693,11 @@ impl VM {
 
         // Add type descriptor references as roots
         for r in &self.type_descriptor_refs {
+            roots.push(Value::Ref(*r));
+        }
+
+        // Add interface descriptor references as roots
+        for r in &self.interface_descriptor_refs {
             roots.push(Value::Ref(*r));
         }
 
@@ -4228,6 +4469,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -4251,6 +4493,7 @@ mod tests {
             },
             strings,
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -4465,6 +4708,7 @@ mod tests {
             },
             strings: vec![path_str.clone(), "hello".to_string()],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -4553,6 +4797,7 @@ mod tests {
             },
             strings: vec![path_str.clone()],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -4627,6 +4872,7 @@ mod tests {
             },
             strings: vec![path_str.clone()],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -4799,6 +5045,7 @@ mod tests {
             },
             strings: vec!["127.0.0.1".to_string(), http_request],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 

@@ -86,3 +86,22 @@ let colors: Vec<Color> = new Vec<Color> {};
 colors.push(Color { r: 255, g: 0, b: 0 });
 colors.push(Color { r: 0, g: 255, b: 0 });
 print_str(debug(colors) + "\n");
+
+// struct with ToString impl: debug() should use to_string()
+struct Pair {
+    a: int,
+    b: int
+}
+impl ToString for Pair {
+    fun to_string(self) -> string {
+        return "(" + _int_to_string(self.a) + ", " + _int_to_string(self.b) + ")";
+    }
+}
+let pair = Pair { a: 10, b: 20 };
+print_str(debug(pair) + "\n");
+
+// Vec of structs with ToString
+let vp2: Vec<Pair> = new Vec<Pair> {};
+vp2.push(Pair { a: 1, b: 2 });
+vp2.push(Pair { a: 3, b: 4 });
+print_str(debug(vp2) + "\n");

@@ -1,8 +1,8 @@
 use crate::compiler::ast::{AsmArg, BinaryOp, UnaryOp};
 
 use crate::compiler::resolver::{
-    ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram, ResolvedStatement,
-    ResolvedStruct,
+    MatchDynArmKind, ResolvedAsmInstruction, ResolvedExpr, ResolvedFunction, ResolvedProgram,
+    ResolvedStatement, ResolvedStruct,
 };
 use crate::compiler::types::Type;
 use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op, ValueType};
@@ -41,6 +41,12 @@ pub struct Codegen {
     type_descriptor_indices: HashMap<String, usize>,
     /// Type descriptors collected during compilation
     type_descriptors: Vec<crate::vm::TypeDescriptor>,
+    /// Interface descriptors collected during compilation
+    interface_descriptors: Vec<crate::vm::InterfaceDescriptor>,
+    /// Interface name -> index in interface_descriptors
+    interface_descriptor_indices: HashMap<String, usize>,
+    /// Interface name -> sorted method names (from resolver)
+    interface_method_names: HashMap<String, Vec<String>>,
 }
 
 impl Default for Codegen {
@@ -67,6 +73,9 @@ impl Codegen {
             current_locals_count: 0,
             type_descriptor_indices: HashMap::new(),
             type_descriptors: Vec::new(),
+            interface_descriptors: Vec::new(),
+            interface_descriptor_indices: HashMap::new(),
+            interface_method_names: HashMap::new(),
         }
     }
 
@@ -88,6 +97,9 @@ impl Codegen {
             current_locals_count: 0,
             type_descriptor_indices: HashMap::new(),
             type_descriptors: Vec::new(),
+            interface_descriptors: Vec::new(),
+            interface_descriptor_indices: HashMap::new(),
+            interface_method_names: HashMap::new(),
         }
     }
 
@@ -262,9 +274,16 @@ impl Codegen {
         self.structs = structs;
     }
 
-    /// Look up a field index for any known struct.
-    fn get_field_index(&self, field_name: &str) -> Option<usize> {
-        // Check all structs for this field name
+    /// Look up a field index, optionally scoped to a specific struct.
+    /// When struct_name is provided, only that struct's fields are checked.
+    /// When None, falls back to searching all structs (ambiguous but backward-compatible).
+    fn get_field_index(&self, field_name: &str, struct_name: Option<&str>) -> Option<usize> {
+        if let Some(sn) = struct_name
+            && let Some(field_map) = self.struct_field_indices.get(sn)
+        {
+            return field_map.get(field_name).copied();
+        }
+        // Fallback: check all structs (non-deterministic if field name is ambiguous)
         for field_map in self.struct_field_indices.values() {
             if let Some(&idx) = field_map.get(field_name) {
                 return Some(idx);
@@ -318,13 +337,38 @@ impl Codegen {
             field_names: field_names.to_vec(),
             field_type_tags: field_type_tags.to_vec(),
             aux_type_tags: aux_type_tags.to_vec(),
+            vtables: vec![],
         });
         self.type_descriptor_indices
             .insert(tag_name.to_string(), idx);
         idx
     }
 
+    /// Add an interface descriptor (or return existing index).
+    fn add_interface_descriptor(&mut self, name: &str) -> usize {
+        if let Some(&idx) = self.interface_descriptor_indices.get(name) {
+            return idx;
+        }
+        let idx = self.interface_descriptors.len();
+        let method_names = self
+            .interface_method_names
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        self.interface_descriptors
+            .push(crate::vm::InterfaceDescriptor {
+                name: name.to_string(),
+                method_names,
+            });
+        self.interface_descriptor_indices
+            .insert(name.to_string(), idx);
+        idx
+    }
+
     pub fn compile(&mut self, program: ResolvedProgram) -> Result<Chunk, String> {
+        // Store interface method names for interface descriptor registration
+        self.interface_method_names = program.interface_methods;
+
         // Initialize struct field indices for field access resolution
         self.init_structs(program.structs);
 
@@ -403,6 +447,7 @@ impl Codegen {
             main: main_func,
             strings: self.strings.clone(),
             type_descriptors: self.type_descriptors.clone(),
+            interface_descriptors: self.interface_descriptors.clone(),
             debug,
         })
     }
@@ -537,9 +582,10 @@ impl Codegen {
                 object,
                 field,
                 value,
+                struct_name,
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
-                if let Some(idx) = self.get_field_index(field) {
+                if let Some(idx) = self.get_field_index(field, struct_name.as_deref()) {
                     // Known struct field - use heap slot assignment
                     self.compile_expr(object, ops)?;
                     ops.push(Op::I64Const(idx as i64));
@@ -751,23 +797,60 @@ impl Codegen {
                 let mut jump_to_end_patches = Vec::new();
 
                 for arm in arms {
-                    // Register type descriptor for this arm's type
-                    let td_idx = self.add_type_descriptor(&arm.type_tag_name, &[], &[], &[]);
+                    let jump_to_next;
 
-                    // Load dyn value → type_info ref, compare with expected type descriptor
-                    ops.push(Op::LocalGet(*dyn_slot));
-                    ops.push(Op::HeapLoad(0)); // dyn slot 0 → type_info ref
-                    ops.push(Op::TypeDescLoad(td_idx)); // expected type descriptor ref
-                    ops.push(Op::RefEq); // pointer comparison (O(1) via identity check)
+                    match &arm.kind {
+                        MatchDynArmKind::TypeMatch { type_tag_name } => {
+                            // Register type descriptor for this arm's type
+                            let td_idx = self.add_type_descriptor(type_tag_name, &[], &[], &[]);
 
-                    // Branch to next arm if tag doesn't match
-                    let jump_to_next = ops.len();
-                    ops.push(Op::BrIfFalse(0)); // placeholder
+                            // Load dyn value → type_info ref, compare with expected type descriptor
+                            ops.push(Op::LocalGet(*dyn_slot));
+                            ops.push(Op::HeapLoad(0)); // dyn slot 0 → type_info ref
+                            ops.push(Op::TypeDescLoad(td_idx)); // expected type descriptor ref
+                            ops.push(Op::RefEq); // pointer comparison (O(1) via identity check)
 
-                    // Unbox the value via HeapLoad(1) and bind to the arm's variable
-                    ops.push(Op::LocalGet(*dyn_slot));
-                    ops.push(Op::HeapLoad(1));
-                    ops.push(Op::LocalSet(arm.var_slot));
+                            // Branch to next arm if tag doesn't match
+                            jump_to_next = ops.len();
+                            ops.push(Op::BrIfFalse(0)); // placeholder
+
+                            // Unbox the value via HeapLoad(1) and bind to the arm's variable
+                            ops.push(Op::LocalGet(*dyn_slot));
+                            ops.push(Op::HeapLoad(1));
+                            ops.push(Op::LocalSet(arm.var_slot));
+                        }
+                        MatchDynArmKind::InterfaceMatch {
+                            interface_name,
+                            vtable_slot,
+                        } => {
+                            // Look up vtable for the interface on this dyn value's type
+                            let iface_idx = self.add_interface_descriptor(interface_name);
+
+                            // Load dyn value → type_info ref
+                            ops.push(Op::LocalGet(*dyn_slot));
+                            ops.push(Op::HeapLoad(0)); // type_info ref
+                            // Load interface descriptor ref
+                            ops.push(Op::InterfaceDescLoad(iface_idx));
+                            // VtableLookup: pops (type_info, iface_desc), pushes vtable_ref or null
+                            ops.push(Op::VtableLookup);
+
+                            // Store vtable result for potential use in arm body
+                            ops.push(Op::LocalSet(*vtable_slot + self.local_offset));
+
+                            // Check if vtable was found (non-null)
+                            ops.push(Op::LocalGet(*vtable_slot + self.local_offset));
+                            ops.push(Op::RefIsNull);
+
+                            // Branch to next arm if vtable is null (interface not implemented)
+                            jump_to_next = ops.len();
+                            ops.push(Op::BrIf(0)); // placeholder (branch if IS null)
+
+                            // Unbox the raw value and bind to the arm's variable
+                            // For interface match, variable is typed as `any` (the raw dyn value)
+                            ops.push(Op::LocalGet(*dyn_slot));
+                            ops.push(Op::LocalSet(arm.var_slot));
+                        }
+                    }
 
                     // Compile arm body
                     for stmt in &arm.body {
@@ -780,7 +863,11 @@ impl Codegen {
 
                     // Patch jump to next arm
                     let next_arm = ops.len();
-                    ops[jump_to_next] = Op::BrIfFalse(next_arm);
+                    ops[jump_to_next] = match ops[jump_to_next] {
+                        Op::BrIfFalse(_) => Op::BrIfFalse(next_arm),
+                        Op::BrIf(_) => Op::BrIf(next_arm),
+                        _ => unreachable!(),
+                    };
                 }
 
                 // Default block
@@ -866,10 +953,14 @@ impl Codegen {
                     ops.push(Op::HeapLoadDyn);
                 }
             }
-            ResolvedExpr::Field { object, field } => {
+            ResolvedExpr::Field {
+                object,
+                field,
+                struct_name,
+            } => {
                 self.compile_expr(object, ops)?;
                 // Check if this might be a struct field (structs are compiled as arrays)
-                if let Some(idx) = self.get_field_index(field) {
+                if let Some(idx) = self.get_field_index(field, struct_name.as_deref()) {
                     // Known struct field - use heap slot access
                     ops.push(Op::I64Const(idx as i64));
                     ops.push(Op::HeapLoadDyn);
@@ -1250,6 +1341,18 @@ impl Codegen {
                         self.compile_expr(&args[1], ops)?;
                         ops.push(Op::HeapAlloc(2)); // String struct with [ptr, len]
                     }
+                    "__call_func" => {
+                        // __call_func(func_idx, arg) -> result
+                        // Calls function by dynamic index with one argument
+                        if args.len() != 2 {
+                            return Err(
+                                "__call_func takes exactly 2 arguments (func_idx, arg)".to_string()
+                            );
+                        }
+                        self.compile_expr(&args[0], ops)?; // func_idx
+                        self.compile_expr(&args[1], ops)?; // arg
+                        ops.push(Op::CallDynamic(1)); // 1 argument
+                    }
                     // CLI argument builtins
                     "argc" => {
                         if !args.is_empty() {
@@ -1426,6 +1529,7 @@ impl Codegen {
                 field_type_tags,
                 aux_type_tags,
                 nested_type_descriptors,
+                vtable_entries,
             } => {
                 // Register nested type descriptors first (with full field info)
                 // so that subsequent registrations with empty info don't overwrite them.
@@ -1441,6 +1545,19 @@ impl Codegen {
                     field_type_tags,
                     aux_type_tags,
                 );
+
+                // Register interface descriptors and build vtable entries
+                if !vtable_entries.is_empty() {
+                    let mut vtables = Vec::new();
+                    for (iface_name, func_indices) in vtable_entries {
+                        let iface_idx = self.add_interface_descriptor(iface_name);
+                        vtables.push((iface_idx, func_indices.clone()));
+                    }
+                    // Merge vtables into the TypeDescriptor
+                    if self.type_descriptors[td_idx].vtables.is_empty() {
+                        self.type_descriptors[td_idx].vtables = vtables;
+                    }
+                }
 
                 // Push type_info ref (pre-allocated) and value, then alloc dyn object inline
                 ops.push(Op::TypeDescLoad(td_idx));

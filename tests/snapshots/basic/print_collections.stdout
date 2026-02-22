@@ -12,3 +12,5 @@ Line { start: Point { x: 0, y: 0 }, end: Point { x: 10, y: 20 } }
 {origin: Point { x: 0, y: 0 }}
 [[1, 2], [3, 4]]
 [Color { r: 255, g: 0, b: 0 }, Color { r: 0, g: 255, b: 0 }]
+(10, 20)
+[(1, 2), (3, 4)]

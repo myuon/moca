@@ -999,6 +999,7 @@ impl ResolvedProgramPrinter {
                 object,
                 field,
                 value,
+                ..
             } => {
                 self.write(&format!("{}FieldAssign .{}", prefix, field));
                 self.newline();
@@ -1135,9 +1136,18 @@ impl ResolvedProgramPrinter {
                 self.print_expr(expr, "├── expr: ", &expr_child);
                 for (i, arm) in arms.iter().enumerate() {
                     self.write_indent_with(parent_prefix);
+                    let kind_str = match &arm.kind {
+                        crate::compiler::resolver::MatchDynArmKind::TypeMatch { type_tag_name } => {
+                            format!("type_tag:{}", type_tag_name)
+                        }
+                        crate::compiler::resolver::MatchDynArmKind::InterfaceMatch {
+                            interface_name,
+                            vtable_slot,
+                        } => format!("interface:{} vtable_slot:{}", interface_name, vtable_slot),
+                    };
                     self.write(&format!(
-                        "├── arm[{}] var_slot:{} type_tag:{}",
-                        i, arm.var_slot, arm.type_tag_name
+                        "├── arm[{}] var_slot:{} {}",
+                        i, arm.var_slot, kind_str
                     ));
                     self.newline();
                     let arm_child = format!("{}│   ", parent_prefix);
@@ -1226,7 +1236,7 @@ impl ResolvedProgramPrinter {
                 self.print_expr(index, "└── index: ", &idx_child);
             }
 
-            ResolvedExpr::Field { object, field } => {
+            ResolvedExpr::Field { object, field, .. } => {
                 self.write(&format!("{}Field .{}", prefix, field));
                 self.newline();
                 let obj_child = format!("{}    ", parent_prefix);
@@ -1844,10 +1854,21 @@ impl<'a> Disassembler<'a> {
             Op::CallIndirect(argc) => {
                 self.output.push_str(&format!("CallIndirect {}", argc));
             }
+            Op::CallDynamic(argc) => {
+                self.output.push_str(&format!("CallDynamic {}", argc));
+            }
 
             // Type Descriptor
             Op::TypeDescLoad(idx) => {
                 self.output.push_str(&format!("TypeDescLoad {}", idx));
+            }
+
+            // Interface Descriptor
+            Op::InterfaceDescLoad(idx) => {
+                self.output.push_str(&format!("InterfaceDescLoad {}", idx));
+            }
+            Op::VtableLookup => {
+                self.output.push_str("VtableLookup");
             }
         }
     }
@@ -1955,6 +1976,23 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             output.push_str(&format!(
                 "CallIndirect {}({}){}",
                 format_vreg(callee),
+                args_str.join(", "),
+                ret_str
+            ))
+        }
+        MicroOp::CallDynamic {
+            func_idx,
+            args,
+            ret,
+        } => {
+            let args_str: Vec<String> = args.iter().map(format_vreg).collect();
+            let ret_str = match ret {
+                Some(r) => format!(" → {}", format_vreg(r)),
+                None => String::new(),
+            };
+            output.push_str(&format!(
+                "CallDynamic {}({}){}",
+                format_vreg(func_idx),
                 args_str.join(", "),
                 ret_str
             ))
@@ -2344,6 +2382,31 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
                 format_vreg(dst),
                 idx,
                 tag
+            ));
+        }
+        MicroOp::InterfaceDescLoad { dst, idx } => {
+            let name = chunk
+                .interface_descriptors
+                .get(*idx)
+                .map(|id| id.name.as_str())
+                .unwrap_or("<unknown>");
+            output.push_str(&format!(
+                "{} = InterfaceDescLoad {} ; \"{}\"",
+                format_vreg(dst),
+                idx,
+                name
+            ));
+        }
+        MicroOp::VtableLookup {
+            dst,
+            type_info,
+            iface_desc,
+        } => {
+            output.push_str(&format!(
+                "{} = VtableLookup {}, {}",
+                format_vreg(dst),
+                format_vreg(type_info),
+                format_vreg(iface_desc),
             ));
         }
         MicroOp::StringConst { dst, idx } => {
