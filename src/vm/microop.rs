@@ -66,6 +66,13 @@ pub enum MicroOp {
         args: Vec<VReg>,
         ret: Option<VReg>,
     },
+    /// Dynamic call by func_index in a vreg.
+    /// func_idx vreg holds an i64 function index; args are passed directly.
+    CallDynamic {
+        func_idx: VReg,
+        args: Vec<VReg>,
+        ret: Option<VReg>,
+    },
 
     // ========================================
     // Move / Constants
@@ -488,6 +495,19 @@ pub enum MicroOp {
     TypeDescLoad {
         dst: VReg,
         idx: usize,
+    },
+    /// Load pre-allocated interface descriptor reference.
+    /// dst = interface_descriptor_refs[idx]
+    InterfaceDescLoad {
+        dst: VReg,
+        idx: usize,
+    },
+    /// Vtable lookup: search type_info's vtable entries for matching iface_desc_ref.
+    /// dst = vtable_ref if found, or Null if not found.
+    VtableLookup {
+        dst: VReg,
+        type_info: VReg,
+        iface_desc: VReg,
     },
     /// Convert any value to its string representation.
     /// dst = to_string(src) (Ref to newly allocated heap string)

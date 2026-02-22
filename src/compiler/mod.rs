@@ -130,6 +130,10 @@ pub fn run(filename: &str, source: &str) -> Result<(), String> {
 
     // Name resolution
     let mut resolver = Resolver::new(filename);
+    resolver.set_interface_info(
+        typechecker.interface_impls().clone(),
+        typechecker.interface_method_names(),
+    );
     let resolved = resolver.resolve(program)?;
 
     // Code generation
@@ -199,6 +203,10 @@ pub fn run_file_capturing_output(
 
         // Name resolution
         let mut resolver = Resolver::new(&filename);
+        resolver.set_interface_info(
+            typechecker.interface_impls().clone(),
+            typechecker.interface_method_names(),
+        );
         let resolved = resolver.resolve(program)?;
 
         // Code generation
@@ -282,6 +290,10 @@ pub fn run_file_with_config(path: &Path, config: &RuntimeConfig) -> Result<(), S
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
+    resolver.set_interface_info(
+        typechecker.interface_impls().clone(),
+        typechecker.interface_method_names(),
+    );
     let resolved = resolver.resolve(program)?;
 
     // Code generation
@@ -374,6 +386,10 @@ pub fn run_file_with_dump(
     // Name resolution
     let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
+    resolver.set_interface_info(
+        typechecker.interface_impls().clone(),
+        typechecker.interface_method_names(),
+    );
     let resolved = resolver.resolve(program)?;
     timings.resolve = start.elapsed();
 
@@ -516,6 +532,10 @@ pub fn run_source(
     // Name resolution
     let start = Instant::now();
     let mut resolver = Resolver::new(&filename);
+    resolver.set_interface_info(
+        typechecker.interface_impls().clone(),
+        typechecker.interface_method_names(),
+    );
     let resolved = resolver.resolve(program)?;
     timings.resolve = start.elapsed();
 
@@ -710,6 +730,10 @@ pub fn dump_bytecode(path: &Path) -> Result<String, String> {
 
     // Name resolution
     let mut resolver = Resolver::new(&filename);
+    resolver.set_interface_info(
+        typechecker.interface_impls().clone(),
+        typechecker.interface_method_names(),
+    );
     let resolved = resolver.resolve(program)?;
 
     // Code generation

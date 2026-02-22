@@ -75,6 +75,18 @@ pub struct TypeDescriptor {
     /// Auxiliary type tag names for container element types.
     /// Vec → [elem_tag], Map → [key_tag, val_tag], Array → [elem_tag], others → [].
     pub aux_type_tags: Vec<String>,
+    /// Interface vtables: Vec<(iface_descriptor_index, Vec<func_index>)>.
+    /// Each entry maps an interface to the function indices implementing its methods.
+    pub vtables: Vec<(usize, Vec<usize>)>,
+}
+
+/// An interface descriptor for runtime interface dispatch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InterfaceDescriptor {
+    /// Interface name (e.g., "ToString")
+    pub name: String,
+    /// Method names in canonical order
+    pub method_names: Vec<String>,
 }
 
 /// A compiled chunk of bytecode.
@@ -86,6 +98,8 @@ pub struct Chunk {
     pub strings: Vec<String>,
     /// Type descriptor table for dyn type info
     pub type_descriptors: Vec<TypeDescriptor>,
+    /// Interface descriptor table for runtime interface dispatch
+    pub interface_descriptors: Vec<InterfaceDescriptor>,
     /// Debug information (optional)
     pub debug: Option<DebugInfo>,
 }

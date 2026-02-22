@@ -111,6 +111,25 @@ pub fn write_chunk<W: Write>(w: &mut W, chunk: &Chunk) -> io::Result<()> {
         for aux_type_tag in &td.aux_type_tags {
             write_string(w, aux_type_tag)?;
         }
+        // vtables: Vec<(iface_idx, Vec<func_idx>)>
+        write_u32(w, td.vtables.len() as u32)?;
+        for (iface_idx, func_indices) in &td.vtables {
+            write_u32(w, *iface_idx as u32)?;
+            write_u32(w, func_indices.len() as u32)?;
+            for fi in func_indices {
+                write_u32(w, *fi as u32)?;
+            }
+        }
+    }
+
+    // Interface descriptors
+    write_u32(w, chunk.interface_descriptors.len() as u32)?;
+    for id in &chunk.interface_descriptors {
+        write_string(w, &id.name)?;
+        write_u32(w, id.method_names.len() as u32)?;
+        for mn in &id.method_names {
+            write_string(w, mn)?;
+        }
     }
 
     // Debug info (not serialized for now)
@@ -172,12 +191,37 @@ pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
         for _ in 0..aux_type_count {
             aux_type_tags.push(read_string(r)?);
         }
+        let vtable_count = read_u32(r)? as usize;
+        let mut vtables = Vec::with_capacity(vtable_count);
+        for _ in 0..vtable_count {
+            let iface_idx = read_u32(r)? as usize;
+            let func_count = read_u32(r)? as usize;
+            let mut func_indices = Vec::with_capacity(func_count);
+            for _ in 0..func_count {
+                func_indices.push(read_u32(r)? as usize);
+            }
+            vtables.push((iface_idx, func_indices));
+        }
         type_descriptors.push(super::TypeDescriptor {
             tag_name,
             field_names,
             field_type_tags,
             aux_type_tags,
+            vtables,
         });
+    }
+
+    // Interface descriptors
+    let iface_count = read_u32(r)? as usize;
+    let mut interface_descriptors = Vec::with_capacity(iface_count);
+    for _ in 0..iface_count {
+        let name = read_string(r)?;
+        let method_count = read_u32(r)? as usize;
+        let mut method_names = Vec::with_capacity(method_count);
+        for _ in 0..method_count {
+            method_names.push(read_string(r)?);
+        }
+        interface_descriptors.push(super::InterfaceDescriptor { name, method_names });
     }
 
     // Debug info
@@ -194,6 +238,7 @@ pub fn read_chunk<R: Read>(r: &mut R) -> Result<Chunk, BytecodeError> {
         main,
         strings,
         type_descriptors,
+        interface_descriptors,
         debug,
     })
 }
@@ -460,6 +505,9 @@ const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
 const OP_TYPE_DESC_LOAD: u8 = 119;
+const OP_IFACE_DESC_LOAD: u8 = 120;
+const OP_CALL_DYNAMIC: u8 = 121;
+const OP_VTABLE_LOOKUP: u8 = 122;
 
 fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
     match op {
@@ -681,6 +729,23 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_TYPE_DESC_LOAD])?;
             write_u32(w, *idx as u32)?;
         }
+
+        // Interface Descriptor
+        Op::InterfaceDescLoad(idx) => {
+            w.write_all(&[OP_IFACE_DESC_LOAD])?;
+            write_u32(w, *idx as u32)?;
+        }
+
+        // Dynamic call by func_index on stack
+        Op::CallDynamic(argc) => {
+            w.write_all(&[OP_CALL_DYNAMIC])?;
+            write_u32(w, *argc as u32)?;
+        }
+
+        // Vtable lookup
+        Op::VtableLookup => {
+            w.write_all(&[OP_VTABLE_LOOKUP])?;
+        }
     }
     Ok(())
 }
@@ -846,6 +911,15 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
 
         // Type Descriptor
         OP_TYPE_DESC_LOAD => Op::TypeDescLoad(read_u32(r)? as usize),
+
+        // Interface Descriptor
+        OP_IFACE_DESC_LOAD => Op::InterfaceDescLoad(read_u32(r)? as usize),
+
+        // Dynamic call by func_index on stack
+        OP_CALL_DYNAMIC => Op::CallDynamic(read_u32(r)? as usize),
+
+        // Vtable lookup
+        OP_VTABLE_LOOKUP => Op::VtableLookup,
 
         _ => return Err(BytecodeError::InvalidOpcode(tag)),
     };
@@ -1014,6 +1088,7 @@ mod tests {
             },
             strings: vec!["hello".to_string(), "world".to_string()],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -1054,6 +1129,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -1095,6 +1171,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -1284,6 +1361,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -1323,6 +1401,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -1359,6 +1438,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
@@ -1394,6 +1474,7 @@ mod tests {
             },
             strings: vec![],
             type_descriptors: vec![],
+            interface_descriptors: vec![],
             debug: None,
         };
 
