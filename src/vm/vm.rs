@@ -1659,6 +1659,18 @@ impl VM {
                     let r = self.heap.alloc_string(s)?;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
+                MicroOp::ValueTag { dst, src } => {
+                    let sb = self.frames.last().unwrap().stack_base;
+                    let value = self.stack[sb + src.0];
+                    let tag = match value {
+                        Value::I64(_) => 0i64,
+                        Value::F64(_) => 1,
+                        Value::Bool(_) => 2,
+                        Value::Null => 3,
+                        Value::Ref(_) => 4,
+                    };
+                    self.stack[sb + dst.0] = Value::I64(tag);
+                }
                 MicroOp::HeapAlloc { dst, args } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let slots: Vec<Value> = args.iter().map(|a| self.stack[sb + a.0]).collect();
@@ -2810,6 +2822,17 @@ impl VM {
                 let s = self.value_to_string(&value)?;
                 let r = self.heap.alloc_string(s)?;
                 self.stack.push(Value::Ref(r));
+            }
+            Op::ValueTag => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let tag = match value {
+                    Value::I64(_) => 0i64,
+                    Value::F64(_) => 1,
+                    Value::Bool(_) => 2,
+                    Value::Null => 3,
+                    Value::Ref(_) => 4,
+                };
+                self.stack.push(Value::I64(tag));
             }
             Op::GcHint(_bytes) => {
                 // Hint about upcoming allocation - might trigger GC

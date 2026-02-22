@@ -173,6 +173,8 @@ pub enum Op {
     Syscall(usize, usize),
     GcHint(usize),
     ValueToString,
+    /// Return the runtime type tag of a value (0=int, 1=float, 2=bool, 3=nil, 4=ref).
+    ValueTag,
     ParseInt,
     UMul128Hi,
 
@@ -318,6 +320,7 @@ impl Op {
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
             Op::ValueToString => "ValueToString",
+            Op::ValueTag => "ValueTag",
             Op::ParseInt => "ParseInt",
             Op::UMul128Hi => "UMul128Hi",
             Op::Throw => "Throw",

@@ -2881,6 +2881,13 @@ impl TypeChecker {
                 }
                 Some(Type::String)
             }
+            "__value_tag" => {
+                // __value_tag accepts any type, returns int (type tag: 0=int, 1=float, 2=bool, 3=nil, 4=ref)
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Int)
+            }
             "__syscall" => {
                 // __syscall(num, ...args) -> Int | String
                 // First argument must be syscall number (Int), rest depends on syscall

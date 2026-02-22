@@ -166,7 +166,7 @@ impl Codegen {
             ResolvedExpr::AssociatedFunctionCall { .. } => ValueType::Ref,
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
-                "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
+                "len" | "argc" | "parse_int" | "__umul128_hi" | "__value_tag" => ValueType::I64,
                 "channel" | "recv" | "argv" | "args" | "__alloc_heap" | "__alloc_string"
                 | "__null_ptr" | "__ptr_offset" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
@@ -1098,6 +1098,13 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::ValueToString);
+                    }
+                    "__value_tag" => {
+                        if args.len() != 1 {
+                            return Err("__value_tag takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::ValueTag);
                     }
                     "__syscall" => {
                         // __syscall(num, ...args) -> result
