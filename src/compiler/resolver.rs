@@ -71,6 +71,8 @@ pub enum ResolvedStatement {
         object: ResolvedExpr,
         field: String,
         value: ResolvedExpr,
+        /// Struct name for field index resolution (from typechecker)
+        struct_name: Option<String>,
     },
     If {
         condition: ResolvedExpr,
@@ -165,6 +167,8 @@ pub enum ResolvedExpr {
     Field {
         object: Box<ResolvedExpr>,
         field: String,
+        /// Struct name for field index resolution (from typechecker)
+        struct_name: Option<String>,
     },
     Unary {
         op: UnaryOp,
@@ -1379,12 +1383,19 @@ impl<'a> Resolver<'a> {
                 value,
                 ..
             } => {
+                let struct_name = object.inferred_type().and_then(|ty| match ty {
+                    Type::Struct { name, .. } | Type::GenericStruct { name, .. } => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                });
                 let object = self.resolve_expr(object, scope)?;
                 let value = self.resolve_expr(value, scope)?;
                 Ok(ResolvedStatement::FieldAssign {
                     object,
                     field,
                     value,
+                    struct_name,
                 })
             }
             Statement::ForIn {
@@ -1593,10 +1604,17 @@ impl<'a> Resolver<'a> {
                 })
             }
             Expr::Field { object, field, .. } => {
+                let struct_name = object.inferred_type().and_then(|ty| match ty {
+                    Type::Struct { name, .. } | Type::GenericStruct { name, .. } => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                });
                 let object = self.resolve_expr(*object, scope)?;
                 Ok(ResolvedExpr::Field {
                     object: Box::new(object),
                     field,
+                    struct_name,
                 })
             }
             Expr::Unary { op, operand, .. } => {

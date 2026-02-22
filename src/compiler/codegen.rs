@@ -274,9 +274,16 @@ impl Codegen {
         self.structs = structs;
     }
 
-    /// Look up a field index for any known struct.
-    fn get_field_index(&self, field_name: &str) -> Option<usize> {
-        // Check all structs for this field name
+    /// Look up a field index, optionally scoped to a specific struct.
+    /// When struct_name is provided, only that struct's fields are checked.
+    /// When None, falls back to searching all structs (ambiguous but backward-compatible).
+    fn get_field_index(&self, field_name: &str, struct_name: Option<&str>) -> Option<usize> {
+        if let Some(sn) = struct_name
+            && let Some(field_map) = self.struct_field_indices.get(sn)
+        {
+            return field_map.get(field_name).copied();
+        }
+        // Fallback: check all structs (non-deterministic if field name is ambiguous)
         for field_map in self.struct_field_indices.values() {
             if let Some(&idx) = field_map.get(field_name) {
                 return Some(idx);
@@ -575,9 +582,10 @@ impl Codegen {
                 object,
                 field,
                 value,
+                struct_name,
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
-                if let Some(idx) = self.get_field_index(field) {
+                if let Some(idx) = self.get_field_index(field, struct_name.as_deref()) {
                     // Known struct field - use heap slot assignment
                     self.compile_expr(object, ops)?;
                     ops.push(Op::I64Const(idx as i64));
@@ -945,10 +953,14 @@ impl Codegen {
                     ops.push(Op::HeapLoadDyn);
                 }
             }
-            ResolvedExpr::Field { object, field } => {
+            ResolvedExpr::Field {
+                object,
+                field,
+                struct_name,
+            } => {
                 self.compile_expr(object, ops)?;
                 // Check if this might be a struct field (structs are compiled as arrays)
-                if let Some(idx) = self.get_field_index(field) {
+                if let Some(idx) = self.get_field_index(field, struct_name.as_deref()) {
                     // Known struct field - use heap slot access
                     ops.push(Op::I64Const(idx as i64));
                     ops.push(Op::HeapLoadDyn);

@@ -651,7 +651,13 @@ impl Monomorphiser {
     pub fn generate_all(&self, instantiations: &HashSet<Instantiation>) -> Vec<Item> {
         let mut items = Vec::new();
 
-        for inst in instantiations {
+        // Sort instantiations by mangled name for deterministic output order.
+        // HashSet iteration order is non-deterministic, which would cause
+        // function indices to vary between runs, breaking vtable entries.
+        let mut sorted_insts: Vec<&Instantiation> = instantiations.iter().collect();
+        sorted_insts.sort_by_key(|inst| inst.mangled_name());
+
+        for inst in sorted_insts {
             if self.generic_functions.contains_key(&inst.name)
                 && let Some(specialized_fn) = self.specialize_function(inst)
             {

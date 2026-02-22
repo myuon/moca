@@ -999,6 +999,7 @@ impl ResolvedProgramPrinter {
                 object,
                 field,
                 value,
+                ..
             } => {
                 self.write(&format!("{}FieldAssign .{}", prefix, field));
                 self.newline();
@@ -1235,7 +1236,7 @@ impl ResolvedProgramPrinter {
                 self.print_expr(index, "└── index: ", &idx_child);
             }
 
-            ResolvedExpr::Field { object, field } => {
+            ResolvedExpr::Field { object, field, .. } => {
                 self.write(&format!("{}Field .{}", prefix, field));
                 self.newline();
                 let obj_child = format!("{}    ", parent_prefix);
