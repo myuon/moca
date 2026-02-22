@@ -1812,7 +1812,6 @@ impl<'a> Disassembler<'a> {
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::ValueToString => self.output.push_str("ValueToString"),
-            Op::ValueTag => self.output.push_str("ValueTag"),
             Op::ParseInt => self.output.push_str("ParseInt"),
             Op::UMul128Hi => self.output.push_str("UMul128Hi"),
             // Exception handling
@@ -2369,11 +2368,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
         }
         MicroOp::ValueToString { dst, src } => output.push_str(&format!(
             "ValueToString {}, {}",
-            format_vreg(dst),
-            format_vreg(src)
-        )),
-        MicroOp::ValueTag { dst, src } => output.push_str(&format!(
-            "ValueTag {}, {}",
             format_vreg(dst),
             format_vreg(src)
         )),
