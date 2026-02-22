@@ -852,132 +852,99 @@ fun print<T: ToString>(v: T) {
     print_str("\n");
 }
 
-// Recursively format a dyn-like wrapper [type_info_ref, raw_value].
-// Uses type_info heap layout to recurse into containers and structs.
+// Recursively format a dyn value [type_info_ref, raw_value].
+// Dispatches on type name prefix: int/float/bool/string/nil/Vec_/Map_/Array_/struct.
 // type_info layout: [tag_id, type_name, fc, ...field_names, ...field_td_refs, aux_count, ...aux_td_refs]
 fun _any_to_string(d: any) -> string {
     let ti = __heap_load(d, 0);
     let tn: string = __heap_load(ti, 1);
     let fc: int = __heap_load(ti, 2);
-
-    // Primitives (no fields)
-    if fc == 0 {
-        let raw = __heap_load(d, 1);
-        if tn == "int" {
-            return _int_to_string(raw);
-        }
-        if tn == "float" {
-            return _float_to_string(raw);
-        }
-        if tn == "bool" {
-            return _bool_to_string(raw);
-        }
-        if tn == "string" {
-            return raw;
-        }
-        if tn == "nil" {
-            return "nil";
-        }
-        return __value_to_string(raw);
-    }
-
     let raw = __heap_load(d, 1);
-    let ac: int = __heap_load(ti, 3 + 2 * fc);
-    let fn0: string = __heap_load(ti, 3);
 
-    // Vec (fc == 3, data/len/cap)
-    if fc == 3 {
-        let fn1: string = __heap_load(ti, 4);
-        let fn2: string = __heap_load(ti, 5);
-        if fn0 == "data" && fn1 == "len" && fn2 == "cap" && ac >= 1 {
-            let data = __heap_load(raw, 0);
-            let vec_len: int = __heap_load(raw, 1);
-            if vec_len == 0 {
-                return "[]";
-            }
-            let elem_td = __heap_load(ti, 3 + 2 * fc + 1);
-            let result = "[";
-            let i = 0;
-            while i < vec_len {
-                if i > 0 {
-                    result = result + ", ";
-                }
-                let wrapper = __alloc_heap(2);
-                __heap_store(wrapper, 0, elem_td);
-                __heap_store(wrapper, 1, __heap_load(data, i));
-                result = result + _any_to_string(wrapper);
-                i = i + 1;
-            }
-            return result + "]";
+    if tn == "int" { return _int_to_string(raw); }
+    if tn == "float" { return _float_to_string(raw); }
+    if tn == "bool" { return _bool_to_string(raw); }
+    if tn == "string" { return raw; }
+    if tn == "nil" { return "nil"; }
+
+    // Vec_*
+    if str_index_of(tn, "Vec_") == 0 {
+        let data = __heap_load(raw, 0);
+        let vec_len: int = __heap_load(raw, 1);
+        if vec_len == 0 { return "[]"; }
+        let elem_td = __heap_load(ti, 3 + 2 * fc + 1);
+        let result = "[";
+        let i = 0;
+        while i < vec_len {
+            if i > 0 { result = result + ", "; }
+            let wrapper = __alloc_heap(2);
+            __heap_store(wrapper, 0, elem_td);
+            __heap_store(wrapper, 1, __heap_load(data, i));
+            result = result + _any_to_string(wrapper);
+            i = i + 1;
         }
-        // Map (fc == 3, hm_buckets/hm_size/hm_capacity)
-        if fn0 == "hm_buckets" && ac >= 2 {
-            let buckets = __heap_load(raw, 0);
-            let map_size: int = __heap_load(raw, 1);
-            let map_cap: int = __heap_load(raw, 2);
-            if map_size == 0 {
-                return "{}";
-            }
-            let key_td = __heap_load(ti, 3 + 2 * fc + 1);
-            let val_td = __heap_load(ti, 3 + 2 * fc + 2);
-            let result = "{";
-            let first = true;
-            let bi = 0;
-            while bi < map_cap {
-                let entry_ptr = __heap_load(buckets, bi);
-                while entry_ptr != 0 {
-                    if !first {
-                        result = result + ", ";
-                    }
-                    first = false;
-                    let kw = __alloc_heap(2);
-                    __heap_store(kw, 0, key_td);
-                    __heap_store(kw, 1, __heap_load(entry_ptr, 0));
-                    let vw = __alloc_heap(2);
-                    __heap_store(vw, 0, val_td);
-                    __heap_store(vw, 1, __heap_load(entry_ptr, 1));
-                    result = result + _any_to_string(kw) + ": " + _any_to_string(vw);
-                    entry_ptr = __heap_load(entry_ptr, 2);
-                }
-                bi = bi + 1;
-            }
-            return result + "}";
-        }
+        return result + "]";
     }
 
-    // Array (fc == 2, data/len)
-    if fc == 2 && fn0 == "data" && ac >= 1 {
-        let fn1: string = __heap_load(ti, 4);
-        if fn1 == "len" {
-            let data = __heap_load(raw, 0);
-            let arr_len: int = __heap_load(raw, 1);
-            if arr_len == 0 {
-                return "[]";
+    // Map_*
+    if str_index_of(tn, "Map_") == 0 {
+        let buckets = __heap_load(raw, 0);
+        let map_size: int = __heap_load(raw, 1);
+        let map_cap: int = __heap_load(raw, 2);
+        if map_size == 0 { return "{}"; }
+        let key_td = __heap_load(ti, 3 + 2 * fc + 1);
+        let val_td = __heap_load(ti, 3 + 2 * fc + 2);
+        let result = "{";
+        let first = true;
+        let bi = 0;
+        while bi < map_cap {
+            let entry_ptr = __heap_load(buckets, bi);
+            while entry_ptr != 0 {
+                if !first { result = result + ", "; }
+                first = false;
+                let kw = __alloc_heap(2);
+                __heap_store(kw, 0, key_td);
+                __heap_store(kw, 1, __heap_load(entry_ptr, 0));
+                let vw = __alloc_heap(2);
+                __heap_store(vw, 0, val_td);
+                __heap_store(vw, 1, __heap_load(entry_ptr, 1));
+                result = result + _any_to_string(kw) + ": " + _any_to_string(vw);
+                entry_ptr = __heap_load(entry_ptr, 2);
             }
-            let elem_td = __heap_load(ti, 3 + 2 * fc + 1);
-            let result = "[";
-            let i = 0;
-            while i < arr_len {
-                if i > 0 {
-                    result = result + ", ";
-                }
-                let wrapper = __alloc_heap(2);
-                __heap_store(wrapper, 0, elem_td);
-                __heap_store(wrapper, 1, __heap_load(data, i));
-                result = result + _any_to_string(wrapper);
-                i = i + 1;
-            }
-            return result + "]";
+            bi = bi + 1;
         }
+        return result + "}";
+    }
+
+    // Array_*
+    if str_index_of(tn, "Array_") == 0 {
+        let data = __heap_load(raw, 0);
+        let arr_len: int = __heap_load(raw, 1);
+        if arr_len == 0 { return "[]"; }
+        let elem_td = __heap_load(ti, 3 + 2 * fc + 1);
+        let result = "[";
+        let i = 0;
+        while i < arr_len {
+            if i > 0 { result = result + ", "; }
+            let wrapper = __alloc_heap(2);
+            __heap_store(wrapper, 0, elem_td);
+            __heap_store(wrapper, 1, __heap_load(data, i));
+            result = result + _any_to_string(wrapper);
+            i = i + 1;
+        }
+        return result + "]";
+    }
+
+    // No fields and unrecognized type name (e.g. nullable "int?")
+    if fc == 0 {
+        return __value_to_string(raw);
     }
 
     // Struct with named fields
     let result = tn + " { ";
     let i = 0;
     while i < fc {
-        if i > 0 {
-            result = result + ", ";
-        }
+        if i > 0 { result = result + ", "; }
         let field_name: string = __heap_load(ti, 3 + i);
         let field_td = __heap_load(ti, 3 + fc + i);
         let field_val = __heap_load(raw, i);
@@ -990,23 +957,12 @@ fun _any_to_string(d: any) -> string {
     return result + " }";
 }
 
-// Convert a dyn value to its string representation using match dyn.
-// Dispatches to type-specific moca functions for primitives.
-// Falls back to _any_to_string for containers and structs.
 fun _value_to_string(v: dyn) -> string {
-    match dyn v {
-        x: int => { return _int_to_string(x); }
-        x: float => { return _float_to_string(x); }
-        x: bool => { return _bool_to_string(x); }
-        x: string => { return x; }
-        _ => {
-            return _any_to_string(v);
-        }
-    }
+    return _any_to_string(v);
 }
 
 fun debug(v: dyn) -> string {
-    return _value_to_string(v);
+    return _any_to_string(v);
 }
 
 // Print a string to stderr without a newline.
