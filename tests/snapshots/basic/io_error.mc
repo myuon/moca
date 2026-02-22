@@ -5,10 +5,11 @@ let result1 = write(99, "test", 4);
 print(result1);
 
 // Test 2: Read from invalid fd (should return EBADF = -1)
-// Note: read() returns string but error values are integers (type-unsafe),
-// so print_debug (runtime dispatch) is needed here. See #195.
+// Note: read() returns string but error values are integers (type-unsafe).
+// Use __value_to_string (VM opcode) for type-unsafe runtime dispatch. See #195.
 let result2 = read(99, 100);
-print_debug(result2);
+print_str(__value_to_string(result2));
+print_str("\n");
 
 // Test 3: Close invalid fd (should return EBADF = -1)
 let result3 = close(99);
