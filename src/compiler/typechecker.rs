@@ -83,11 +83,6 @@ impl Substitution {
                 }
             }
             Type::Ptr(elem) => Type::Ptr(Box::new(self.apply(elem))),
-            Type::Array(elem) => Type::Array(Box::new(self.apply(elem))),
-            Type::Vector(elem) => Type::Vector(Box::new(self.apply(elem))),
-            Type::Map(key, value) => {
-                Type::Map(Box::new(self.apply(key)), Box::new(self.apply(value)))
-            }
             Type::Nullable(inner) => Type::Nullable(Box::new(self.apply(inner))),
             Type::Function { params, ret } => Type::Function {
                 params: params.iter().map(|p| self.apply(p)).collect(),
@@ -472,51 +467,6 @@ impl TypeChecker {
                 } else {
                     Err(TypeError::mismatch(t1, t2, span))
                 }
-            }
-
-            // Array types
-            (Type::Array(elem1), Type::Array(elem2)) => self.unify(elem1, elem2, span),
-
-            // Vector types
-            (Type::Vector(elem1), Type::Vector(elem2)) => self.unify(elem1, elem2, span),
-
-            // vec<T> and Vec<T> are compatible (Vec is the underlying struct for vec)
-            (
-                Type::Vector(elem1),
-                Type::GenericStruct {
-                    name, type_args, ..
-                },
-            )
-            | (
-                Type::GenericStruct {
-                    name, type_args, ..
-                },
-                Type::Vector(elem1),
-            ) if name == "Vec" && type_args.len() == 1 => self.unify(elem1, &type_args[0], span),
-
-            // Map types
-            (Type::Map(k1, v1), Type::Map(k2, v2)) => {
-                let s1 = self.unify(k1, k2, span)?;
-                let s2 = self.unify(v1, v2, span)?;
-                Ok(s1.compose(&s2))
-            }
-
-            // map<K, V> and Map<K, V> are compatible (Map is the underlying struct for map)
-            (
-                Type::Map(k1, v1),
-                Type::GenericStruct {
-                    name, type_args, ..
-                },
-            )
-            | (
-                Type::GenericStruct {
-                    name, type_args, ..
-                },
-                Type::Map(k1, v1),
-            ) if name == "Map" && type_args.len() == 2 => {
-                let s1 = self.unify(k1, &type_args[0], span)?;
-                let s2 = self.unify(v1, &type_args[1], span)?;
-                Ok(s1.compose(&s2))
             }
 
             // Nullable types
@@ -1195,11 +1145,11 @@ impl TypeChecker {
 
                 // Iterable should be array<T>, and var has type T
                 let elem_type = match self.substitution.apply(&iter_type) {
-                    Type::Array(elem) => *elem,
+                    ref t if t.is_array() => t.collection_element_type().unwrap().clone(),
                     Type::Var(_) => {
                         // Create fresh element type and unify
                         let elem = self.fresh_var();
-                        let arr_type = Type::Array(Box::new(elem.clone()));
+                        let arr_type = Type::array(elem.clone());
                         if let Err(e) = self.unify(&iter_type, &arr_type, *span) {
                             self.errors.push(e);
                         }
@@ -1278,27 +1228,14 @@ impl TypeChecker {
                 let resolved_obj_type = self.substitution.apply(&obj_type);
                 *object_type = Some(resolved_obj_type.clone());
 
-                // Object can be array<T>, Vector<T>, Vec<T>, or Map<K,V> generic struct
+                // Object can be array<T>, Vec<T>, or Map<K,V> generic struct
                 match resolved_obj_type {
-                    Type::Array(elem) | Type::Vector(elem) => {
-                        // Index should be int for Array/Vector
+                    ref t @ Type::GenericStruct { .. } if t.is_array() || t.is_vec() => {
+                        // Index should be int for Array/Vec
                         if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
                             self.errors.push(e);
                         }
-                        if let Err(e) = self.unify(&val_type, &elem, *span) {
-                            self.errors.push(e);
-                        }
-                    }
-                    Type::GenericStruct {
-                        ref name,
-                        ref type_args,
-                        ..
-                    } if name == "Vec" => {
-                        // Vec<T> - index should be int, check element type
-                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
-                            self.errors.push(e);
-                        }
-                        if let Some(elem) = type_args.first()
+                        if let Some(elem) = t.collection_element_type()
                             && let Err(e) = self.unify(&val_type, elem, *span)
                         {
                             self.errors.push(e);
@@ -1535,7 +1472,7 @@ impl TypeChecker {
             Expr::Array { elements, span, .. } => {
                 if elements.is_empty() {
                     // Empty array has unknown element type
-                    Type::Array(Box::new(self.fresh_var()))
+                    Type::array(self.fresh_var())
                 } else {
                     let first_type = self.infer_expr(&mut elements[0], env);
                     for elem in elements.iter_mut().skip(1) {
@@ -1544,7 +1481,7 @@ impl TypeChecker {
                             self.errors.push(e);
                         }
                     }
-                    Type::Array(Box::new(self.substitution.apply(&first_type)))
+                    Type::array(self.substitution.apply(&first_type))
                 }
             }
 
@@ -1562,21 +1499,16 @@ impl TypeChecker {
                 let resolved_obj_type = self.substitution.apply(&obj_type);
                 *object_type = Some(resolved_obj_type.clone());
 
-                // Object can be array<T>, Vector<T>, Vec<T>, Map<K,V>, string, or struct
+                // Object can be array<T>, Vec<T>, Map<K,V>, string, or struct
                 match resolved_obj_type {
-                    Type::Array(elem) => {
-                        // Index should be int for Array
+                    ref t @ Type::GenericStruct { .. } if t.is_array() || t.is_vec() => {
+                        // Index should be int for Array/Vec
                         if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
                             self.errors.push(e);
                         }
-                        self.substitution.apply(&elem)
-                    }
-                    Type::Vector(elem) => {
-                        // Index should be int for Vector
-                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
-                            self.errors.push(e);
-                        }
-                        self.substitution.apply(&elem)
+                        t.collection_element_type()
+                            .map(|e| self.substitution.apply(e))
+                            .unwrap_or_else(|| self.fresh_var())
                     }
                     Type::String => {
                         // Index should be int for String
@@ -1584,20 +1516,6 @@ impl TypeChecker {
                             self.errors.push(e);
                         }
                         Type::Int // String index returns byte value as int
-                    }
-                    Type::GenericStruct {
-                        ref name,
-                        ref type_args,
-                        ..
-                    } if name == "Vec" => {
-                        // Vec<T> - index should be int, return element type T
-                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
-                            self.errors.push(e);
-                        }
-                        type_args
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| self.fresh_var())
                     }
                     Type::GenericStruct {
                         ref name,
@@ -2428,8 +2346,6 @@ impl TypeChecker {
 
                 // Get struct name and type args from object type
                 let (struct_name, type_args) = match &resolved_obj_type {
-                    Type::Vector(elem) => ("Vec".to_string(), vec![*elem.clone()]),
-                    Type::Map(key, val) => ("Map".to_string(), vec![*key.clone(), *val.clone()]),
                     Type::Struct { name, .. } => (name.clone(), Vec::new()),
                     Type::GenericStruct {
                         name, type_args, ..
@@ -2997,7 +2913,8 @@ impl TypeChecker {
                 let resolved = self.substitution.apply(&arg_type);
                 // len works on array or string
                 match &resolved {
-                    Type::Array(_) | Type::String => {}
+                    t if t.is_array() => {}
+                    Type::String => {}
                     Type::Var(_) => {}
                     _ => {
                         self.errors.push(TypeError::new(
@@ -3019,7 +2936,7 @@ impl TypeChecker {
                 let val_type = self.infer_expr(&mut args[1], env);
 
                 let elem_type = self.fresh_var();
-                let expected = Type::Array(Box::new(elem_type.clone()));
+                let expected = Type::array(elem_type.clone());
                 if let Err(e) = self.unify(&arr_type, &expected, span) {
                     self.errors.push(e);
                 }
@@ -3036,7 +2953,7 @@ impl TypeChecker {
                 }
                 let arr_type = self.infer_expr(&mut args[0], env);
                 let elem_type = self.fresh_var();
-                let expected = Type::Array(Box::new(elem_type.clone()));
+                let expected = Type::array(elem_type.clone());
                 if let Err(e) = self.unify(&arr_type, &expected, span) {
                     self.errors.push(e);
                 }
@@ -3194,7 +3111,7 @@ impl TypeChecker {
                     self.errors
                         .push(TypeError::new("args expects 0 arguments", span));
                 }
-                Some(Type::Array(Box::new(Type::String)))
+                Some(Type::array(Type::String))
             }
             // vec_new and map_new are now associated functions (vec::new(), map::new())
             // They are defined in prelude.mc using impl vec/map blocks
@@ -3302,8 +3219,6 @@ impl TypeChecker {
             Type::String => "string".to_string(),
             Type::Struct { name, .. } => name.clone(),
             Type::GenericStruct { name, .. } => name.clone(),
-            Type::Vector(_) => "vec".to_string(),
-            Type::Map(_, _) => "map".to_string(),
             _ => ty.to_string(),
         }
     }

@@ -371,7 +371,6 @@ pub struct PreferIndexAccess;
 impl PreferIndexAccess {
     fn is_vec_or_map(object_type: &Option<Type>) -> bool {
         match object_type {
-            Some(Type::Vector(_)) | Some(Type::Map(_, _)) => true,
             Some(Type::GenericStruct { name, .. }) => name == "Vec" || name == "Map",
             _ => false,
         }

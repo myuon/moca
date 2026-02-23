@@ -21,12 +21,6 @@ pub enum Type {
     String,
     /// Nil type: `nil`
     Nil,
-    /// Array type: `array<T>`
-    Array(Box<Type>),
-    /// Vector type: `vec<T>` (dynamic array)
-    Vector(Box<Type>),
-    /// Map type: `map<K, V>` (hash map)
-    Map(Box<Type>, Box<Type>),
     /// Nullable type: `T?` (equivalent to T | nil)
     Nullable(Box<Type>),
     /// Function type: `(T1, T2, ...) -> R`
@@ -69,17 +63,64 @@ pub enum Type {
 impl Type {
     /// Create a new array type.
     pub fn array(element: Type) -> Type {
-        Type::Array(Box::new(element))
+        Type::GenericStruct {
+            name: "Array".to_string(),
+            type_args: vec![element],
+            fields: vec![],
+        }
     }
 
     /// Create a new vector type.
     pub fn vector(element: Type) -> Type {
-        Type::Vector(Box::new(element))
+        Type::GenericStruct {
+            name: "Vec".to_string(),
+            type_args: vec![element],
+            fields: vec![],
+        }
     }
 
     /// Create a new map type.
     pub fn map(key: Type, value: Type) -> Type {
-        Type::Map(Box::new(key), Box::new(value))
+        Type::GenericStruct {
+            name: "Map".to_string(),
+            type_args: vec![key, value],
+            fields: vec![],
+        }
+    }
+
+    /// Check if this type is an Array.
+    pub fn is_array(&self) -> bool {
+        matches!(self, Type::GenericStruct { name, .. } if name == "Array")
+    }
+
+    /// Check if this type is a Vec.
+    pub fn is_vec(&self) -> bool {
+        matches!(self, Type::GenericStruct { name, .. } if name == "Vec")
+    }
+
+    /// Check if this type is a Map.
+    pub fn is_map(&self) -> bool {
+        matches!(self, Type::GenericStruct { name, .. } if name == "Map")
+    }
+
+    /// Extract element type from Array or Vec.
+    pub fn collection_element_type(&self) -> Option<&Type> {
+        match self {
+            Type::GenericStruct {
+                name, type_args, ..
+            } if (name == "Array" || name == "Vec") && !type_args.is_empty() => Some(&type_args[0]),
+            _ => None,
+        }
+    }
+
+    /// Extract key and value types from Map.
+    pub fn map_key_value_types(&self) -> Option<(&Type, &Type)> {
+        match self {
+            Type::GenericStruct {
+                name, type_args, ..
+            } if name == "Map" && type_args.len() >= 2 => Some((&type_args[0], &type_args[1])),
+            _ => None,
+        }
     }
 
     /// Create a new nullable type.
@@ -107,8 +148,7 @@ impl Type {
             | Type::Dyn => false,
             Type::Var(_) => true,
             Type::Param { .. } | Type::InterfaceBound { .. } => false,
-            Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
-            Type::Map(key, value) => key.has_type_vars() || value.has_type_vars(),
+            Type::Ptr(elem) => elem.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
             Type::Struct { fields, .. } => fields.iter().any(|(_, t)| t.has_type_vars()),
             Type::GenericStruct {
@@ -145,13 +185,7 @@ impl Type {
                     vars.push(*id);
                 }
             }
-            Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => {
-                elem.collect_type_vars(vars)
-            }
-            Type::Map(key, value) => {
-                key.collect_type_vars(vars);
-                value.collect_type_vars(vars);
-            }
+            Type::Ptr(elem) => elem.collect_type_vars(vars),
             Type::Nullable(inner) => inner.collect_type_vars(vars),
             Type::Struct { fields, .. } => {
                 for (_, t) in fields {
@@ -189,12 +223,6 @@ impl Type {
             Type::Nil => Some(TypeAnnotation::Named("nil".to_string())),
             Type::Any => Some(TypeAnnotation::Named("any".to_string())),
             Type::Dyn => Some(TypeAnnotation::Named("dyn".to_string())),
-            Type::Array(elem) => Some(TypeAnnotation::Array(Box::new(elem.to_type_annotation()?))),
-            Type::Vector(elem) => Some(TypeAnnotation::Vec(Box::new(elem.to_type_annotation()?))),
-            Type::Map(key, value) => Some(TypeAnnotation::Map(
-                Box::new(key.to_type_annotation()?),
-                Box::new(value.to_type_annotation()?),
-            )),
             Type::Nullable(inner) => Some(TypeAnnotation::Nullable(Box::new(
                 inner.to_type_annotation()?,
             ))),
@@ -211,10 +239,26 @@ impl Type {
                 name, type_args, ..
             } => {
                 let ta: Option<Vec<_>> = type_args.iter().map(|t| t.to_type_annotation()).collect();
-                Some(TypeAnnotation::Generic {
-                    name: name.clone(),
-                    type_args: ta?,
-                })
+                let ta = ta?;
+                match name.as_str() {
+                    "Array" if ta.len() == 1 => Some(TypeAnnotation::Array(Box::new(
+                        ta.into_iter().next().unwrap(),
+                    ))),
+                    "Vec" if ta.len() == 1 => Some(TypeAnnotation::Vec(Box::new(
+                        ta.into_iter().next().unwrap(),
+                    ))),
+                    "Map" if ta.len() == 2 => {
+                        let mut iter = ta.into_iter();
+                        Some(TypeAnnotation::Map(
+                            Box::new(iter.next().unwrap()),
+                            Box::new(iter.next().unwrap()),
+                        ))
+                    }
+                    _ => Some(TypeAnnotation::Generic {
+                        name: name.clone(),
+                        type_args: ta,
+                    }),
+                }
             }
             Type::Ptr(elem) => Some(TypeAnnotation::Generic {
                 name: "ptr".to_string(),
@@ -249,16 +293,6 @@ impl Type {
                 }
             }
             Type::Ptr(elem) => Type::Ptr(Box::new(elem.substitute_param(param_name, replacement))),
-            Type::Array(elem) => {
-                Type::Array(Box::new(elem.substitute_param(param_name, replacement)))
-            }
-            Type::Vector(elem) => {
-                Type::Vector(Box::new(elem.substitute_param(param_name, replacement)))
-            }
-            Type::Map(key, value) => Type::Map(
-                Box::new(key.substitute_param(param_name, replacement)),
-                Box::new(value.substitute_param(param_name, replacement)),
-            ),
             Type::Nullable(inner) => {
                 Type::Nullable(Box::new(inner.substitute_param(param_name, replacement)))
             }
@@ -303,9 +337,6 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::String => write!(f, "string"),
             Type::Nil => write!(f, "nil"),
-            Type::Array(elem) => write!(f, "array<{}>", elem),
-            Type::Vector(elem) => write!(f, "vec<{}>", elem),
-            Type::Map(key, value) => write!(f, "map<{}, {}>", key, value),
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Function { params, ret } => {
                 write!(f, "(")?;
@@ -327,7 +358,13 @@ impl fmt::Display for Type {
             Type::GenericStruct {
                 name, type_args, ..
             } => {
-                write!(f, "{}<", name)?;
+                let display_name = match name.as_str() {
+                    "Array" => "array",
+                    "Vec" => "vec",
+                    "Map" => "map",
+                    _ => name.as_str(),
+                };
+                write!(f, "{}<", display_name)?;
                 for (i, arg) in type_args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
