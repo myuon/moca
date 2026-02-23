@@ -2951,12 +2951,19 @@ impl TypeChecker {
         span: Span,
     ) -> Option<Type> {
         match name {
-            "__value_to_string" => {
-                // __value_to_string accepts any type, returns string
+            "__typeof" => {
+                // __typeof accepts any type, returns int (type tag)
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
-                Some(Type::String)
+                Some(Type::Int)
+            }
+            "__heap_size" => {
+                // __heap_size accepts any type (ref), returns int (slot count)
+                for arg in args {
+                    self.infer_expr(arg, env);
+                }
+                Some(Type::Int)
             }
             "__syscall" => {
                 // __syscall(num, ...args) -> Int | String
@@ -3044,18 +3051,6 @@ impl TypeChecker {
                     self.infer_expr(arg, env);
                 }
                 Some(Type::String)
-            }
-            "parse_int" => {
-                if args.len() != 1 {
-                    self.errors
-                        .push(TypeError::new("parse_int expects 1 argument", span));
-                    return Some(Type::Int);
-                }
-                let arg_type = self.infer_expr(&mut args[0], env);
-                if let Err(e) = self.unify(&arg_type, &Type::String, span) {
-                    self.errors.push(e);
-                }
-                Some(Type::Int)
             }
             // Thread operations - for now just return appropriate types
             "spawn" | "channel" | "send" | "recv" | "join" => {

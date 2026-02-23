@@ -67,23 +67,23 @@ fun _test_str_contains_empty() {
 // Parsing Functions Tests
 // ============================================================================
 
-fun _test_std_parse_int_positive() {
-    assert_eq(std_parse_int("42"), 42, "parse '42' as 42");
-    assert_eq(std_parse_int("0"), 0, "parse '0' as 0");
-    assert_eq(std_parse_int("12345"), 12345, "parse '12345' as 12345");
+fun _test_parse_int_positive() {
+    assert_eq(parse_int("42"), 42, "parse '42' as 42");
+    assert_eq(parse_int("0"), 0, "parse '0' as 0");
+    assert_eq(parse_int("12345"), 12345, "parse '12345' as 12345");
 }
 
-fun _test_std_parse_int_negative() {
-    assert_eq(std_parse_int("-42"), -42, "parse '-42' as -42");
-    assert_eq(std_parse_int("-1"), -1, "parse '-1' as -1");
-    assert_eq(std_parse_int("-12345"), -12345, "parse '-12345' as -12345");
+fun _test_parse_int_negative() {
+    assert_eq(parse_int("-42"), -42, "parse '-42' as -42");
+    assert_eq(parse_int("-1"), -1, "parse '-1' as -1");
+    assert_eq(parse_int("-12345"), -12345, "parse '-12345' as -12345");
 }
 
-fun _test_std_parse_int_whitespace() {
-    assert_eq(std_parse_int("  42"), 42, "parse '  42' with leading whitespace");
-    assert_eq(std_parse_int("42  "), 42, "parse '42  ' with trailing whitespace");
-    assert_eq(std_parse_int("  42  "), 42, "parse '  42  ' with both whitespace");
-    assert_eq(std_parse_int("  -42  "), -42, "parse '  -42  ' with whitespace");
+fun _test_parse_int_whitespace() {
+    assert_eq(parse_int("  42"), 42, "parse '  42' with leading whitespace");
+    assert_eq(parse_int("42  "), 42, "parse '42  ' with trailing whitespace");
+    assert_eq(parse_int("  42  "), 42, "parse '  42  ' with both whitespace");
+    assert_eq(parse_int("  -42  "), -42, "parse '  -42  ' with whitespace");
 }
 
 // ============================================================================

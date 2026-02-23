@@ -178,11 +178,10 @@ impl Codegen {
             ResolvedExpr::AssociatedFunctionCall { .. } => ValueType::Ref,
             ResolvedExpr::SpawnFunc { .. } => ValueType::I64,
             ResolvedExpr::Builtin { name, .. } => match name.as_str() {
-                "len" | "argc" | "parse_int" | "__umul128_hi" => ValueType::I64,
+                "len" | "argc" | "__umul128_hi" | "__typeof" | "__heap_size" => ValueType::I64,
                 "channel" | "recv" | "argv" | "args" | "__alloc_heap" | "__alloc_string"
                 | "__null_ptr" | "__ptr_offset" => ValueType::Ref,
                 "__heap_load" => ValueType::I64, // Returns raw slot value; type unknown at compile time
-                "__value_to_string" => ValueType::Ref, // returns string ref
                 "send" | "join" | "print" | "__heap_store" => ValueType::Ref, // returns null
                 _ => ValueType::I64,
             },
@@ -1190,12 +1189,19 @@ impl Codegen {
             }
             ResolvedExpr::Builtin { name, args, .. } => {
                 match name.as_str() {
-                    "__value_to_string" => {
+                    "__typeof" => {
                         if args.len() != 1 {
-                            return Err("__value_to_string takes exactly 1 argument".to_string());
+                            return Err("__typeof takes exactly 1 argument".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::ValueToString);
+                        ops.push(Op::TypeOf);
+                    }
+                    "__heap_size" => {
+                        if args.len() != 1 {
+                            return Err("__heap_size takes exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::HeapSize);
                     }
                     "__syscall" => {
                         // __syscall(num, ...args) -> result
@@ -1227,13 +1233,6 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         // Both Array<T> and String have [ptr, len] layout
                         ops.push(Op::HeapLoad(1));
-                    }
-                    "parse_int" => {
-                        if args.len() != 1 {
-                            return Err("parse_int takes exactly 1 argument".to_string());
-                        }
-                        self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::ParseInt);
                     }
                     "__umul128_hi" => {
                         if args.len() != 2 {
@@ -1814,7 +1813,6 @@ impl Codegen {
             "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
 
             // Type operations
-            "ParseInt" => Ok(Op::ParseInt),
             // Exception handling
             "Throw" => Ok(Op::Throw),
             "TryBegin" => {
@@ -1824,7 +1822,8 @@ impl Codegen {
             "TryEnd" => Ok(Op::TryEnd),
 
             // Builtins
-            "ValueToString" => Ok(Op::ValueToString),
+            "TypeOf" => Ok(Op::TypeOf),
+            "HeapSize" => Ok(Op::HeapSize),
 
             // GC hint
             "GcHint" => {
@@ -1934,21 +1933,21 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_print() {
-        let chunk = compile("__value_to_string(42);").unwrap();
+    fn test_simple_typeof() {
+        let chunk = compile("__typeof(42);").unwrap();
         assert!(chunk.main.code.contains(&Op::I64Const(42)));
-        assert!(chunk.main.code.contains(&Op::ValueToString));
+        assert!(chunk.main.code.contains(&Op::TypeOf));
     }
 
     #[test]
     fn test_arithmetic() {
-        let chunk = compile("__value_to_string(1 + 2);").unwrap();
+        let chunk = compile("__typeof(1 + 2);").unwrap();
         assert!(chunk.main.code.contains(&Op::I64Add));
     }
 
     #[test]
     fn test_function_call() {
-        let chunk = compile("fun foo() { return 42; } __value_to_string(foo());").unwrap();
+        let chunk = compile("fun foo() { return 42; } __typeof(foo());").unwrap();
         assert_eq!(chunk.functions.len(), 1);
         assert_eq!(chunk.functions[0].name, "foo");
     }

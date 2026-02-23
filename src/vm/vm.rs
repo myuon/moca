@@ -1804,13 +1804,6 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = result;
                 }
-                MicroOp::ValueToString { dst, src } => {
-                    let sb = self.frames.last().unwrap().stack_base;
-                    let value = self.stack[sb + src.0];
-                    let s = self.value_to_string(&value)?;
-                    let r = self.heap.alloc_string(s)?;
-                    self.stack[sb + dst.0] = Value::Ref(r);
-                }
                 MicroOp::HeapAlloc { dst, args } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let slots: Vec<Value> = args.iter().map(|a| self.stack[sb + a.0]).collect();
@@ -2922,23 +2915,33 @@ impl VM {
 
                 return Ok(ControlFlow::Return);
             }
-            Op::ParseInt => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let r = value
-                    .as_ref()
-                    .ok_or("runtime error: parse_int expects string")?;
-                let s = self.ref_to_rust_string(r)?;
-                let n: i64 = s
-                    .trim()
-                    .parse()
-                    .map_err(|_| format!("runtime error: cannot parse '{}' as int", s))?;
-                self.stack.push(Value::I64(n));
-            }
             Op::UMul128Hi => {
                 let b = self.pop_int()?;
                 let a = self.pop_int()?;
                 let result = ((a as u64 as u128) * (b as u64 as u128)) >> 64;
                 self.stack.push(Value::I64(result as i64));
+            }
+            Op::TypeOf => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let tag = match value {
+                    Value::I64(_) => 0,
+                    Value::F64(_) => 1,
+                    Value::Bool(_) => 2,
+                    Value::Null => 3,
+                    Value::Ref(_) => 4,
+                };
+                self.stack.push(Value::I64(tag));
+            }
+            Op::HeapSize => {
+                let value = self.stack.pop().ok_or("stack underflow")?;
+                let r = value
+                    .as_ref()
+                    .ok_or("runtime error: __heap_size expects reference")?;
+                let size = self
+                    .heap
+                    .slot_count(r)
+                    .ok_or("runtime error: invalid reference in __heap_size")?;
+                self.stack.push(Value::I64(size as i64));
             }
             Op::Throw => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
@@ -2956,12 +2959,6 @@ impl VM {
             }
             Op::TryEnd => {
                 self.try_frames.pop();
-            }
-            Op::ValueToString => {
-                let value = self.stack.pop().ok_or("stack underflow")?;
-                let s = self.value_to_string(&value)?;
-                let r = self.heap.alloc_string(s)?;
-                self.stack.push(Value::Ref(r));
             }
             Op::GcHint(_bytes) => {
                 // Hint about upcoming allocation - might trigger GC

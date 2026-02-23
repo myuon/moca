@@ -509,12 +509,6 @@ pub enum MicroOp {
         type_info: VReg,
         iface_desc: VReg,
     },
-    /// Convert any value to its string representation.
-    /// dst = to_string(src) (Ref to newly allocated heap string)
-    ValueToString {
-        dst: VReg,
-        src: VReg,
-    },
     // ========================================
     // Stack Bridge (for Raw op interop)
     // ========================================
