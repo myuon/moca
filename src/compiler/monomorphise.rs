@@ -95,8 +95,8 @@ pub struct InstantiationCollector {
     generic_functions: HashMap<String, FnDef>,
     /// Generic struct definitions: name -> StructDef
     generic_structs: HashMap<String, StructDef>,
-    /// Generic impl blocks: struct_name -> ImplBlock
-    generic_impl_blocks: HashMap<String, ImplBlock>,
+    /// Generic impl blocks: struct_name -> Vec<ImplBlock>
+    generic_impl_blocks: HashMap<String, Vec<ImplBlock>>,
     /// Collected instantiations
     instantiations: HashSet<Instantiation>,
 }
@@ -141,7 +141,9 @@ impl InstantiationCollector {
         // Store generic impl blocks for later specialization
         if !impl_block.type_params.is_empty() {
             self.generic_impl_blocks
-                .insert(impl_block.struct_name.clone(), impl_block.clone());
+                .entry(impl_block.struct_name.clone())
+                .or_default()
+                .push(impl_block.clone());
         }
 
         // Collect generic methods from impl blocks
@@ -469,7 +471,7 @@ impl InstantiationCollector {
     }
 
     /// Get generic impl blocks.
-    pub fn generic_impl_blocks(&self) -> &HashMap<String, ImplBlock> {
+    pub fn generic_impl_blocks(&self) -> &HashMap<String, Vec<ImplBlock>> {
         &self.generic_impl_blocks
     }
 }
@@ -486,15 +488,15 @@ pub struct Monomorphiser {
     generic_functions: HashMap<String, FnDef>,
     /// Generic struct definitions
     generic_structs: HashMap<String, StructDef>,
-    /// Generic impl blocks: struct_name -> ImplBlock
-    generic_impl_blocks: HashMap<String, ImplBlock>,
+    /// Generic impl blocks: struct_name -> Vec<ImplBlock>
+    generic_impl_blocks: HashMap<String, Vec<ImplBlock>>,
 }
 
 impl Monomorphiser {
     pub fn new(
         generic_functions: HashMap<String, FnDef>,
         generic_structs: HashMap<String, StructDef>,
-        generic_impl_blocks: HashMap<String, ImplBlock>,
+        generic_impl_blocks: HashMap<String, Vec<ImplBlock>>,
     ) -> Self {
         Self {
             generic_functions,
@@ -594,61 +596,69 @@ impl Monomorphiser {
         Some(specialized)
     }
 
-    /// Generate a specialized impl block from a struct instantiation.
-    pub fn specialize_impl_block(&self, instantiation: &Instantiation) -> Option<ImplBlock> {
-        let generic_impl = self.generic_impl_blocks.get(&instantiation.name)?;
-
-        // Check that type args match type params
-        if generic_impl.type_params.len() != instantiation.type_args.len() {
-            return None;
-        }
-
-        // Create type parameter to concrete type mapping
-        let type_map: HashMap<String, Type> = generic_impl
-            .type_params
-            .iter()
-            .cloned()
-            .zip(instantiation.type_args.iter().cloned())
-            .collect();
-
-        // Create specialized impl block
-        let specialized = ImplBlock {
-            type_params: Vec::new(), // No longer generic
-            interface_name: generic_impl.interface_name.clone(),
-            struct_name: instantiation.mangled_name(),
-            struct_type_args: Vec::new(), // No longer generic
-            methods: generic_impl
-                .methods
-                .iter()
-                .map(|m| FnDef {
-                    name: m.name.clone(),
-                    type_params: m.type_params.clone(), // Keep method-level type params
-                    type_param_bounds: m.type_param_bounds.clone(),
-                    params: m
-                        .params
-                        .iter()
-                        .map(|p| crate::compiler::ast::Param {
-                            name: p.name.clone(),
-                            type_annotation: p
-                                .type_annotation
-                                .as_ref()
-                                .map(|ann| substitute_type_annotation(ann, &type_map)),
-                            span: p.span,
-                        })
-                        .collect(),
-                    return_type: m
-                        .return_type
-                        .as_ref()
-                        .map(|ann| substitute_type_annotation(ann, &type_map)),
-                    body: substitute_block(&m.body, &type_map),
-                    attributes: m.attributes.clone(),
-                    span: m.span,
-                })
-                .collect(),
-            span: generic_impl.span,
+    /// Generate specialized impl blocks from a struct instantiation.
+    pub fn specialize_impl_blocks(&self, instantiation: &Instantiation) -> Vec<ImplBlock> {
+        let generic_impls = match self.generic_impl_blocks.get(&instantiation.name) {
+            Some(impls) => impls,
+            None => return Vec::new(),
         };
 
-        Some(specialized)
+        let mut results = Vec::new();
+        for generic_impl in generic_impls {
+            // Check that type args match type params
+            if generic_impl.type_params.len() != instantiation.type_args.len() {
+                continue;
+            }
+
+            // Create type parameter to concrete type mapping
+            let type_map: HashMap<String, Type> = generic_impl
+                .type_params
+                .iter()
+                .cloned()
+                .zip(instantiation.type_args.iter().cloned())
+                .collect();
+
+            // Create specialized impl block
+            let specialized = ImplBlock {
+                type_params: Vec::new(), // No longer generic
+                interface_name: generic_impl.interface_name.clone(),
+                struct_name: instantiation.mangled_name(),
+                struct_type_args: Vec::new(), // No longer generic
+                methods: generic_impl
+                    .methods
+                    .iter()
+                    .map(|m| FnDef {
+                        name: m.name.clone(),
+                        type_params: m.type_params.clone(), // Keep method-level type params
+                        type_param_bounds: m.type_param_bounds.clone(),
+                        params: m
+                            .params
+                            .iter()
+                            .map(|p| crate::compiler::ast::Param {
+                                name: p.name.clone(),
+                                type_annotation: p
+                                    .type_annotation
+                                    .as_ref()
+                                    .map(|ann| substitute_type_annotation(ann, &type_map)),
+                                span: p.span,
+                            })
+                            .collect(),
+                        return_type: m
+                            .return_type
+                            .as_ref()
+                            .map(|ann| substitute_type_annotation(ann, &type_map)),
+                        body: substitute_block(&m.body, &type_map),
+                        attributes: m.attributes.clone(),
+                        span: m.span,
+                    })
+                    .collect(),
+                span: generic_impl.span,
+            };
+
+            results.push(specialized);
+        }
+
+        results
     }
 
     /// Generate all specialized items from a set of instantiations.
@@ -667,11 +677,11 @@ impl Monomorphiser {
             {
                 items.push(Item::FnDef(specialized_fn));
             } else if self.generic_structs.contains_key(&inst.name) {
-                // Generate both specialized struct and impl block
+                // Generate both specialized struct and impl blocks
                 if let Some(specialized_struct) = self.specialize_struct(inst) {
                     items.push(Item::StructDef(specialized_struct));
                 }
-                if let Some(specialized_impl) = self.specialize_impl_block(inst) {
+                for specialized_impl in self.specialize_impl_blocks(inst) {
                     items.push(Item::ImplBlock(specialized_impl));
                 }
             }
