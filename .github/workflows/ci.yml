@@ -223,83 +223,51 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Performance report (PR only)
-  # PR branch and main branch are built in completely separate jobs.
-  # Each job has its own checkout and its own cache, so there is zero risk of
-  # stale/wrong binaries from cache contamination.
+  # Main and PR benchmarks run sequentially in a single job on the same runner
+  # to avoid CPU contention from parallel execution on shared hosts.
   # ---------------------------------------------------------------------------
-  perf-pr:
+  performance:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=lld
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install lld
-        run: sudo apt-get install -y lld
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: perf-pr
-
-      - name: Run performance test
-        run: cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee perf.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr-perf
-          path: perf.txt
-
-  perf-main:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=lld
-    steps:
-      # Checkout main branch directly — no branch switching within this job.
-      # This ensures the build and cache are always for main branch code only.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.base_ref }}
-
-      - name: Install lld
-        run: sudo apt-get install -y lld
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: perf-main
-
-      - name: Run performance test
-        run: cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee perf.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: main-perf
-          path: perf.txt
-
-  performance-report:
-    if: github.event_name == 'pull_request'
-    needs: [perf-pr, perf-main]
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: pr-perf
-          path: pr-perf
+      - name: Install lld
+        run: sudo apt-get install -y lld
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: main-perf
-          path: main-perf
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
+      # --- Run main branch benchmark first ---
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          clean: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf
+
+      - name: Build main
+        run: cargo test snapshot_performance --features jit --release --no-run
+
+      - name: Run main benchmark
+        run: cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee /tmp/main-perf.txt
+
+      # --- Run PR branch benchmark second (same runner, no contention) ---
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Build PR
+        run: cargo test snapshot_performance --features jit --release --no-run
+
+      - name: Run PR benchmark
+        run: cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee /tmp/pr-perf.txt
+
+      # --- Generate and post report ---
       - name: Generate performance report
         run: |
           cat > generate_report.py << 'PYTHON_SCRIPT'
@@ -320,8 +288,8 @@ jobs:
                           results[name] = {'moca': moca, 'rust': rust, 'vs_rust': vs_rust}
               return results
 
-          pr_results = parse_perf_output('pr-perf/perf.txt')
-          main_results = parse_perf_output('main-perf/perf.txt')
+          pr_results = parse_perf_output('/tmp/pr-perf.txt')
+          main_results = parse_perf_output('/tmp/main-perf.txt')
 
           lines = []
           lines.append("| Benchmark | moca | Rust | vs Rust | vs Main |")
