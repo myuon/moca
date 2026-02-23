@@ -24,7 +24,7 @@ print_str(type_name_of(box_it(3.14)));
 print_str("\n");
 
 // Direct boxing should also work (regression check)
-print_str(type_name_of("world" as dyn));
+print_str(type_name_of("world"));
 print_str("\n");
-print_str(type_name_of(99 as dyn));
+print_str(type_name_of(99));
 print_str("\n");

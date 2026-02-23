@@ -8,23 +8,23 @@ struct Point {
 // Primitive nullable
 let a: int? = 42;
 let b: int? = nil;
-print(debug(a as dyn));
-print(debug(b as dyn));
+print(debug(a));
+print(debug(b));
 
 // String nullable
 let s: string? = "hello";
 let t: string? = nil;
-print(debug(s as dyn));
-print(debug(t as dyn));
+print(debug(s));
+print(debug(t));
 
 // Struct nullable — should format as "Point { x: 1, y: 2 }" not "[1, 2]"
 let p: Point? = Point { x: 1, y: 2 };
 let q: Point? = nil;
-print(debug(p as dyn));
-print(debug(q as dyn));
+print(debug(p));
+print(debug(q));
 
 // Bool nullable
 let x: bool? = true;
 let y: bool? = nil;
-print(debug(x as dyn));
-print(debug(y as dyn));
+print(debug(x));
+print(debug(y));

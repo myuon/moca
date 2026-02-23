@@ -372,6 +372,8 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
         inferred_type: Option<Type>,
+        /// true = inserted by typechecker/desugar, false = user-written `as dyn`
+        is_implicit: bool,
     },
     /// Dynamic call expression: `expr(args)` where expr is not a simple identifier.
     /// Used for calling closures stored in variables: `f(10)` or `make_adder(5)(10)`

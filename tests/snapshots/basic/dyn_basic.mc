@@ -32,8 +32,8 @@ fun double_int(d: dyn) {
     }
 }
 
-double_int(10 as dyn);
-double_int("hello" as dyn);
+double_int(10);
+double_int("hello");
 
 // Struct type as dyn
 struct Point { x: int, y: int }
@@ -46,9 +46,9 @@ fun describe(d: dyn) {
     }
 }
 
-describe(42 as dyn);
-describe(Point { x: 10, y: 20 } as dyn);
-describe("hello" as dyn);
+describe(42);
+describe(Point { x: 10, y: 20 });
+describe("hello");
 
 // Reflection
 let dr = Point { x: 3, y: 4 } as dyn;
@@ -68,9 +68,9 @@ fun match_container(d: dyn) {
     }
 }
 
-match_container(Container<int> { value: 99 } as dyn);
-match_container(Container<string> { value: "world" } as dyn);
-match_container(42 as dyn);
+match_container(Container<int> { value: 99 });
+match_container(Container<string> { value: "world" });
+match_container(42);
 
 // Reflection on generic struct
 let dg = Container<int> { value: 7 } as dyn;
