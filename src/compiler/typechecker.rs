@@ -739,7 +739,17 @@ impl TypeChecker {
 
     /// Register a struct definition.
     fn register_struct(&mut self, struct_def: &StructDef) {
-        // Set current type params for resolving field types
+        // Phase 1: Insert struct with placeholder fields so self-referencing types can resolve
+        let placeholder_info = StructInfo {
+            name: struct_def.name.clone(),
+            type_params: struct_def.type_params.clone(),
+            fields: Vec::new(),
+            methods: HashMap::new(),
+        };
+        self.structs
+            .insert(struct_def.name.clone(), placeholder_info);
+
+        // Phase 2: Resolve field types (now self-references like ptr<HashMapEntry<K, V>> work)
         self.current_type_params = struct_def.type_params.clone();
 
         let mut fields = Vec::new();
@@ -756,13 +766,10 @@ impl TypeChecker {
         // Clear current type params
         self.current_type_params.clear();
 
-        let info = StructInfo {
-            name: struct_def.name.clone(),
-            type_params: struct_def.type_params.clone(),
-            fields,
-            methods: HashMap::new(),
-        };
-        self.structs.insert(struct_def.name.clone(), info);
+        // Update struct with resolved fields
+        if let Some(info) = self.structs.get_mut(&struct_def.name) {
+            info.fields = fields;
+        }
     }
 
     /// Register an interface definition.
@@ -2984,10 +2991,27 @@ impl TypeChecker {
                         span,
                     ));
                 }
-                for arg in args {
+                for arg in args.iter_mut() {
                     self.infer_expr(arg, env);
                 }
-                Some(Type::Any)
+                // Try to infer return type from first argument's struct type and literal offset
+                let first_type = args
+                    .first()
+                    .and_then(|a| a.inferred_type())
+                    .map(|t| self.substitution.apply(t));
+                let offset = args.get(1).and_then(|a| match a {
+                    Expr::Int { value, .. } => Some(*value as usize),
+                    _ => None,
+                });
+                match (first_type.as_ref(), offset) {
+                    (Some(Type::GenericStruct { fields, .. }), Some(idx)) if idx < fields.len() => {
+                        Some(fields[idx].1.clone())
+                    }
+                    (Some(Type::Struct { fields, .. }), Some(idx)) if idx < fields.len() => {
+                        Some(fields[idx].1.clone())
+                    }
+                    _ => Some(Type::Any),
+                }
             }
             "__heap_store" => {
                 if args.len() != 3 {
