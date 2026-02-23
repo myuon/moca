@@ -420,15 +420,6 @@ impl TypeChecker {
             // Ptr<T> unification
             (Type::Ptr(a), Type::Ptr(b)) => self.unify(a, b, span),
 
-            // Ptr<T> ~ Struct/GenericStruct: structs are heap-allocated references at runtime,
-            // so ptr<T> is compatible with struct types by unifying inner type T with the struct.
-            (Type::Ptr(inner), other @ Type::Struct { .. })
-            | (other @ Type::Struct { .. }, Type::Ptr(inner))
-            | (Type::Ptr(inner), other @ Type::GenericStruct { .. })
-            | (other @ Type::GenericStruct { .. }, Type::Ptr(inner)) => {
-                self.unify(inner, other, span)
-            }
-
             // Any type unifies with any other type
             // any ~ T -> T (any adapts to the other type)
             // any ~ any -> any
