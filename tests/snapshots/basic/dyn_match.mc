@@ -20,8 +20,8 @@ fun describe(d: dyn) -> string {
     }
 }
 
-print(describe(42 as dyn));
-print(describe("world" as dyn));
-print(describe(false as dyn));
-print(describe(2.718 as dyn));
-print(describe(nil as dyn));
+print(describe(42));
+print(describe("world"));
+print(describe(false));
+print(describe(2.718));
+print(describe(nil));

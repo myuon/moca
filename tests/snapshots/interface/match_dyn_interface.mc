@@ -46,10 +46,10 @@ let p = Point { x: 10, y: 20 };
 let c = Color { r: 255, g: 128, b: 0 };
 
 // int matches the int arm
-print(show(42 as dyn));
+print(show(42));
 // Point implements Describable → matches interface arm
-print(show(p as dyn));
+print(show(p));
 // Color implements Describable → matches interface arm
-print(show(c as dyn));
+print(show(c));
 // string does not implement Describable → falls to default
-print(show("hello" as dyn));
+print(show("hello"));

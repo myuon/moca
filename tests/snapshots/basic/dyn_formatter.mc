@@ -7,11 +7,11 @@ let p = Point { x: 1, y: 2 } as dyn;
 inspect(p);
 
 // Primitive formatting via dyn
-inspect(42 as dyn);
-inspect("hello" as dyn);
-inspect(true as dyn);
-inspect(3.14 as dyn);
-inspect(nil as dyn);
+inspect(42);
+inspect("hello");
+inspect(true);
+inspect(3.14);
+inspect(nil);
 
 // Nested struct formatting
 struct Line { a: Point, b: Point }
