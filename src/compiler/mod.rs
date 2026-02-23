@@ -32,7 +32,7 @@ use std::time::Instant;
 /// Parse and prepend stdlib to a user program.
 /// The stdlib functions are added at the beginning so they are available globally.
 /// If a user function has the same name as a stdlib function, the stdlib function is skipped.
-fn prepend_stdlib(mut user_program: Program) -> Result<Program, String> {
+pub(crate) fn prepend_stdlib(mut user_program: Program) -> Result<Program, String> {
     // Collect user-defined function names to avoid conflicts
     let user_fn_names: HashSet<String> = user_program
         .items
