@@ -52,6 +52,10 @@ pub enum Type {
     /// Type parameter (generic type variable): `T`, `U`, etc.
     /// Used in generic function/struct definitions.
     Param { name: std::string::String },
+    /// Interface-bounded type from match dyn interface arms.
+    /// Represents a value whose concrete type is unknown but guaranteed
+    /// to implement the named interface.
+    InterfaceBound { interface_name: std::string::String },
     /// Generic struct instantiation: `Container<int>`, `Pair<T, U>`
     GenericStruct {
         name: std::string::String,
@@ -102,7 +106,7 @@ impl Type {
             | Type::Any
             | Type::Dyn => false,
             Type::Var(_) => true,
-            Type::Param { .. } => false, // Type params are not inference variables
+            Type::Param { .. } | Type::InterfaceBound { .. } => false,
             Type::Ptr(elem) | Type::Array(elem) | Type::Vector(elem) => elem.has_type_vars(),
             Type::Map(key, value) => key.has_type_vars() || value.has_type_vars(),
             Type::Nullable(inner) => inner.has_type_vars(),
@@ -135,7 +139,7 @@ impl Type {
             | Type::Nil
             | Type::Any
             | Type::Dyn => {}
-            Type::Param { .. } => {} // Type params are not inference variables
+            Type::Param { .. } | Type::InterfaceBound { .. } => {}
             Type::Var(id) => {
                 if !vars.contains(id) {
                     vars.push(*id);
@@ -217,6 +221,9 @@ impl Type {
                 type_args: vec![elem.to_type_annotation()?],
             }),
             Type::Param { name } => Some(TypeAnnotation::Named(name.clone())),
+            Type::InterfaceBound { interface_name } => {
+                Some(TypeAnnotation::Named(interface_name.clone()))
+            }
             Type::Var(_) => None, // Unresolved type variable
         }
     }
@@ -233,6 +240,7 @@ impl Type {
             | Type::Any
             | Type::Dyn => self.clone(),
             Type::Var(_) => self.clone(),
+            Type::InterfaceBound { .. } => self.clone(),
             Type::Param { name } => {
                 if name == param_name {
                     replacement.clone()
@@ -315,6 +323,7 @@ impl fmt::Display for Type {
             Type::Any => write!(f, "any"),
             Type::Dyn => write!(f, "dyn"),
             Type::Param { name } => write!(f, "{}", name),
+            Type::InterfaceBound { interface_name } => write!(f, "{}", interface_name),
             Type::GenericStruct {
                 name, type_args, ..
             } => {
