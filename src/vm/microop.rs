@@ -490,15 +490,9 @@ pub enum MicroOp {
         dst: VReg,
         idx: usize,
     },
-    /// Load pre-allocated type descriptor reference.
-    /// dst = type_descriptor_refs[idx]
-    TypeDescLoad {
-        dst: VReg,
-        idx: usize,
-    },
-    /// Load pre-allocated interface descriptor reference.
-    /// dst = interface_descriptor_refs[idx]
-    InterfaceDescLoad {
+    /// Load a global value.
+    /// dst = globals[idx]
+    GlobalGet {
         dst: VReg,
         idx: usize,
     },

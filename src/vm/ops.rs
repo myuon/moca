@@ -215,18 +215,12 @@ pub enum Op {
     CallDynamic(usize), // (argc) — number of arguments
 
     // ========================================
-    // Type Descriptor
+    // Globals
     // ========================================
-    /// Push pre-allocated type descriptor reference onto the stack.
-    /// The index refers to the type_descriptors table in the Chunk.
-    TypeDescLoad(usize),
-
-    // ========================================
-    // Interface Descriptor
-    // ========================================
-    /// Push pre-allocated interface descriptor reference onto the stack.
-    /// The index refers to the interface_descriptors table in the Chunk.
-    InterfaceDescLoad(usize),
+    /// Push a pre-allocated global value onto the stack.
+    /// The index refers to the globals table in the VM.
+    /// Layout: globals[0..T] = type descriptor refs, globals[T..T+I] = interface descriptor refs.
+    GlobalGet(usize),
 
     /// Vtable lookup: pops iface_desc_ref and type_info_ref from stack.
     /// Searches type_info's vtable entries for matching iface_desc_ref (by RefEq).
@@ -352,8 +346,7 @@ impl Op {
             Op::CallIndirect(_) => "CallIndirect",
             Op::CallDynamic(_) => "CallDynamic",
             Op::VtableLookup => "VtableLookup",
-            Op::TypeDescLoad(_) => "TypeDescLoad",
-            Op::InterfaceDescLoad(_) => "InterfaceDescLoad",
+            Op::GlobalGet(_) => "GlobalGet",
         }
     }
 }

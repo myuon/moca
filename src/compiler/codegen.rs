@@ -56,6 +56,10 @@ impl Default for Codegen {
 }
 
 impl Codegen {
+    /// Flag bit used to mark interface descriptor indices in GlobalGet during codegen.
+    /// These are resolved to final global indices in a fixup pass after all code is generated.
+    const IFACE_GLOBAL_FLAG: usize = 1 << 31;
+
     pub fn new() -> Self {
         Self {
             functions: Vec::new(),
@@ -423,6 +427,27 @@ impl Codegen {
         main_ops.push(Op::Ret);
 
         let main_local_types = self.current_local_types.clone();
+
+        // Fixup pass: resolve interface descriptor GlobalGet indices.
+        // During codegen, interface descriptor loads are emitted as GlobalGet(iface_idx | IFACE_GLOBAL_FLAG).
+        // Now that type_descriptors is finalized, add the offset to get the final global index.
+        let td_count = self.type_descriptors.len();
+        for func in &mut self.functions {
+            for op in &mut func.code {
+                if let Op::GlobalGet(idx) = op
+                    && *idx & Self::IFACE_GLOBAL_FLAG != 0
+                {
+                    *idx = (*idx & !Self::IFACE_GLOBAL_FLAG) + td_count;
+                }
+            }
+        }
+        for op in &mut main_ops {
+            if let Op::GlobalGet(idx) = op
+                && *idx & Self::IFACE_GLOBAL_FLAG != 0
+            {
+                *idx = (*idx & !Self::IFACE_GLOBAL_FLAG) + td_count;
+            }
+        }
 
         let main_func = Function {
             name: "__main__".to_string(),
@@ -801,7 +826,7 @@ impl Codegen {
                             // Load dyn value → type_info ref, compare with expected type descriptor
                             ops.push(Op::LocalGet(*dyn_slot));
                             ops.push(Op::HeapLoad(0)); // dyn slot 0 → type_info ref
-                            ops.push(Op::TypeDescLoad(td_idx)); // expected type descriptor ref
+                            ops.push(Op::GlobalGet(td_idx)); // expected type descriptor ref
                             ops.push(Op::RefEq); // pointer comparison (O(1) via identity check)
 
                             // Branch to next arm if tag doesn't match
@@ -824,7 +849,7 @@ impl Codegen {
                             ops.push(Op::LocalGet(*dyn_slot));
                             ops.push(Op::HeapLoad(0)); // type_info ref
                             // Load interface descriptor ref
-                            ops.push(Op::InterfaceDescLoad(iface_idx));
+                            ops.push(Op::GlobalGet(iface_idx | Self::IFACE_GLOBAL_FLAG));
                             // VtableLookup: pops (type_info, iface_desc), pushes vtable_ref or null
                             ops.push(Op::VtableLookup);
 
@@ -1553,7 +1578,7 @@ impl Codegen {
                 }
 
                 // Push type_info ref (pre-allocated) and value, then alloc dyn object inline
-                ops.push(Op::TypeDescLoad(td_idx));
+                ops.push(Op::GlobalGet(td_idx));
                 self.compile_expr(expr, ops)?;
                 // HeapAlloc(2) pops [type_info_ref, value] → dyn object [slot0=type_info, slot1=value]
                 ops.push(Op::HeapAlloc(2));
