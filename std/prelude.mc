@@ -1423,11 +1423,11 @@ struct HashMapEntry<K, V> {
 
 // Map<K, V> - Generic hash map implementation.
 // Layout: [hm_buckets, hm_size, hm_capacity]
-// hm_buckets: pointer to array of bucket heads
+// hm_buckets: pointer to array of bucket heads (HashMapEntry or __null_ptr())
 // hm_size: number of entries in the map
 // hm_capacity: number of buckets
 struct Map<K, V> {
-    hm_buckets: ptr<any>,
+    hm_buckets: ptr<HashMapEntry<K, V>>,
     hm_size: int,
     hm_capacity: int
 }
@@ -1464,7 +1464,7 @@ impl<K, V> Map<K, V> {
         let entry_ptr = self.hm_buckets[bucket_idx];
 
         while entry_ptr != __null_ptr() {
-            let entry_key: int = __heap_load(entry_ptr, 0);
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 return entry_ptr;
             }
@@ -1479,7 +1479,7 @@ impl<K, V> Map<K, V> {
         let entry_ptr = self.hm_buckets[bucket_idx];
 
         while entry_ptr != __null_ptr() {
-            let entry_key: string = __heap_load(entry_ptr, 0);
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 return entry_ptr;
             }
@@ -1505,7 +1505,7 @@ impl<K, V> Map<K, V> {
         while i < old_capacity {
             let entry_ptr = old_buckets[i];
             while entry_ptr != __null_ptr() {
-                let key: int = __heap_load(entry_ptr, 0);
+                let key = __heap_load(entry_ptr, 0);
                 let next_ptr = __heap_load(entry_ptr, 2);
 
                 let new_bucket_idx = _map_hash_int(key) % new_capacity;
@@ -1540,7 +1540,7 @@ impl<K, V> Map<K, V> {
         while i < old_capacity {
             let entry_ptr = old_buckets[i];
             while entry_ptr != __null_ptr() {
-                let key: string = __heap_load(entry_ptr, 0);
+                let key = __heap_load(entry_ptr, 0);
                 let next_ptr = __heap_load(entry_ptr, 2);
 
                 let new_bucket_idx = _map_hash_string(key) % new_capacity;
@@ -1674,7 +1674,7 @@ impl<K, V> Map<K, V> {
         let prev_ptr = __null_ptr();
 
         while entry_ptr != __null_ptr() {
-            let entry_key: int = __heap_load(entry_ptr, 0);
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 // Found the entry, remove it
                 let next_ptr = __heap_load(entry_ptr, 2);
@@ -1702,7 +1702,7 @@ impl<K, V> Map<K, V> {
         let prev_ptr = __null_ptr();
 
         while entry_ptr != __null_ptr() {
-            let entry_key: string = __heap_load(entry_ptr, 0);
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 // Found the entry, remove it
                 let next_ptr = __heap_load(entry_ptr, 2);
@@ -1729,7 +1729,7 @@ impl<K, V> Map<K, V> {
         while i < self.hm_capacity {
             let entry_ptr = self.hm_buckets[i];
             while entry_ptr != __null_ptr() {
-                let key: K = __heap_load(entry_ptr, 0);
+                let key = __heap_load(entry_ptr, 0);
                 result.push(key);
                 entry_ptr = __heap_load(entry_ptr, 2);
             }
@@ -1745,7 +1745,7 @@ impl<K, V> Map<K, V> {
         while i < self.hm_capacity {
             let entry_ptr = self.hm_buckets[i];
             while entry_ptr != __null_ptr() {
-                let val: V = __heap_load(entry_ptr, 1);
+                let val = __heap_load(entry_ptr, 1);
                 result.push(val);
                 entry_ptr = __heap_load(entry_ptr, 2);
             }
