@@ -351,6 +351,9 @@ pub struct Resolver<'a> {
     interface_methods: HashMap<String, Vec<String>>,
     /// Maps variable slot → (interface_name, vtable_slot) for interface match arm variables
     interface_vtable_slots: HashMap<usize, (String, usize)>,
+    /// Struct field types: struct_name -> Vec<(field_name, field_type)>
+    /// Used to enrich Type::Struct with empty fields (from monomorphiser substitution)
+    struct_field_types: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -396,6 +399,27 @@ impl<'a> Resolver<'a> {
             next_lambda_id: 0,
             base_func_count: 0,
             interface_vtable_slots: HashMap::new(),
+            struct_field_types: HashMap::new(),
+        }
+    }
+
+    /// Enrich a Type::Struct with field info from struct definitions.
+    /// After monomorphisation, Type::Struct may have empty fields because
+    /// TypeAnnotation::to_type() creates Type::Struct { name, fields: [] }.
+    /// This method looks up the struct definition and fills in the field info.
+    fn enrich_type_with_struct_fields(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Struct { name, fields } if fields.is_empty() => {
+                if let Some(field_types) = self.struct_field_types.get(name) {
+                    Type::Struct {
+                        name: name.clone(),
+                        fields: field_types.clone(),
+                    }
+                } else {
+                    ty.clone()
+                }
+            }
+            _ => ty.clone(),
         }
     }
 
@@ -561,6 +585,19 @@ impl<'a> Resolver<'a> {
                 name: struct_def.name.clone(),
                 fields,
             });
+            // Store field types for enriching Type::Struct with empty fields
+            let field_types: Vec<(String, Type)> = struct_def
+                .fields
+                .iter()
+                .filter_map(|f| {
+                    f.type_annotation
+                        .to_type()
+                        .ok()
+                        .map(|ty| (f.name.clone(), ty))
+                })
+                .collect();
+            self.struct_field_types
+                .insert(struct_def.name.clone(), field_types);
         }
 
         // Register top-level functions
@@ -660,6 +697,14 @@ impl<'a> Resolver<'a> {
                         .method_return_types
                         .insert(method.name.clone(), return_struct_name);
                 }
+            }
+
+            // Register monomorphised interface impls (e.g., ("ToString", "Vec_Point"))
+            // The typechecker only registers generic impls like ("ToString", "Vec"),
+            // but after monomorphisation we need the concrete names for vtable lookup.
+            if let Some(iface_name) = &impl_block.interface_name {
+                self.interface_impls
+                    .insert((iface_name.clone(), impl_block.struct_name.clone()));
             }
         }
 
@@ -2192,6 +2237,10 @@ impl<'a> Resolver<'a> {
                     .inferred_type()
                     .cloned()
                     .expect("AsDyn inner expr must have inferred_type");
+                // Enrich the type with field info from struct definitions if empty.
+                // After monomorphisation, Type::Struct may have empty fields because
+                // TypeAnnotation::to_type() creates Type::Struct { name, fields: [] }.
+                let inner_type = self.enrich_type_with_struct_fields(&inner_type);
                 let type_tag_name = type_to_dyn_tag_name(&inner_type);
                 // Extract field names and field type tags from the inferred type.
                 // Using the Type directly (instead of resolved_structs) ensures
@@ -2416,7 +2465,21 @@ fn type_to_impl_name(ty: &Type) -> String {
         Type::Bool => "bool".to_string(),
         Type::String => "string".to_string(),
         Type::Struct { name, .. } => name.clone(),
-        Type::GenericStruct { name, .. } => name.clone(),
+        Type::GenericStruct {
+            name, type_args, ..
+        } => {
+            if type_args.is_empty() {
+                name.clone()
+            } else {
+                // Use the same mangling as Instantiation::mangled_name()
+                let type_suffix = type_args
+                    .iter()
+                    .map(super::monomorphise::mangle_type)
+                    .collect::<Vec<_>>()
+                    .join("_");
+                format!("{}__{}", name, type_suffix)
+            }
+        }
         _ => ty.to_string(),
     }
 }

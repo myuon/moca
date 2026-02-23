@@ -1761,6 +1761,46 @@ impl<K, V> Map<K, V> {
 }
 
 // ============================================================================
+// ToString for Vec and Map
+// ============================================================================
+
+impl<T> ToString for Vec<T> {
+    fun to_string(self) -> string {
+        if self.len == 0 { return "[]"; }
+        let result = "[";
+        let i = 0;
+        while i < self.len {
+            if i > 0 { result = result + ", "; }
+            result = result + debug(self.data[i] as dyn);
+            i = i + 1;
+        }
+        return result + "]";
+    }
+}
+
+impl<K, V> ToString for Map<K, V> {
+    fun to_string(self) -> string {
+        if self.hm_size == 0 { return "{}"; }
+        let result = "{";
+        let first = true;
+        let bi = 0;
+        while bi < self.hm_capacity {
+            let entry_ptr = self.hm_buckets[bi];
+            while entry_ptr != nil {
+                if !first { result = result + ", "; }
+                first = false;
+                let k = __heap_load(entry_ptr, 0);
+                let v = __heap_load(entry_ptr, 1);
+                result = result + debug(k as dyn) + ": " + debug(v as dyn);
+                entry_ptr = __heap_load(entry_ptr, 2);
+            }
+            bi = bi + 1;
+        }
+        return result + "}";
+    }
+}
+
+// ============================================================================
 // Random Number Generation (LCG - Linear Congruential Generator)
 // ============================================================================
 
