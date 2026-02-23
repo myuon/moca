@@ -1023,8 +1023,8 @@ fn rust_text_counting<W: Write>(writer: &mut W) {
 fn rust_quicksort<W: Write>(writer: &mut W) {
     // Same LCG as moca _perf_lcg_next
     let mut seed: i64 = 42;
-    let mut v: Vec<i64> = Vec::with_capacity(100000);
-    for _ in 0..100000 {
+    let mut v: Vec<i64> = Vec::with_capacity(500000);
+    for _ in 0..500000 {
         seed = (seed * 1103515245 + 12345) % 2147483648;
         if seed < 0 {
             seed = -seed;

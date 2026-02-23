@@ -16,7 +16,7 @@ fun quicksort_benchmark() {
     let v: Vec<int> = Vec<int> { data: __null_ptr(), len: 0, cap: 0 };
     let seed = 42;
     let i = 0;
-    while i < 100000 {
+    while i < 500000 {
         seed = _perf_lcg_next(seed);
         v.push(seed % 100000);
         i = i + 1;
