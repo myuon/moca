@@ -1,4 +1,6 @@
-use crate::compiler::ast::{Block, Expr, FnDef, Item, Program, Statement};
+use crate::compiler::ast::{
+    Block, Expr, FnDef, ImplBlock, InterfaceDef, Item, Program, Statement, StructDef,
+};
 use crate::compiler::lexer::Span;
 use std::collections::HashMap;
 
@@ -15,6 +17,19 @@ pub enum SymbolKind {
     Function,
     Variable,
     Parameter,
+    Struct,
+    Interface,
+    Method,
+    Field,
+}
+
+/// A document symbol with optional children (for textDocument/documentSymbol).
+#[derive(Debug, Clone)]
+pub struct DocSymbol {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub span: Span,
+    pub children: Vec<DocSymbol>,
 }
 
 /// Symbol table built from the AST.
@@ -24,6 +39,19 @@ pub struct SymbolTable {
     pub definitions: HashMap<String, Vec<SymbolInfo>>,
     /// All references: span -> symbol name (for finding what's at a position)
     pub references: Vec<(Span, String)>,
+    /// Top-level document symbols (for textDocument/documentSymbol)
+    pub doc_symbols: Vec<DocSymbol>,
+    /// impl blocks: struct_name -> list of (interface_name, methods)
+    pub impl_blocks: Vec<ImplInfo>,
+}
+
+/// Information about an impl block.
+#[derive(Debug, Clone)]
+pub struct ImplInfo {
+    pub struct_name: String,
+    pub interface_name: Option<String>,
+    pub methods: Vec<SymbolInfo>,
+    pub span: Span,
 }
 
 impl SymbolTable {
@@ -44,19 +72,191 @@ impl SymbolTable {
                 Item::Import(_) => {}
                 Item::FnDef(fn_def) => {
                     self.collect_fn_def(fn_def);
+                    self.doc_symbols.push(DocSymbol {
+                        name: fn_def.name.clone(),
+                        kind: SymbolKind::Function,
+                        span: fn_def.span,
+                        children: vec![],
+                    });
                 }
-                Item::StructDef(_struct_def) => {
-                    // TODO: Collect struct definitions for LSP
+                Item::StructDef(struct_def) => {
+                    self.collect_struct_def(struct_def);
                 }
-                Item::ImplBlock(_impl_block) => {
-                    // TODO: Collect impl block methods for LSP
+                Item::ImplBlock(impl_block) => {
+                    self.collect_impl_block(impl_block);
                 }
-                Item::InterfaceDef(_) => {}
+                Item::InterfaceDef(interface_def) => {
+                    self.collect_interface_def(interface_def);
+                }
                 Item::Statement(stmt) => {
                     self.collect_statement(stmt);
+                    // Add top-level let/const to doc_symbols
+                    match stmt {
+                        Statement::Let { name, span, .. } | Statement::Const { name, span, .. } => {
+                            self.doc_symbols.push(DocSymbol {
+                                name: name.clone(),
+                                kind: SymbolKind::Variable,
+                                span: *span,
+                                children: vec![],
+                            });
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
+    }
+
+    fn collect_struct_def(&mut self, struct_def: &StructDef) {
+        let info = SymbolInfo {
+            name: struct_def.name.clone(),
+            kind: SymbolKind::Struct,
+            def_span: struct_def.span,
+        };
+        self.definitions
+            .entry(struct_def.name.clone())
+            .or_default()
+            .push(info);
+
+        let mut children = Vec::new();
+        for field in &struct_def.fields {
+            let field_info = SymbolInfo {
+                name: field.name.clone(),
+                kind: SymbolKind::Field,
+                def_span: field.span,
+            };
+            // Register as "StructName.field_name" for lookup
+            let qualified = format!("{}.{}", struct_def.name, field.name);
+            self.definitions
+                .entry(qualified)
+                .or_default()
+                .push(field_info);
+
+            children.push(DocSymbol {
+                name: field.name.clone(),
+                kind: SymbolKind::Field,
+                span: field.span,
+                children: vec![],
+            });
+        }
+
+        self.doc_symbols.push(DocSymbol {
+            name: struct_def.name.clone(),
+            kind: SymbolKind::Struct,
+            span: struct_def.span,
+            children,
+        });
+    }
+
+    fn collect_impl_block(&mut self, impl_block: &ImplBlock) {
+        let mut method_infos = Vec::new();
+        let mut children = Vec::new();
+
+        for method in &impl_block.methods {
+            let qualified = format!("{}.{}", impl_block.struct_name, method.name);
+            let info = SymbolInfo {
+                name: qualified.clone(),
+                kind: SymbolKind::Method,
+                def_span: method.span,
+            };
+            self.definitions
+                .entry(qualified)
+                .or_default()
+                .push(info.clone());
+
+            // Also register just the method name for simple lookup
+            let simple_info = SymbolInfo {
+                name: method.name.clone(),
+                kind: SymbolKind::Method,
+                def_span: method.span,
+            };
+            self.definitions
+                .entry(method.name.clone())
+                .or_default()
+                .push(simple_info);
+
+            method_infos.push(info);
+            children.push(DocSymbol {
+                name: method.name.clone(),
+                kind: SymbolKind::Method,
+                span: method.span,
+                children: vec![],
+            });
+
+            // Collect references inside method bodies
+            for param in &method.params {
+                let param_info = SymbolInfo {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Parameter,
+                    def_span: param.span,
+                };
+                self.definitions
+                    .entry(param.name.clone())
+                    .or_default()
+                    .push(param_info);
+            }
+            self.collect_block(&method.body);
+        }
+
+        self.impl_blocks.push(ImplInfo {
+            struct_name: impl_block.struct_name.clone(),
+            interface_name: impl_block.interface_name.clone(),
+            methods: method_infos,
+            span: impl_block.span,
+        });
+
+        let label = if let Some(ref iface) = impl_block.interface_name {
+            format!("impl {} for {}", iface, impl_block.struct_name)
+        } else {
+            format!("impl {}", impl_block.struct_name)
+        };
+
+        self.doc_symbols.push(DocSymbol {
+            name: label,
+            kind: SymbolKind::Method, // closest kind for impl blocks
+            span: impl_block.span,
+            children,
+        });
+    }
+
+    fn collect_interface_def(&mut self, interface_def: &InterfaceDef) {
+        let info = SymbolInfo {
+            name: interface_def.name.clone(),
+            kind: SymbolKind::Interface,
+            def_span: interface_def.span,
+        };
+        self.definitions
+            .entry(interface_def.name.clone())
+            .or_default()
+            .push(info);
+
+        let mut children = Vec::new();
+        for method_sig in &interface_def.methods {
+            let qualified = format!("{}.{}", interface_def.name, method_sig.name);
+            let method_info = SymbolInfo {
+                name: qualified.clone(),
+                kind: SymbolKind::Method,
+                def_span: method_sig.span,
+            };
+            self.definitions
+                .entry(qualified)
+                .or_default()
+                .push(method_info);
+
+            children.push(DocSymbol {
+                name: method_sig.name.clone(),
+                kind: SymbolKind::Method,
+                span: method_sig.span,
+                children: vec![],
+            });
+        }
+
+        self.doc_symbols.push(DocSymbol {
+            name: interface_def.name.clone(),
+            kind: SymbolKind::Interface,
+            span: interface_def.span,
+            children,
+        });
     }
 
     fn collect_fn_def(&mut self, fn_def: &FnDef) {
@@ -364,5 +564,34 @@ impl SymbolTable {
     /// Get the definition for a symbol name.
     pub fn get_definition(&self, name: &str) -> Option<&SymbolInfo> {
         self.definitions.get(name).and_then(|defs| defs.first())
+    }
+
+    /// Find all references to a symbol name (both definitions and usages).
+    pub fn find_references(&self, name: &str) -> Vec<Span> {
+        let mut spans = Vec::new();
+
+        // Add definition spans
+        if let Some(defs) = self.definitions.get(name) {
+            for def in defs {
+                spans.push(def.def_span);
+            }
+        }
+
+        // Add reference spans
+        for (span, ref_name) in &self.references {
+            if ref_name == name {
+                spans.push(*span);
+            }
+        }
+
+        spans
+    }
+
+    /// Find all implementations of a given interface name.
+    pub fn find_implementations(&self, interface_name: &str) -> Vec<&ImplInfo> {
+        self.impl_blocks
+            .iter()
+            .filter(|info| info.interface_name.as_deref() == Some(interface_name))
+            .collect()
     }
 }

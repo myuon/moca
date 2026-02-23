@@ -9,7 +9,7 @@ use crate::compiler::ast::Program;
 use crate::compiler::{Lexer, Parser, Resolver};
 
 mod symbols;
-use symbols::SymbolTable;
+use symbols::{DocSymbol, SymbolTable};
 
 /// The moca language server backend.
 pub struct MocaLanguageServer {
@@ -155,6 +155,10 @@ impl LanguageServer for MocaLanguageServer {
                     ..Default::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
             },
@@ -264,6 +268,10 @@ impl LanguageServer for MocaLanguageServer {
                         symbols::SymbolKind::Function => CompletionItemKind::FUNCTION,
                         symbols::SymbolKind::Variable => CompletionItemKind::VARIABLE,
                         symbols::SymbolKind::Parameter => CompletionItemKind::VARIABLE,
+                        symbols::SymbolKind::Struct => CompletionItemKind::STRUCT,
+                        symbols::SymbolKind::Interface => CompletionItemKind::INTERFACE,
+                        symbols::SymbolKind::Method => CompletionItemKind::METHOD,
+                        symbols::SymbolKind::Field => CompletionItemKind::FIELD,
                     };
                     items.push(CompletionItem {
                         label: name.clone(),
@@ -373,6 +381,10 @@ impl LanguageServer for MocaLanguageServer {
                 symbols::SymbolKind::Function => "function",
                 symbols::SymbolKind::Variable => "variable",
                 symbols::SymbolKind::Parameter => "parameter",
+                symbols::SymbolKind::Struct => "struct",
+                symbols::SymbolKind::Interface => "interface",
+                symbols::SymbolKind::Method => "method",
+                symbols::SymbolKind::Field => "field",
             },
             None => "symbol",
         };
@@ -386,6 +398,257 @@ impl LanguageServer for MocaLanguageServer {
             contents,
             range: None,
         }))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = &params.text_document.uri;
+
+        let source = {
+            let docs = self.documents.read().unwrap();
+            match docs.get(uri) {
+                Some(s) => s.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        let program = match self.parse_document(uri, &source) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let symbols = SymbolTable::from_program(&program);
+        let lsp_symbols: Vec<DocumentSymbol> =
+            symbols.doc_symbols.iter().map(doc_symbol_to_lsp).collect();
+
+        Ok(Some(DocumentSymbolResponse::Nested(lsp_symbols)))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let source = {
+            let docs = self.documents.read().unwrap();
+            match docs.get(uri) {
+                Some(s) => s.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        let program = match self.parse_document(uri, &source) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let symbols = SymbolTable::from_program(&program);
+
+        let line = position.line + 1;
+        let column = position.character + 1;
+
+        let symbol_name = match symbols.find_at_position(line, column) {
+            Some(name) => name.to_string(),
+            None => return Ok(None),
+        };
+
+        let spans = symbols.find_references(&symbol_name);
+        if spans.is_empty() {
+            return Ok(None);
+        }
+
+        let locations: Vec<Location> = spans
+            .iter()
+            .map(|span| Location {
+                uri: uri.clone(),
+                range: span_to_range(span, symbol_name.len()),
+            })
+            .collect();
+
+        Ok(Some(locations))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let query = params.query.to_lowercase();
+
+        let docs = self.documents.read().unwrap();
+        let mut results = Vec::new();
+
+        for (uri, source) in docs.iter() {
+            let program = match self.parse_document(uri, source) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let symbols = SymbolTable::from_program(&program);
+
+            for sym in &symbols.doc_symbols {
+                Self::collect_workspace_symbols(sym, uri, &query, &mut results);
+            }
+        }
+
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results))
+        }
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let source = {
+            let docs = self.documents.read().unwrap();
+            match docs.get(uri) {
+                Some(s) => s.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        let program = match self.parse_document(uri, &source) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let symbols = SymbolTable::from_program(&program);
+
+        let line = position.line + 1;
+        let column = position.character + 1;
+
+        let symbol_name = match symbols.find_at_position(line, column) {
+            Some(name) => name.to_string(),
+            None => return Ok(None),
+        };
+
+        // Check if this is an interface — find its implementations
+        if let Some(def) = symbols.get_definition(&symbol_name)
+            && def.kind == symbols::SymbolKind::Interface
+        {
+            let impls = symbols.find_implementations(&symbol_name);
+            if impls.is_empty() {
+                return Ok(None);
+            }
+            let locations: Vec<Location> = impls
+                .iter()
+                .map(|impl_info| Location {
+                    uri: uri.clone(),
+                    range: span_to_range(&impl_info.span, impl_info.struct_name.len()),
+                })
+                .collect();
+
+            return Ok(Some(GotoDefinitionResponse::Array(locations)));
+        }
+
+        // Check if this is a method call — find the impl method
+        for impl_info in &symbols.impl_blocks {
+            for method in &impl_info.methods {
+                // method.name is "StructName.method_name"
+                if method.name.ends_with(&format!(".{}", symbol_name)) {
+                    let location = Location {
+                        uri: uri.clone(),
+                        range: span_to_range(&method.def_span, symbol_name.len()),
+                    };
+                    return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+}
+
+impl MocaLanguageServer {
+    /// Recursively collect workspace symbols matching a query.
+    #[allow(deprecated)]
+    fn collect_workspace_symbols(
+        sym: &DocSymbol,
+        uri: &Url,
+        query: &str,
+        results: &mut Vec<SymbolInformation>,
+    ) {
+        if query.is_empty() || sym.name.to_lowercase().contains(query) {
+            let kind = match sym.kind {
+                symbols::SymbolKind::Function => SymbolKind::FUNCTION,
+                symbols::SymbolKind::Variable => SymbolKind::VARIABLE,
+                symbols::SymbolKind::Parameter => SymbolKind::VARIABLE,
+                symbols::SymbolKind::Struct => SymbolKind::STRUCT,
+                symbols::SymbolKind::Interface => SymbolKind::INTERFACE,
+                symbols::SymbolKind::Method => SymbolKind::METHOD,
+                symbols::SymbolKind::Field => SymbolKind::FIELD,
+            };
+
+            results.push(SymbolInformation {
+                name: sym.name.clone(),
+                kind,
+                tags: None,
+                deprecated: None,
+                location: Location {
+                    uri: uri.clone(),
+                    range: span_to_range(&sym.span, sym.name.len()),
+                },
+                container_name: None,
+            });
+        }
+
+        for child in &sym.children {
+            Self::collect_workspace_symbols(child, uri, query, results);
+        }
+    }
+}
+
+/// Convert a Span (1-based) to an LSP Range (0-based).
+fn span_to_range(span: &crate::compiler::lexer::Span, name_len: usize) -> Range {
+    let line = (span.line.saturating_sub(1)) as u32;
+    let col = (span.column.saturating_sub(1)) as u32;
+    Range {
+        start: Position {
+            line,
+            character: col,
+        },
+        end: Position {
+            line,
+            character: col + name_len as u32,
+        },
+    }
+}
+
+/// Convert a DocSymbol to an LSP DocumentSymbol.
+#[allow(deprecated)]
+fn doc_symbol_to_lsp(sym: &DocSymbol) -> DocumentSymbol {
+    let kind = match sym.kind {
+        symbols::SymbolKind::Function => SymbolKind::FUNCTION,
+        symbols::SymbolKind::Variable => SymbolKind::VARIABLE,
+        symbols::SymbolKind::Parameter => SymbolKind::VARIABLE,
+        symbols::SymbolKind::Struct => SymbolKind::STRUCT,
+        symbols::SymbolKind::Interface => SymbolKind::INTERFACE,
+        symbols::SymbolKind::Method => SymbolKind::METHOD,
+        symbols::SymbolKind::Field => SymbolKind::FIELD,
+    };
+
+    let range = span_to_range(&sym.span, sym.name.len());
+    let children = if sym.children.is_empty() {
+        None
+    } else {
+        Some(sym.children.iter().map(doc_symbol_to_lsp).collect())
+    };
+
+    DocumentSymbol {
+        name: sym.name.clone(),
+        detail: None,
+        kind,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children,
     }
 }
 
