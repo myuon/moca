@@ -88,8 +88,8 @@ moca-lint: build
             fi
         }
     done
-    # Lint test snapshot .mc files (excluding lint/ and errors/ which have intentional warnings/errors)
-    for file in $(find tests/snapshots -name "*.mc" -not -path "*/lint/*" -not -path "*/errors/*"); do
+    # Lint test snapshot .mc files (excluding lint/, errors/, lsp_diagnostics/ which have intentional warnings/errors)
+    for file in $(find tests/snapshots -name "*.mc" -not -path "*/lint/*" -not -path "*/errors/*" -not -path "*/lsp_diagnostics/*"); do
         output=$(./target/debug/moca lint "$file" 2>&1) || {
             # Filter out compile errors (only fail on warnings)
             warnings=$(echo "$output" | grep "^warning:" || true)
