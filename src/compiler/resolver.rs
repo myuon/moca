@@ -894,6 +894,17 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Extract struct name from a Type (set by typechecker's inferred_type)
+    fn struct_name_from_type(ty: &Type) -> Option<String> {
+        match ty {
+            Type::Struct { name, .. } | Type::GenericStruct { name, .. } => Some(name.clone()),
+            Type::Vector(_) => Some("Vec".to_string()),
+            Type::Array(_) => Some("Array".to_string()),
+            Type::Map(_, _) => Some("Map".to_string()),
+            _ => None,
+        }
+    }
+
     /// First pass: scan a block of statements to find `var` variables that are
     /// captured by any lambda within the block. These variables need to be
     /// promoted to RefCell for reference capture semantics.
@@ -1236,17 +1247,19 @@ impl<'a> Resolver<'a> {
                 name,
                 type_annotation,
                 init,
+                inferred_type,
                 span: _,
-                ..
             } => {
                 let init = self.resolve_expr(init, scope)?;
+                let inferred_fallback =
+                    || inferred_type.as_ref().and_then(Self::struct_name_from_type);
                 // First try to get struct name from type annotation
                 let struct_name = match type_annotation {
                     Some(crate::compiler::types::TypeAnnotation::Named(type_name)) => {
                         if self.structs.contains_key(&type_name) {
                             Some(type_name)
                         } else {
-                            self.get_struct_name(&init)
+                            self.get_struct_name(&init).or_else(inferred_fallback)
                         }
                     }
                     // array<T> maps to Array<T> generic struct
@@ -1264,10 +1277,10 @@ impl<'a> Resolver<'a> {
                         if self.structs.contains_key(&name) {
                             Some(name)
                         } else {
-                            self.get_struct_name(&init)
+                            self.get_struct_name(&init).or_else(inferred_fallback)
                         }
                     }
-                    _ => self.get_struct_name(&init),
+                    _ => self.get_struct_name(&init).or_else(inferred_fallback),
                 };
                 // If this let shadows a const, remove the inline value
                 scope.const_values.remove(&name);
