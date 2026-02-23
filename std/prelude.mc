@@ -996,7 +996,7 @@ fun _any_to_string(d: any) -> string {
         let bi = 0;
         while bi < map_cap {
             let entry_ptr = __heap_load(buckets, bi);
-            while entry_ptr != __null_ptr() {
+            while entry_ptr != nil {
                 if !first { result = result + ", "; }
                 first = false;
                 let kw = __alloc_heap(2);
@@ -1414,20 +1414,20 @@ impl<T> Vec<T> {
 
 // HashMapEntry struct - represents a key-value pair in the map.
 // Layout: [hm_key, hm_value, hm_next]
-// hm_next: pointer to next entry in the chain (__null_ptr() if end of chain)
+// hm_next: next entry in the chain (nil if end of chain)
 struct HashMapEntry<K, V> {
     hm_key: K,
     hm_value: V,
-    hm_next: ptr<HashMapEntry<K, V>>
+    hm_next: HashMapEntry<K, V>?
 }
 
 // Map<K, V> - Generic hash map implementation.
 // Layout: [hm_buckets, hm_size, hm_capacity]
-// hm_buckets: pointer to array of bucket heads
+// hm_buckets: pointer to array of bucket heads (entry or nil)
 // hm_size: number of entries in the map
 // hm_capacity: number of buckets
 struct Map<K, V> {
-    hm_buckets: ptr<any>,
+    hm_buckets: ptr<HashMapEntry<K, V>?>,
     hm_size: int,
     hm_capacity: int
 }
@@ -1459,33 +1459,33 @@ fun _map_hash_string(key: string) -> int {
 
 impl<K, V> Map<K, V> {
     // Internal: Find entry by key in a bucket chain (int key)
-    fun _find_entry_int(self, key: int) -> ptr<HashMapEntry<int, V>> {
+    fun _find_entry_int(self, key: int) -> HashMapEntry<int, V>? {
         let bucket_idx = _map_hash_int(key) % self.hm_capacity;
         let entry_ptr = self.hm_buckets[bucket_idx];
 
-        while entry_ptr != __null_ptr() {
-            let entry_key: int = __heap_load(entry_ptr, 0);
+        while entry_ptr != nil {
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 return entry_ptr;
             }
             entry_ptr = __heap_load(entry_ptr, 2);
         }
-        return __null_ptr();
+        return nil;
     }
 
     // Internal: Find entry by key in a bucket chain (string key)
-    fun _find_entry_string(self, key: string) -> ptr<HashMapEntry<string, V>> {
+    fun _find_entry_string(self, key: string) -> HashMapEntry<string, V>? {
         let bucket_idx = _map_hash_string(key) % self.hm_capacity;
         let entry_ptr = self.hm_buckets[bucket_idx];
 
-        while entry_ptr != __null_ptr() {
-            let entry_key: string = __heap_load(entry_ptr, 0);
+        while entry_ptr != nil {
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 return entry_ptr;
             }
             entry_ptr = __heap_load(entry_ptr, 2);
         }
-        return __null_ptr();
+        return nil;
     }
 
     // Internal: Rehash the map when load factor exceeds 0.75 (int keys)
@@ -1497,15 +1497,15 @@ impl<K, V> Map<K, V> {
 
         let i = 0;
         while i < new_capacity {
-            new_buckets[i] = __null_ptr();
+            new_buckets[i] = nil;
             i = i + 1;
         }
 
         i = 0;
         while i < old_capacity {
             let entry_ptr = old_buckets[i];
-            while entry_ptr != __null_ptr() {
-                let key: int = __heap_load(entry_ptr, 0);
+            while entry_ptr != nil {
+                let key = __heap_load(entry_ptr, 0);
                 let next_ptr = __heap_load(entry_ptr, 2);
 
                 let new_bucket_idx = _map_hash_int(key) % new_capacity;
@@ -1532,15 +1532,15 @@ impl<K, V> Map<K, V> {
 
         let i = 0;
         while i < new_capacity {
-            new_buckets[i] = __null_ptr();
+            new_buckets[i] = nil;
             i = i + 1;
         }
 
         i = 0;
         while i < old_capacity {
             let entry_ptr = old_buckets[i];
-            while entry_ptr != __null_ptr() {
-                let key: string = __heap_load(entry_ptr, 0);
+            while entry_ptr != nil {
+                let key = __heap_load(entry_ptr, 0);
                 let next_ptr = __heap_load(entry_ptr, 2);
 
                 let new_bucket_idx = _map_hash_string(key) % new_capacity;
@@ -1562,10 +1562,10 @@ impl<K, V> Map<K, V> {
     fun `new`() -> Map<K, V> {
         let capacity = 16;
         let buckets = __alloc_heap(capacity);
-        // Initialize all buckets to __null_ptr() (empty)
+        // Initialize all buckets to nil (empty)
         let i = 0;
         while i < capacity {
-            buckets[i] = __null_ptr();
+            buckets[i] = nil;
             i = i + 1;
         }
         return Map<K, V> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
@@ -1578,7 +1578,7 @@ impl<K, V> Map<K, V> {
         let buckets = __alloc_heap(capacity);
         let i = 0;
         while i < capacity {
-            buckets[i] = __null_ptr();
+            buckets[i] = nil;
             i = i + 1;
         }
         return Map<K, V> { hm_buckets: buckets, hm_size: 0, hm_capacity: capacity };
@@ -1588,7 +1588,7 @@ impl<K, V> Map<K, V> {
     fun put_int(self, key: int, val: V) {
         // Check if key already exists
         let existing = self._find_entry_int(key);
-        if existing != __null_ptr() {
+        if existing != nil {
             // Update existing entry
             __heap_store(existing, 1, val);
             return;
@@ -1614,7 +1614,7 @@ impl<K, V> Map<K, V> {
     fun put_string(self, key: string, val: V) {
         // Check if key already exists
         let existing = self._find_entry_string(key);
-        if existing != __null_ptr() {
+        if existing != nil {
             // Update existing entry
             __heap_store(existing, 1, val);
             return;
@@ -1640,7 +1640,7 @@ impl<K, V> Map<K, V> {
     // Throws if key not found
     fun get_int(self, key: int) -> V {
         let entry_ptr = self._find_entry_int(key);
-        if entry_ptr == __null_ptr() {
+        if entry_ptr == nil {
             throw "key not found";
         }
         return __heap_load(entry_ptr, 1);
@@ -1650,7 +1650,7 @@ impl<K, V> Map<K, V> {
     // Throws if key not found
     fun get_string(self, key: string) -> V {
         let entry_ptr = self._find_entry_string(key);
-        if entry_ptr == __null_ptr() {
+        if entry_ptr == nil {
             throw "key not found";
         }
         return __heap_load(entry_ptr, 1);
@@ -1658,12 +1658,12 @@ impl<K, V> Map<K, V> {
 
     // Check if the map contains a key (int version)
     fun contains_int(self, key: int) -> bool {
-        return self._find_entry_int(key) != __null_ptr();
+        return self._find_entry_int(key) != nil;
     }
 
     // Check if the map contains a key (string version)
     fun contains_string(self, key: string) -> bool {
-        return self._find_entry_string(key) != __null_ptr();
+        return self._find_entry_string(key) != nil;
     }
 
     // Remove an entry from the map by int key
@@ -1671,14 +1671,14 @@ impl<K, V> Map<K, V> {
     fun remove_int(self, key: int) -> bool {
         let bucket_idx = _map_hash_int(key) % self.hm_capacity;
         let entry_ptr = self.hm_buckets[bucket_idx];
-        let prev_ptr = __null_ptr();
+        let prev_ptr = nil;
 
-        while entry_ptr != __null_ptr() {
-            let entry_key: int = __heap_load(entry_ptr, 0);
+        while entry_ptr != nil {
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 // Found the entry, remove it
                 let next_ptr = __heap_load(entry_ptr, 2);
-                if prev_ptr == __null_ptr() {
+                if prev_ptr == nil {
                     // Entry is head of bucket
                     self.hm_buckets[bucket_idx] = next_ptr;
                 } else {
@@ -1699,14 +1699,14 @@ impl<K, V> Map<K, V> {
     fun remove_string(self, key: string) -> bool {
         let bucket_idx = _map_hash_string(key) % self.hm_capacity;
         let entry_ptr = self.hm_buckets[bucket_idx];
-        let prev_ptr = __null_ptr();
+        let prev_ptr = nil;
 
-        while entry_ptr != __null_ptr() {
-            let entry_key: string = __heap_load(entry_ptr, 0);
+        while entry_ptr != nil {
+            let entry_key = __heap_load(entry_ptr, 0);
             if entry_key == key {
                 // Found the entry, remove it
                 let next_ptr = __heap_load(entry_ptr, 2);
-                if prev_ptr == __null_ptr() {
+                if prev_ptr == nil {
                     // Entry is head of bucket
                     self.hm_buckets[bucket_idx] = next_ptr;
                 } else {
@@ -1728,8 +1728,8 @@ impl<K, V> Map<K, V> {
         let i = 0;
         while i < self.hm_capacity {
             let entry_ptr = self.hm_buckets[i];
-            while entry_ptr != __null_ptr() {
-                let key: K = __heap_load(entry_ptr, 0);
+            while entry_ptr != nil {
+                let key = __heap_load(entry_ptr, 0);
                 result.push(key);
                 entry_ptr = __heap_load(entry_ptr, 2);
             }
@@ -1744,8 +1744,8 @@ impl<K, V> Map<K, V> {
         let i = 0;
         while i < self.hm_capacity {
             let entry_ptr = self.hm_buckets[i];
-            while entry_ptr != __null_ptr() {
-                let val: V = __heap_load(entry_ptr, 1);
+            while entry_ptr != nil {
+                let val = __heap_load(entry_ptr, 1);
                 result.push(val);
                 entry_ptr = __heap_load(entry_ptr, 2);
             }
