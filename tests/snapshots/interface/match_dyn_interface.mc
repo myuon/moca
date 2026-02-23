@@ -34,7 +34,7 @@ fun show(d: dyn) -> string {
             return "int:" + v.to_string();
         }
         v: Describable => {
-            return "describable";
+            return "describable:" + v.describe();
         }
         _ => {
             return "other";

@@ -196,6 +196,7 @@ impl Codegen {
             ResolvedExpr::RefCellNew { .. } => ValueType::Ref,   // Returns a Ref
             ResolvedExpr::RefCellLoad { .. } => ValueType::I64,  // Default; dynamic
             ResolvedExpr::AsDyn { .. } => ValueType::Ref,        // Dyn values are heap-allocated
+            ResolvedExpr::VtableMethodCall { .. } => ValueType::I64, // Default; dynamic
         }
     }
 
@@ -846,8 +847,8 @@ impl Codegen {
                             ops.push(Op::BrIf(0)); // placeholder (branch if IS null)
 
                             // Unbox the raw value and bind to the arm's variable
-                            // For interface match, variable is typed as `any` (the raw dyn value)
                             ops.push(Op::LocalGet(*dyn_slot));
+                            ops.push(Op::HeapLoad(1)); // raw value from dyn slot 1
                             ops.push(Op::LocalSet(arm.var_slot));
                         }
                     }
@@ -1564,6 +1565,25 @@ impl Codegen {
                 self.compile_expr(expr, ops)?;
                 // HeapAlloc(2) pops [type_info_ref, value] → dyn object [slot0=type_info, slot1=value]
                 ops.push(Op::HeapAlloc(2));
+            }
+            ResolvedExpr::VtableMethodCall {
+                object,
+                vtable_slot,
+                method_index,
+                args,
+            } => {
+                // Dynamic dispatch via vtable:
+                // 1. Load func_index from vtable
+                ops.push(Op::LocalGet(*vtable_slot + self.local_offset));
+                ops.push(Op::HeapLoad(*method_index));
+                // 2. Push self (raw value, already unboxed by InterfaceMatch arm)
+                self.compile_expr(object, ops)?;
+                // 3. Push explicit arguments
+                for arg in args {
+                    self.compile_expr(arg, ops)?;
+                }
+                // 4. CallDynamic: pops argc args then func_index, calls function
+                ops.push(Op::CallDynamic(args.len() + 1)); // self + explicit args
             }
         }
 

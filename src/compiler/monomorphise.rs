@@ -82,6 +82,7 @@ fn mangle_type(ty: &Type) -> String {
         }
         Type::Var(id) => format!("T{}", id),
         Type::Param { name } => name.clone(),
+        Type::InterfaceBound { interface_name } => interface_name.clone(),
     }
 }
 
@@ -804,6 +805,7 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
         },
         Type::Var(_) => TypeAnnotation::Named("any".to_string()), // Fallback for unresolved vars
         Type::Param { name } => TypeAnnotation::Named(name.clone()),
+        Type::InterfaceBound { interface_name } => TypeAnnotation::Named(interface_name.clone()),
         Type::Dyn => TypeAnnotation::Named("dyn".to_string()),
     }
 }

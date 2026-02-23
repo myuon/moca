@@ -112,8 +112,8 @@ impl Substitution {
                     .map(|(n, t)| (n.clone(), self.apply(t)))
                     .collect(),
             },
-            // Type parameters are unchanged (they are not inference variables)
-            Type::Param { .. } => ty.clone(),
+            // Type parameters and interface bounds are unchanged
+            Type::Param { .. } | Type::InterfaceBound { .. } => ty.clone(),
             // Primitive types, Any, and Dyn are unchanged
             Type::Int
             | Type::Float
@@ -455,6 +455,18 @@ impl TypeChecker {
 
             // Type parameter unification: same name = same type
             (Type::Param { name: n1 }, Type::Param { name: n2 }) => {
+                if n1 == n2 {
+                    Ok(Substitution::new())
+                } else {
+                    Err(TypeError::mismatch(t1, t2, span))
+                }
+            }
+
+            // Interface-bounded types: same interface name = same type
+            (
+                Type::InterfaceBound { interface_name: n1 },
+                Type::InterfaceBound { interface_name: n2 },
+            ) => {
                 if n1 == n2 {
                     Ok(Substitution::new())
                 } else {
@@ -1422,8 +1434,14 @@ impl TypeChecker {
                     };
 
                     let arm_type = if is_interface {
-                        // Interface match arm: variable is typed as Any (raw value)
-                        Type::Any
+                        // Interface match arm: variable carries interface bound for method resolution
+                        if let TypeAnnotation::Named(name) = &arm.type_annotation {
+                            Type::InterfaceBound {
+                                interface_name: name.clone(),
+                            }
+                        } else {
+                            Type::Any
+                        }
                     } else {
                         match self.resolve_type_annotation(&arm.type_annotation, arm.span) {
                             Ok(ty) => ty,
@@ -2359,6 +2377,46 @@ impl TypeChecker {
                                 "cannot call method `{}` on unbounded type parameter `{}`",
                                 method, param_name
                             ),
+                            *span,
+                        ));
+                    }
+                    for arg in args {
+                        self.infer_expr(arg, env);
+                    }
+                    return self.fresh_var();
+                }
+
+                // Handle Type::InterfaceBound — resolve method via interface definition
+                if let Type::InterfaceBound { interface_name } = &resolved_obj_type {
+                    if let Some(interface_info) = self.interfaces.get(interface_name).cloned() {
+                        if let Some(Type::Function { params, ret }) =
+                            interface_info.methods.get(method)
+                        {
+                            if args.len() != params.len() {
+                                self.errors.push(TypeError::new(
+                                    format!(
+                                        "method `{}` expects {} arguments, got {}",
+                                        method,
+                                        params.len(),
+                                        args.len()
+                                    ),
+                                    *span,
+                                ));
+                                return self.substitution.apply(ret);
+                            }
+                            self.check_call_args(args, params, env);
+                            return self.substitution.apply(ret);
+                        }
+                        self.errors.push(TypeError::new(
+                            format!(
+                                "method `{}` not found in interface `{}`",
+                                method, interface_name
+                            ),
+                            *span,
+                        ));
+                    } else {
+                        self.errors.push(TypeError::new(
+                            format!("unknown interface `{}`", interface_name),
                             *span,
                         ));
                     }

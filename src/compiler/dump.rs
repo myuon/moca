@@ -1391,6 +1391,41 @@ impl ResolvedProgramPrinter {
                     self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
                 }
             }
+            ResolvedExpr::VtableMethodCall {
+                object,
+                vtable_slot,
+                method_index,
+                args,
+            } => {
+                self.write(&format!(
+                    "{}VtableMethodCall(vtable_slot={}, method_index={}, {} args)",
+                    prefix,
+                    vtable_slot,
+                    method_index,
+                    args.len()
+                ));
+                self.newline();
+                let has_args = !args.is_empty();
+                let obj_prefix = if has_args { "├── " } else { "└── " };
+                let obj_child = if has_args {
+                    format!("{}│   ", parent_prefix)
+                } else {
+                    format!("{}    ", parent_prefix)
+                };
+                self.write_indent_with(parent_prefix);
+                self.print_expr(object, &format!("{}object: ", obj_prefix), &obj_child);
+                for (i, arg) in args.iter().enumerate() {
+                    let is_last = i == args.len() - 1;
+                    let arg_prefix = if is_last { "└── " } else { "├── " };
+                    let arg_child = if is_last {
+                        format!("{}    ", parent_prefix)
+                    } else {
+                        format!("{}│   ", parent_prefix)
+                    };
+                    self.write_indent_with(parent_prefix);
+                    self.print_expr(arg, &format!("{}arg: ", arg_prefix), &arg_child);
+                }
+            }
             ResolvedExpr::AssociatedFunctionCall {
                 func_index,
                 args,

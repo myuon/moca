@@ -278,6 +278,14 @@ pub enum ResolvedExpr {
     RefCellLoad {
         slot: usize,
     },
+    /// Dynamic method call via vtable (for match dyn interface arms).
+    /// Dispatches through the vtable stored in vtable_slot.
+    VtableMethodCall {
+        object: Box<ResolvedExpr>,
+        vtable_slot: usize,
+        method_index: usize,
+        args: Vec<ResolvedExpr>,
+    },
     /// As dyn expression: boxes a value with a runtime type tag.
     AsDyn {
         expr: Box<ResolvedExpr>,
@@ -341,6 +349,8 @@ pub struct Resolver<'a> {
     interface_impls: HashSet<(String, String)>,
     /// Interface definitions: interface_name -> method_names (sorted)
     interface_methods: HashMap<String, Vec<String>>,
+    /// Maps variable slot → (interface_name, vtable_slot) for interface match arm variables
+    interface_vtable_slots: HashMap<usize, (String, usize)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -385,6 +395,7 @@ impl<'a> Resolver<'a> {
             lifted_functions: Vec::new(),
             next_lambda_id: 0,
             base_func_count: 0,
+            interface_vtable_slots: HashMap::new(),
         }
     }
 
@@ -1492,6 +1503,9 @@ impl<'a> Resolver<'a> {
                                 unreachable!()
                             };
                         let vtable_slot = scope.declare("__vtable".to_string(), false);
+                        // Register vtable info for method call resolution
+                        self.interface_vtable_slots
+                            .insert(var_slot, (interface_name.clone(), vtable_slot));
                         MatchDynArmKind::InterfaceMatch {
                             interface_name,
                             vtable_slot,
@@ -1764,6 +1778,59 @@ impl<'a> Resolver<'a> {
                     Type::String => Some("string"),
                     _ => None,
                 });
+
+                // Handle Type::InterfaceBound — vtable-dispatched method calls
+                if let Some(Type::InterfaceBound { interface_name }) = object_type.as_ref() {
+                    let resolved_object = self.resolve_expr(*object, scope)?;
+                    let resolved_args: Vec<_> = args
+                        .into_iter()
+                        .map(|a| self.resolve_expr(a, scope))
+                        .collect::<Result<_, _>>()?;
+
+                    // Find method index in the interface's method list
+                    let method_names =
+                        self.interface_methods.get(interface_name).ok_or_else(|| {
+                            self.error(&format!("unknown interface '{}'", interface_name), span)
+                        })?;
+                    let method_index =
+                        method_names
+                            .iter()
+                            .position(|m| m == &method)
+                            .ok_or_else(|| {
+                                self.error(
+                                    &format!(
+                                        "method '{}' not found in interface '{}'",
+                                        method, interface_name
+                                    ),
+                                    span,
+                                )
+                            })?;
+
+                    // Look up vtable_slot from the object's variable slot
+                    let vtable_slot = if let ResolvedExpr::Local(slot) = &resolved_object {
+                        self.interface_vtable_slots
+                            .get(slot)
+                            .map(|(_, vs)| *vs)
+                            .ok_or_else(|| {
+                                self.error(
+                                    "interface method calls require a match dyn arm variable",
+                                    span,
+                                )
+                            })?
+                    } else {
+                        return Err(self.error(
+                            "interface method calls require a match dyn arm variable",
+                            span,
+                        ));
+                    };
+
+                    return Ok(ResolvedExpr::VtableMethodCall {
+                        object: Box::new(resolved_object),
+                        vtable_slot,
+                        method_index,
+                        args: resolved_args,
+                    });
+                }
 
                 // Handle Type::Param — method calls on generic type parameters.
                 // The generic function body is never executed directly (only
