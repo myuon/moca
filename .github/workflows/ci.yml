@@ -14,20 +14,27 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install lld
+        run: sudo apt-get install -y lld
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Install just
-        uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest
 
       - uses: Swatinem/rust-cache@v2
 
@@ -42,10 +49,15 @@ jobs:
   coverage-base:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.base_ref }}
+
+      - name: Install lld
+        run: sudo apt-get install -y lld
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -83,8 +95,13 @@ jobs:
   coverage-head:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install lld
+        run: sudo apt-get install -y lld
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -213,8 +230,13 @@ jobs:
   perf-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install lld
+        run: sudo apt-get install -y lld
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -234,12 +256,17 @@ jobs:
   perf-main:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       # Checkout main branch directly — no branch switching within this job.
       # This ensures the build and cache are always for main branch code only.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.base_ref }}
+
+      - name: Install lld
+        run: sudo apt-get install -y lld
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

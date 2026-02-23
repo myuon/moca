@@ -24,9 +24,14 @@ fix:
 clippy:
     cargo clippy -- -D warnings
 
-# Run tests
+# Run tests (uses cargo-nextest if available, otherwise cargo test)
 test:
-    cargo test
+    #!/usr/bin/env bash
+    if command -v cargo-nextest &> /dev/null; then
+        cargo nextest run
+    else
+        cargo test
+    fi
 
 # Run tests with coverage report
 coverage:
