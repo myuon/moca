@@ -8,7 +8,7 @@
 // false
 
 // Create a Map<int, string> using new literal syntax
-let m: Map<int, string> = new Map<int, string> {1: "one", 2: "two", 3: "three"};
+let m = new Map<int, string> {1: "one", 2: "two", 3: "three"};
 
 // Check size
 print(m.len());

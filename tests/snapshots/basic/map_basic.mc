@@ -1,14 +1,14 @@
 // Basic Map operations test
 
 // Test with string keys
-let m: Map<string, string> = Map<string, string>::`new`();
+let m = new Map<string, string> {};
 
 // Test put and get
-m.put("name", "Alice");
-m.put("city", "Tokyo");
+m["name"] = "Alice";
+m["city"] = "Tokyo";
 
-print(m.get("name"));
-print(m.get("city"));
+print(m["name"]);
+print(m["city"]);
 print(m.len());
 
 // Test contains
@@ -20,8 +20,8 @@ if !m.contains("unknown") {
 }
 
 // Test overwrite
-m.put("name", "Bob");
-print(m.get("name"));
+m["name"] = "Bob";
+print(m["name"]);
 print(m.len());
 
 // Test remove
@@ -34,7 +34,7 @@ print(m.len());
 // Test get non-existent key throws
 let got_error = false;
 try {
-    m.get("city");
+    let _v = m["city"];
 } catch e {
     got_error = true;
     print(e);
