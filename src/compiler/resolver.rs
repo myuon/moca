@@ -1912,11 +1912,7 @@ impl<'a> Resolver<'a> {
                 let struct_name = struct_name
                     .or_else(|| self.get_struct_name(&resolved_object))
                     // Fallback: use the typechecker's inferred_type on the object expression
-                    .or_else(|| {
-                        object_type
-                            .as_ref()
-                            .and_then(Self::struct_name_from_type)
-                    });
+                    .or_else(|| object_type.as_ref().and_then(Self::struct_name_from_type));
 
                 // Resolve method to function index (static dispatch)
                 let (func_index, return_struct_name) = if let Some(sn) = &struct_name {
