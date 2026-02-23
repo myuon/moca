@@ -1,0 +1,6 @@
+{
+    "name": "moca-lsp",
+    "version": "0.1.0",
+    "description": "moca language server for .mc files",
+    "keywords": ["moca", "lsp", "language-server"]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "moca-plugins",
+  "owner": {
+    "name": "myuon"
+  },
+  "plugins": [
+    {
+      "name": "moca-lsp",
+      "version": "0.1.0",
+      "source": "./moca-lsp",
+      "description": "moca language server for .mc files",
+      "category": "development",
+      "tags": ["moca", "lsp", "language-server"]
+    }
+  ]
+}

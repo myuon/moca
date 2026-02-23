@@ -49,5 +49,8 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "moca-lsp@moca-plugins": true
   }
 }
