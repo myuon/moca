@@ -504,8 +504,8 @@ const OP_I64_SHR_U: u8 = 115;
 const OP_F64_REINTERPRET_AS_I64: u8 = 116;
 const OP_UMUL128_HI: u8 = 117;
 const OP_HEAP_OFFSET_REF: u8 = 118;
-const OP_TYPE_DESC_LOAD: u8 = 119;
-const OP_IFACE_DESC_LOAD: u8 = 120;
+const OP_GLOBAL_GET: u8 = 119;
+// 120 is unused (was OP_IFACE_DESC_LOAD)
 const OP_CALL_DYNAMIC: u8 = 121;
 const OP_VTABLE_LOOKUP: u8 = 122;
 
@@ -724,15 +724,9 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             write_u32(w, *argc as u32)?;
         }
 
-        // Type Descriptor
-        Op::TypeDescLoad(idx) => {
-            w.write_all(&[OP_TYPE_DESC_LOAD])?;
-            write_u32(w, *idx as u32)?;
-        }
-
-        // Interface Descriptor
-        Op::InterfaceDescLoad(idx) => {
-            w.write_all(&[OP_IFACE_DESC_LOAD])?;
+        // Globals
+        Op::GlobalGet(idx) => {
+            w.write_all(&[OP_GLOBAL_GET])?;
             write_u32(w, *idx as u32)?;
         }
 
@@ -910,10 +904,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_CALL_INDIRECT => Op::CallIndirect(read_u32(r)? as usize),
 
         // Type Descriptor
-        OP_TYPE_DESC_LOAD => Op::TypeDescLoad(read_u32(r)? as usize),
-
-        // Interface Descriptor
-        OP_IFACE_DESC_LOAD => Op::InterfaceDescLoad(read_u32(r)? as usize),
+        // Globals
+        OP_GLOBAL_GET => Op::GlobalGet(read_u32(r)? as usize),
 
         // Dynamic call by func_index on stack
         OP_CALL_DYNAMIC => Op::CallDynamic(read_u32(r)? as usize),

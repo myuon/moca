@@ -144,10 +144,9 @@ pub struct VM {
     jit_loops: HashMap<(usize, usize), CompiledLoop>,
     /// Whether to use the MicroOp interpreter instead of the stack-based interpreter
     use_microop: bool,
-    /// Pre-allocated type descriptor heap references (indexed by type descriptor table index)
-    type_descriptor_refs: Vec<GcRef>,
-    /// Pre-allocated interface descriptor heap references (indexed by interface descriptor table index)
-    interface_descriptor_refs: Vec<GcRef>,
+    /// Global values table.
+    /// Layout: globals[0..T] = type descriptor refs, globals[T..T+I] = interface descriptor refs.
+    globals: Vec<Value>,
 }
 
 impl VM {
@@ -223,32 +222,19 @@ impl VM {
             #[cfg(all(target_arch = "x86_64", feature = "jit"))]
             jit_loops: HashMap::new(),
             use_microop: true,
-            type_descriptor_refs: Vec::new(),
-            interface_descriptor_refs: Vec::new(),
+            globals: Vec::new(),
         }
     }
 
-    /// Pre-allocate interface descriptor heap objects from the chunk's interface descriptor table.
-    /// Layout: [iface_name, method_count]
-    fn init_interface_descriptors(&mut self, chunk: &Chunk) -> Result<(), String> {
-        self.interface_descriptor_refs = Vec::with_capacity(chunk.interface_descriptors.len());
-        for id in &chunk.interface_descriptors {
-            let name_ref = self.heap.alloc_string(id.name.clone())?;
-            let slots = vec![
-                Value::Ref(name_ref),                     // slot 0: iface_name
-                Value::I64(id.method_names.len() as i64), // slot 1: method_count
-            ];
-            let gc_ref = self.heap.alloc_slots(slots)?;
-            self.interface_descriptor_refs.push(gc_ref);
-        }
-        Ok(())
-    }
+    /// Initialize the globals table with type descriptor and interface descriptor heap objects.
+    /// Layout: globals[0..T] = type descriptor refs, globals[T..T+I] = interface descriptor refs.
+    fn init_globals(&mut self, chunk: &Chunk) -> Result<(), String> {
+        let td_count = chunk.type_descriptors.len();
+        let iface_count = chunk.interface_descriptors.len();
+        self.globals = vec![Value::Null; td_count + iface_count];
 
-    /// Pre-allocate type descriptor heap objects from the chunk's type descriptor table.
-    /// Layout: [tag_id, type_name, field_count, ...field_names, ...field_type_desc_refs,
-    ///          aux_count, ...aux_type_desc_refs,
-    ///          vtable_count, ...iface_desc_ref, vtable_ref pairs]
-    fn init_type_descriptors(&mut self, chunk: &Chunk) -> Result<(), String> {
+        // --- Type descriptors (globals[0..T]) ---
+
         // Build tag_name -> index map for resolving field type references
         let tag_to_idx: std::collections::HashMap<&str, usize> = chunk
             .type_descriptors
@@ -258,13 +244,10 @@ impl VM {
             .collect();
 
         // Pass 1: Allocate all type descriptor heap objects with placeholder nils for type refs
-        self.type_descriptor_refs = Vec::with_capacity(chunk.type_descriptors.len());
-        for td in &chunk.type_descriptors {
+        for (i, td) in chunk.type_descriptors.iter().enumerate() {
             let n = td.field_names.len();
             let m = td.aux_type_tags.len();
             let v = td.vtables.len();
-            // field_names + field_type_desc_refs + aux_count + aux_type_desc_refs
-            // + vtable_count + (iface_desc_ref + vtable_ref) * v
             let type_info_slots = 3 + n + n + 1 + m + 1 + 2 * v;
             let mut slots = Vec::with_capacity(type_info_slots);
 
@@ -312,47 +295,60 @@ impl VM {
             }
 
             let gc_ref = self.heap.alloc_slots(slots)?;
-            self.type_descriptor_refs.push(gc_ref);
+            self.globals[i] = Value::Ref(gc_ref);
         }
 
-        // Pass 2: Fill in field type descriptor refs, aux type descriptor refs, and vtable refs
+        // --- Interface descriptors (globals[T..T+I]) ---
+        for (i, id) in chunk.interface_descriptors.iter().enumerate() {
+            let name_ref = self.heap.alloc_string(id.name.clone())?;
+            let slots = vec![
+                Value::Ref(name_ref),                     // slot 0: iface_name
+                Value::I64(id.method_names.len() as i64), // slot 1: method_count
+            ];
+            let gc_ref = self.heap.alloc_slots(slots)?;
+            self.globals[td_count + i] = Value::Ref(gc_ref);
+        }
+
+        // --- Pass 2: Fill in type descriptor cross-references ---
         for (i, td) in chunk.type_descriptors.iter().enumerate() {
             let n = td.field_names.len();
             let m = td.aux_type_tags.len();
+            let td_gc_ref = match self.globals[i] {
+                Value::Ref(r) => r,
+                _ => unreachable!(),
+            };
             // Fill field type desc refs
             for (j, ft_tag) in td.field_type_tags.iter().enumerate() {
                 if let Some(&ft_idx) = tag_to_idx.get(ft_tag.as_str()) {
-                    let ft_ref = self.type_descriptor_refs[ft_idx];
+                    let ft_ref = match self.globals[ft_idx] {
+                        Value::Ref(r) => r,
+                        _ => unreachable!(),
+                    };
                     let slot_index = 3 + n + j;
-                    self.heap.write_slot(
-                        self.type_descriptor_refs[i],
-                        slot_index,
-                        Value::Ref(ft_ref),
-                    )?;
+                    self.heap
+                        .write_slot(td_gc_ref, slot_index, Value::Ref(ft_ref))?;
                 }
             }
             // Fill aux type desc refs
             for (j, aux_tag) in td.aux_type_tags.iter().enumerate() {
                 if let Some(&aux_idx) = tag_to_idx.get(aux_tag.as_str()) {
-                    let aux_ref = self.type_descriptor_refs[aux_idx];
+                    let aux_ref = match self.globals[aux_idx] {
+                        Value::Ref(r) => r,
+                        _ => unreachable!(),
+                    };
                     let slot_index = 3 + 2 * n + 1 + j;
-                    self.heap.write_slot(
-                        self.type_descriptor_refs[i],
-                        slot_index,
-                        Value::Ref(aux_ref),
-                    )?;
+                    self.heap
+                        .write_slot(td_gc_ref, slot_index, Value::Ref(aux_ref))?;
                 }
             }
             // Fill vtable entries
             let vtable_base = 3 + 2 * n + 1 + m + 1;
             for (j, (iface_idx, func_indices)) in td.vtables.iter().enumerate() {
-                // Set iface_desc_ref
-                if let Some(&iface_ref) = self.interface_descriptor_refs.get(*iface_idx) {
-                    self.heap.write_slot(
-                        self.type_descriptor_refs[i],
-                        vtable_base + 2 * j,
-                        Value::Ref(iface_ref),
-                    )?;
+                // Set iface_desc_ref (from globals[td_count + iface_idx])
+                let iface_global_idx = td_count + iface_idx;
+                if let Some(Value::Ref(iface_ref)) = self.globals.get(iface_global_idx) {
+                    self.heap
+                        .write_slot(td_gc_ref, vtable_base + 2 * j, Value::Ref(*iface_ref))?;
                 }
                 // Allocate vtable heap object with func_indices
                 let vtable_slots: Vec<Value> = func_indices
@@ -360,11 +356,8 @@ impl VM {
                     .map(|&fi| Value::I64(fi as i64))
                     .collect();
                 let vtable_ref = self.heap.alloc_slots(vtable_slots)?;
-                self.heap.write_slot(
-                    self.type_descriptor_refs[i],
-                    vtable_base + 2 * j + 1,
-                    Value::Ref(vtable_ref),
-                )?;
+                self.heap
+                    .write_slot(td_gc_ref, vtable_base + 2 * j + 1, Value::Ref(vtable_ref))?;
             }
         }
 
@@ -1123,9 +1116,8 @@ impl VM {
         self.init_call_counts(chunk);
         // Initialize string constant cache
         self.init_string_cache(chunk);
-        // Initialize interface and type descriptor heap objects
-        self.init_interface_descriptors(chunk)?;
-        self.init_type_descriptors(chunk)?;
+        // Initialize globals (type descriptors + interface descriptors)
+        self.init_globals(chunk)?;
         // Initialize JIT function table
         #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
         {
@@ -1190,9 +1182,8 @@ impl VM {
 
     /// Run a chunk and return the result value (used for thread execution).
     pub fn run_and_get_result(&mut self, chunk: &Chunk) -> Result<Value, String> {
-        // Initialize interface and type descriptors for this chunk
-        self.init_interface_descriptors(chunk)?;
-        self.init_type_descriptors(chunk)?;
+        // Initialize globals (type descriptors + interface descriptors)
+        self.init_globals(chunk)?;
 
         // Start with main
         self.frames.push(Frame {
@@ -1270,8 +1261,7 @@ impl VM {
         // Initialize (same as run())
         self.init_call_counts(chunk);
         self.init_string_cache(chunk);
-        self.init_interface_descriptors(chunk)?;
-        self.init_type_descriptors(chunk)?;
+        self.init_globals(chunk)?;
         #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), feature = "jit"))]
         {
             self.jit_function_table = JitFunctionTable::new(chunk.functions.len());
@@ -1772,21 +1762,13 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
-                MicroOp::TypeDescLoad { dst, idx } => {
-                    let gc_ref = self
-                        .type_descriptor_refs
+                MicroOp::GlobalGet { dst, idx } => {
+                    let val = self
+                        .globals
                         .get(idx)
-                        .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
+                        .ok_or_else(|| format!("invalid global index: {}", idx))?;
                     let sb = self.frames.last().unwrap().stack_base;
-                    self.stack[sb + dst.0] = Value::Ref(*gc_ref);
-                }
-                MicroOp::InterfaceDescLoad { dst, idx } => {
-                    let gc_ref = self
-                        .interface_descriptor_refs
-                        .get(idx)
-                        .ok_or_else(|| format!("invalid interface descriptor index: {}", idx))?;
-                    let sb = self.frames.last().unwrap().stack_base;
-                    self.stack[sb + dst.0] = Value::Ref(*gc_ref);
+                    self.stack[sb + dst.0] = *val;
                 }
                 MicroOp::VtableLookup {
                     dst,
@@ -3327,25 +3309,14 @@ impl VM {
             }
 
             // ========================================
-            // Type Descriptor
+            // Globals
             // ========================================
-            Op::TypeDescLoad(idx) => {
-                let gc_ref = self
-                    .type_descriptor_refs
+            Op::GlobalGet(idx) => {
+                let val = self
+                    .globals
                     .get(idx)
-                    .ok_or_else(|| format!("invalid type descriptor index: {}", idx))?;
-                self.stack.push(Value::Ref(*gc_ref));
-            }
-
-            // ========================================
-            // Interface Descriptor
-            // ========================================
-            Op::InterfaceDescLoad(idx) => {
-                let gc_ref = self
-                    .interface_descriptor_refs
-                    .get(idx)
-                    .ok_or_else(|| format!("invalid interface descriptor index: {}", idx))?;
-                self.stack.push(Value::Ref(*gc_ref));
+                    .ok_or_else(|| format!("invalid global index: {}", idx))?;
+                self.stack.push(*val);
             }
 
             // ========================================
@@ -3688,14 +3659,9 @@ impl VM {
             roots.push(Value::Ref(*r));
         }
 
-        // Add type descriptor references as roots
-        for r in &self.type_descriptor_refs {
-            roots.push(Value::Ref(*r));
-        }
-
-        // Add interface descriptor references as roots
-        for r in &self.interface_descriptor_refs {
-            roots.push(Value::Ref(*r));
+        // Add globals as roots
+        for val in &self.globals {
+            roots.push(*val);
         }
 
         self.heap.collect(&roots);

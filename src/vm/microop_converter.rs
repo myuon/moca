@@ -1705,24 +1705,14 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::StringConst { dst, idx: *idx });
                 vstack.push(Vse::RegRef(dst));
             }
-            Op::TypeDescLoad(idx) => {
+            Op::GlobalGet(idx) => {
                 let dst = alloc_temp(
                     &mut next_temp,
                     &mut max_temp,
                     &mut vreg_types,
                     ValueType::Ref,
                 );
-                micro_ops.push(MicroOp::TypeDescLoad { dst, idx: *idx });
-                vstack.push(Vse::RegRef(dst));
-            }
-            Op::InterfaceDescLoad(idx) => {
-                let dst = alloc_temp(
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                    ValueType::Ref,
-                );
-                micro_ops.push(MicroOp::InterfaceDescLoad { dst, idx: *idx });
+                micro_ops.push(MicroOp::GlobalGet { dst, idx: *idx });
                 vstack.push(Vse::RegRef(dst));
             }
             Op::VtableLookup => {

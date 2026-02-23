@@ -491,11 +491,8 @@ impl Verifier {
             // Dynamic call by func_index on stack
             Op::CallDynamic(argc) => (argc + 1, 1), // pops func_index + argc args, pushes result
 
-            // Type Descriptor
-            Op::TypeDescLoad(_) => (0, 1), // pushes type descriptor ref
-
-            // Interface Descriptor
-            Op::InterfaceDescLoad(_) => (0, 1), // pushes interface descriptor ref
+            // Globals
+            Op::GlobalGet(_) => (0, 1), // pushes global value
 
             // Vtable lookup
             Op::VtableLookup => (2, 1), // pops iface_desc_ref + type_info_ref, pushes vtable_ref or null

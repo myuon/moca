@@ -1893,14 +1893,9 @@ impl<'a> Disassembler<'a> {
                 self.output.push_str(&format!("CallDynamic {}", argc));
             }
 
-            // Type Descriptor
-            Op::TypeDescLoad(idx) => {
-                self.output.push_str(&format!("TypeDescLoad {}", idx));
-            }
-
-            // Interface Descriptor
-            Op::InterfaceDescLoad(idx) => {
-                self.output.push_str(&format!("InterfaceDescLoad {}", idx));
+            // Globals
+            Op::GlobalGet(idx) => {
+                self.output.push_str(&format!("GlobalGet {}", idx));
             }
             Op::VtableLookup => {
                 self.output.push_str("VtableLookup");
@@ -2406,30 +2401,26 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(dst),
             format_vreg(size)
         )),
-        MicroOp::TypeDescLoad { dst, idx } => {
-            let tag = chunk
-                .type_descriptors
-                .get(*idx)
-                .map(|td| td.tag_name.as_str())
-                .unwrap_or("<unknown>");
+        MicroOp::GlobalGet { dst, idx } => {
+            let td_count = chunk.type_descriptors.len();
+            let comment = if *idx < td_count {
+                chunk
+                    .type_descriptors
+                    .get(*idx)
+                    .map(|td| td.tag_name.as_str())
+                    .unwrap_or("<unknown>")
+            } else {
+                chunk
+                    .interface_descriptors
+                    .get(*idx - td_count)
+                    .map(|id| id.name.as_str())
+                    .unwrap_or("<unknown>")
+            };
             output.push_str(&format!(
-                "{} = TypeDescLoad {} ; \"{}\"",
+                "{} = GlobalGet {} ; \"{}\"",
                 format_vreg(dst),
                 idx,
-                tag
-            ));
-        }
-        MicroOp::InterfaceDescLoad { dst, idx } => {
-            let name = chunk
-                .interface_descriptors
-                .get(*idx)
-                .map(|id| id.name.as_str())
-                .unwrap_or("<unknown>");
-            output.push_str(&format!(
-                "{} = InterfaceDescLoad {} ; \"{}\"",
-                format_vreg(dst),
-                idx,
-                name
+                comment
             ));
         }
         MicroOp::VtableLookup {
