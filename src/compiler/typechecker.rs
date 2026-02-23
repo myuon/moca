@@ -1152,8 +1152,8 @@ impl TypeChecker {
                 "string" => Type::String,
                 _ => unreachable!(),
             })
-        } else if is_builtin_type {
-            None // Builtin types don't have a struct definition
+        } else if is_builtin_type && impl_block.interface_name.is_none() {
+            None // Builtin types without interface impl don't need self_type
         } else if let Some(info) = self.structs.get(struct_name).cloned() {
             // For generic structs, create GenericStruct with type params
             if !impl_block.type_params.is_empty() {
@@ -1192,8 +1192,9 @@ impl TypeChecker {
                     .get(struct_name)
                     .and_then(|methods| methods.get(&method.name))
                     .cloned()
-            } else if is_builtin_type {
-                // For builtin types (Vec/Map), skip body checking entirely.
+            } else if is_builtin_type && impl_block.interface_name.is_none() {
+                // For builtin types (Vec/Map) without an interface impl,
+                // skip body checking entirely.
                 // Bodies use low-level intrinsics that aren't type-checkable.
                 // Method signatures are already registered via register_impl_methods.
                 None

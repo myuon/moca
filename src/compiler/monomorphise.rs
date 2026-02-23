@@ -51,7 +51,7 @@ impl Instantiation {
 }
 
 /// Mangle a type into a string suitable for use in a function name.
-fn mangle_type(ty: &Type) -> String {
+pub fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
