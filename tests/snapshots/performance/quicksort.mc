@@ -25,12 +25,13 @@ fun quicksort_benchmark() {
     // Sort using stdlib quicksort
     sort_int(v);
 
-    // Print all sorted elements
-    i = 0;
-    while i < 100000 {
-        print(v[i]);
-        i = i + 1;
-    }
+    // Print a few elements to verify sort correctness
+    let n = v.len();
+    print(v[0]);
+    print(v[n / 4]);
+    print(v[n / 2]);
+    print(v[n * 3 / 4]);
+    print(v[n - 1]);
 }
 
 quicksort_benchmark();

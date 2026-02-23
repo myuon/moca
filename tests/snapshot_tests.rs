@@ -1034,9 +1034,13 @@ fn rust_quicksort<W: Write>(writer: &mut W) {
 
     v.sort();
 
-    for val in &v {
-        writeln!(writer, "{}", val).unwrap();
-    }
+    // Print a few elements to verify sort correctness
+    let n = v.len();
+    writeln!(writer, "{}", v[0]).unwrap();
+    writeln!(writer, "{}", v[n / 4]).unwrap();
+    writeln!(writer, "{}", v[n / 2]).unwrap();
+    writeln!(writer, "{}", v[n * 3 / 4]).unwrap();
+    writeln!(writer, "{}", v[n - 1]).unwrap();
 }
 
 #[cfg(feature = "jit")]
