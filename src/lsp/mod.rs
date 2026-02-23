@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use tower_lsp::jsonrpc::Result;
@@ -16,6 +17,8 @@ pub struct MocaLanguageServer {
     client: Client,
     /// Document cache: URI -> source text
     documents: RwLock<HashMap<Url, String>>,
+    /// Workspace root path
+    workspace_root: RwLock<Option<PathBuf>>,
 }
 
 impl MocaLanguageServer {
@@ -23,7 +26,49 @@ impl MocaLanguageServer {
         Self {
             client,
             documents: RwLock::new(HashMap::new()),
+            workspace_root: RwLock::new(None),
         }
+    }
+
+    /// Scan workspace for .mc files and index them.
+    fn scan_workspace(&self, root: &Path) {
+        let mc_files = Self::find_mc_files(root);
+        let mut docs = self.documents.write().unwrap();
+
+        for path in mc_files {
+            if let (Ok(source), Ok(uri)) =
+                (std::fs::read_to_string(&path), Url::from_file_path(&path))
+            {
+                docs.entry(uri).or_insert(source);
+            }
+        }
+    }
+
+    /// Recursively find all .mc files under a directory.
+    fn find_mc_files(dir: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return files;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip hidden dirs and common non-source dirs
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with('.') || name == "target" || name == "node_modules"
+                    })
+                {
+                    continue;
+                }
+                files.extend(Self::find_mc_files(&path));
+            } else if path.extension().is_some_and(|ext| ext == "mc") {
+                files.push(path);
+            }
+        }
+        files
     }
 
     /// Parse a document and return the AST (if successful).
@@ -143,7 +188,24 @@ fn parse_error_to_diagnostic(error: &str) -> Option<Diagnostic> {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for MocaLanguageServer {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Capture workspace root from rootUri or workspaceFolders
+        let root_path = params
+            .root_uri
+            .as_ref()
+            .and_then(|uri| uri.to_file_path().ok())
+            .or_else(|| {
+                params
+                    .workspace_folders
+                    .as_ref()
+                    .and_then(|folders| folders.first().and_then(|f| f.uri.to_file_path().ok()))
+            });
+
+        if let Some(root) = root_path {
+            let mut wr = self.workspace_root.write().unwrap();
+            *wr = Some(root);
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -170,9 +232,29 @@ impl LanguageServer for MocaLanguageServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "moca language server initialized")
-            .await;
+        // Scan workspace for .mc files
+        let root = {
+            let wr = self.workspace_root.read().unwrap();
+            wr.clone()
+        };
+
+        if let Some(root) = root {
+            self.scan_workspace(&root);
+            let doc_count = self.documents.read().unwrap().len();
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "moca language server initialized — indexed {} .mc files",
+                        doc_count
+                    ),
+                )
+                .await;
+        } else {
+            self.client
+                .log_message(MessageType::INFO, "moca language server initialized")
+                .await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
