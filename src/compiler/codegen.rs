@@ -110,10 +110,7 @@ impl Codegen {
             Type::Float => ValueType::F64,
             Type::Bool => ValueType::I32,
             Type::String => ValueType::Ref,
-            Type::Array(_)
-            | Type::Vector(_)
-            | Type::Map(_, _)
-            | Type::Struct { .. }
+            Type::Struct { .. }
             | Type::GenericStruct { .. }
             | Type::Nullable(_)
             | Type::Ptr(_)
@@ -126,14 +123,14 @@ impl Codegen {
     fn infer_index_element_type(object_type: &Option<Type>) -> ValueType {
         match object_type {
             Some(Type::String) => ValueType::I64, // string[i] returns char code (int)
-            Some(Type::Array(elem)) | Some(Type::Vector(elem)) => Self::type_to_value_type(elem),
-            Some(Type::GenericStruct {
-                name, type_args, ..
-            }) if name == "Vec" && !type_args.is_empty() => Self::type_to_value_type(&type_args[0]),
-            Some(Type::GenericStruct {
-                name, type_args, ..
-            }) if name == "Map" && type_args.len() >= 2 => Self::type_to_value_type(&type_args[1]),
-            Some(Type::Map(_, val)) => Self::type_to_value_type(val),
+            Some(t) if t.is_array() || t.is_vec() => t
+                .collection_element_type()
+                .map(Self::type_to_value_type)
+                .unwrap_or(ValueType::I64),
+            Some(t) if t.is_map() => t
+                .map_key_value_types()
+                .map(|(_, v)| Self::type_to_value_type(v))
+                .unwrap_or(ValueType::I64),
             _ => ValueType::I64, // fallback
         }
     }
@@ -557,10 +554,7 @@ impl Codegen {
                 // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
                 let has_ptr_layout = object_type
                     .as_ref()
-                    .map(|t| {
-                        matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
-                            || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
-                    })
+                    .map(|t| t.is_array() || t.is_vec() || matches!(t, Type::String))
                     .unwrap_or(false);
 
                 if has_ptr_layout {
@@ -934,10 +928,7 @@ impl Codegen {
                 // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
                 let has_ptr_layout = object_type
                     .as_ref()
-                    .map(|t| {
-                        matches!(t, Type::Vector(_) | Type::Array(_) | Type::String)
-                            || matches!(t, Type::GenericStruct { name, .. } if name == "Vec")
-                    })
+                    .map(|t| t.is_array() || t.is_vec() || matches!(t, Type::String))
                     .unwrap_or(false);
 
                 if has_ptr_layout {

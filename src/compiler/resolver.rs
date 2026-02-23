@@ -836,11 +836,9 @@ impl<'a> Resolver<'a> {
                     }
                 }
             },
-            Some(TypeAnnotation::Array(_)) => Some(Type::Array(Box::new(Type::Any))),
-            Some(TypeAnnotation::Vec(_)) => Some(Type::Vector(Box::new(Type::Any))),
-            Some(TypeAnnotation::Map(_, _)) => {
-                Some(Type::Map(Box::new(Type::Any), Box::new(Type::Any)))
-            }
+            Some(TypeAnnotation::Array(_)) => Some(Type::array(Type::Any)),
+            Some(TypeAnnotation::Vec(_)) => Some(Type::vector(Type::Any)),
+            Some(TypeAnnotation::Map(_, _)) => Some(Type::map(Type::Any, Type::Any)),
             Some(TypeAnnotation::Nullable(inner)) => {
                 let inner_ty = self
                     .type_from_annotation(&Some(*inner.clone()))
@@ -898,9 +896,6 @@ impl<'a> Resolver<'a> {
     fn struct_name_from_type(ty: &Type) -> Option<String> {
         match ty {
             Type::Struct { name, .. } | Type::GenericStruct { name, .. } => Some(name.clone()),
-            Type::Vector(_) => Some("Vec".to_string()),
-            Type::Array(_) => Some("Array".to_string()),
-            Type::Map(_, _) => Some("Map".to_string()),
             _ => None,
         }
     }
@@ -2207,7 +2202,7 @@ impl<'a> Resolver<'a> {
                             .collect();
                         (names, type_tags)
                     }
-                    Type::Array(_) => {
+                    t if t.is_array() => {
                         // Array<T> has runtime layout [data_ptr, len]
                         (vec!["data".to_string(), "len".to_string()], vec![])
                     }
@@ -2405,13 +2400,6 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
             format!("{}_{}", name, args)
         }
         Type::Nullable(inner) => format!("{}?", type_to_dyn_tag_name(inner)),
-        Type::Array(elem) => format!("Array_{}", type_to_dyn_tag_name(elem)),
-        Type::Vector(elem) => format!("Vec_{}", type_to_dyn_tag_name(elem)),
-        Type::Map(k, v) => format!(
-            "Map_{}_{}",
-            type_to_dyn_tag_name(k),
-            type_to_dyn_tag_name(v)
-        ),
         _ => ty.to_string(),
     }
 }
@@ -2426,8 +2414,6 @@ fn type_to_impl_name(ty: &Type) -> String {
         Type::String => "string".to_string(),
         Type::Struct { name, .. } => name.clone(),
         Type::GenericStruct { name, .. } => name.clone(),
-        Type::Vector(_) => "vec".to_string(),
-        Type::Map(_, _) => "map".to_string(),
         _ => ty.to_string(),
     }
 }
@@ -2438,12 +2424,6 @@ fn compute_aux_type_tags(ty: &Type) -> Vec<String> {
     match ty {
         Type::Nullable(inner) => {
             vec![type_to_dyn_tag_name(inner)]
-        }
-        Type::Vector(elem) | Type::Array(elem) => {
-            vec![type_to_dyn_tag_name(elem)]
-        }
-        Type::Map(k, v) => {
-            vec![type_to_dyn_tag_name(k), type_to_dyn_tag_name(v)]
         }
         Type::GenericStruct {
             type_args, fields, ..
@@ -2478,8 +2458,8 @@ fn compute_aux_type_tags(ty: &Type) -> Vec<String> {
             if name.starts_with("Vec_") || name.starts_with("Array_") {
                 let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
                 if field_names == ["data", "len", "cap"] || field_names == ["data", "len"] {
-                    // Extract element type from field "data" which should be an Array
-                    if let Some((_, Type::Array(elem))) = fields.first() {
+                    // Extract element type from field "data" which should be a ptr<T>
+                    if let Some((_, Type::Ptr(elem))) = fields.first() {
                         return vec![type_to_dyn_tag_name(elem)];
                     }
                 }
@@ -2521,14 +2501,18 @@ fn collect_nested_type_descriptors_inner(
     // Extract field info for this type
     let (field_names, field_type_tags): (Vec<String>, Vec<String>) = match ty {
         Type::Struct { fields, .. } | Type::GenericStruct { fields, .. } => {
-            let names = fields.iter().map(|(n, _)| n.clone()).collect();
-            let tags = fields
-                .iter()
-                .map(|(_, t)| type_to_dyn_tag_name(t))
-                .collect();
-            (names, tags)
+            if fields.is_empty() && ty.is_array() {
+                // Array<T> with empty fields: use runtime layout [data_ptr, len]
+                (vec!["data".to_string(), "len".to_string()], vec![])
+            } else {
+                let names = fields.iter().map(|(n, _)| n.clone()).collect();
+                let tags = fields
+                    .iter()
+                    .map(|(_, t)| type_to_dyn_tag_name(t))
+                    .collect();
+                (names, tags)
+            }
         }
-        Type::Array(_) => (vec!["data".to_string(), "len".to_string()], vec![]),
         _ => (vec![], vec![]),
     };
     let aux_type_tags = compute_aux_type_tags(ty);
@@ -2546,13 +2530,6 @@ fn collect_nested_type_descriptors_inner(
     match ty {
         Type::Nullable(inner) => {
             collect_nested_type_descriptors_inner(inner, result, visited);
-        }
-        Type::Vector(elem) | Type::Array(elem) => {
-            collect_nested_type_descriptors_inner(elem, result, visited);
-        }
-        Type::Map(key, val) => {
-            collect_nested_type_descriptors_inner(key, result, visited);
-            collect_nested_type_descriptors_inner(val, result, visited);
         }
         Type::GenericStruct { type_args, .. } => {
             for arg in type_args {

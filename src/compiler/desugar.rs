@@ -57,7 +57,6 @@ impl Desugar {
     /// Extract the key type from a Map type (if known and concrete).
     fn extract_map_key_type(obj_type: &Option<Type>) -> Option<&Type> {
         match obj_type.as_ref()? {
-            Type::Map(key_type, _) => Some(key_type),
             Type::GenericStruct {
                 name, type_args, ..
             } if name == "Map" && !type_args.is_empty() => Some(&type_args[0]),
@@ -90,13 +89,10 @@ impl Desugar {
         match obj_type {
             // Map<K,V> generic structs should be desugared to get/set method calls
             Type::GenericStruct { name, .. } if name == "Map" => true,
-            // Vec<T> uses ptr-based layout and is handled directly in codegen
-            // with HeapLoad2/HeapStore2 for better performance
-            Type::GenericStruct { name, .. } if name == "Vec" => false,
-            // Legacy Vector type - handled directly in codegen (ptr-based layout)
-            Type::Vector(_) => false,
-            // Array, String, and other types should NOT be desugared
-            Type::Array(_) | Type::String => false,
+            // Vec<T>/Array<T> uses ptr-based layout and is handled directly in codegen
+            Type::GenericStruct { name, .. } if name == "Vec" || name == "Array" => false,
+            // String and other types should NOT be desugared
+            Type::String => false,
             // Struct types should NOT be desugared
             Type::Struct { .. } => false,
             // Default: don't desugar
@@ -652,11 +648,18 @@ impl Desugar {
                         .map(|e| self.desugar_expr(e))
                         .expect("__print_dyn_fallback requires 1 argument");
 
-                    // For struct types: use inspect(v as dyn) for rich field formatting
-                    if matches!(
-                        arg.inferred_type(),
-                        Some(Type::Struct { .. } | Type::GenericStruct { .. })
-                    ) {
+                    // For struct types (excluding Array/Vec/Map containers):
+                    // use inspect(v as dyn) for rich field formatting
+                    let is_container = arg
+                        .inferred_type()
+                        .map(|t| t.is_array() || t.is_vec() || t.is_map())
+                        .unwrap_or(false);
+                    if !is_container
+                        && matches!(
+                            arg.inferred_type(),
+                            Some(Type::Struct { .. } | Type::GenericStruct { .. })
+                        )
+                    {
                         return Expr::Call {
                             callee: "inspect".to_string(),
                             type_args: vec![],

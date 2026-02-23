@@ -61,9 +61,6 @@ fn mangle_type(ty: &Type) -> String {
         Type::Ptr(elem) => format!("ptr_{}", mangle_type(elem)),
         Type::Any => "any".to_string(),
         Type::Dyn => "dyn".to_string(),
-        Type::Array(elem) => format!("array_{}", mangle_type(elem)),
-        Type::Vector(elem) => format!("vec_{}", mangle_type(elem)),
-        Type::Map(k, v) => format!("map_{}_{}", mangle_type(k), mangle_type(v)),
         Type::Nullable(inner) => format!("opt_{}", mangle_type(inner)),
         Type::Function { params, ret } => {
             let params_str = params.iter().map(mangle_type).collect::<Vec<_>>().join("_");
@@ -73,12 +70,18 @@ fn mangle_type(ty: &Type) -> String {
         Type::GenericStruct {
             name, type_args, ..
         } => {
+            let display_name = match name.as_str() {
+                "Array" => "array",
+                "Vec" => "vec",
+                "Map" => "map",
+                _ => name.as_str(),
+            };
             let args_str = type_args
                 .iter()
                 .map(mangle_type)
                 .collect::<Vec<_>>()
                 .join("_");
-            format!("{}_{}", name, args_str)
+            format!("{}_{}", display_name, args_str)
         }
         Type::Var(id) => format!("T{}", id),
         Type::Param { name } => name.clone(),
@@ -689,11 +692,6 @@ fn substitute_type_in_type(ty: &Type, type_map: &HashMap<String, Type>) -> Type 
                 .collect(),
             ret: Box::new(substitute_type_in_type(ret, type_map)),
         },
-        Type::Vector(elem) => Type::Vector(Box::new(substitute_type_in_type(elem, type_map))),
-        Type::Map(k, v) => Type::Map(
-            Box::new(substitute_type_in_type(k, type_map)),
-            Box::new(substitute_type_in_type(v, type_map)),
-        ),
         Type::GenericStruct {
             name,
             type_args,
@@ -785,12 +783,6 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
             type_args: vec![type_to_annotation(elem)],
         },
         Type::Any => TypeAnnotation::Named("any".to_string()),
-        Type::Array(elem) => TypeAnnotation::Array(Box::new(type_to_annotation(elem))),
-        Type::Vector(elem) => TypeAnnotation::Vec(Box::new(type_to_annotation(elem))),
-        Type::Map(key, value) => TypeAnnotation::Map(
-            Box::new(type_to_annotation(key)),
-            Box::new(type_to_annotation(value)),
-        ),
         Type::Nullable(inner) => TypeAnnotation::Nullable(Box::new(type_to_annotation(inner))),
         Type::Function { params, ret } => TypeAnnotation::Function {
             params: params.iter().map(type_to_annotation).collect(),
@@ -799,10 +791,28 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
         Type::Struct { name, .. } => TypeAnnotation::Named(name.clone()),
         Type::GenericStruct {
             name, type_args, ..
-        } => TypeAnnotation::Generic {
-            name: name.clone(),
-            type_args: type_args.iter().map(type_to_annotation).collect(),
-        },
+        } => {
+            let ta: Vec<_> = type_args.iter().map(type_to_annotation).collect();
+            match name.as_str() {
+                "Array" if ta.len() == 1 => {
+                    TypeAnnotation::Array(Box::new(ta.into_iter().next().unwrap()))
+                }
+                "Vec" if ta.len() == 1 => {
+                    TypeAnnotation::Vec(Box::new(ta.into_iter().next().unwrap()))
+                }
+                "Map" if ta.len() == 2 => {
+                    let mut iter = ta.into_iter();
+                    TypeAnnotation::Map(
+                        Box::new(iter.next().unwrap()),
+                        Box::new(iter.next().unwrap()),
+                    )
+                }
+                _ => TypeAnnotation::Generic {
+                    name: name.clone(),
+                    type_args: ta,
+                },
+            }
+        }
         Type::Var(_) => TypeAnnotation::Named("any".to_string()), // Fallback for unresolved vars
         Type::Param { name } => TypeAnnotation::Named(name.clone()),
         Type::InterfaceBound { interface_name } => TypeAnnotation::Named(interface_name.clone()),
@@ -1723,8 +1733,8 @@ mod tests {
     fn test_mangle_type() {
         assert_eq!(mangle_type(&Type::Int), "int");
         assert_eq!(mangle_type(&Type::String), "string");
-        assert_eq!(mangle_type(&Type::Array(Box::new(Type::Int))), "array_int");
-        assert_eq!(mangle_type(&Type::Vector(Box::new(Type::Int))), "vec_int");
+        assert_eq!(mangle_type(&Type::array(Type::Int)), "array_int");
+        assert_eq!(mangle_type(&Type::vector(Type::Int)), "vec_int");
     }
 
     #[test]
