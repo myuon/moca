@@ -1306,7 +1306,7 @@ fn snapshot_http() {
 }
 
 // ============================================================================
-// Time Syscall Tests
+// Time Hostcall Tests
 // ============================================================================
 
 /// Format epoch seconds as "YYYY-MM-DD HH:MM:SS" in UTC (same algorithm as VM).
@@ -1337,14 +1337,14 @@ fn format_epoch_secs_utc(epoch_secs: i64) -> String {
     )
 }
 
-/// Test time syscalls: verify time accuracy and format correctness.
+/// Test time hostcalls: verify time accuracy and format correctness.
 #[test]
-fn snapshot_time_syscall() {
+fn snapshot_time_hostcall() {
     let test_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("snapshots")
         .join("basic")
-        .join("syscall_time.mc");
+        .join("hostcall_time.mc");
 
     let config = RuntimeConfig::default();
     let before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -1353,7 +1353,7 @@ fn snapshot_time_syscall() {
 
     assert_eq!(
         exitcode, 0,
-        "syscall_time.mc failed with exit code {}\nstderr: {}",
+        "hostcall_time.mc failed with exit code {}\nstderr: {}",
         exitcode, stderr
     );
 

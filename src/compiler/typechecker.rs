@@ -2965,17 +2965,17 @@ impl TypeChecker {
                 }
                 Some(Type::Int)
             }
-            "__syscall" => {
-                // __syscall(num, ...args) -> Int | String
-                // First argument must be syscall number (Int), rest depends on syscall
+            "__hostcall" => {
+                // __hostcall(num, ...args) -> Int | String
+                // First argument must be hostcall number (Int), rest depends on hostcall
                 if args.is_empty() {
                     self.errors.push(TypeError::new(
-                        "__syscall expects at least 1 argument (syscall number)",
+                        "__hostcall expects at least 1 argument (hostcall number)",
                         span,
                     ));
                     return Some(self.fresh_var());
                 }
-                // First arg must be Int (syscall number)
+                // First arg must be Int (hostcall number)
                 let num_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&num_type, &Type::Int, span) {
                     self.errors.push(e);
@@ -2984,7 +2984,7 @@ impl TypeChecker {
                 for arg in args.iter_mut().skip(1) {
                     self.infer_expr(arg, env);
                 }
-                // Return type depends on syscall (can be Int or String for read)
+                // Return type depends on hostcall (can be Int or String for read)
                 Some(self.fresh_var())
             }
             "len" => {

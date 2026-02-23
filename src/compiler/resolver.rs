@@ -371,8 +371,8 @@ impl<'a> Resolver<'a> {
                 "send".to_string(),
                 "recv".to_string(),
                 "join".to_string(),
-                // Syscall operations (generic syscall builtin)
-                "__syscall".to_string(),
+                // Hostcall operations (generic hostcall builtin)
+                "__hostcall".to_string(),
                 // Low-level heap intrinsics (for stdlib implementation)
                 "__heap_load".to_string(),
                 "__heap_store".to_string(),

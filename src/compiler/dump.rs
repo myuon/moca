@@ -1854,7 +1854,7 @@ impl<'a> Disassembler<'a> {
             Op::HeapStore2 => self.output.push_str("HeapStore2"),
             Op::HeapOffsetRef => self.output.push_str("HeapOffsetRef"),
             // System / Builtins
-            Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
+            Op::Hostcall(num, argc) => self.output.push_str(&format!("Hostcall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
             Op::UMul128Hi => self.output.push_str("UMul128Hi"),
             Op::TypeOf => self.output.push_str("TypeOf"),
