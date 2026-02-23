@@ -1856,9 +1856,9 @@ impl<'a> Disassembler<'a> {
             // System / Builtins
             Op::Syscall(num, argc) => self.output.push_str(&format!("Syscall {} {}", num, argc)),
             Op::GcHint(size) => self.output.push_str(&format!("GcHint {}", size)),
-            Op::ValueToString => self.output.push_str("ValueToString"),
-            Op::ParseInt => self.output.push_str("ParseInt"),
             Op::UMul128Hi => self.output.push_str("UMul128Hi"),
+            Op::TypeOf => self.output.push_str("TypeOf"),
+            Op::HeapSize => self.output.push_str("HeapSize"),
             // Exception handling
             Op::Throw => self.output.push_str("Throw"),
             Op::TryBegin(target) => self.output.push_str(&format!("TryBegin {}", target)),
@@ -2464,11 +2464,6 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
                 s
             ))
         }
-        MicroOp::ValueToString { dst, src } => output.push_str(&format!(
-            "ValueToString {}, {}",
-            format_vreg(dst),
-            format_vreg(src)
-        )),
         // Stack bridge
         MicroOp::StackPush { src } => output.push_str(&format!("StackPush {}", format_vreg(src))),
         MicroOp::StackPop { dst } => output.push_str(&format!("StackPop {}", format_vreg(dst))),
@@ -2600,9 +2595,9 @@ mod tests {
 
     #[test]
     fn test_resolved_builtin() {
-        let resolved = resolve("__value_to_string(42);");
+        let resolved = resolve("__typeof(42);");
         let output = format_resolved(&resolved);
-        assert!(output.contains("Builtin(__value_to_string)"));
+        assert!(output.contains("Builtin(__typeof)"));
     }
 
     // Bytecode disassembler tests
@@ -2618,18 +2613,18 @@ mod tests {
 
     #[test]
     fn test_bytecode_simple() {
-        let chunk = compile("let x = 42; __value_to_string(x);");
+        let chunk = compile("let x = 42; __typeof(x);");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Main =="));
         assert!(output.contains("I64Const 42"));
         assert!(output.contains("LocalSet"));
         assert!(output.contains("LocalGet"));
-        assert!(output.contains("ValueToString"));
+        assert!(output.contains("TypeOf"));
     }
 
     #[test]
     fn test_bytecode_function() {
-        let chunk = compile("fun add(a, b) { return a + b; } __value_to_string(add(1, 2));");
+        let chunk = compile("fun add(a, b) { return a + b; } __typeof(add(1, 2));");
         let output = format_bytecode(&chunk);
         assert!(output.contains("== Function[0]: add"));
         assert!(output.contains("LocalGet 0"));
@@ -2641,7 +2636,7 @@ mod tests {
 
     #[test]
     fn test_bytecode_control_flow() {
-        let chunk = compile("if true { __value_to_string(1); } else { __value_to_string(2); }");
+        let chunk = compile("if true { __typeof(1); } else { __typeof(2); }");
         let output = format_bytecode(&chunk);
         assert!(output.contains("I32Const 1"));
         assert!(output.contains("BrIfFalse"));
@@ -2650,7 +2645,7 @@ mod tests {
 
     #[test]
     fn test_bytecode_string_constants() {
-        let chunk = compile(r#"let s = "hello"; __value_to_string(s);"#);
+        let chunk = compile(r#"let s = "hello"; __typeof(s);"#);
         let output = format_bytecode(&chunk);
         assert!(output.contains("== String Constants =="));
         assert!(output.contains("\"hello\""));

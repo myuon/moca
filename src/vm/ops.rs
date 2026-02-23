@@ -172,9 +172,11 @@ pub enum Op {
     // ========================================
     Syscall(usize, usize),
     GcHint(usize),
-    ValueToString,
-    ParseInt,
     UMul128Hi,
+    /// Returns the runtime type tag of a value: 0=I64, 1=F64, 2=Bool, 3=Null, 4=Ref
+    TypeOf,
+    /// Returns the number of slots in a heap object
+    HeapSize,
 
     // ========================================
     // Exception Handling
@@ -333,9 +335,9 @@ impl Op {
             Op::HeapOffsetRef => "HeapOffsetRef",
             Op::Syscall(_, _) => "Syscall",
             Op::GcHint(_) => "GcHint",
-            Op::ValueToString => "ValueToString",
-            Op::ParseInt => "ParseInt",
             Op::UMul128Hi => "UMul128Hi",
+            Op::TypeOf => "TypeOf",
+            Op::HeapSize => "HeapSize",
             Op::Throw => "Throw",
             Op::TryBegin(_) => "TryBegin",
             Op::TryEnd => "TryEnd",

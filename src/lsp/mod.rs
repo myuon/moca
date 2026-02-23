@@ -238,15 +238,7 @@ impl LanguageServer for MocaLanguageServer {
             "nil", "try", "catch", "throw", "import",
         ];
 
-        let builtins = [
-            "print",
-            "len",
-            "push",
-            "pop",
-            "type_of",
-            "to_string",
-            "parse_int",
-        ];
+        let builtins = ["print", "len", "push", "pop", "type_of", "to_string"];
 
         let mut items: Vec<CompletionItem> = keywords
             .iter()

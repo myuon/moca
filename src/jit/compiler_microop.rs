@@ -396,7 +396,6 @@ impl MicroOpJitCompiler {
                 | MicroOp::HeapLoadDyn { dst, .. }
                 | MicroOp::HeapLoad2 { dst, .. }
                 | MicroOp::StackPop { dst }
-                | MicroOp::ValueToString { dst, .. }
                 | MicroOp::HeapAlloc { dst, .. }
                 | MicroOp::HeapAllocDynSimple { dst, .. }
                 | MicroOp::StringConst { dst, .. } => {
@@ -569,7 +568,6 @@ impl MicroOpJitCompiler {
 
             // String operations
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
-            MicroOp::ValueToString { .. } => Err("ValueToString not supported in JIT".to_string()),
             // Heap allocation operations
             MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
             MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),

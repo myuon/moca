@@ -1777,24 +1777,6 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::UMul128Hi { dst, a, b });
                 vstack.push(Vse::Reg(dst));
             }
-            Op::ValueToString => {
-                let src = pop_vreg(
-                    &mut vstack,
-                    &mut micro_ops,
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                );
-                let dst = alloc_temp(
-                    &mut next_temp,
-                    &mut max_temp,
-                    &mut vreg_types,
-                    ValueType::I64,
-                );
-                micro_ops.push(MicroOp::ValueToString { dst, src });
-                vstack.push(Vse::Reg(dst));
-            }
-
             // ============================================================
             // Heap allocation operations
             // ============================================================

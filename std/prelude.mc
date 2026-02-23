@@ -649,6 +649,57 @@ fun _bool_to_string(b: bool) -> string {
     return "false";
 }
 
+// Internal: convert any untyped value to string using runtime type inspection.
+// Uses __typeof to determine the Value variant and dispatches accordingly.
+fun __value_to_string(v: any) -> string {
+    let t = __typeof(v);
+    if t == 0 { return _int_to_string(v); }
+    if t == 1 { return _float_to_string(v); }
+    if t == 2 { return _bool_to_string(v); }
+    if t == 3 { return "nil"; }
+    // t == 4: ref — try to detect string vs array/struct
+    let size = __heap_size(v);
+    if size == 2 {
+        let slot0 = __heap_load(v, 0);
+        let slot1 = __heap_load(v, 1);
+        if __typeof(slot0) == 4 && __typeof(slot1) == 0 {
+            // Candidate: string layout [data_ptr, len]
+            let data = slot0;
+            let slen: int = slot1;
+            let is_str = slen > 0;
+            let i = 0;
+            while i < slen && is_str {
+                let c: int = __heap_load(data, i);
+                if c < 32 && c != 10 && c != 13 && c != 9 {
+                    is_str = false;
+                }
+                i = i + 1;
+            }
+            if is_str {
+                return __alloc_string(data, slen);
+            }
+            // Display as array
+            let result = "[";
+            let j = 0;
+            while j < slen {
+                if j > 0 { result = result + ", "; }
+                result = result + __value_to_string(__heap_load(data, j));
+                j = j + 1;
+            }
+            return result + "]";
+        }
+    }
+    // Fallback: display all slots as array
+    let result = "[";
+    let i = 0;
+    while i < size {
+        if i > 0 { result = result + ", "; }
+        result = result + __value_to_string(__heap_load(v, i));
+        i = i + 1;
+    }
+    return result + "]";
+}
+
 // ============================================================================
 // ToString Interface
 // ============================================================================
@@ -1787,7 +1838,7 @@ fun _is_digit(c: int) -> bool {
 // Parse a string to an integer.
 // Handles leading/trailing whitespace and optional negative sign.
 // Throws an error if the string cannot be parsed as an integer.
-fun std_parse_int(s: string) -> int {
+fun parse_int(s: string) -> int {
     let n = len(s);
     let i = 0;
 

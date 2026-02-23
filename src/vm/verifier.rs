@@ -467,8 +467,8 @@ impl Verifier {
             // System / Builtins
             Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::GcHint(_) => (0, 0),
-            Op::ValueToString => (1, 1), // pops value, pushes string
-            Op::ParseInt => (1, 1),      // pops string, pushes int
+            Op::TypeOf => (1, 1),   // pops value, pushes type tag
+            Op::HeapSize => (1, 1), // pops ref, pushes slot count
             // Exception handling
             Op::Throw => (1, 0),
             Op::TryBegin(_) => (0, 0),
