@@ -893,6 +893,26 @@ fun _any_to_string(d: any) -> string {
         return ts_result;
     }
 
+    // Nullable types (e.g. "int?", "Point?", "Array_int?")
+    // Must be checked before container prefixes (Vec_, Map_, Array_)
+    let tn_len = len(tn);
+    if tn_len > 1 {
+        if str_index_of(tn, "?") == tn_len - 1 {
+            if raw == nil {
+                return "nil";
+            }
+            let ac: int = __heap_load(ti, 3 + 2 * fc);
+            if ac > 0 {
+                let inner_td = __heap_load(ti, 3 + 2 * fc + 1);
+                let wrapper = __alloc_heap(2);
+                __heap_store(wrapper, 0, inner_td);
+                __heap_store(wrapper, 1, raw);
+                return _any_to_string(wrapper);
+            }
+            return __value_to_string(raw);
+        }
+    }
+
     // Vec_*
     if str_index_of(tn, "Vec_") == 0 {
         let data = __heap_load(raw, 0);
@@ -961,7 +981,7 @@ fun _any_to_string(d: any) -> string {
         return result + "]";
     }
 
-    // No fields and unrecognized type name (e.g. nullable "int?")
+    // No fields and unrecognized type name
     if fc == 0 {
         return __value_to_string(raw);
     }

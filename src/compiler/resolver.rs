@@ -2391,6 +2391,7 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
                 .join("_");
             format!("{}_{}", name, args)
         }
+        Type::Nullable(inner) => format!("{}?", type_to_dyn_tag_name(inner)),
         Type::Array(elem) => format!("Array_{}", type_to_dyn_tag_name(elem)),
         Type::Vector(elem) => format!("Vec_{}", type_to_dyn_tag_name(elem)),
         Type::Map(k, v) => format!(
@@ -2422,6 +2423,9 @@ fn type_to_impl_name(ty: &Type) -> String {
 /// Vec/Array → [elem_tag], Map → [key_tag, val_tag], Struct fields → field type tags.
 fn compute_aux_type_tags(ty: &Type) -> Vec<String> {
     match ty {
+        Type::Nullable(inner) => {
+            vec![type_to_dyn_tag_name(inner)]
+        }
         Type::Vector(elem) | Type::Array(elem) => {
             vec![type_to_dyn_tag_name(elem)]
         }
@@ -2527,6 +2531,9 @@ fn collect_nested_type_descriptors_inner(
 
     // Recurse into element/key/value types
     match ty {
+        Type::Nullable(inner) => {
+            collect_nested_type_descriptors_inner(inner, result, visited);
+        }
         Type::Vector(elem) | Type::Array(elem) => {
             collect_nested_type_descriptors_inner(elem, result, visited);
         }
