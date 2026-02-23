@@ -438,11 +438,15 @@ impl TypeAnnotation {
                     }
                     Ok(Type::Ptr(Box::new(type_args[0].to_type()?)))
                 } else {
-                    // Generic types need context from typechecker to resolve
-                    Err(format!(
-                        "generic type '{}' requires typechecker context",
-                        name
-                    ))
+                    // Generic struct type — create GenericStruct with empty fields
+                    // (fields will be resolved by the typechecker/resolver later)
+                    let resolved_args: Result<Vec<_>, _> =
+                        type_args.iter().map(|ta| ta.to_type()).collect();
+                    Ok(Type::GenericStruct {
+                        name: name.clone(),
+                        type_args: resolved_args?,
+                        fields: Vec::new(),
+                    })
                 }
             }
         }

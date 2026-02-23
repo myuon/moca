@@ -10,7 +10,7 @@
 #![allow(clippy::result_large_err)]
 
 use crate::compiler::ast::{
-    BinaryOp, Block, Expr, FnDef, ImplBlock, InterfaceDef, Item, NewLiteralElement, Program,
+    BinaryOp, Block, Expr, FnDef, ImplBlock, InterfaceDef, Item, NewLiteralElement, Param, Program,
     Statement, StructDef, UnaryOp,
 };
 use crate::compiler::lexer::Span;
@@ -608,6 +608,39 @@ impl TypeChecker {
             }
         }
 
+        // Pass 2.5: auto-derive ToString for structs without explicit impl
+        // Only run when ToString interface is defined (i.e., prelude is loaded)
+        let struct_names: Vec<String> = self.structs.keys().cloned().collect();
+        let mut synthetic_items = Vec::new();
+        let has_tostring_interface = self.interfaces.contains_key("ToString");
+        for struct_name in &struct_names {
+            if !has_tostring_interface {
+                break;
+            }
+            // Skip if explicit impl ToString already exists
+            if self
+                .interface_impls
+                .contains(&("ToString".to_string(), struct_name.clone()))
+            {
+                continue;
+            }
+            // Skip internal/builtin/container types (these have their own formatting via dyn)
+            if struct_name.starts_with("__")
+                || matches!(
+                    struct_name.as_str(),
+                    "Vec" | "Map" | "Array" | "HashMapEntry"
+                )
+            {
+                continue;
+            }
+            if let Some(impl_block) = self.generate_tostring_impl(struct_name) {
+                self.register_impl_methods(&impl_block);
+                self.register_interface_impl(&impl_block);
+                synthetic_items.push(Item::ImplBlock(impl_block));
+            }
+        }
+        program.items.extend(synthetic_items);
+
         // Third pass: type check function bodies and statements (mutable)
         let mut main_env = TypeEnv::new();
         for item in &mut program.items {
@@ -857,6 +890,170 @@ impl TypeChecker {
         // Register the implementation
         self.interface_impls
             .insert((interface_name, type_name.clone()));
+    }
+
+    /// Generate a synthetic `impl ToString for StructName` block for auto-derive.
+    fn generate_tostring_impl(&self, struct_name: &str) -> Option<ImplBlock> {
+        let struct_info = self.structs.get(struct_name)?;
+        let span = Span::new(0, 0);
+
+        // Determine if this is a generic struct
+        let type_params = struct_info.type_params.clone();
+
+        // Build the to_string method body:
+        // return "StructName { field1: " + self.field1.to_string() + ", field2: " + ...  + " }";
+        let return_expr = if struct_info.fields.is_empty() {
+            // Empty struct: return "StructName {}"
+            Expr::Str {
+                value: format!("{} {{}}", struct_name),
+                span,
+                inferred_type: None,
+            }
+        } else {
+            // Build concatenation chain
+            let mut expr = Expr::Str {
+                value: format!("{} {{ ", struct_name),
+                span,
+                inferred_type: None,
+            };
+
+            for (i, (field_name, field_type)) in struct_info.fields.iter().enumerate() {
+                // Add separator for subsequent fields
+                if i > 0 {
+                    expr = Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(expr),
+                        right: Box::new(Expr::Str {
+                            value: ", ".to_string(),
+                            span,
+                            inferred_type: None,
+                        }),
+                        span,
+                        inferred_type: None,
+                    };
+                }
+
+                // Add "field_name: "
+                expr = Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(expr),
+                    right: Box::new(Expr::Str {
+                        value: format!("{}: ", field_name),
+                        span,
+                        inferred_type: None,
+                    }),
+                    span,
+                    inferred_type: None,
+                };
+
+                // Build field access: self.field_name
+                let field_access = Expr::Field {
+                    object: Box::new(Expr::Ident {
+                        name: "self".to_string(),
+                        span,
+                        inferred_type: None,
+                    }),
+                    field: field_name.clone(),
+                    span,
+                    inferred_type: None,
+                };
+
+                // Determine formatting method based on field type
+                let field_str = if self.field_has_tostring(field_type) {
+                    // Use self.field.to_string()
+                    Expr::MethodCall {
+                        object: Box::new(field_access),
+                        method: "to_string".to_string(),
+                        type_args: Vec::new(),
+                        args: Vec::new(),
+                        span,
+                        object_type: None,
+                        inferred_type: None,
+                    }
+                } else {
+                    // Use debug(self.field as dyn) — dyn fallback
+                    Expr::Call {
+                        callee: "debug".to_string(),
+                        type_args: Vec::new(),
+                        args: vec![Expr::AsDyn {
+                            expr: Box::new(field_access),
+                            span,
+                            inferred_type: None,
+                        }],
+                        span,
+                        inferred_type: None,
+                    }
+                };
+
+                // Concatenate
+                expr = Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(expr),
+                    right: Box::new(field_str),
+                    span,
+                    inferred_type: None,
+                };
+            }
+
+            // Add closing " }"
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(expr),
+                right: Box::new(Expr::Str {
+                    value: " }".to_string(),
+                    span,
+                    inferred_type: None,
+                }),
+                span,
+                inferred_type: None,
+            }
+        };
+
+        let body = Block {
+            statements: vec![Statement::Return {
+                value: Some(return_expr),
+                span,
+            }],
+            span,
+        };
+
+        let to_string_fn = FnDef {
+            name: "to_string".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: Vec::new(),
+            params: vec![Param {
+                name: "self".to_string(),
+                type_annotation: None,
+                span,
+            }],
+            return_type: Some(TypeAnnotation::Named("string".to_string())),
+            body,
+            attributes: Vec::new(),
+            span,
+        };
+
+        Some(ImplBlock {
+            type_params,
+            interface_name: Some("ToString".to_string()),
+            struct_name: struct_name.to_string(),
+            struct_type_args: Vec::new(),
+            methods: vec![to_string_fn],
+            span,
+        })
+    }
+
+    /// Check if a field type has a ToString implementation.
+    /// Returns true for primitives, structs (auto-derived), and other types with known ToString.
+    fn field_has_tostring(&self, field_type: &Type) -> bool {
+        match field_type {
+            Type::Int | Type::Float | Type::Bool | Type::String => true,
+            Type::Struct { name, .. } | Type::GenericStruct { name, .. } => {
+                // All structs are auto-derived, so they have ToString
+                // (unless they're internal types, but those would be checked separately)
+                self.structs.contains_key(name)
+            }
+            _ => false,
+        }
     }
 
     /// Register methods from an impl block.

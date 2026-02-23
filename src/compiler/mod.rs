@@ -657,6 +657,10 @@ pub fn lint_file(path: &Path) -> Result<(String, usize), String> {
 
     let filename = path.to_string_lossy().to_string();
 
+    // Record stdlib item count before type checking, because check_program
+    // may append synthetic items (e.g. auto-derived ToString impls).
+    let stdlib_item_count = program.items.len() - user_item_count;
+
     // Type checking (must pass before linting; writes types to AST)
     let mut typechecker = TypeChecker::new(&filename);
     typechecker
@@ -664,7 +668,6 @@ pub fn lint_file(path: &Path) -> Result<(String, usize), String> {
         .map_err(|errors| format_type_errors(&filename, &errors))?;
 
     // Linting (skip stdlib items at the beginning)
-    let stdlib_item_count = program.items.len() - user_item_count;
     let rules = linter::default_rules();
     let diagnostics = linter::lint_program(&program, &filename, &rules, stdlib_item_count);
     let count = diagnostics.len();
