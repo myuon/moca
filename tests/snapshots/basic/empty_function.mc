@@ -4,7 +4,7 @@ fun do_nothing() {
 }
 
 fun do_something_then_nothing() {
-    let x = 10;
+    let _x = 10;
 }
 
 do_nothing();

@@ -1,17 +1,17 @@
 // Test map operations (migrated from object literal test)
 
 // String key map with string values
-let person: Map<string, string> = Map<string, string>::`new`();
-person.put("name", "Alice");
-person.put("city", "Tokyo");
-print(person.get("name"));
-print(person.get("city"));
+let person = new Map<string, string> {};
+person["name"] = "Alice";
+person["city"] = "Tokyo";
+print(person["name"]);
+print(person["city"]);
 
 // Int key map demonstrating computed keys
 let x = 10;
 let y = 20;
-let point: Map<int, string> = Map<int, string>::`new`();
-point.put(x, "ten");
-point.put(y, "twenty");
-point.put(x + y, "thirty");
-print(point.get(30));
+let point = new Map<int, string> {};
+point[x] = "ten";
+point[y] = "twenty";
+point[x + y] = "thirty";
+print(point[30]);

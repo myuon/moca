@@ -729,7 +729,8 @@ fn collect_usages_expr(expr: &Expr, used: &mut HashSet<String>) {
             collect_usages_expr(left, used);
             collect_usages_expr(right, used);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { callee, args, .. } => {
+            used.insert(callee.clone());
             for arg in args {
                 collect_usages_expr(arg, used);
             }
@@ -791,12 +792,16 @@ fn collect_usages_expr(expr: &Expr, used: &mut HashSet<String>) {
         Expr::AsDyn { expr, .. } => {
             collect_usages_expr(expr, used);
         }
+        Expr::Asm(asm_block) => {
+            for input in &asm_block.inputs {
+                used.insert(input.clone());
+            }
+        }
         // Leaf expressions: no identifiers to collect
         Expr::Int { .. }
         | Expr::Float { .. }
         | Expr::Bool { .. }
         | Expr::Str { .. }
-        | Expr::Nil { .. }
-        | Expr::Asm(_) => {}
+        | Expr::Nil { .. } => {}
     }
 }

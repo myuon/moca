@@ -1,15 +1,15 @@
 // Map with integer keys test
 
-let m: Map<int, string> = Map<int, string>::`new`();
+let m = new Map<int, string> {};
 
 // Test put and get
-m.put(1, "one");
-m.put(2, "two");
-m.put(100, "hundred");
+m[1] = "one";
+m[2] = "two";
+m[100] = "hundred";
 
-print(m.get(1));
-print(m.get(2));
-print(m.get(100));
+print(m[1]);
+print(m[2]);
+print(m[100]);
 print(m.len());
 
 // Test contains
@@ -21,8 +21,8 @@ if !m.contains(999) {
 }
 
 // Test overwrite
-m.put(1, "ONE");
-print(m.get(1));
+m[1] = "ONE";
+print(m[1]);
 print(m.len());
 
 // Test remove
@@ -33,5 +33,5 @@ if removed {
 print(m.len());
 
 // Test negative key
-m.put(-5, "negative");
-print(m.get(-5));
+m[-5] = "negative";
+print(m[-5]);

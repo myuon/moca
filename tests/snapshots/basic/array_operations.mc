@@ -3,13 +3,13 @@ let arr: array<int> = [1, 2, 3];
 print(len(arr));
 
 // Test Vector push/pop operations
-let vec: Vec<int> = Vec<int>::`new`();
+let vec = new Vec<int> {};
 vec.push(1);
 vec.push(2);
 vec.push(3);
 vec.push(4);
 print(vec.len());
-print(vec.get(3));
+print(vec[3]);
 
 let popped = vec.pop();
 print(popped);

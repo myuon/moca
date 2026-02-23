@@ -66,7 +66,7 @@ coverage-check:
     fi
     echo "Coverage check passed!"
 
-# Run moca lint on std .mc files
+# Run moca lint on std and test .mc files
 moca-lint: build
     #!/usr/bin/env bash
     set -e
@@ -78,6 +78,18 @@ moca-lint: build
         output=$(./target/debug/moca lint "$file" 2>&1) || {
             unexpected=$(echo "$output" | grep -v -E "$known_warnings" | grep "^warning:" || true)
             if [ -n "$unexpected" ]; then
+                echo "$output"
+                failed=1
+            fi
+        }
+    done
+    # Lint test snapshot .mc files (excluding lint/ and errors/ which have intentional warnings/errors)
+    for file in $(find tests/snapshots -name "*.mc" -not -path "*/lint/*" -not -path "*/errors/*"); do
+        output=$(./target/debug/moca lint "$file" 2>&1) || {
+            # Filter out compile errors (only fail on warnings)
+            warnings=$(echo "$output" | grep "^warning:" || true)
+            if [ -n "$warnings" ]; then
+                echo "=== $file ==="
                 echo "$output"
                 failed=1
             fi

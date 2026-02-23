@@ -9,7 +9,7 @@
 // 30
 
 // Create a Map<string, int> using new literal syntax
-let m: Map<string, int> = new Map<string, int> {"a": 10, "b": 20};
+let m = new Map<string, int> {"a": 10, "b": 20};
 
 // Test index access with [] syntax (desugars to .get())
 print(m["a"]);

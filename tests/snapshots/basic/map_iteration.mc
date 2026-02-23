@@ -1,11 +1,11 @@
 // Map iteration test - keys and values methods
 
-let m: Map<int, int> = Map<int, int>::`new`();
+let m = new Map<int, int> {};
 
 // Add some entries
-m.put(1, 100);
-m.put(2, 200);
-m.put(3, 300);
+m[1] = 100;
+m[2] = 200;
+m[3] = 300;
 
 // Get keys and values
 let keys: Vec<int> = m.keys();
@@ -19,7 +19,7 @@ print(values.len());
 let key_sum = 0;
 let i = 0;
 while i < keys.len() {
-    key_sum = key_sum + keys.get(i);
+    key_sum = key_sum + keys[i];
     i = i + 1;
 }
 print(key_sum);
@@ -27,7 +27,7 @@ print(key_sum);
 let value_sum = 0;
 i = 0;
 while i < values.len() {
-    value_sum = value_sum + values.get(i);
+    value_sum = value_sum + values[i];
     i = i + 1;
 }
 print(value_sum);

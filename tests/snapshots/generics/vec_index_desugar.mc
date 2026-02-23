@@ -11,7 +11,7 @@
 // 100
 
 // Create a Vec<int> using new literal syntax
-let v: Vec<int> = new Vec<int> {1, 2, 3};
+let v = new Vec<int> {1, 2, 3};
 
 // Test index access with [] syntax (desugars to .get())
 print(v[0]);

@@ -3,9 +3,9 @@
 // using maps with consistent types per map
 
 // Test 1: String access - prints "outer"
-let str_map: Map<string, string> = Map<string, string>::`new`();
-str_map.put("name", "outer");
-print(str_map.get("name"));
+let str_map = new Map<string, string> {};
+str_map["name"] = "outer";
+print(str_map["name"]);
 
 // Test 2: Int access - prints "42"
 print(42);

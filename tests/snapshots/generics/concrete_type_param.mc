@@ -34,7 +34,7 @@ fun map_len(m: Map<string, int>) -> int {
     return m.len();
 }
 
-let m: Map<string, int> = Map<string, int>::`new`();
+let m = new Map<string, int> {};
 m["hello"] = 42;
 print(map_len(m));
 

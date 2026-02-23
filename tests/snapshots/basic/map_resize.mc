@@ -1,11 +1,11 @@
 // Map resize test - add more than initial capacity (16) entries
 
-let m: Map<int, int> = Map<int, int>::`new`();
+let m = new Map<int, int> {};
 
 // Add 20 entries to trigger resize (load factor > 0.75 = 12 entries)
 let i = 0;
 while i < 20 {
-    m.put(i, i * 10);
+    m[i] = i * 10;
     i = i + 1;
 }
 
@@ -15,7 +15,7 @@ print(m.len());
 let all_ok = true;
 i = 0;
 while i < 20 {
-    let val = m.get(i);
+    let val = m[i];
     if val != i * 10 {
         all_ok = false;
     }

@@ -6,7 +6,7 @@ fun create_garbage() {
     while i < 1000 {
         // Create arrays that become garbage after each iteration
         let arr = [i, i + 1, i + 2, i + 3, i + 4];
-        let arr2 = [arr];
+        let _arr2 = [arr];
         i = i + 1;
     }
 }
