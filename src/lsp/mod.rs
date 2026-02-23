@@ -7,7 +7,9 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::compiler::ast::Program;
-use crate::compiler::{Lexer, Parser, Resolver};
+use crate::compiler::linter;
+use crate::compiler::typechecker::TypeError;
+use crate::compiler::{Lexer, Parser, TypeChecker};
 
 mod symbols;
 use symbols::{DocSymbol, SymbolTable};
@@ -86,43 +88,68 @@ impl MocaLanguageServer {
 
     /// Analyze a document and return diagnostics.
     fn analyze(&self, uri: &Url, source: &str) -> Vec<Diagnostic> {
-        let filename = uri.path();
-        let mut diagnostics = Vec::new();
-
-        // Try lexing
-        let mut lexer = Lexer::new(filename, source);
-        let tokens = match lexer.scan_tokens() {
-            Ok(tokens) => tokens,
-            Err(e) => {
-                if let Some(diag) = parse_error_to_diagnostic(&e) {
-                    diagnostics.push(diag);
-                }
-                return diagnostics;
-            }
-        };
-
-        // Try parsing
-        let mut parser = Parser::new(filename, tokens);
-        let program = match parser.parse() {
-            Ok(program) => program,
-            Err(e) => {
-                if let Some(diag) = parse_error_to_diagnostic(&e) {
-                    diagnostics.push(diag);
-                }
-                return diagnostics;
-            }
-        };
-
-        // Try resolving
-        let mut resolver = Resolver::new(filename);
-        if let Err(e) = resolver.resolve(program)
-            && let Some(diag) = parse_error_to_diagnostic(&e)
-        {
-            diagnostics.push(diag);
-        }
-
-        diagnostics
+        analyze_source(uri.path(), source)
     }
+}
+
+/// Analyze source code and return LSP diagnostics.
+///
+/// This is the core analysis pipeline: lex → parse → typecheck → lint.
+/// Exposed as a public function for testing.
+pub fn analyze_source(filename: &str, source: &str) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // Try lexing
+    let mut lexer = Lexer::new(filename, source);
+    let tokens = match lexer.scan_tokens() {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            if let Some(diag) = parse_error_to_diagnostic(&e) {
+                diagnostics.push(diag);
+            }
+            return diagnostics;
+        }
+    };
+
+    // Try parsing
+    let mut parser = Parser::new(filename, tokens);
+    let program = match parser.parse() {
+        Ok(program) => program,
+        Err(e) => {
+            if let Some(diag) = parse_error_to_diagnostic(&e) {
+                diagnostics.push(diag);
+            }
+            return diagnostics;
+        }
+    };
+
+    // Prepend stdlib for type checking and linting
+    let user_item_count = program.items.len();
+    let Ok(mut program) = crate::compiler::prepend_stdlib(program) else {
+        return diagnostics;
+    };
+    let stdlib_item_count = program.items.len() - user_item_count;
+
+    // Type checking
+    let mut typechecker = TypeChecker::new(filename);
+    match typechecker.check_program(&mut program) {
+        Ok(()) => {
+            // Type check succeeded — run lint
+            let rules = linter::default_rules();
+            let lint_results = linter::lint_program(&program, filename, &rules, stdlib_item_count);
+            for lint_diag in &lint_results {
+                diagnostics.push(lint_diagnostic_to_lsp(lint_diag));
+            }
+        }
+        Err(type_errors) => {
+            // Type check failed — report type errors, skip lint
+            for error in &type_errors {
+                diagnostics.push(type_error_to_diagnostic(error));
+            }
+        }
+    }
+
+    diagnostics
 }
 
 /// Parse an error message to extract location and create a diagnostic.
@@ -683,6 +710,54 @@ impl MocaLanguageServer {
         for child in &sym.children {
             Self::collect_workspace_symbols(child, uri, query, results);
         }
+    }
+}
+
+/// Convert a linter Diagnostic to an LSP Diagnostic.
+fn lint_diagnostic_to_lsp(diag: &linter::Diagnostic) -> Diagnostic {
+    let line = (diag.span.line.saturating_sub(1)) as u32;
+    let col = (diag.span.column.saturating_sub(1)) as u32;
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line,
+                character: col,
+            },
+            end: Position {
+                line,
+                character: col + 1,
+            },
+        },
+        severity: Some(DiagnosticSeverity::WARNING),
+        source: Some("moca-lint".to_string()),
+        message: format!("{}: {}", diag.rule, diag.message),
+        ..Default::default()
+    }
+}
+
+/// Convert a TypeError to an LSP Diagnostic.
+fn type_error_to_diagnostic(error: &TypeError) -> Diagnostic {
+    let line = (error.span.line.saturating_sub(1)) as u32;
+    let col = (error.span.column.saturating_sub(1)) as u32;
+    let mut message = error.message.clone();
+    if let (Some(expected), Some(found)) = (&error.expected, &error.found) {
+        message.push_str(&format!(" (expected `{}`, found `{}`)", expected, found));
+    }
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line,
+                character: col,
+            },
+            end: Position {
+                line,
+                character: col + 1,
+            },
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("moca".to_string()),
+        message,
+        ..Default::default()
     }
 }
 

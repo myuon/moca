@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use moca::compiler::{dump_ast, dump_bytecode, lint_file, run_file_capturing_output, run_tests};
 use moca::config::{JitMode, RuntimeConfig};
+use moca::lsp::analyze_source;
 
 /// Run a .mc file in-process and return (stdout, stderr, exit_code, jit_compile_count)
 fn run_moca_file_inprocess(path: &Path, config: &RuntimeConfig) -> (String, String, i32, usize) {
@@ -500,6 +501,101 @@ fn parse_lint_expected(content: &str) -> Vec<(String, usize, usize)> {
 #[test]
 fn snapshot_lint() {
     run_lint_snapshot_dir("lint");
+}
+
+// ============================================================================
+// LSP Diagnostics Snapshot Tests
+// ============================================================================
+
+/// Format an LSP Diagnostic into a snapshot line.
+///
+/// Format: `SEVERITY:SOURCE:LINE:COLUMN`
+/// - SEVERITY: ERROR or WARNING
+/// - SOURCE: e.g. "moca" or "moca-lint"
+/// - LINE: 1-based line number
+/// - COLUMN: 1-based column number
+fn format_lsp_diagnostic(diag: &tower_lsp::lsp_types::Diagnostic) -> String {
+    let severity = match diag.severity {
+        Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR) => "ERROR",
+        Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING) => "WARNING",
+        _ => "UNKNOWN",
+    };
+    let source = diag.source.as_deref().unwrap_or("unknown");
+    // Convert 0-based LSP positions back to 1-based for readability
+    let line = diag.range.start.line + 1;
+    let col = diag.range.start.character + 1;
+    format!("{}:{}:{}:{}", severity, source, line, col)
+}
+
+/// Parse expected diagnostics from a .diag file.
+///
+/// Format: one line per diagnostic: `SEVERITY:SOURCE:LINE:COLUMN`
+fn parse_diag_expected(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+fn run_lsp_diagnostics_snapshot_dir(dir: &str) {
+    let dir_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join(dir);
+
+    if !dir_path.exists() {
+        return;
+    }
+
+    let entries: Vec<_> = fs::read_dir(&dir_path)
+        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", dir_path, e))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "mc"))
+        .collect();
+
+    assert!(!entries.is_empty(), "No .mc files found in {:?}", dir_path);
+
+    for entry in entries {
+        let mc_path = entry.path();
+        let base_path = mc_path.with_extension("");
+        let diag_path = base_path.with_extension("diag");
+        let test_name = mc_path.file_stem().unwrap().to_string_lossy().to_string();
+
+        // Read source
+        let source = fs::read_to_string(&mc_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", mc_path, e));
+
+        // Run analyze_source
+        let filename = mc_path.to_string_lossy().to_string();
+        let diagnostics = analyze_source(&filename, &source);
+
+        // Format actual diagnostics
+        let actual: Vec<String> = diagnostics.iter().map(format_lsp_diagnostic).collect();
+
+        // Parse expected diagnostics from .diag file
+        let expected: Vec<String> = if diag_path.exists() {
+            let content = fs::read_to_string(&diag_path)
+                .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", diag_path, e));
+            parse_diag_expected(&content)
+        } else {
+            Vec::new()
+        };
+
+        assert_eq!(
+            actual,
+            expected,
+            "[{}] LSP diagnostics mismatch\n--- expected ---\n{}\n--- actual ---\n{}",
+            test_name,
+            expected.join("\n"),
+            actual.join("\n")
+        );
+    }
+}
+
+#[test]
+fn snapshot_lsp_diagnostics() {
+    run_lsp_diagnostics_snapshot_dir("lsp_diagnostics");
 }
 
 // ============================================================================
