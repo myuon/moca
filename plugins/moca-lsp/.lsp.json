@@ -1,0 +1,11 @@
+{
+    "moca": {
+        "command": "moca",
+        "args": ["lsp"],
+        "extensionToLanguage": {
+            ".mc": "moca"
+        },
+        "transport": "stdio",
+        "maxRestarts": 3
+    }
+}

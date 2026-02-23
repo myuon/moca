@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -25,58 +29,37 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v2
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-check-
+      - uses: Swatinem/rust-cache@v2
 
       - name: Run checks
         run: just check
 
-  coverage-report:
+  # ---------------------------------------------------------------------------
+  # Coverage report (PR only)
+  # Base and head are built in separate jobs to avoid branch switching and
+  # cache contamination. Each job has its own checkout and independent cache.
+  # ---------------------------------------------------------------------------
+  coverage-base:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.base_ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-coverage-
+          shared-key: coverage-base
 
-      - name: Get base branch coverage
+      - name: Generate base coverage
         run: |
-          git checkout -- include/moca.h || true
-          git checkout ${{ github.base_ref }}
-          # Clean profraw files only to avoid full rebuild; source changes trigger incremental recompilation
           cargo llvm-cov clean --profraw-only
           cargo llvm-cov --no-report --ignore-run-fail > /dev/null 2>&1
           cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
@@ -91,21 +74,34 @@ jobs:
             gsub(/%/, "", cov)
             print file, cov
           }' > base_coverage.txt
-          git checkout -- include/moca.h || true
-          git checkout ${{ github.head_ref }}
-          cargo llvm-cov clean --profraw-only
 
-      - name: Generate coverage report with diff
+      - uses: actions/upload-artifact@v4
+        with:
+          name: base-coverage
+          path: base_coverage.txt
+
+  coverage-head:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage-head
+
+      - name: Generate head coverage
         run: |
+          cargo llvm-cov clean --profraw-only
           cargo llvm-cov --no-report --ignore-run-fail > /dev/null 2>&1
-          cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '
-          BEGIN {
-            while ((getline line < "base_coverage.txt") > 0) {
-              split(line, a, " ")
-              base[a[1]] = a[2]
-            }
-          }
-          {
+          cargo llvm-cov report 2>&1 | grep -E '^[a-z].*\.rs|^TOTAL' | awk '{
             file = $1
             pct_count = 0
             for (i=1; i<=NF; i++) {
@@ -115,6 +111,42 @@ jobs:
               }
             }
             gsub(/%/, "", cov)
+            print file, cov
+          }' > head_coverage.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: head-coverage
+          path: head_coverage.txt
+
+  coverage-report:
+    if: github.event_name == 'pull_request'
+    needs: [coverage-base, coverage-head]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: base-coverage
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: head-coverage
+
+      - name: Generate coverage diff
+        run: |
+          awk '
+          BEGIN {
+            while ((getline line < "base_coverage.txt") > 0) {
+              split(line, a, " ")
+              base[a[1]] = a[2]
+            }
+          }
+          {
+            file = $1
+            cov = $2
+
             if (cov+0 >= 80) icon = "🟢"
             else if (cov+0 >= 60) icon = "🟡"
             else icon = "🔴"
@@ -128,7 +160,7 @@ jobs:
               diff_str = "new"
             }
             printf "| %s | %s%% | %s | %s |\n", file, cov, diff_str, icon
-          }' > coverage_rows.txt
+          }' head_coverage.txt > coverage_rows.txt
 
           if [ -s coverage_rows.txt ]; then
             echo "| File | Coverage | Diff | |" > coverage.md
@@ -172,48 +204,74 @@ jobs:
               });
             }
 
-  performance-report:
+  # ---------------------------------------------------------------------------
+  # Performance report (PR only)
+  # PR branch and main branch are built in completely separate jobs.
+  # Each job has its own checkout and its own cache, so there is zero risk of
+  # stale/wrong binaries from cache contamination.
+  # ---------------------------------------------------------------------------
+  perf-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-perf-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-perf-
+          shared-key: perf-pr
 
-      - name: Run performance test on PR branch
-        run: |
-          cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee pr_perf.txt
-          cat pr_perf.txt
+      - name: Run performance test
+        run: cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee perf.txt
 
-      - name: Get main branch performance
-        run: |
-          git checkout -- include/moca.h || true
-          git stash || true
-          git checkout ${{ github.base_ref }}
-          cargo clean
-          cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee main_perf.txt
-          cat main_perf.txt
-          git checkout -- include/moca.h || true
-          git checkout ${{ github.head_ref }}
-          git stash pop || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-perf
+          path: perf.txt
+
+  perf-main:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout main branch directly — no branch switching within this job.
+      # This ensures the build and cache are always for main branch code only.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf-main
+
+      - name: Run performance test
+        run: cargo test snapshot_performance --features jit --release -- --nocapture 2>&1 | tee perf.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: main-perf
+          path: perf.txt
+
+  performance-report:
+    if: github.event_name == 'pull_request'
+    needs: [perf-pr, perf-main]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-perf
+          path: pr-perf
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-perf
+          path: main-perf
 
       - name: Generate performance report
         run: |
@@ -235,8 +293,8 @@ jobs:
                           results[name] = {'moca': moca, 'rust': rust, 'vs_rust': vs_rust}
               return results
 
-          pr_results = parse_perf_output('pr_perf.txt')
-          main_results = parse_perf_output('main_perf.txt')
+          pr_results = parse_perf_output('pr-perf/perf.txt')
+          main_results = parse_perf_output('main-perf/perf.txt')
 
           lines = []
           lines.append("| Benchmark | moca | Rust | vs Rust | vs Main |")
