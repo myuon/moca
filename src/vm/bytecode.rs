@@ -463,7 +463,7 @@ const OP_HEAP_LOAD_DYN: u8 = 83;
 const OP_HEAP_STORE_DYN: u8 = 84;
 
 // System / Builtins
-const OP_SYSCALL: u8 = 86;
+const OP_HOSTCALL: u8 = 86;
 const OP_GC_HINT: u8 = 87;
 const OP_TYPE_OF: u8 = 89;
 const OP_HEAP_SIZE: u8 = 90;
@@ -684,8 +684,8 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         Op::HeapStore2 => w.write_all(&[OP_HEAP_STORE2])?,
         Op::HeapOffsetRef => w.write_all(&[OP_HEAP_OFFSET_REF])?,
         // System / Builtins
-        Op::Syscall(num, argc) => {
-            w.write_all(&[OP_SYSCALL])?;
+        Op::Hostcall(num, argc) => {
+            w.write_all(&[OP_HOSTCALL])?;
             write_u32(w, *num as u32)?;
             write_u32(w, *argc as u32)?;
         }
@@ -885,7 +885,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE2 => Op::HeapStore2,
         OP_HEAP_OFFSET_REF => Op::HeapOffsetRef,
         // System / Builtins
-        OP_SYSCALL => Op::Syscall(read_u32(r)? as usize, read_u32(r)? as usize),
+        OP_HOSTCALL => Op::Hostcall(read_u32(r)? as usize, read_u32(r)? as usize),
         OP_GC_HINT => Op::GcHint(read_u32(r)? as usize),
         OP_TYPE_OF => Op::TypeOf,
         OP_HEAP_SIZE => Op::HeapSize,
@@ -1329,7 +1329,7 @@ mod tests {
             Op::HeapStore2,
             Op::HeapOffsetRef,
             // System / Builtins
-            Op::Syscall(7, 2),
+            Op::Hostcall(7, 2),
             Op::GcHint(1024),
             Op::TypeOf,
             Op::HeapSize,

@@ -1,4 +1,4 @@
-// Test write syscall to stdout
+// Test write hostcall to stdout
 let result = write(1, "hello", 5);
 print(result);
 

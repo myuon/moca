@@ -2,19 +2,19 @@
 // This file is automatically loaded when running Moca programs.
 
 // ============================================================================
-// Syscall Numbers (internal use)
+// Hostcall Numbers (internal use)
 // ============================================================================
-// Syscall 1: write(fd, buf, count) -> bytes_written
-// Syscall 2: open(path, flags) -> fd
-// Syscall 3: close(fd) -> status
-// Syscall 4: read(fd, count) -> string
-// Syscall 5: socket(domain, type) -> fd
-// Syscall 6: connect(fd, host, port) -> status
-// Syscall 7: bind(fd, host, port) -> status
-// Syscall 8: listen(fd, backlog) -> status
-// Syscall 9: accept(fd) -> client_fd
-// Syscall 10: time() -> epoch_seconds
-// Syscall 11: time_nanos() -> epoch_nanoseconds
+// Hostcall 1: write(fd, buf, count) -> bytes_written
+// Hostcall 2: open(path, flags) -> fd
+// Hostcall 3: close(fd) -> status
+// Hostcall 4: read(fd, count) -> string
+// Hostcall 5: socket(domain, type) -> fd
+// Hostcall 6: connect(fd, host, port) -> status
+// Hostcall 7: bind(fd, host, port) -> status
+// Hostcall 8: listen(fd, backlog) -> status
+// Hostcall 9: accept(fd) -> client_fd
+// Hostcall 10: time() -> epoch_seconds
+// Hostcall 11: time_nanos() -> epoch_nanoseconds
 
 // ============================================================================
 // POSIX-like Constants (as functions to avoid polluting the stack)
@@ -41,33 +41,33 @@ fun ESOCKTNOSUPPORT() -> int { return -7; } // Socket type not supported
 fun EADDRINUSE() -> int { return -8; }      // Address already in use
 
 // ============================================================================
-// Low-level I/O Functions (using __syscall)
+// Low-level I/O Functions (using __hostcall)
 // ============================================================================
 
 // Open a file and return a file descriptor.
 // flags: O_RDONLY(), O_WRONLY(), O_CREAT(), O_TRUNC() (can be combined with |)
 // Returns: fd (>=3) on success, negative error code on failure
 fun open(path: string, flags: int) -> int {
-    return __syscall(2, path, flags);
+    return __hostcall(2, path, flags);
 }
 
 // Write to a file descriptor.
 // fd: 1 = stdout, 2 = stderr, >=3 = file/socket
 // Returns: bytes written on success, negative error code on failure
 fun write(fd: int, buf: string, count: int) -> int {
-    return __syscall(1, fd, buf, count);
+    return __hostcall(1, fd, buf, count);
 }
 
 // Read from a file descriptor.
 // Returns: string on success, or throws on error
 fun read(fd: int, count: int) -> string {
-    return __syscall(4, fd, count);
+    return __hostcall(4, fd, count);
 }
 
 // Close a file descriptor.
 // Returns: 0 on success, negative error code on failure
 fun close(fd: int) -> int {
-    return __syscall(3, fd);
+    return __hostcall(3, fd);
 }
 
 // Create a socket.
@@ -75,33 +75,33 @@ fun close(fd: int) -> int {
 // typ: SOCK_STREAM() (1) for TCP
 // Returns: socket fd on success, negative error code on failure
 fun socket(domain: int, typ: int) -> int {
-    return __syscall(5, domain, typ);
+    return __hostcall(5, domain, typ);
 }
 
 // Connect a socket to a remote host.
 // Returns: 0 on success, negative error code on failure
 fun connect(fd: int, host: string, port: int) -> int {
-    return __syscall(6, fd, host, port);
+    return __hostcall(6, fd, host, port);
 }
 
 // Bind a socket to a local address.
 // host: "0.0.0.0" for all interfaces, "127.0.0.1" for localhost only
 // Returns: 0 on success, negative error code on failure
 fun bind(fd: int, host: string, port: int) -> int {
-    return __syscall(7, fd, host, port);
+    return __hostcall(7, fd, host, port);
 }
 
 // Listen for incoming connections on a bound socket.
 // backlog: maximum number of pending connections (ignored in current implementation)
 // Returns: 0 on success, negative error code on failure
 fun listen(fd: int, backlog: int) -> int {
-    return __syscall(8, fd, backlog);
+    return __hostcall(8, fd, backlog);
 }
 
 // Accept an incoming connection on a listening socket.
 // Returns: new socket fd for the client connection, or negative error code on failure
 fun accept(fd: int) -> int {
-    return __syscall(9, fd);
+    return __hostcall(9, fd);
 }
 
 // ============================================================================
@@ -110,12 +110,12 @@ fun accept(fd: int) -> int {
 
 // Get current time as Unix epoch seconds.
 fun time() -> int {
-    return __syscall(10);
+    return __hostcall(10);
 }
 
 // Get current time as Unix epoch nanoseconds.
 fun time_nanos() -> int {
-    return __syscall(11);
+    return __hostcall(11);
 }
 
 // ============================================================================

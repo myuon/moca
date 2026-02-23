@@ -177,7 +177,7 @@ ArrayLen           // [ref] → [i64]
 ### System Operations
 
 ```
-Syscall(num, argc) // System call
+Hostcall(num, argc) // Host call
 GcHint(size)       // GC allocation hint
 PrintDebug         // Debug print
 TypeOf             // [any] → [ref(string)]

@@ -825,7 +825,7 @@ impl VM {
             call_helper: jit_call_helper,
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
-            syscall_helper: jit_syscall_helper,
+            hostcall_helper: jit_hostcall_helper,
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
@@ -913,7 +913,7 @@ impl VM {
             call_helper: jit_call_helper,
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
-            syscall_helper: jit_syscall_helper,
+            hostcall_helper: jit_hostcall_helper,
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
@@ -996,7 +996,7 @@ impl VM {
             call_helper: jit_call_helper,
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
-            syscall_helper: jit_syscall_helper,
+            hostcall_helper: jit_hostcall_helper,
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
@@ -1074,7 +1074,7 @@ impl VM {
             call_helper: jit_call_helper,
             push_string_helper: jit_push_string_helper,
             array_len_helper: jit_array_len_helper,
-            syscall_helper: jit_syscall_helper,
+            hostcall_helper: jit_hostcall_helper,
             heap_base: self.heap.memory_base_ptr(),
             string_cache: self.string_cache.as_ptr() as *const u64,
             string_cache_len: self.string_cache.len() as u64,
@@ -3188,7 +3188,7 @@ impl VM {
                 self.stack.push(Value::Ref(r));
             }
             // HeapAllocString removed — use HeapAlloc(2) instead
-            Op::Syscall(syscall_num, argc) => {
+            Op::Hostcall(hostcall_num, argc) => {
                 // Collect arguments from stack
                 let mut args = Vec::with_capacity(argc);
                 for _ in 0..argc {
@@ -3196,7 +3196,7 @@ impl VM {
                 }
                 args.reverse(); // Arguments were popped in reverse order
 
-                let result = self.handle_syscall(syscall_num, &args)?;
+                let result = self.handle_hostcall(hostcall_num, &args)?;
                 self.stack.push(result);
             }
             Op::Argc => {
@@ -3701,27 +3701,27 @@ impl VM {
         self.heap.collect(&roots);
     }
 
-    /// Handle syscall instructions
-    /// Syscall numbers:
+    /// Handle hostcall instructions
+    /// Hostcall numbers:
     /// - 1: write(fd, buf, count) -> bytes_written
     /// - 2: open(path, flags) -> fd
     /// - 3: close(fd) -> 0 on success
     /// - 4: read(fd, count) -> string (heap ref) or error
     /// - 10: time() -> epoch seconds
     /// - 11: time_nanos() -> epoch nanoseconds
-    fn handle_syscall(&mut self, syscall_num: usize, args: &[Value]) -> Result<Value, String> {
-        // Syscall numbers
-        const SYSCALL_WRITE: usize = 1;
-        const SYSCALL_OPEN: usize = 2;
-        const SYSCALL_CLOSE: usize = 3;
-        const SYSCALL_READ: usize = 4;
-        const SYSCALL_SOCKET: usize = 5;
-        const SYSCALL_CONNECT: usize = 6;
-        const SYSCALL_BIND: usize = 7;
-        const SYSCALL_LISTEN: usize = 8;
-        const SYSCALL_ACCEPT: usize = 9;
-        const SYSCALL_TIME: usize = 10;
-        const SYSCALL_TIME_NANOS: usize = 11;
+    fn handle_hostcall(&mut self, hostcall_num: usize, args: &[Value]) -> Result<Value, String> {
+        // Hostcall numbers
+        const HOSTCALL_WRITE: usize = 1;
+        const HOSTCALL_OPEN: usize = 2;
+        const HOSTCALL_CLOSE: usize = 3;
+        const HOSTCALL_READ: usize = 4;
+        const HOSTCALL_SOCKET: usize = 5;
+        const HOSTCALL_CONNECT: usize = 6;
+        const HOSTCALL_BIND: usize = 7;
+        const HOSTCALL_LISTEN: usize = 8;
+        const HOSTCALL_ACCEPT: usize = 9;
+        const HOSTCALL_TIME: usize = 10;
+        const HOSTCALL_TIME_NANOS: usize = 11;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
@@ -3743,11 +3743,11 @@ impl VM {
         const AF_INET: i64 = 2;
         const SOCK_STREAM: i64 = 1;
 
-        match syscall_num {
-            SYSCALL_OPEN => {
+        match hostcall_num {
+            HOSTCALL_OPEN => {
                 if args.len() != 2 {
                     return Err(format!(
-                        "open syscall expects 2 arguments, got {}",
+                        "open hostcall expects 2 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -3801,10 +3801,10 @@ impl VM {
                     }
                 }
             }
-            SYSCALL_CLOSE => {
+            HOSTCALL_CLOSE => {
                 if args.len() != 1 {
                     return Err(format!(
-                        "close syscall expects 1 argument, got {}",
+                        "close hostcall expects 1 argument, got {}",
                         args.len()
                     ));
                 }
@@ -3830,10 +3830,10 @@ impl VM {
                     Ok(Value::I64(EBADF)) // Invalid fd
                 }
             }
-            SYSCALL_WRITE => {
+            HOSTCALL_WRITE => {
                 if args.len() != 3 {
                     return Err(format!(
-                        "write syscall expects 3 arguments, got {}",
+                        "write hostcall expects 3 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -3888,10 +3888,10 @@ impl VM {
 
                 Ok(Value::I64(result))
             }
-            SYSCALL_READ => {
+            HOSTCALL_READ => {
                 if args.len() != 2 {
                     return Err(format!(
-                        "read syscall expects 2 arguments, got {}",
+                        "read hostcall expects 2 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -3940,10 +3940,10 @@ impl VM {
                 let heap_ref = self.heap.alloc_string(content)?;
                 Ok(Value::Ref(heap_ref))
             }
-            SYSCALL_SOCKET => {
+            HOSTCALL_SOCKET => {
                 if args.len() != 2 {
                     return Err(format!(
-                        "socket syscall expects 2 arguments, got {}",
+                        "socket hostcall expects 2 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -3972,10 +3972,10 @@ impl VM {
 
                 Ok(Value::I64(fd))
             }
-            SYSCALL_CONNECT => {
+            HOSTCALL_CONNECT => {
                 if args.len() != 3 {
                     return Err(format!(
-                        "connect syscall expects 3 arguments, got {}",
+                        "connect hostcall expects 3 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -4020,10 +4020,10 @@ impl VM {
                     }
                 }
             }
-            SYSCALL_BIND => {
+            HOSTCALL_BIND => {
                 if args.len() != 3 {
                     return Err(format!(
-                        "bind syscall expects 3 arguments, got {}",
+                        "bind hostcall expects 3 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -4066,10 +4066,10 @@ impl VM {
                     }
                 }
             }
-            SYSCALL_LISTEN => {
+            HOSTCALL_LISTEN => {
                 if args.len() != 2 {
                     return Err(format!(
-                        "listen syscall expects 2 arguments, got {}",
+                        "listen hostcall expects 2 arguments, got {}",
                         args.len()
                     ));
                 }
@@ -4089,10 +4089,10 @@ impl VM {
                     Ok(Value::I64(EBADF)) // Not a valid listener
                 }
             }
-            SYSCALL_ACCEPT => {
+            HOSTCALL_ACCEPT => {
                 if args.len() != 1 {
                     return Err(format!(
-                        "accept syscall expects 1 argument, got {}",
+                        "accept hostcall expects 1 argument, got {}",
                         args.len()
                     ));
                 }
@@ -4118,33 +4118,33 @@ impl VM {
                     Err(_) => Ok(Value::I64(EBADF)),
                 }
             }
-            SYSCALL_TIME => {
+            HOSTCALL_TIME => {
                 if !args.is_empty() {
                     return Err(format!(
-                        "time syscall expects 0 arguments, got {}",
+                        "time hostcall expects 0 arguments, got {}",
                         args.len()
                     ));
                 }
 
                 let duration = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|e| format!("time syscall failed: {}", e))?;
+                    .map_err(|e| format!("time hostcall failed: {}", e))?;
                 Ok(Value::I64(duration.as_secs() as i64))
             }
-            SYSCALL_TIME_NANOS => {
+            HOSTCALL_TIME_NANOS => {
                 if !args.is_empty() {
                     return Err(format!(
-                        "time_nanos syscall expects 0 arguments, got {}",
+                        "time_nanos hostcall expects 0 arguments, got {}",
                         args.len()
                     ));
                 }
 
                 let duration = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|e| format!("time_nanos syscall failed: {}", e))?;
+                    .map_err(|e| format!("time_nanos hostcall failed: {}", e))?;
                 Ok(Value::I64(duration.as_nanos() as i64))
             }
-            _ => Err(format!("unknown syscall: {}", syscall_num)),
+            _ => Err(format!("unknown hostcall: {}", hostcall_num)),
         }
     }
 }
@@ -4368,12 +4368,12 @@ unsafe extern "C" fn jit_array_len_helper(ctx: *mut JitCallContext, ref_index: u
     }
 }
 
-/// JIT syscall helper function.
-/// Executes a syscall via the VM and returns the result.
+/// JIT hostcall helper function.
+/// Executes a hostcall via the VM and returns the result.
 #[cfg(feature = "jit")]
-unsafe extern "C" fn jit_syscall_helper(
+unsafe extern "C" fn jit_hostcall_helper(
     ctx: *mut JitCallContext,
-    syscall_num: u64,
+    hostcall_num: u64,
     argc: u64,
     args: *const JitValue,
 ) -> JitReturn {
@@ -4381,7 +4381,7 @@ unsafe extern "C" fn jit_syscall_helper(
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
 
     // Record opcode for profiling (JIT path)
-    vm.record_opcode("Syscall");
+    vm.record_opcode("Hostcall");
 
     let argc = argc as usize;
 
@@ -4392,8 +4392,8 @@ unsafe extern "C" fn jit_syscall_helper(
         vm_args.push(jit_val.to_value());
     }
 
-    // Call the syscall handler
-    match vm.handle_syscall(syscall_num as usize, &vm_args) {
+    // Call the hostcall handler
+    match vm.handle_hostcall(hostcall_num as usize, &vm_args) {
         Ok(result) => {
             let jit_result = JitValue::from_value(&result);
             JitReturn {
@@ -4626,14 +4626,14 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_write_invalid_fd() {
+    fn test_hostcall_write_invalid_fd() {
         // Test writing to invalid fd returns EBADF (-1)
         let stack = run_code_with_strings(
             vec![
                 Op::I64Const(99),   // invalid fd
                 Op::StringConst(0), // buffer
                 Op::I64Const(5),    // count
-                Op::Syscall(1, 3),  // syscall_write
+                Op::Hostcall(1, 3), // hostcall_write
             ],
             vec!["hello".to_string()],
         )
@@ -4642,34 +4642,34 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_close_invalid_fd() {
+    fn test_hostcall_close_invalid_fd() {
         // Test closing invalid fd returns EBADF (-1)
         let stack = run_code(vec![
-            Op::I64Const(99),  // invalid fd
-            Op::Syscall(3, 1), // syscall_close
+            Op::I64Const(99),   // invalid fd
+            Op::Hostcall(3, 1), // hostcall_close
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
     }
 
     #[test]
-    fn test_syscall_close_reserved_fd() {
+    fn test_hostcall_close_reserved_fd() {
         // Test closing reserved fd (stdin/stdout/stderr) returns EBADF
         let stack = run_code(vec![
-            Op::I64Const(1),   // stdout
-            Op::Syscall(3, 1), // syscall_close
+            Op::I64Const(1),    // stdout
+            Op::Hostcall(3, 1), // hostcall_close
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
     }
 
     #[test]
-    fn test_syscall_open_write_close() {
+    fn test_hostcall_open_write_close() {
         use std::io::Read;
 
         // Create a temporary file path
         let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join("moca_test_syscall.txt");
+        let temp_path = temp_dir.join("moca_test_hostcall.txt");
         let path_str = temp_path.to_str().unwrap().to_string();
 
         // Clean up any existing file
@@ -4688,17 +4688,17 @@ mod tests {
                     // fd = open(path, flags)
                     Op::StringConst(0),  // path
                     Op::I64Const(flags), // flags
-                    Op::Syscall(2, 2),   // syscall_open
+                    Op::Hostcall(2, 2),  // hostcall_open
                     Op::LocalSet(0),     // store fd in local 0
                     // write(fd, "hello", 5)
                     Op::LocalGet(0),    // fd
                     Op::StringConst(1), // buffer
                     Op::I64Const(5),    // count
-                    Op::Syscall(1, 3),  // syscall_write
+                    Op::Hostcall(1, 3), // hostcall_write
                     Op::Drop,           // discard write result
                     // close(fd)
-                    Op::LocalGet(0),   // fd
-                    Op::Syscall(3, 1), // syscall_close
+                    Op::LocalGet(0),    // fd
+                    Op::Hostcall(3, 1), // hostcall_close
                 ],
                 stackmap: None,
                 local_types: vec![],
@@ -4711,7 +4711,7 @@ mod tests {
 
         let mut vm = VM::new();
         let result = vm.run(&chunk);
-        assert!(result.is_ok(), "syscall test failed: {:?}", result);
+        assert!(result.is_ok(), "hostcall test failed: {:?}", result);
 
         // Verify file contents
         let mut contents = String::new();
@@ -4724,31 +4724,31 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_read_invalid_fd() {
+    fn test_hostcall_read_invalid_fd() {
         // Test reading from invalid fd returns EBADF (-1)
         let stack = run_code(vec![
-            Op::I64Const(99),  // invalid fd
-            Op::I64Const(10),  // count
-            Op::Syscall(4, 2), // syscall_read
+            Op::I64Const(99),   // invalid fd
+            Op::I64Const(10),   // count
+            Op::Hostcall(4, 2), // hostcall_read
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
     }
 
     #[test]
-    fn test_syscall_read_reserved_fd() {
+    fn test_hostcall_read_reserved_fd() {
         // Test reading from reserved fd (stdout) returns EBADF
         let stack = run_code(vec![
-            Op::I64Const(1),   // stdout
-            Op::I64Const(10),  // count
-            Op::Syscall(4, 2), // syscall_read
+            Op::I64Const(1),    // stdout
+            Op::I64Const(10),   // count
+            Op::Hostcall(4, 2), // hostcall_read
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(-1)]); // EBADF
     }
 
     #[test]
-    fn test_syscall_read_from_file() {
+    fn test_hostcall_read_from_file() {
         use std::io::Write;
 
         // Create a temporary file with content
@@ -4775,17 +4775,17 @@ mod tests {
                     // fd = open(path, O_RDONLY)
                     Op::StringConst(0),  // path
                     Op::I64Const(flags), // flags
-                    Op::Syscall(2, 2),   // syscall_open
+                    Op::Hostcall(2, 2),  // hostcall_open
                     Op::LocalSet(0),     // store fd at stack[0]
                     // content = read(fd, 100)
-                    Op::LocalGet(0),   // push fd from stack[0]
-                    Op::I64Const(100), // count
-                    Op::Syscall(4, 2), // syscall_read -> returns string ref
-                    Op::LocalSet(1),   // store content at stack[1]
+                    Op::LocalGet(0),    // push fd from stack[0]
+                    Op::I64Const(100),  // count
+                    Op::Hostcall(4, 2), // hostcall_read -> returns string ref
+                    Op::LocalSet(1),    // store content at stack[1]
                     // close(fd)
-                    Op::LocalGet(0),   // push fd
-                    Op::Syscall(3, 1), // syscall_close
-                    Op::Drop,          // discard close result
+                    Op::LocalGet(0),    // push fd
+                    Op::Hostcall(3, 1), // hostcall_close
+                    Op::Drop,           // discard close result
                     // return content
                     Op::LocalGet(1), // push content ref
                 ],
@@ -4800,7 +4800,7 @@ mod tests {
 
         let mut vm = VM::new();
         let result = vm.run(&chunk);
-        assert!(result.is_ok(), "syscall read test failed: {:?}", result);
+        assert!(result.is_ok(), "hostcall read test failed: {:?}", result);
 
         // Find the content ref in the stack (last Ref value)
         let content_ref = vm
@@ -4823,7 +4823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_read_partial() {
+    fn test_hostcall_read_partial() {
         use std::io::Write;
 
         // Create a temporary file with content
@@ -4850,17 +4850,17 @@ mod tests {
                     // fd = open(path, O_RDONLY)
                     Op::StringConst(0),  // path
                     Op::I64Const(flags), // flags
-                    Op::Syscall(2, 2),   // syscall_open
+                    Op::Hostcall(2, 2),  // hostcall_open
                     Op::LocalSet(0),     // store fd at stack[0]
                     // content = read(fd, 5) - only read first 5 bytes
-                    Op::LocalGet(0),   // push fd
-                    Op::I64Const(5),   // count
-                    Op::Syscall(4, 2), // syscall_read -> returns string ref
-                    Op::LocalSet(1),   // store content at stack[1]
+                    Op::LocalGet(0),    // push fd
+                    Op::I64Const(5),    // count
+                    Op::Hostcall(4, 2), // hostcall_read -> returns string ref
+                    Op::LocalSet(1),    // store content at stack[1]
                     // close(fd)
-                    Op::LocalGet(0),   // push fd
-                    Op::Syscall(3, 1), // syscall_close
-                    Op::Drop,          // discard close result
+                    Op::LocalGet(0),    // push fd
+                    Op::Hostcall(3, 1), // hostcall_close
+                    Op::Drop,           // discard close result
                     // return content
                     Op::LocalGet(1), // push content ref
                 ],
@@ -4877,7 +4877,7 @@ mod tests {
         let result = vm.run(&chunk);
         assert!(
             result.is_ok(),
-            "syscall read partial test failed: {:?}",
+            "hostcall read partial test failed: {:?}",
             result
         );
 
@@ -4902,12 +4902,12 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_socket_valid() {
+    fn test_hostcall_socket_valid() {
         // socket(AF_INET=2, SOCK_STREAM=1) should return fd >= 3
         let stack = run_code(vec![
-            Op::I64Const(2),   // AF_INET
-            Op::I64Const(1),   // SOCK_STREAM
-            Op::Syscall(5, 2), // syscall_socket
+            Op::I64Const(2),    // AF_INET
+            Op::I64Const(1),    // SOCK_STREAM
+            Op::Hostcall(5, 2), // hostcall_socket
         ])
         .unwrap();
         assert_eq!(stack.len(), 1);
@@ -4916,38 +4916,38 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_socket_invalid_domain() {
+    fn test_hostcall_socket_invalid_domain() {
         // socket(999, SOCK_STREAM=1) should return EAFNOSUPPORT (-6)
         let stack = run_code(vec![
-            Op::I64Const(999), // Invalid domain
-            Op::I64Const(1),   // SOCK_STREAM
-            Op::Syscall(5, 2), // syscall_socket
+            Op::I64Const(999),  // Invalid domain
+            Op::I64Const(1),    // SOCK_STREAM
+            Op::Hostcall(5, 2), // hostcall_socket
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(-6)]); // EAFNOSUPPORT
     }
 
     #[test]
-    fn test_syscall_socket_invalid_type() {
+    fn test_hostcall_socket_invalid_type() {
         // socket(AF_INET=2, 999) should return ESOCKTNOSUPPORT (-7)
         let stack = run_code(vec![
-            Op::I64Const(2),   // AF_INET
-            Op::I64Const(999), // Invalid socket type
-            Op::Syscall(5, 2), // syscall_socket
+            Op::I64Const(2),    // AF_INET
+            Op::I64Const(999),  // Invalid socket type
+            Op::Hostcall(5, 2), // hostcall_socket
         ])
         .unwrap();
         assert_eq!(stack, vec![Value::I64(-7)]); // ESOCKTNOSUPPORT
     }
 
     #[test]
-    fn test_syscall_connect_invalid_fd() {
+    fn test_hostcall_connect_invalid_fd() {
         // connect(999, "example.com", 80) should return EBADF (-1)
         let stack = run_code_with_strings(
             vec![
                 Op::I64Const(999),  // Invalid fd
                 Op::StringConst(0), // host
                 Op::I64Const(80),   // port
-                Op::Syscall(6, 3),  // syscall_connect
+                Op::Hostcall(6, 3), // hostcall_connect
             ],
             vec!["example.com".to_string()],
         )
@@ -4956,15 +4956,15 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_close_pending_socket() {
+    fn test_hostcall_close_pending_socket() {
         // socket() then close() should work
         let stack = run_code(vec![
-            Op::I64Const(2),   // AF_INET
-            Op::I64Const(1),   // SOCK_STREAM
-            Op::Syscall(5, 2), // syscall_socket -> fd
-            Op::LocalSet(0),   // store fd
-            Op::LocalGet(0),   // push fd
-            Op::Syscall(3, 1), // syscall_close
+            Op::I64Const(2),    // AF_INET
+            Op::I64Const(1),    // SOCK_STREAM
+            Op::Hostcall(5, 2), // hostcall_socket -> fd
+            Op::LocalSet(0),    // store fd
+            Op::LocalGet(0),    // push fd
+            Op::Hostcall(3, 1), // hostcall_close
         ])
         .unwrap();
         // Last value should be 0 (success)
@@ -4972,7 +4972,7 @@ mod tests {
     }
 
     #[test]
-    fn test_syscall_http_get_local_server() {
+    fn test_hostcall_http_get_local_server() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         use std::thread;
@@ -5009,31 +5009,31 @@ mod tests {
                 locals_count: 2,
                 code: vec![
                     // fd = socket(AF_INET=2, SOCK_STREAM=1)
-                    Op::I64Const(2),   // AF_INET
-                    Op::I64Const(1),   // SOCK_STREAM
-                    Op::Syscall(5, 2), // syscall_socket
-                    Op::LocalSet(0),   // store fd at local 0
+                    Op::I64Const(2),    // AF_INET
+                    Op::I64Const(1),    // SOCK_STREAM
+                    Op::Hostcall(5, 2), // hostcall_socket
+                    Op::LocalSet(0),    // store fd at local 0
                     // connect(fd, "127.0.0.1", port)
                     Op::LocalGet(0),           // push fd
                     Op::StringConst(0),        // host = "127.0.0.1"
                     Op::I64Const(port as i64), // port
-                    Op::Syscall(6, 3),         // syscall_connect
+                    Op::Hostcall(6, 3),        // hostcall_connect
                     Op::Drop,                  // discard connect result
                     // write(fd, request, len)
                     Op::LocalGet(0),           // push fd
                     Op::StringConst(1),        // request string
                     Op::I64Const(request_len), // count
-                    Op::Syscall(1, 3),         // syscall_write
+                    Op::Hostcall(1, 3),        // hostcall_write
                     Op::Drop,                  // discard write result
                     // response = read(fd, 4096)
                     Op::LocalGet(0),    // push fd
                     Op::I64Const(4096), // count
-                    Op::Syscall(4, 2),  // syscall_read
+                    Op::Hostcall(4, 2), // hostcall_read
                     Op::LocalSet(1),    // store response at local 1
                     // close(fd)
-                    Op::LocalGet(0),   // push fd
-                    Op::Syscall(3, 1), // syscall_close
-                    Op::Drop,          // discard close result
+                    Op::LocalGet(0),    // push fd
+                    Op::Hostcall(3, 1), // hostcall_close
+                    Op::Drop,           // discard close result
                     // return response
                     Op::LocalGet(1), // push response ref
                 ],

@@ -1203,28 +1203,30 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::HeapSize);
                     }
-                    "__syscall" => {
-                        // __syscall(num, ...args) -> result
-                        // First argument must be a compile-time constant (syscall number)
+                    "__hostcall" => {
+                        // __hostcall(num, ...args) -> result
+                        // First argument must be a compile-time constant (hostcall number)
                         if args.is_empty() {
-                            return Err("__syscall requires at least 1 argument (syscall number)"
-                                .to_string());
+                            return Err(
+                                "__hostcall requires at least 1 argument (hostcall number)"
+                                    .to_string(),
+                            );
                         }
-                        // Extract syscall number from first argument (must be integer literal)
-                        let syscall_num = match &args[0] {
+                        // Extract hostcall number from first argument (must be integer literal)
+                        let hostcall_num = match &args[0] {
                             ResolvedExpr::Int(n) => *n as usize,
                             _ => {
-                                return Err("__syscall first argument must be an integer literal"
+                                return Err("__hostcall first argument must be an integer literal"
                                     .to_string());
                             }
                         };
-                        // Compile remaining arguments (syscall-specific args)
+                        // Compile remaining arguments (hostcall-specific args)
                         for arg in args.iter().skip(1) {
                             self.compile_expr(arg, ops)?;
                         }
-                        // argc is the number of syscall-specific arguments (excluding syscall number)
+                        // argc is the number of hostcall-specific arguments (excluding hostcall number)
                         let argc = args.len() - 1;
-                        ops.push(Op::Syscall(syscall_num, argc));
+                        ops.push(Op::Hostcall(hostcall_num, argc));
                     }
                     "len" => {
                         if args.len() != 1 {
@@ -1846,11 +1848,11 @@ impl Codegen {
             "ChannelRecv" => Ok(Op::ChannelRecv),
             "ThreadJoin" => Ok(Op::ThreadJoin),
 
-            // Syscall
-            "Syscall" => {
-                let num = self.expect_int_arg(args, 0, "Syscall")? as usize;
-                let argc = self.expect_int_arg(args, 1, "Syscall")? as usize;
-                Ok(Op::Syscall(num, argc))
+            // Hostcall
+            "Hostcall" => {
+                let num = self.expect_int_arg(args, 0, "Hostcall")? as usize;
+                let argc = self.expect_int_arg(args, 1, "Hostcall")? as usize;
+                Ok(Op::Hostcall(num, argc))
             }
 
             _ => Err(format!("unknown asm instruction '{}'", op_name)),

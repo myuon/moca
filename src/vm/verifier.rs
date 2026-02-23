@@ -465,7 +465,7 @@ impl Verifier {
             Op::HeapStore2 => (3, 0), // pops ref, index, and value (indirect via slot 0)
             Op::HeapOffsetRef => (2, 1), // pops ref and offset, pushes offset ref
             // System / Builtins
-            Op::Syscall(_, argc) => (*argc, 1), // pops argc args, pushes result
+            Op::Hostcall(_, argc) => (*argc, 1), // pops argc args, pushes result
             Op::GcHint(_) => (0, 0),
             Op::TypeOf => (1, 1),   // pops value, pushes type tag
             Op::HeapSize => (1, 1), // pops ref, pushes slot count

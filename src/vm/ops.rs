@@ -170,7 +170,7 @@ pub enum Op {
     // ========================================
     // System / Builtins
     // ========================================
-    Syscall(usize, usize),
+    Hostcall(usize, usize),
     GcHint(usize),
     UMul128Hi,
     /// Returns the runtime type tag of a value: 0=I64, 1=F64, 2=Bool, 3=Null, 4=Ref
@@ -333,7 +333,7 @@ impl Op {
             Op::HeapLoad2 => "HeapLoad2",
             Op::HeapStore2 => "HeapStore2",
             Op::HeapOffsetRef => "HeapOffsetRef",
-            Op::Syscall(_, _) => "Syscall",
+            Op::Hostcall(_, _) => "Hostcall",
             Op::GcHint(_) => "GcHint",
             Op::UMul128Hi => "UMul128Hi",
             Op::TypeOf => "TypeOf",

@@ -311,13 +311,13 @@ PRINT_DEBUG         // Debug output stack top to stdout
 GC_HINT <bytes>     // Hint GC about allocation
 ```
 
-### Syscall Operations
+### Hostcall Operations
 
 ```
-SYSCALL <num> <argc>  // Execute system call
+HOSTCALL <num> <argc>  // Execute host call
 ```
 
-#### Syscall Numbers
+#### Hostcall Numbers
 
 | Number | Name    | Arguments                 | Return Value                 |
 |--------|---------|---------------------------|------------------------------|
@@ -363,10 +363,10 @@ Flags can be combined with bitwise OR (e.g., `1 | 64 | 512` = 577).
 | 2     | AF_INET     | IPv4 address family            |
 | 1     | SOCK_STREAM | TCP socket type                |
 
-#### open Syscall
+#### open Hostcall
 
 ```
-syscall_open(path: string, flags: int) -> int
+hostcall_open(path: string, flags: int) -> int
 ```
 
 - **path**: File path (relative or absolute)
@@ -375,16 +375,16 @@ syscall_open(path: string, flags: int) -> int
 
 **Example:**
 ```moca
-let fd = syscall_open("output.txt", 1 | 64 | 512);  // O_WRONLY | O_CREAT | O_TRUNC
+let fd = hostcall_open("output.txt", 1 | 64 | 512);  // O_WRONLY | O_CREAT | O_TRUNC
 if fd < 0 {
     print("Failed to open file");
 }
 ```
 
-#### write Syscall
+#### write Hostcall
 
 ```
-syscall_write(fd: int, buf: string, count: int) -> int
+hostcall_write(fd: int, buf: string, count: int) -> int
 ```
 
 - **fd**: File descriptor (1 = stdout, 2 = stderr, >=3 = file)
@@ -395,18 +395,18 @@ syscall_write(fd: int, buf: string, count: int) -> int
 **Example:**
 ```moca
 // Write to stdout
-syscall_write(1, "hello", 5);
+hostcall_write(1, "hello", 5);
 
 // Write to file
-let fd = syscall_open("test.txt", 577);
-syscall_write(fd, "content", 7);
-syscall_close(fd);
+let fd = hostcall_open("test.txt", 577);
+hostcall_write(fd, "content", 7);
+hostcall_close(fd);
 ```
 
-#### close Syscall
+#### close Hostcall
 
 ```
-syscall_close(fd: int) -> int
+hostcall_close(fd: int) -> int
 ```
 
 - **fd**: File descriptor to close (must be >=3)
@@ -414,10 +414,10 @@ syscall_close(fd: int) -> int
 
 **Note:** fd=0, 1, 2 (stdin, stdout, stderr) cannot be closed and will return EBADF.
 
-#### read Syscall
+#### read Hostcall
 
 ```
-syscall_read(fd: int, count: int) -> string | int
+hostcall_read(fd: int, count: int) -> string | int
 ```
 
 - **fd**: File descriptor to read from (must be >=3, opened with O_RDONLY)
@@ -429,15 +429,15 @@ syscall_read(fd: int, count: int) -> string | int
 **Example:**
 ```moca
 // Read from file
-let fd = syscall_open("input.txt", 0);  // O_RDONLY
-let content = syscall_read(fd, 1024);   // Read up to 1024 bytes
-syscall_close(fd);
+let fd = hostcall_open("input.txt", 0);  // O_RDONLY
+let content = hostcall_read(fd, 1024);   // Read up to 1024 bytes
+hostcall_close(fd);
 ```
 
-#### socket Syscall
+#### socket Hostcall
 
 ```
-syscall_socket(domain: int, type: int) -> int
+hostcall_socket(domain: int, type: int) -> int
 ```
 
 - **domain**: Address family (AF_INET = 2 for IPv4)
@@ -448,27 +448,27 @@ syscall_socket(domain: int, type: int) -> int
 
 **Example:**
 ```moca
-let fd = syscall_socket(2, 1);  // AF_INET, SOCK_STREAM
+let fd = hostcall_socket(2, 1);  // AF_INET, SOCK_STREAM
 if fd < 0 {
     print("Failed to create socket");
 }
 ```
 
-#### connect Syscall
+#### connect Hostcall
 
 ```
-syscall_connect(fd: int, host: string, port: int) -> int
+hostcall_connect(fd: int, host: string, port: int) -> int
 ```
 
-- **fd**: Socket file descriptor (from syscall_socket)
+- **fd**: Socket file descriptor (from hostcall_socket)
 - **host**: Hostname or IP address
 - **port**: Port number
 - **Returns**: 0 on success, or negative error code
 
 **Example:**
 ```moca
-let fd = syscall_socket(2, 1);  // AF_INET, SOCK_STREAM
-let result = syscall_connect(fd, "example.com", 80);
+let fd = hostcall_socket(2, 1);  // AF_INET, SOCK_STREAM
+let result = hostcall_connect(fd, "example.com", 80);
 if result < 0 {
     print("Connection failed");
 }
@@ -476,38 +476,38 @@ if result < 0 {
 
 #### Socket I/O
 
-Once connected, sockets can use the same `read`, `write`, and `close` syscalls as files:
+Once connected, sockets can use the same `read`, `write`, and `close` hostcalls as files:
 
 ```moca
 // Create and connect socket
-let fd = syscall_socket(2, 1);
-syscall_connect(fd, "example.com", 80);
+let fd = hostcall_socket(2, 1);
+hostcall_connect(fd, "example.com", 80);
 
 // Send HTTP request
 let request = "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
-syscall_write(fd, request, 38);
+hostcall_write(fd, request, 38);
 
 // Read response
-let response = syscall_read(fd, 4096);
+let response = hostcall_read(fd, 4096);
 
 // Close socket
-syscall_close(fd);
+hostcall_close(fd);
 ```
 
-#### time Syscall
+#### time Hostcall
 
 ```
-syscall_time() -> int
+hostcall_time() -> int
 ```
 
 - **Returns**: Current time as Unix epoch seconds (i64)
 
 Uses `std::time::SystemTime::now()` internally.
 
-#### time_nanos Syscall
+#### time_nanos Hostcall
 
 ```
-syscall_time_nanos() -> int
+hostcall_time_nanos() -> int
 ```
 
 - **Returns**: Current time as Unix epoch nanoseconds (i64, valid until ~2262)

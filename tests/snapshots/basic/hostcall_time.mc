@@ -1,4 +1,4 @@
-// Test syscall 10 (time), 11 (time_nanos), 12 (time_format)
+// Test hostcall 10 (time), 11 (time_nanos), 12 (time_format)
 
 let secs = time();
 let nanos = time_nanos();
