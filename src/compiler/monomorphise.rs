@@ -1242,10 +1242,12 @@ fn substitute_expr(expr: &Expr, type_map: &HashMap<String, Type>) -> Expr {
             expr,
             span,
             inferred_type,
+            is_implicit,
         } => Expr::AsDyn {
             expr: Box::new(substitute_expr(expr, type_map)),
             span: *span,
             inferred_type: substitute_inferred_type(inferred_type, type_map),
+            is_implicit: *is_implicit,
         },
         Expr::StringInterpolation {
             parts,
@@ -1725,10 +1727,12 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
             expr,
             span,
             inferred_type,
+            is_implicit,
         } => Expr::AsDyn {
             expr: Box::new(rewrite_expr(expr, instantiations)),
             span: *span,
             inferred_type: inferred_type.clone(),
+            is_implicit: *is_implicit,
         },
         // Literals and identifiers don't need rewriting
         _ => expr.clone(),

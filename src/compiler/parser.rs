@@ -1327,6 +1327,7 @@ impl<'a> Parser<'a> {
                         expr: Box::new(expr),
                         span,
                         inferred_type: None,
+                        is_implicit: false,
                     };
                 } else {
                     return Err(self.error("expected 'dyn' after 'as'"));

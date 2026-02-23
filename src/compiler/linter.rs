@@ -310,6 +310,7 @@ pub fn default_rules() -> Vec<Box<dyn LintRule>> {
         Box::new(PreferNewLiteral),
         Box::new(PreferIndexAccess),
         Box::new(RedundantTypeAnnotation),
+        Box::new(RedundantAsDyn),
     ]
 }
 
@@ -489,6 +490,53 @@ impl LintRule for RedundantTypeAnnotation {
                 ),
                 span: *span,
             });
+        }
+    }
+}
+
+// ============================================================================
+// Redundant `as dyn` Detection
+// ============================================================================
+
+/// Warns about redundant explicit `as dyn` casts in function call arguments.
+/// When a function parameter is `dyn`, the typechecker automatically inserts
+/// implicit `as dyn` coercion, making explicit casts unnecessary.
+/// Exception: `Type::Param` (generic `T`) is NOT auto-coerced, so `as dyn` is needed.
+pub struct RedundantAsDyn;
+
+impl LintRule for RedundantAsDyn {
+    fn name(&self) -> &str {
+        "redundant-as-dyn"
+    }
+
+    fn check_expr(&self, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
+        let args = match expr {
+            Expr::Call { args, .. }
+            | Expr::MethodCall { args, .. }
+            | Expr::AssociatedFunctionCall { args, .. } => args,
+            Expr::CallExpr { args, .. } => args,
+            _ => return,
+        };
+
+        for arg in args {
+            if let Expr::AsDyn {
+                is_implicit: false,
+                expr: inner,
+                span,
+                ..
+            } = arg
+                && let Some(inner_type) = inner.inferred_type()
+                && !matches!(
+                    inner_type,
+                    Type::Dyn | Type::Any | Type::Var(_) | Type::Param { .. }
+                )
+            {
+                diagnostics.push(Diagnostic {
+                    rule: self.name().to_string(),
+                    message: "redundant `as dyn` cast: implicit coercion is automatic".to_string(),
+                    span: *span,
+                });
+            }
         }
     }
 }

@@ -667,6 +667,7 @@ impl Desugar {
                                 expr: Box::new(arg),
                                 span,
                                 inferred_type: Some(Type::Dyn),
+                                is_implicit: true,
                             }],
                             span,
                             inferred_type: Some(Type::Nil),
@@ -687,6 +688,7 @@ impl Desugar {
                                         expr: Box::new(arg),
                                         span,
                                         inferred_type: Some(Type::Dyn),
+                                        is_implicit: true,
                                     }],
                                     span,
                                     inferred_type: Some(Type::String),
@@ -863,10 +865,12 @@ impl Desugar {
                 expr,
                 span,
                 inferred_type,
+                is_implicit,
             } => Expr::AsDyn {
                 expr: Box::new(self.desugar_expr(*expr)),
                 span,
                 inferred_type,
+                is_implicit,
             },
 
             // StringInterpolation - desugar to direct buffer write for 3+ parts,

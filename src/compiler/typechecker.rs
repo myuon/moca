@@ -979,6 +979,7 @@ impl TypeChecker {
                             expr: Box::new(field_access),
                             span,
                             inferred_type: None,
+                            is_implicit: true,
                         }],
                         span,
                         inferred_type: None,
@@ -3056,6 +3057,7 @@ impl TypeChecker {
                     expr: Box::new(inner),
                     span,
                     inferred_type: Some(Type::Dyn),
+                    is_implicit: true,
                 };
             } else if let Err(e) = self.unify(&arg_type, param_type, arg.span()) {
                 self.errors.push(e);
