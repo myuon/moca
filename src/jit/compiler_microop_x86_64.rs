@@ -85,6 +85,9 @@ pub struct MicroOpJitCompiler {
     all_reg_map: HashMap<usize, Reg>,
     /// Detected inner loop range: Some((loop_start_pc, loop_end_pc)).
     loop_range: Option<(usize, usize)>,
+    /// Code offset after loop_reg_loads (backward jump target).
+    /// Forward jumps use labels[ls] (before loads), backward jump uses this (after loads).
+    loop_body_offset: Option<usize>,
 }
 
 /// Kind of forward reference for patching.
@@ -118,6 +121,7 @@ impl MicroOpJitCompiler {
             loop_regs: HashMap::new(),
             all_reg_map: HashMap::new(),
             loop_range: None,
+            loop_body_offset: None,
         }
     }
 
@@ -451,7 +455,7 @@ impl MicroOpJitCompiler {
             .into_iter()
             .filter(|(vreg, _)| !written.contains(vreg))
             .collect();
-        invariants.sort_by(|a, b| b.1.cmp(&a.1));
+        invariants.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         invariants
     }
 
@@ -692,7 +696,7 @@ impl MicroOpJitCompiler {
                 (v, total)
             })
             .collect();
-        variants.sort_by(|a, b| b.1.cmp(&a.1));
+        variants.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         variants
     }
 
@@ -936,40 +940,22 @@ impl MicroOpJitCompiler {
             }
 
             // Allocate LOOP_REGS for loop-variant VRegs.
-            // Only enable when there are no calls, heap allocs, or string consts
-            // outside the detected loop, since those operations may depend on
-            // frame-consistent state that LOOP_REGS would violate.
             if let Some((ls, le)) = detected_loop {
-                let has_outside_complex_ops =
-                    converted.micro_ops.iter().enumerate().any(|(i, op)| {
-                        (i < ls || i > le)
-                            && matches!(
-                                op,
-                                MicroOp::HeapAllocDynSimple { .. }
-                                    | MicroOp::HeapAlloc { .. }
-                                    | MicroOp::StringConst { .. }
-                                    | MicroOp::Call { .. }
-                                    | MicroOp::CallIndirect { .. }
-                                    | MicroOp::CallDynamic { .. }
-                            )
-                    });
-                if !has_outside_complex_ops {
-                    let variants = Self::analyze_loop_variants(&converted.micro_ops, ls, le);
-                    let mut loop_reg_idx = 0;
-                    for (vreg_idx, _) in variants {
-                        if loop_reg_idx >= regs::LOOP_REGS.len() {
-                            break;
-                        }
-                        if self.pinned_vregs.contains_key(&vreg_idx) {
-                            continue;
-                        }
-                        if self.hoisted_inner_ptrs.contains_key(&vreg_idx) {
-                            continue;
-                        }
-                        self.loop_regs
-                            .insert(vreg_idx, regs::LOOP_REGS[loop_reg_idx]);
-                        loop_reg_idx += 1;
+                let variants = Self::analyze_loop_variants(&converted.micro_ops, ls, le);
+                let mut loop_reg_idx = 0;
+                for (vreg_idx, _) in &variants {
+                    if loop_reg_idx >= regs::LOOP_REGS.len() {
+                        break;
                     }
+                    if self.pinned_vregs.contains_key(vreg_idx) {
+                        continue;
+                    }
+                    if self.hoisted_inner_ptrs.contains_key(vreg_idx) {
+                        continue;
+                    }
+                    self.loop_regs
+                        .insert(*vreg_idx, regs::LOOP_REGS[loop_reg_idx]);
+                    loop_reg_idx += 1;
                 }
                 self.loop_range = Some((ls, le));
             }
@@ -1001,7 +987,7 @@ impl MicroOpJitCompiler {
         let ops = &converted.micro_ops;
         let mut pc = 0;
         while pc < ops.len() {
-            // Loop entry: activate loop_regs and load from frame
+            // Loop entry: activate loop_regs
             if let Some((ls, _)) = self.loop_range
                 && pc == ls
                 && !self.loop_regs.is_empty()
@@ -1009,16 +995,49 @@ impl MicroOpJitCompiler {
                 for (&vreg_idx, &reg) in &self.loop_regs.clone() {
                     self.all_reg_map.insert(vreg_idx, reg);
                 }
-                self.emit_loop_reg_loads();
             }
 
+            // Set label BEFORE loop_reg_loads so forward jumps to ls execute the loads.
             self.labels.insert(pc, self.buf.len());
 
+            // Emit loop_reg_loads after the label. Backward jump uses loop_body_offset
+            // (set below) to skip these loads and keep R10/R11 from the previous iteration.
+            if let Some((ls, _)) = self.loop_range
+                && pc == ls
+                && !self.loop_regs.is_empty()
+            {
+                self.emit_loop_reg_loads();
+                self.loop_body_offset = Some(self.buf.len());
+            }
+
             // Loop exit branches: insert spills before exiting the loop
-            if let Some((_, le)) = self.loop_range
+            if let Some((ls, le)) = self.loop_range
+                && pc >= ls
                 && pc <= le
                 && !self.loop_regs.is_empty()
             {
+                let next_pc = pc + 1;
+
+                // Fused CmpI64/CmpI64Imm + BrIfFalse/BrIf loop-exit
+                let next_is_loop_exit = next_pc < ops.len()
+                    && match &ops[next_pc] {
+                        MicroOp::BrIfFalse { target, .. } | MicroOp::BrIf { target, .. } => {
+                            *target > le
+                        }
+                        _ => false,
+                    };
+                if next_is_loop_exit
+                    && !jump_targets.contains(&next_pc)
+                    && let Some(fused) =
+                        self.try_fuse_loop_exit_cmp_branch(&ops[pc], &ops[next_pc])
+                {
+                    fused?;
+                    self.labels.insert(next_pc, self.buf.len());
+                    pc += 2;
+                    continue;
+                }
+
+                // Standalone BrIfFalse/BrIf loop-exit (not preceded by fusable CmpI64)
                 let is_loop_exit = match &ops[pc] {
                     MicroOp::BrIfFalse { target, .. } | MicroOp::BrIf { target, .. } => {
                         *target > le
@@ -1032,11 +1051,12 @@ impl MicroOpJitCompiler {
                 }
             }
 
-            // Peephole: fuse CmpI64/CmpI64Imm + BrIfFalse/BrIf
-            // Skip fusion if the next op is a loop-exit branch (must use emit_loop_exit_branch)
+            // Peephole: fuse CmpI64/CmpI64Imm + BrIfFalse/BrIf (non-loop-exit)
             let next_pc = pc + 1;
-            let next_is_loop_exit_for_fusion = if let Some((_, le)) = self.loop_range {
+            let next_is_loop_exit_for_fusion = if let Some((ls, le)) = self.loop_range {
                 !self.loop_regs.is_empty()
+                    && pc >= ls
+                    && pc <= le
                     && match ops.get(next_pc) {
                         Some(MicroOp::BrIfFalse { target, .. })
                         | Some(MicroOp::BrIf { target, .. }) => *target > le,
@@ -1056,17 +1076,28 @@ impl MicroOpJitCompiler {
                 continue;
             }
 
-            self.compile_microop(&ops[pc], pc)?;
-
-            // After the backward Jmp (loop_end), deactivate loop_regs
+            // Backward Jmp at loop_end: jump to loop_body_offset (after loads)
+            // instead of labels[ls] (before loads), then deactivate loop_regs.
             if let Some((_, le)) = self.loop_range
                 && pc == le
                 && !self.loop_regs.is_empty()
+                && let Some(body_offset) = self.loop_body_offset
             {
+                // Emit backward jump to loop body (skipping the loop_reg_loads)
+                let jmp_start = self.buf.len();
+                let mut asm = X86_64Assembler::new(&mut self.buf);
+                let rel = body_offset as i32 - (jmp_start as i32) - 5; // 5 = jmp rel32 size
+                asm.jmp_rel32(rel);
+
+                // Deactivate loop_regs
                 for &vreg_idx in self.loop_regs.clone().keys() {
                     self.all_reg_map.remove(&vreg_idx);
                 }
+                pc += 1;
+                continue;
             }
+
+            self.compile_microop(&ops[pc], pc)?;
 
             pc += 1;
         }
@@ -2099,6 +2130,117 @@ impl MicroOpJitCompiler {
         let skip_target = self.buf.len();
         let skip_rel = (skip_target as i32) - (skip_offset as i32) - 6; // 6 = JNE/JE rel32 instruction size
         self.patch_i32(skip_offset + 2, skip_rel); // +2 = opcode prefix (0F 85/84)
+
+        Ok(())
+    }
+
+    /// Fused CmpI64/CmpI64Imm + BrIfFalse/BrIf for loop exit with spill.
+    /// Returns None if the pattern doesn't match.
+    fn try_fuse_loop_exit_cmp_branch(
+        &mut self,
+        cmp_op: &MicroOp,
+        branch_op: &MicroOp,
+    ) -> Option<Result<(), String>> {
+        let (cmp_dst, cmp_cond, load_a, load_b_or_imm) = match cmp_op {
+            MicroOp::CmpI64 { dst, a, b, cond } => (dst, cond, a, CmpOperand::Reg(b)),
+            MicroOp::CmpI64Imm { dst, a, imm, cond } => (dst, cond, a, CmpOperand::Imm(*imm)),
+            _ => return None,
+        };
+
+        let (branch_cond_vreg, target, is_br_if_false) = match branch_op {
+            MicroOp::BrIfFalse { cond, target } => (cond, *target, true),
+            MicroOp::BrIf { cond, target } => (cond, *target, false),
+            _ => return None,
+        };
+
+        // Branch must use the CmpI64 result
+        if branch_cond_vreg != cmp_dst {
+            return None;
+        }
+
+        Some(self.emit_fused_loop_exit_cmp_branch(
+            load_a,
+            load_b_or_imm,
+            cmp_cond,
+            target,
+            is_br_if_false,
+        ))
+    }
+
+    /// Emit fused CmpI64+BrIfFalse/BrIf with loop register spills on exit.
+    ///
+    /// For CmpI64(a, b, cond) + BrIfFalse(target=exit):
+    ///   "if !(a cond b), goto exit" → skip_spill when (a cond b) is true
+    ///   cmp a, b; j_cond skip_spill; spill; jmp exit; skip_spill:
+    ///
+    /// For CmpI64(a, b, cond) + BrIf(target=exit):
+    ///   "if (a cond b), goto exit" → skip_spill when (a cond b) is false
+    ///   cmp a, b; j_inv_cond skip_spill; spill; jmp exit; skip_spill:
+    fn emit_fused_loop_exit_cmp_branch(
+        &mut self,
+        a: &VReg,
+        b: CmpOperand,
+        cond: &CmpCond,
+        target: usize,
+        is_br_if_false: bool,
+    ) -> Result<(), String> {
+        // Load operand a
+        {
+            let reg_map = &self.all_reg_map;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            Self::load_vreg(&mut asm, regs::TMP0, a, reg_map);
+        }
+
+        // Compare with operand b
+        match b {
+            CmpOperand::Reg(b_vreg) => {
+                let reg_map = &self.all_reg_map;
+                let mut asm = X86_64Assembler::new(&mut self.buf);
+                Self::load_vreg(&mut asm, regs::TMP1, b_vreg, reg_map);
+                asm.cmp_rr(regs::TMP0, regs::TMP1);
+            }
+            CmpOperand::Imm(imm) => {
+                if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+                    let mut asm = X86_64Assembler::new(&mut self.buf);
+                    asm.cmp_ri32(regs::TMP0, imm as i32);
+                } else {
+                    let mut asm = X86_64Assembler::new(&mut self.buf);
+                    asm.mov_ri64(regs::TMP1, imm);
+                    asm.cmp_rr(regs::TMP0, regs::TMP1);
+                }
+            }
+        }
+
+        // Determine skip_spill condition:
+        // BrIfFalse exits when cond is false → skip_spill when cond is true → direct x86_cond
+        // BrIf exits when cond is true → skip_spill when cond is false → inverted x86_cond
+        let mut x86_cond = Self::cmp_cond_to_x86(cond);
+        if !is_br_if_false {
+            x86_cond = x86_cond.invert();
+        }
+
+        // Emit Jcc to skip_spill
+        let skip_offset = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(x86_cond, 0);
+        }
+
+        // Spill loop regs to frame
+        self.emit_loop_reg_spills();
+
+        // Jump to exit target
+        {
+            let current = self.buf.len();
+            self.forward_refs.push((current, target, RefKind::Jmp));
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jmp_rel32(0);
+        }
+
+        // Patch skip_offset to jump here (continue loop)
+        let skip_target = self.buf.len();
+        let skip_rel = (skip_target as i32) - (skip_offset as i32) - 6; // 6 = Jcc rel32 size
+        self.patch_i32(skip_offset + 2, skip_rel); // +2 = Jcc opcode prefix (0F xx)
 
         Ok(())
     }
