@@ -1064,6 +1064,19 @@ fn rust_string_interpolation<W: Write>(writer: &mut W) {
     writeln!(writer, "{}", total).unwrap();
 }
 
+#[cfg(feature = "jit")]
+fn rust_print_int<W: Write>(writer: &mut W) {
+    // Same LCG as moca _print_lcg_next
+    let mut seed: i64 = 42;
+    for _ in 0..100000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if seed < 0 {
+            seed = -seed;
+        }
+        writeln!(writer, "{}", seed % 1000000).unwrap();
+    }
+}
+
 /// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
 fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
@@ -1208,6 +1221,10 @@ fn snapshot_performance() {
     // Test string interpolation with Rust reference
     let string_interp_path = perf_dir.join("string_interpolation.mc");
     run_performance_test(&string_interp_path, |w| rust_string_interpolation(w));
+
+    // Test print(int) bulk output with Rust reference
+    let print_int_path = perf_dir.join("print_int.mc");
+    run_performance_test(&print_int_path, |w| rust_print_int(w));
 }
 
 // ============================================================================
