@@ -1845,6 +1845,20 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
             inferred_type: inferred_type.clone(),
             is_implicit: *is_implicit,
         },
+        Expr::Block {
+            statements,
+            expr,
+            span,
+            inferred_type,
+        } => Expr::Block {
+            statements: statements
+                .iter()
+                .map(|s| rewrite_statement(s, instantiations))
+                .collect(),
+            expr: Box::new(rewrite_expr(expr, instantiations)),
+            span: *span,
+            inferred_type: inferred_type.clone(),
+        },
         // Literals and identifiers don't need rewriting
         // Note: NewLiteral is already desugared before monomorphisation
         _ => expr.clone(),
