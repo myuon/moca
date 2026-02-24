@@ -3256,15 +3256,19 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::HeapAllocDynSimple(_) => {
+            Op::HeapAllocDynSimple(ek) => {
                 // Pop size from stack, allocate that many null-initialized slots
                 let size_val = self.stack.pop().ok_or("stack underflow")?;
                 let size = size_val
                     .as_i64()
                     .ok_or("runtime error: HeapAllocDynSimple requires integer size")?
                     as usize;
-                let slots = vec![Value::Null; size];
-                let r = self.heap.alloc_slots(slots)?;
+                let r = if ek.is_typed() {
+                    self.heap.alloc_typed_array(size as u32, ek)?
+                } else {
+                    let slots = vec![Value::Null; size];
+                    self.heap.alloc_slots(slots)?
+                };
                 self.stack.push(Value::Ref(r));
             }
             // HeapAllocString removed — use HeapAlloc(2) instead
@@ -4473,11 +4477,14 @@ unsafe extern "C" fn jit_hostcall_helper(
 }
 
 /// JIT HeapAllocDynSimple helper function.
-/// Allocates `size` null-initialized slots on the heap.
+/// Allocates `size` slots on the heap with the given ElemKind.
+/// The third argument (elem_kind) is currently unused in the JIT path;
+/// the interpreter handles typed allocation, while JIT always allocates Tagged.
 #[cfg(feature = "jit")]
 unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     ctx: *mut JitCallContext,
     size: u64,
+    _elem_kind_raw: u64,
 ) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };

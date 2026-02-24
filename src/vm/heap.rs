@@ -38,6 +38,11 @@ impl ElemKind {
         }
     }
 
+    /// Decode from a raw u8 value (public version of from_bits).
+    pub fn from_raw(raw: u8) -> Self {
+        Self::from_bits(raw)
+    }
+
     /// Whether this element kind requires GC tracing.
     pub fn needs_trace(self) -> bool {
         matches!(self, ElemKind::Ref)

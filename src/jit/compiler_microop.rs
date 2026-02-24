@@ -570,9 +570,11 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             // Heap allocation operations
             MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
-            MicroOp::HeapAllocDynSimple { dst, size, .. } => {
-                self.emit_heap_alloc_dyn_simple(dst, size)
-            }
+            MicroOp::HeapAllocDynSimple {
+                dst,
+                size,
+                elem_kind,
+            } => self.emit_heap_alloc_dyn_simple(dst, size, *elem_kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1936,14 +1938,20 @@ impl MicroOpJitCompiler {
 
     // ==================== Heap Allocation ====================
 
-    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload) -> (tag, payload)
-    fn emit_heap_alloc_dyn_simple(&mut self, dst: &VReg, size: &VReg) -> Result<(), String> {
+    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload, elem_kind) -> (tag, payload)
+    fn emit_heap_alloc_dyn_simple(
+        &mut self,
+        dst: &VReg,
+        size: &VReg,
+        elem_kind: crate::vm::ElemKind,
+    ) -> Result<(), String> {
         let dst_shadow_off = self.shadow_tag_offset(dst);
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(size));
+            asm.mov_imm(Reg::X2, elem_kind as u8 as u16);
             asm.ldr(regs::TMP4, regs::VM_CTX, 72);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);

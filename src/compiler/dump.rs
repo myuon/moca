@@ -1845,7 +1845,9 @@ impl<'a> Disassembler<'a> {
             // Heap operations
             Op::HeapAlloc(n) => self.output.push_str(&format!("HeapAlloc {}", n)),
             Op::HeapAllocDyn => self.output.push_str("HeapAllocDyn"),
-            Op::HeapAllocDynSimple(_) => self.output.push_str("HeapAllocDynSimple"),
+            Op::HeapAllocDynSimple(ek) => self
+                .output
+                .push_str(&format!("HeapAllocDynSimple({:?})", ek)),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
             Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
@@ -2408,8 +2410,13 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
                 args_str.join(", ")
             ))
         }
-        MicroOp::HeapAllocDynSimple { dst, size, .. } => output.push_str(&format!(
-            "HeapAllocDynSimple {}, {}",
+        MicroOp::HeapAllocDynSimple {
+            dst,
+            size,
+            elem_kind,
+        } => output.push_str(&format!(
+            "HeapAllocDynSimple({:?}) {}, {}",
+            elem_kind,
             format_vreg(dst),
             format_vreg(size)
         )),
