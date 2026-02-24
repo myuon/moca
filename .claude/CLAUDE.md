@@ -110,7 +110,7 @@ PRを作成した後は以下のフローに従う:
 
 ## GitHub CLI (`gh`) の注意点
 
-このリポジトリでは Projects Classic が有効なため、`gh issue view` や `gh pr edit` を `--json` なしで実行するとエラーになる。**必ず `--json` フラグを使うこと。**
+`gh issue view` や `gh pr edit` を `--json` なしで実行すると Projects Classic 関連の GraphQL エラーになる（`gh` CLI のバグで `has_projects=false` にしても解消しない）。**必ず `--json` フラグを使うこと。**
 
 ```bash
 # ❌ エラーになる
