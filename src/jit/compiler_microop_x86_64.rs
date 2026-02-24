@@ -908,12 +908,12 @@ impl MicroOpJitCompiler {
                 Self::analyze_loop_invariants(&converted.micro_ops, inv_start, inv_end);
             let heap2_usage = Self::count_heap2_obj_usage(&converted.micro_ops, inv_start, inv_end);
 
-            // Find the best hoisting candidate: invariant VReg used as HeapLoad2/HeapStore2 obj >= 2 times
+            // Find the best hoisting candidate: invariant VReg used as HeapLoad2/HeapStore2 obj
             let mut reg_idx = 0;
             let mut hoist_candidate: Option<(usize, usize)> = None;
             for &(vreg_idx, _) in &invariants {
                 if let Some(&count) = heap2_usage.get(&vreg_idx)
-                    && count >= 2
+                    && count >= 1
                     && (hoist_candidate.is_none() || count > hoist_candidate.unwrap().1)
                 {
                     hoist_candidate = Some((vreg_idx, count));
@@ -1028,8 +1028,7 @@ impl MicroOpJitCompiler {
                     };
                 if next_is_loop_exit
                     && !jump_targets.contains(&next_pc)
-                    && let Some(fused) =
-                        self.try_fuse_loop_exit_cmp_branch(&ops[pc], &ops[next_pc])
+                    && let Some(fused) = self.try_fuse_loop_exit_cmp_branch(&ops[pc], &ops[next_pc])
                 {
                     fused?;
                     self.labels.insert(next_pc, self.buf.len());
@@ -1171,7 +1170,7 @@ impl MicroOpJitCompiler {
         let mut hoist_candidate: Option<(usize, usize)> = None;
         for &(vreg_idx, _) in &invariants {
             if let Some(&count) = heap2_usage.get(&vreg_idx)
-                && count >= 2
+                && count >= 1
                 && (hoist_candidate.is_none() || count > hoist_candidate.unwrap().1)
             {
                 hoist_candidate = Some((vreg_idx, count));
@@ -1947,6 +1946,25 @@ impl MicroOpJitCompiler {
     fn emit_add_i64_imm(&mut self, dst: &VReg, a: &VReg, imm: i64) -> Result<(), String> {
         let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let reg_map = &self.all_reg_map;
+
+        // Fast path: when dst == a and both are mapped to the same register,
+        // we can add directly to the register (1 instruction instead of 3).
+        if dst == a
+            && let Some(&reg) = reg_map.get(&dst.0)
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+                asm.add_ri32(reg, imm as i32);
+            } else {
+                asm.mov_ri64(regs::TMP0, imm);
+                asm.add_rr(reg, regs::TMP0);
+            }
+            if let Some(off) = shadow {
+                Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+            }
+            return Ok(());
+        }
+
         let mut asm = X86_64Assembler::new(&mut self.buf);
         Self::load_vreg(&mut asm, regs::TMP0, a, reg_map);
         if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
