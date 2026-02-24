@@ -2368,14 +2368,26 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(idx),
             format_vreg(src)
         )),
-        MicroOp::HeapLoad2 { dst, obj, idx, .. } => output.push_str(&format!(
-            "HeapLoad2 {}, {}, {}",
+        MicroOp::HeapLoad2 {
+            dst,
+            obj,
+            idx,
+            elem_kind,
+        } => output.push_str(&format!(
+            "HeapLoad2({:?}) {}, {}, {}",
+            elem_kind,
             format_vreg(dst),
             format_vreg(obj),
             format_vreg(idx)
         )),
-        MicroOp::HeapStore2 { obj, idx, src, .. } => output.push_str(&format!(
-            "HeapStore2 {}, {}, {}",
+        MicroOp::HeapStore2 {
+            obj,
+            idx,
+            src,
+            elem_kind,
+        } => output.push_str(&format!(
+            "HeapStore2({:?}) {}, {}, {}",
+            elem_kind,
             format_vreg(obj),
             format_vreg(idx),
             format_vreg(src)
