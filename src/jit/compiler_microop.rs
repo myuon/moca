@@ -570,7 +570,9 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             // Heap allocation operations
             MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
-            MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
+            MicroOp::HeapAllocDynSimple { dst, size, .. } => {
+                self.emit_heap_alloc_dyn_simple(dst, size)
+            }
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),

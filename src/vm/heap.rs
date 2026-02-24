@@ -9,10 +9,13 @@ use super::Value;
 /// Describes how elements are stored within a heap object.
 ///
 /// - `Tagged` (0): legacy 16B/slot format (tag u64 + payload u64). Used for structs, closures.
-/// - `I64` (3): untagged 8B/element. For arrays of int, float, bool (no GC trace).
-/// - `Ref` (4): untagged 8B/element. For arrays of references (needs GC trace).
+/// - `I64` (3): untagged 8B/element, no GC trace. For arrays of int, bool.
+/// - `Ref` (4): untagged 8B/element, GC trace. For arrays of references.
+/// - `F64` (5): untagged 8B/element, no GC trace. For arrays of float.
 ///
 /// Values 1 (U8) and 2 (I32) are reserved for future 1B and 4B element support.
+/// I64 and F64 have identical heap behavior (8B, no trace) but differ in
+/// how the interpreter/JIT reconstructs the Value tag on load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ElemKind {
@@ -21,6 +24,7 @@ pub enum ElemKind {
     // I32 = 2, // reserved for future 4-byte elements
     I64 = 3,
     Ref = 4,
+    F64 = 5,
 }
 
 impl ElemKind {
@@ -29,8 +33,19 @@ impl ElemKind {
         match bits {
             3 => ElemKind::I64,
             4 => ElemKind::Ref,
+            5 => ElemKind::F64,
             _ => ElemKind::Tagged,
         }
+    }
+
+    /// Whether this element kind requires GC tracing.
+    pub fn needs_trace(self) -> bool {
+        matches!(self, ElemKind::Ref)
+    }
+
+    /// Whether this is a typed (untagged) element kind.
+    pub fn is_typed(self) -> bool {
+        !matches!(self, ElemKind::Tagged)
     }
 }
 
@@ -136,7 +151,7 @@ const fn object_size_words(slot_count: u32) -> usize {
 const fn object_size_words_for_kind(count: u32, kind: ElemKind) -> usize {
     match kind {
         ElemKind::Tagged => 1 + 2 * (count as usize),
-        ElemKind::I64 | ElemKind::Ref => 1 + (count as usize),
+        ElemKind::I64 | ElemKind::Ref | ElemKind::F64 => 1 + (count as usize),
     }
 }
 
@@ -185,22 +200,44 @@ impl HeapObject {
         // Read header
         let header = *memory.get(offset)?;
         let marked = decode_marked(header);
+        let elem_kind = decode_elem_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
         // Check if we have enough memory for all slots
-        let total_size = object_size_words(slot_count as u32);
+        let total_size = object_size_words_for_kind(slot_count as u32, elem_kind);
         if offset + total_size > memory.len() {
             return None;
         }
 
         // Read slots
         let mut slots = Vec::with_capacity(slot_count);
-        for i in 0..slot_count {
-            let tag_offset = offset + 1 + 2 * i;
-            let tag = memory[tag_offset];
-            let payload = memory[tag_offset + 1];
-            let value = Value::decode(tag, payload)?;
-            slots.push(value);
+        match elem_kind {
+            ElemKind::Tagged => {
+                for i in 0..slot_count {
+                    let tag_offset = offset + 1 + 2 * i;
+                    let tag = memory[tag_offset];
+                    let payload = memory[tag_offset + 1];
+                    let value = Value::decode(tag, payload)?;
+                    slots.push(value);
+                }
+            }
+            ElemKind::I64 => {
+                for i in 0..slot_count {
+                    slots.push(Value::I64(memory[offset + 1 + i] as i64));
+                }
+            }
+            ElemKind::F64 => {
+                for i in 0..slot_count {
+                    slots.push(Value::F64(f64::from_bits(memory[offset + 1 + i])));
+                }
+            }
+            ElemKind::Ref => {
+                for i in 0..slot_count {
+                    slots.push(Value::Ref(GcRef {
+                        index: memory[offset + 1 + i] as usize,
+                    }));
+                }
+            }
         }
 
         Some(HeapObject { marked, slots })
@@ -415,8 +452,8 @@ impl Heap {
     /// (no tag). This is 50% smaller than the tagged representation.
     pub fn alloc_typed_array(&mut self, count: u32, kind: ElemKind) -> Result<GcRef, String> {
         debug_assert!(
-            kind == ElemKind::I64 || kind == ElemKind::Ref,
-            "alloc_typed_array only supports I64 and Ref"
+            kind.is_typed(),
+            "alloc_typed_array only supports typed kinds (I64, F64, Ref)"
         );
 
         let obj_size_words = object_size_words_for_kind(count, kind);
@@ -448,6 +485,18 @@ impl Heap {
         }
 
         Ok(GcRef::from_offset(offset))
+    }
+
+    /// Get the ElemKind of the object at the given reference.
+    pub fn get_elem_kind(&self, r: GcRef) -> ElemKind {
+        if !r.is_valid() {
+            return ElemKind::Tagged;
+        }
+        let offset = r.base();
+        match self.memory.get(offset) {
+            Some(&header) => decode_elem_kind(header),
+            None => ElemKind::Tagged,
+        }
     }
 
     /// Read a single element from a typed array (ElemKind::I64 or ElemKind::Ref).
@@ -556,6 +605,7 @@ impl Heap {
     }
 
     /// Read a single slot from an object.
+    /// Automatically detects typed arrays from the header and uses the appropriate layout.
     pub fn read_slot(&self, r: GcRef, slot_index: usize) -> Option<Value> {
         if !r.is_valid() {
             return None;
@@ -564,19 +614,39 @@ impl Heap {
         let actual_slot = slot_index + r.slot_offset();
         let offset = r.base();
         let header = *self.memory.get(offset)?;
+        let elem_kind = decode_elem_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
         if actual_slot >= slot_count {
             return None;
         }
 
-        let tag_offset = offset + 1 + 2 * actual_slot;
-        let tag = *self.memory.get(tag_offset)?;
-        let payload = *self.memory.get(tag_offset + 1)?;
-        Value::decode(tag, payload)
+        match elem_kind {
+            ElemKind::Tagged => {
+                let tag_offset = offset + 1 + 2 * actual_slot;
+                let tag = *self.memory.get(tag_offset)?;
+                let payload = *self.memory.get(tag_offset + 1)?;
+                Value::decode(tag, payload)
+            }
+            ElemKind::I64 => {
+                let raw = *self.memory.get(offset + 1 + actual_slot)?;
+                Some(Value::I64(raw as i64))
+            }
+            ElemKind::F64 => {
+                let raw = *self.memory.get(offset + 1 + actual_slot)?;
+                Some(Value::F64(f64::from_bits(raw)))
+            }
+            ElemKind::Ref => {
+                let raw = *self.memory.get(offset + 1 + actual_slot)?;
+                Some(Value::Ref(GcRef {
+                    index: raw as usize,
+                }))
+            }
+        }
     }
 
     /// Write a single slot to an object.
+    /// Automatically detects typed arrays from the header and uses the appropriate layout.
     pub fn write_slot(&mut self, r: GcRef, slot_index: usize, value: Value) -> Result<(), String> {
         if !r.is_valid() {
             return Err("invalid reference".to_string());
@@ -588,6 +658,7 @@ impl Heap {
             .memory
             .get(offset)
             .ok_or("invalid reference: out of bounds")?;
+        let elem_kind = decode_elem_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
         if actual_slot >= slot_count {
@@ -597,10 +668,30 @@ impl Heap {
             ));
         }
 
-        let tag_offset = offset + 1 + 2 * actual_slot;
-        let (tag, payload) = value.encode();
-        self.memory[tag_offset] = tag;
-        self.memory[tag_offset + 1] = payload;
+        match elem_kind {
+            ElemKind::Tagged => {
+                let tag_offset = offset + 1 + 2 * actual_slot;
+                let (tag, payload) = value.encode();
+                self.memory[tag_offset] = tag;
+                self.memory[tag_offset + 1] = payload;
+            }
+            ElemKind::I64 | ElemKind::F64 => {
+                let raw = match value {
+                    Value::I64(v) => v as u64,
+                    Value::F64(v) => v.to_bits(),
+                    _ => value.encode().1,
+                };
+                self.memory[offset + 1 + actual_slot] = raw;
+            }
+            ElemKind::Ref => {
+                let raw = match value {
+                    Value::Ref(r) => r.index as u64,
+                    Value::Null => 0,
+                    _ => value.encode().1,
+                };
+                self.memory[offset + 1 + actual_slot] = raw;
+            }
+        }
         Ok(())
     }
 
@@ -694,7 +785,7 @@ impl Heap {
                         worklist.extend(obj.trace());
                     }
                 }
-                ElemKind::I64 => {
+                ElemKind::I64 | ElemKind::F64 => {
                     // Primitive-only array: no references to trace
                 }
                 ElemKind::Ref => {

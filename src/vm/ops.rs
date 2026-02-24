@@ -155,7 +155,7 @@ pub enum Op {
     // ========================================
     HeapAlloc(usize),
     HeapAllocDyn,
-    HeapAllocDynSimple,
+    HeapAllocDynSimple(super::heap::ElemKind),
     HeapLoad(usize),
     HeapStore(usize),
     HeapLoadDyn,
@@ -321,7 +321,7 @@ impl Op {
             Op::Ret => "Ret",
             Op::HeapAlloc(_) => "HeapAlloc",
             Op::HeapAllocDyn => "HeapAllocDyn",
-            Op::HeapAllocDynSimple => "HeapAllocDynSimple",
+            Op::HeapAllocDynSimple(_) => "HeapAllocDynSimple",
             Op::HeapLoad(_) => "HeapLoad",
             Op::HeapStore(_) => "HeapStore",
             Op::HeapLoadDyn => "HeapLoadDyn",

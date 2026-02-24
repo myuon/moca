@@ -11,20 +11,27 @@ use std::collections::HashMap;
 /// Maximum nesting depth for @inline expansion (prevents code explosion).
 const MAX_INLINE_DEPTH: usize = 4;
 
+/// Determine ElemKind for a direct element type.
+fn elem_kind_for_element_type(ty: &Type) -> ElemKind {
+    match ty {
+        Type::Int | Type::Bool => ElemKind::I64,
+        Type::Float => ElemKind::F64,
+        Type::String | Type::GenericStruct { .. } | Type::Nullable(_) | Type::Dyn => ElemKind::Ref,
+        // Only treat Struct as Ref if it has fields (concrete struct).
+        // Struct { name: "T", fields: [] } is an unresolved type parameter, not a real struct.
+        Type::Struct { fields, .. } if !fields.is_empty() => ElemKind::Ref,
+        _ => ElemKind::Tagged,
+    }
+}
+
 /// Determine ElemKind for a collection (Array/Vec) based on its element type.
 fn elem_kind_for_collection(object_type: &Option<Type>) -> ElemKind {
     let elem_type = object_type
         .as_ref()
         .and_then(|t| t.collection_element_type());
     match elem_type {
-        Some(Type::Int) | Some(Type::Float) | Some(Type::Bool) => ElemKind::I64,
-        Some(Type::String)
-        | Some(Type::Struct { .. })
-        | Some(Type::GenericStruct { .. })
-        | Some(Type::Nullable(_))
-        | Some(Type::Dyn) => ElemKind::Ref,
-        // For unknown/unresolved types or String container itself, fall back to Tagged
-        _ => ElemKind::Tagged,
+        Some(ty) => elem_kind_for_element_type(ty),
+        None => ElemKind::Tagged,
     }
 }
 
@@ -64,6 +71,14 @@ pub struct Codegen {
     interface_descriptor_indices: HashMap<String, usize>,
     /// Interface name -> sorted method names (from resolver)
     interface_method_names: HashMap<String, Vec<String>>,
+    /// Full Type for each local variable in the currently-being-compiled function
+    /// (used to derive ElemKind for __alloc_heap calls)
+    current_local_full_types: Vec<Type>,
+    /// Struct field types: struct_name -> Vec<(field_name, Type)>
+    struct_field_type_map: HashMap<String, Vec<(String, Type)>>,
+    /// ElemKind for the current collection method (Vec/Array) being compiled.
+    /// Derived from the struct's `data: ptr<T>` field when compiling a method.
+    current_collection_elem_kind: Option<ElemKind>,
 }
 
 impl Default for Codegen {
@@ -97,6 +112,9 @@ impl Codegen {
             interface_descriptors: Vec::new(),
             interface_descriptor_indices: HashMap::new(),
             interface_method_names: HashMap::new(),
+            current_local_full_types: Vec::new(),
+            struct_field_type_map: HashMap::new(),
+            current_collection_elem_kind: None,
         }
     }
 
@@ -121,6 +139,9 @@ impl Codegen {
             interface_descriptors: Vec::new(),
             interface_descriptor_indices: HashMap::new(),
             interface_method_names: HashMap::new(),
+            current_local_full_types: Vec::new(),
+            struct_field_type_map: HashMap::new(),
+            current_collection_elem_kind: None,
         }
     }
 
@@ -288,6 +309,10 @@ impl Codegen {
                 field_map.insert(field_name.clone(), idx);
             }
             self.struct_field_indices.insert(s.name.clone(), field_map);
+            if !s.field_types.is_empty() {
+                self.struct_field_type_map
+                    .insert(s.name.clone(), s.field_types.clone());
+            }
         }
         self.structs = structs;
     }
@@ -491,7 +516,33 @@ impl Codegen {
         })
     }
 
+    /// Determine the collection element ElemKind from a struct's `data` field type.
+    /// For structs like `vec_int` with `data: ptr<int>`, returns `Some(ElemKind::I64)`.
+    fn collection_elem_kind_from_struct(&self, struct_name: &str) -> Option<ElemKind> {
+        let field_types = self.struct_field_type_map.get(struct_name)?;
+        for (name, ty) in field_types {
+            if name == "data"
+                && let Type::Ptr(inner) = ty
+            {
+                let ek = elem_kind_for_element_type(inner);
+                if ek != ElemKind::Tagged {
+                    return Some(ek);
+                }
+            }
+        }
+        None
+    }
+
     fn compile_function(&mut self, func: &ResolvedFunction) -> Result<Function, String> {
+        self.current_local_full_types = func.local_types.clone();
+
+        // Detect collection methods (e.g., vec_int::push) and set ElemKind
+        // for __alloc_heap calls within them.
+        self.current_collection_elem_kind = func
+            .name
+            .split_once("::")
+            .and_then(|(struct_name, _)| self.collection_elem_kind_from_struct(struct_name));
+
         let mut ops = Vec::new();
 
         for stmt in &func.body {
@@ -1348,7 +1399,12 @@ impl Codegen {
                             return Err("__alloc_heap takes exactly 1 argument (size)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        ops.push(Op::HeapAllocDynSimple);
+                        // Use the collection-level ElemKind if we're inside a Vec/Array method,
+                        // otherwise default to Tagged.
+                        let ek = self
+                            .current_collection_elem_kind
+                            .unwrap_or(ElemKind::Tagged);
+                        ops.push(Op::HeapAllocDynSimple(ek));
                     }
                     "__null_ptr" => {
                         // __null_ptr() -> null pointer (0 as Ref)
@@ -1837,7 +1893,7 @@ impl Codegen {
             }
             // HeapAllocArray removed — use HeapAlloc instead
             "HeapAllocDyn" | "AllocHeapDyn" => Ok(Op::HeapAllocDyn),
-            "HeapAllocDynSimple" => Ok(Op::HeapAllocDynSimple),
+            "HeapAllocDynSimple" => Ok(Op::HeapAllocDynSimple(ElemKind::Tagged)),
             "HeapLoad" => {
                 let n = self.expect_int_arg(args, 0, "HeapLoad")? as usize;
                 Ok(Op::HeapLoad(n))

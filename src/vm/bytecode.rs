@@ -670,7 +670,7 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         // HeapAllocArray removed — use HeapAlloc instead
         Op::HeapAllocDyn => w.write_all(&[OP_HEAP_ALLOC_DYN])?,
-        Op::HeapAllocDynSimple => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
+        Op::HeapAllocDynSimple(_) => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -871,7 +871,7 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // OP_HEAP_ALLOC_ARRAY removed — use HeapAlloc instead
         OP_HEAP_ALLOC_ARRAY => Op::HeapAlloc(read_u32(r)? as usize),
         OP_HEAP_ALLOC_DYN => Op::HeapAllocDyn,
-        OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple,
+        OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple(ElemKind::Tagged),
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
@@ -1312,7 +1312,7 @@ mod tests {
             // Heap Operations
             Op::HeapAlloc(5),
             Op::HeapAllocDyn,
-            Op::HeapAllocDynSimple,
+            Op::HeapAllocDynSimple(ElemKind::Tagged),
             // HeapAllocArray removed from test
             Op::HeapLoad(1),
             Op::HeapStore(2),

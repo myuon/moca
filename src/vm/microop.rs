@@ -485,6 +485,7 @@ pub enum MicroOp {
     HeapAllocDynSimple {
         dst: VReg,
         size: VReg,
+        elem_kind: super::heap::ElemKind,
     },
     // ========================================
     // String operations

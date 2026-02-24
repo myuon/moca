@@ -34,6 +34,8 @@ pub struct ResolvedStruct {
     pub name: String,
     /// Field names in declaration order
     pub fields: Vec<String>,
+    /// Field types (name, type) in declaration order – used by codegen for ElemKind inference
+    pub field_types: Vec<(String, Type)>,
 }
 
 #[derive(Debug, Clone)]
@@ -581,10 +583,6 @@ impl<'a> Resolver<'a> {
                     method_return_types: HashMap::new(),
                 },
             );
-            self.resolved_structs.push(ResolvedStruct {
-                name: struct_def.name.clone(),
-                fields,
-            });
             // Store field types for enriching Type::Struct with empty fields
             let field_types: Vec<(String, Type)> = struct_def
                 .fields
@@ -596,6 +594,11 @@ impl<'a> Resolver<'a> {
                         .map(|ty| (f.name.clone(), ty))
                 })
                 .collect();
+            self.resolved_structs.push(ResolvedStruct {
+                name: struct_def.name.clone(),
+                fields,
+                field_types: field_types.clone(),
+            });
             self.struct_field_types
                 .insert(struct_def.name.clone(), field_types);
         }
