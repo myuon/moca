@@ -563,7 +563,12 @@ impl VM {
     /// Uses MicroOp-based JIT compiler which takes register-based IR as input.
     /// Frame layout: unboxed, 8B per VReg slot (payload only).
     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
-    fn jit_compile_function(&mut self, func: &Function, func_index: usize) {
+    fn jit_compile_function(
+        &mut self,
+        func: &Function,
+        func_index: usize,
+        all_functions: &[Function],
+    ) {
         if self.jit_functions.contains_key(&func_index) {
             return; // Already compiled
         }
@@ -573,7 +578,7 @@ impl VM {
         let converted = microop_converter::convert(func);
 
         let compiler = MicroOpJitCompiler::new();
-        match compiler.compile(&converted, func.locals_count, func_index) {
+        match compiler.compile(&converted, func.locals_count, func_index, all_functions) {
             Ok(compiled) => {
                 if self.trace_jit {
                     eprintln!(
@@ -616,6 +621,7 @@ impl VM {
         func_index: usize,
         loop_start_pc: usize,
         loop_end_pc: usize,
+        all_functions: &[Function],
     ) {
         let key = (func_index, loop_end_pc);
         if self.jit_loops.contains_key(&key) {
@@ -651,6 +657,7 @@ impl VM {
             loop_end_microop,
             loop_start_pc,
             loop_end_pc,
+            all_functions,
         ) {
             Ok(compiled) => {
                 if self.trace_jit {
@@ -1333,7 +1340,13 @@ impl VM {
                                 } else {
                                     &chunk.functions[func_index]
                                 };
-                                self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                                self.jit_compile_loop(
+                                    func,
+                                    func_index,
+                                    loop_start_pc,
+                                    loop_end_pc,
+                                    &chunk.functions,
+                                );
                             }
                         }
 
@@ -1411,7 +1424,7 @@ impl VM {
                     #[cfg(all(target_arch = "x86_64", feature = "jit"))]
                     {
                         if self.should_jit_compile(func_id, &callee_func.name) {
-                            self.jit_compile_function(callee_func, func_id);
+                            self.jit_compile_function(callee_func, func_id, &chunk.functions);
                         }
                         if self.is_jit_compiled(func_id) {
                             // Push args onto operand stack for JIT (it pops them)
@@ -2760,7 +2773,13 @@ impl VM {
                             } else {
                                 &chunk.functions[func_index]
                             };
-                            self.jit_compile_loop(func, func_index, loop_start_pc, loop_end_pc);
+                            self.jit_compile_loop(
+                                func,
+                                func_index,
+                                loop_start_pc,
+                                loop_end_pc,
+                                &chunk.functions,
+                            );
                         }
                     }
 
@@ -2842,7 +2861,7 @@ impl VM {
                 #[cfg(all(target_arch = "x86_64", feature = "jit"))]
                 {
                     if self.should_jit_compile(func_index, &func.name) {
-                        self.jit_compile_function(func, func_index);
+                        self.jit_compile_function(func, func_index, &chunk.functions);
                     }
 
                     // If JIT compiled, execute via JIT
@@ -4147,7 +4166,7 @@ unsafe extern "C" fn jit_call_helper(
 
     // Check if we should JIT compile this function (increments call count)
     if vm.should_jit_compile(func_index, &func.name) {
-        vm.jit_compile_function(func, func_index);
+        vm.jit_compile_function(func, func_index, &chunk.functions);
     }
 
     // FAST PATH: If target function is JIT compiled, call directly with stack allocation
