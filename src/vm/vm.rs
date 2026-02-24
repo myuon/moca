@@ -806,16 +806,27 @@ impl VM {
         // Allocate frame with shadow tag space (payload + shadow, 8B per slot each)
         let mut jit_frame = vec![0u64; frame_regs * 2];
 
-        // Copy VRegs from VM stack to JIT frame (payload only)
+        // Copy VRegs from VM stack to JIT frame (payload only),
+        // and save runtime types for accurate copy-back (local_types may be wrong for generics).
         let vm_frame = self.frames.last().unwrap();
         let stack_base = vm_frame.stack_base;
+        let mut runtime_types: Vec<ValueType> = Vec::with_capacity(func.locals_count);
         for (i, slot) in jit_frame
             .iter_mut()
             .enumerate()
             .take(frame_regs.min(func.locals_count))
         {
             if stack_base + i < self.stack.len() {
-                *slot = JitValue::from_value(&self.stack[stack_base + i]).payload;
+                let val = &self.stack[stack_base + i];
+                *slot = JitValue::from_value(val).payload;
+                runtime_types.push(match val {
+                    Value::I64(_) => ValueType::I64,
+                    Value::F64(_) => ValueType::F64,
+                    Value::Bool(_) => ValueType::I64,
+                    Value::Null | Value::Ref(_) => ValueType::Ref,
+                });
+            } else {
+                runtime_types.push(ValueType::I64);
             }
         }
 
@@ -847,12 +858,16 @@ impl VM {
             eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
         }
 
-        // Copy locals back from JIT frame to VM stack using type info
+        // Copy locals back from JIT frame to VM stack using runtime types
+        // (local_types from the compiler may be incorrect for generic methods)
         let vm_frame = self.frames.last().unwrap();
         let stack_base = vm_frame.stack_base;
         for (i, &payload) in jit_frame.iter().enumerate().take(func.locals_count) {
             if stack_base + i < self.stack.len() {
-                let ty = func.local_types.get(i).copied().unwrap_or(ValueType::I64);
+                let ty = runtime_types
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| func.local_types.get(i).copied().unwrap_or(ValueType::I64));
                 self.stack[stack_base + i] = Self::payload_to_value(payload, ty);
             }
         }
@@ -894,16 +909,27 @@ impl VM {
         // Allocate frame: payload + shadow tags (8B per slot, doubled for shadow area)
         let mut jit_frame = vec![0u64; frame_size * 2];
 
-        // Copy VRegs from VM stack to JIT frame (payload only)
+        // Copy VRegs from VM stack to JIT frame (payload only),
+        // and save runtime types for accurate copy-back.
         let vm_frame = self.frames.last().unwrap();
         let stack_base = vm_frame.stack_base;
+        let mut runtime_types: Vec<ValueType> = Vec::with_capacity(func.locals_count);
         for (i, slot) in jit_frame
             .iter_mut()
             .enumerate()
             .take(frame_size.min(func.locals_count))
         {
             if stack_base + i < self.stack.len() {
-                *slot = JitValue::from_value(&self.stack[stack_base + i]).payload;
+                let val = &self.stack[stack_base + i];
+                *slot = JitValue::from_value(val).payload;
+                runtime_types.push(match val {
+                    Value::I64(_) => ValueType::I64,
+                    Value::F64(_) => ValueType::F64,
+                    Value::Bool(_) => ValueType::I64,
+                    Value::Null | Value::Ref(_) => ValueType::Ref,
+                });
+            } else {
+                runtime_types.push(ValueType::I64);
             }
         }
 
@@ -935,12 +961,15 @@ impl VM {
             eprintln!("[JIT] Executed loop in '{}' PC ..{}", func.name, loop_end);
         }
 
-        // Copy locals back from JIT frame to VM stack using type info
+        // Copy locals back from JIT frame to VM stack using runtime types
         let vm_frame = self.frames.last().unwrap();
         let stack_base = vm_frame.stack_base;
         for (i, &payload) in jit_frame.iter().enumerate().take(func.locals_count) {
             if stack_base + i < self.stack.len() {
-                let ty = func.local_types.get(i).copied().unwrap_or(ValueType::I64);
+                let ty = runtime_types
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| func.local_types.get(i).copied().unwrap_or(ValueType::I64));
                 self.stack[stack_base + i] = Self::payload_to_value(payload, ty);
             }
         }

@@ -70,6 +70,15 @@ gh run view <run-id> --log         # 失敗時のログ確認
   cargo clippy   # lintチェック
   ```
 
+### PR作成後のフロー
+
+PRを作成した後は以下のフローに従う:
+
+1. **CI watch**: `gh pr checks <PR番号> --watch` でCIの完了を待つ
+2. **結果確認**: CI全チェック（check, coverage-report, performance-report）がパスしていることを確認する
+3. **マージ確認**: パフォーマンスに大きなデグレがなく、カバレッジも正常であれば、ユーザーにマージしてよいか確認する
+4. **マージ実行**: ユーザーの承認後、`gh pr merge <PR番号> --merge` でマージする
+
 ## Performance & Benchmarking
 
 パフォーマンステストは以下の2箇所で構成されている:
