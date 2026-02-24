@@ -20,6 +20,8 @@ use crate::vm::ValueType;
 #[cfg(target_arch = "x86_64")]
 use crate::vm::microop::{CmpCond, ConvertedFunction, MicroOp, VReg};
 #[cfg(target_arch = "x86_64")]
+use crate::vm::{Function, microop_converter};
+#[cfg(target_arch = "x86_64")]
 use std::collections::{HashMap, HashSet};
 
 /// Register conventions for MicroOp JIT on x86-64.
@@ -60,6 +62,10 @@ pub struct MicroOpJitCompiler {
     /// VRegs that need unconditional shadow tag updates because they are written
     /// with multiple different tag types across different MicroOps.
     shadow_conflict_vregs: HashSet<usize>,
+    /// Inline candidates: func_id → (converted IR, arity).
+    inline_candidates: HashMap<usize, (ConvertedFunction, usize)>,
+    /// Starting VReg index for inline temp pool.
+    inline_vreg_base: usize,
 }
 
 /// Kind of forward reference for patching.
@@ -86,6 +92,8 @@ impl MicroOpJitCompiler {
             self_locals_count: 0,
             vreg_types: Vec::new(),
             shadow_conflict_vregs: HashSet::new(),
+            inline_candidates: HashMap::new(),
+            inline_vreg_base: 0,
         }
     }
 
@@ -252,12 +260,16 @@ impl MicroOpJitCompiler {
         converted: &ConvertedFunction,
         locals_count: usize,
         func_index: usize,
+        all_functions: &[Function],
     ) -> Result<CompiledCode, String> {
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
         self.vreg_types = converted.vreg_types.clone();
         self.shadow_conflict_vregs = Self::compute_shadow_conflicts(&converted.micro_ops);
+
+        // Pre-scan for inlinable call targets
+        self.scan_inline_candidates(&converted.micro_ops, all_functions);
 
         // Emit prologue and shadow tag initialization
         self.emit_prologue();
@@ -334,12 +346,16 @@ impl MicroOpJitCompiler {
         loop_end_microop_pc: usize,
         loop_start_op_pc: usize,
         loop_end_op_pc: usize,
+        all_functions: &[Function],
     ) -> Result<CompiledLoop, String> {
         self.total_regs = locals_count + converted.temps_count;
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
         self.vreg_types = converted.vreg_types.clone();
         self.shadow_conflict_vregs = Self::compute_shadow_conflicts(&converted.micro_ops);
+
+        // Pre-scan for inlinable call targets
+        self.scan_inline_candidates(&converted.micro_ops, all_functions);
 
         // Emit prologue and shadow tag initialization
         self.emit_prologue();
@@ -491,6 +507,257 @@ impl MicroOpJitCompiler {
         asm.pop(Reg::Rbx);
         asm.pop(Reg::Rbp);
         asm.ret();
+    }
+
+    // ==================== Call inlining ====================
+
+    /// Check if a callee function is small enough to inline.
+    /// Only allows ops that `remap_op` can fully remap.
+    fn is_inlinable(converted: &ConvertedFunction) -> bool {
+        if converted.micro_ops.len() > 20 {
+            return false;
+        }
+        for op in &converted.micro_ops {
+            match op {
+                // Supported ops (all VRegs are remapped by remap_op)
+                MicroOp::Mov { .. }
+                | MicroOp::ConstI64 { .. }
+                | MicroOp::ConstI32 { .. }
+                | MicroOp::ConstF64 { .. }
+                | MicroOp::ConstF32 { .. }
+                | MicroOp::AddI64 { .. }
+                | MicroOp::SubI64 { .. }
+                | MicroOp::MulI64 { .. }
+                | MicroOp::DivI64 { .. }
+                | MicroOp::RemI64 { .. }
+                | MicroOp::NegI64 { .. }
+                | MicroOp::AddI64Imm { .. }
+                | MicroOp::CmpI64 { .. }
+                | MicroOp::CmpI64Imm { .. }
+                | MicroOp::HeapLoad2 { .. }
+                | MicroOp::HeapStore2 { .. }
+                | MicroOp::HeapLoad { .. }
+                | MicroOp::HeapStore { .. }
+                | MicroOp::HeapLoadDyn { .. }
+                | MicroOp::HeapStoreDyn { .. }
+                | MicroOp::RefNull { .. }
+                | MicroOp::Ret { .. } => {}
+                // Any unsupported op → not inlinable
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Pre-scan MicroOps for Call targets and identify inlinable functions.
+    /// Extends total_regs and vreg_types for the inline VReg pool.
+    fn scan_inline_candidates(&mut self, ops: &[MicroOp], all_functions: &[Function]) {
+        let mut max_non_arg_vregs = 0usize;
+
+        for op in ops {
+            if let MicroOp::Call { func_id, .. } = op {
+                let func_id = *func_id;
+                if func_id == self.self_func_index {
+                    continue; // Skip self-recursion
+                }
+                if self.inline_candidates.contains_key(&func_id) {
+                    continue; // Already checked
+                }
+                if func_id >= all_functions.len() {
+                    continue;
+                }
+                let callee = &all_functions[func_id];
+                let callee_converted = microop_converter::convert(callee);
+                if Self::is_inlinable(&callee_converted) {
+                    let non_arg_vregs =
+                        callee.locals_count - callee.arity + callee_converted.temps_count;
+                    max_non_arg_vregs = max_non_arg_vregs.max(non_arg_vregs);
+                    self.inline_candidates
+                        .insert(func_id, (callee_converted, callee.arity));
+                }
+            }
+        }
+
+        if max_non_arg_vregs > 0 {
+            self.inline_vreg_base = self.total_regs;
+            self.total_regs += max_non_arg_vregs;
+
+            // Extend vreg_types for inline pool (default to Int)
+            self.vreg_types.resize(self.total_regs, ValueType::I64);
+        }
+    }
+
+    /// Remap a VReg from callee space to caller space.
+    fn remap_vreg(vreg: &VReg, vreg_map: &[VReg]) -> VReg {
+        vreg_map[vreg.0]
+    }
+
+    /// Build the VReg mapping table for an inline expansion.
+    fn build_inline_vreg_map(
+        callee_arity: usize,
+        callee_total_regs: usize,
+        caller_args: &[VReg],
+        inline_vreg_base: usize,
+    ) -> Vec<VReg> {
+        let mut map = Vec::with_capacity(callee_total_regs);
+        // Args map to caller's arg VRegs
+        for arg in caller_args.iter().take(callee_arity) {
+            map.push(*arg);
+        }
+        // Non-arg locals and temps map to inline pool
+        for i in callee_arity..callee_total_regs {
+            map.push(VReg(inline_vreg_base + (i - callee_arity)));
+        }
+        map
+    }
+
+    /// Remap all VRegs in a MicroOp for inline expansion.
+    fn remap_op(op: &MicroOp, vreg_map: &[VReg]) -> MicroOp {
+        match op {
+            MicroOp::Mov { dst, src } => MicroOp::Mov {
+                dst: Self::remap_vreg(dst, vreg_map),
+                src: Self::remap_vreg(src, vreg_map),
+            },
+            MicroOp::ConstI64 { dst, imm } => MicroOp::ConstI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                imm: *imm,
+            },
+            MicroOp::ConstI32 { dst, imm } => MicroOp::ConstI32 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                imm: *imm,
+            },
+            MicroOp::ConstF64 { dst, imm } => MicroOp::ConstF64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                imm: *imm,
+            },
+            MicroOp::ConstF32 { dst, imm } => MicroOp::ConstF32 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                imm: *imm,
+            },
+            MicroOp::AddI64 { dst, a, b } => MicroOp::AddI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                b: Self::remap_vreg(b, vreg_map),
+            },
+            MicroOp::SubI64 { dst, a, b } => MicroOp::SubI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                b: Self::remap_vreg(b, vreg_map),
+            },
+            MicroOp::MulI64 { dst, a, b } => MicroOp::MulI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                b: Self::remap_vreg(b, vreg_map),
+            },
+            MicroOp::DivI64 { dst, a, b } => MicroOp::DivI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                b: Self::remap_vreg(b, vreg_map),
+            },
+            MicroOp::RemI64 { dst, a, b } => MicroOp::RemI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                b: Self::remap_vreg(b, vreg_map),
+            },
+            MicroOp::NegI64 { dst, src } => MicroOp::NegI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                src: Self::remap_vreg(src, vreg_map),
+            },
+            MicroOp::AddI64Imm { dst, a, imm } => MicroOp::AddI64Imm {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                imm: *imm,
+            },
+            MicroOp::CmpI64 { dst, a, b, cond } => MicroOp::CmpI64 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                b: Self::remap_vreg(b, vreg_map),
+                cond: *cond,
+            },
+            MicroOp::CmpI64Imm { dst, a, imm, cond } => MicroOp::CmpI64Imm {
+                dst: Self::remap_vreg(dst, vreg_map),
+                a: Self::remap_vreg(a, vreg_map),
+                imm: *imm,
+                cond: *cond,
+            },
+            MicroOp::HeapLoad2 { dst, obj, idx } => MicroOp::HeapLoad2 {
+                dst: Self::remap_vreg(dst, vreg_map),
+                obj: Self::remap_vreg(obj, vreg_map),
+                idx: Self::remap_vreg(idx, vreg_map),
+            },
+            MicroOp::HeapStore2 { obj, idx, src } => MicroOp::HeapStore2 {
+                obj: Self::remap_vreg(obj, vreg_map),
+                idx: Self::remap_vreg(idx, vreg_map),
+                src: Self::remap_vreg(src, vreg_map),
+            },
+            MicroOp::HeapLoad { dst, src, offset } => MicroOp::HeapLoad {
+                dst: Self::remap_vreg(dst, vreg_map),
+                src: Self::remap_vreg(src, vreg_map),
+                offset: *offset,
+            },
+            MicroOp::HeapStore {
+                dst_obj,
+                offset,
+                src,
+            } => MicroOp::HeapStore {
+                dst_obj: Self::remap_vreg(dst_obj, vreg_map),
+                offset: *offset,
+                src: Self::remap_vreg(src, vreg_map),
+            },
+            MicroOp::HeapLoadDyn { dst, obj, idx } => MicroOp::HeapLoadDyn {
+                dst: Self::remap_vreg(dst, vreg_map),
+                obj: Self::remap_vreg(obj, vreg_map),
+                idx: Self::remap_vreg(idx, vreg_map),
+            },
+            MicroOp::HeapStoreDyn { obj, idx, src } => MicroOp::HeapStoreDyn {
+                obj: Self::remap_vreg(obj, vreg_map),
+                idx: Self::remap_vreg(idx, vreg_map),
+                src: Self::remap_vreg(src, vreg_map),
+            },
+            MicroOp::RefNull { dst } => MicroOp::RefNull {
+                dst: Self::remap_vreg(dst, vreg_map),
+            },
+            // Ret is handled by emit_inline_call, not remapped here.
+            // All other ops should have been filtered by is_inlinable.
+            other => unreachable!("remap_op: unsupported op {:?}", other),
+        }
+    }
+
+    /// Emit an inlined function call.
+    fn emit_inline_call(
+        &mut self,
+        func_id: usize,
+        args: &[VReg],
+        ret: Option<&VReg>,
+    ) -> Result<(), String> {
+        // Clone the candidate data to avoid borrow issues
+        let (callee, arity) = self.inline_candidates.get(&func_id).unwrap();
+        let callee_ops = callee.micro_ops.clone();
+        let callee_total_regs = callee.vreg_types.len();
+        let arity = *arity;
+
+        let vreg_map =
+            Self::build_inline_vreg_map(arity, callee_total_regs, args, self.inline_vreg_base);
+
+        // Emit each callee op with remapped VRegs, skipping Ret
+        for op in &callee_ops {
+            match op {
+                MicroOp::Ret { src } => {
+                    // If caller expects a return value, emit a Mov
+                    if let (Some(ret_vreg), Some(src_vreg)) = (ret, src) {
+                        let remapped_src = Self::remap_vreg(src_vreg, &vreg_map);
+                        self.emit_mov(ret_vreg, &remapped_src)?;
+                    }
+                    break;
+                }
+                _ => {
+                    let remapped = Self::remap_op(op, &vreg_map);
+                    self.compile_microop(&remapped, 0)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     // ==================== MicroOp compilation ====================
@@ -1036,6 +1303,10 @@ impl MicroOpJitCompiler {
         args: &[VReg],
         ret: Option<&VReg>,
     ) -> Result<(), String> {
+        if self.inline_candidates.contains_key(&func_id) {
+            return self.emit_inline_call(func_id, args, ret);
+        }
+
         if func_id == self.self_func_index {
             return self.emit_call_self(args, ret);
         }
