@@ -1409,6 +1409,70 @@ fn rewrite_block(block: &Block, instantiations: &HashSet<Instantiation>) -> Bloc
     }
 }
 
+/// Rewrite a type annotation to use monomorphised struct names when applicable.
+fn rewrite_type_annotation(
+    ann: &crate::compiler::types::TypeAnnotation,
+    instantiations: &HashSet<Instantiation>,
+) -> crate::compiler::types::TypeAnnotation {
+    use crate::compiler::types::TypeAnnotation;
+
+    match ann {
+        TypeAnnotation::Vec(elem) => {
+            if let Ok(ty) = elem.to_type() {
+                let inst = Instantiation {
+                    name: "Vec".to_string(),
+                    type_args: vec![ty],
+                };
+                if instantiations.contains(&inst) {
+                    return TypeAnnotation::Named(inst.mangled_name());
+                }
+            }
+            ann.clone()
+        }
+        TypeAnnotation::Array(elem) => {
+            if let Ok(ty) = elem.to_type() {
+                let inst = Instantiation {
+                    name: "Array".to_string(),
+                    type_args: vec![ty],
+                };
+                if instantiations.contains(&inst) {
+                    return TypeAnnotation::Named(inst.mangled_name());
+                }
+            }
+            ann.clone()
+        }
+        TypeAnnotation::Map(key, val) => {
+            if let (Ok(k), Ok(v)) = (key.to_type(), val.to_type()) {
+                let inst = Instantiation {
+                    name: "Map".to_string(),
+                    type_args: vec![k, v],
+                };
+                if instantiations.contains(&inst) {
+                    return TypeAnnotation::Named(inst.mangled_name());
+                }
+            }
+            ann.clone()
+        }
+        TypeAnnotation::Generic { name, type_args } => {
+            let concrete_types: Vec<Type> = type_args
+                .iter()
+                .filter_map(|ta| ta.to_type().ok())
+                .collect();
+            if concrete_types.len() == type_args.len() && !concrete_types.is_empty() {
+                let inst = Instantiation {
+                    name: name.clone(),
+                    type_args: concrete_types,
+                };
+                if instantiations.contains(&inst) {
+                    return TypeAnnotation::Named(inst.mangled_name());
+                }
+            }
+            ann.clone()
+        }
+        _ => ann.clone(),
+    }
+}
+
 /// Rewrite call sites in a statement.
 fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) -> Statement {
     match stmt {
@@ -1420,7 +1484,9 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
             inferred_type,
         } => Statement::Let {
             name: name.clone(),
-            type_annotation: type_annotation.clone(),
+            type_annotation: type_annotation
+                .as_ref()
+                .map(|ta| rewrite_type_annotation(ta, instantiations)),
             init: rewrite_expr(init, instantiations),
             span: *span,
             inferred_type: inferred_type.clone(),
@@ -1727,18 +1793,47 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
             args,
             span,
             inferred_type,
-        } => Expr::AssociatedFunctionCall {
-            type_name: type_name.clone(),
-            type_args: type_args.clone(),
-            function: function.clone(),
-            fn_type_args: fn_type_args.clone(),
-            args: args
-                .iter()
-                .map(|a| rewrite_expr(a, instantiations))
-                .collect(),
-            span: *span,
-            inferred_type: inferred_type.clone(),
-        },
+        } => {
+            // Rewrite struct type_name if a struct-level instantiation exists
+            if !type_args.is_empty() {
+                let concrete_types: Vec<Type> = type_args
+                    .iter()
+                    .filter_map(|ta| ta.to_type().ok())
+                    .collect();
+                if concrete_types.len() == type_args.len() {
+                    let inst = Instantiation {
+                        name: type_name.clone(),
+                        type_args: concrete_types,
+                    };
+                    if instantiations.contains(&inst) {
+                        return Expr::AssociatedFunctionCall {
+                            type_name: inst.mangled_name(),
+                            type_args: Vec::new(),
+                            function: function.clone(),
+                            fn_type_args: fn_type_args.clone(),
+                            args: args
+                                .iter()
+                                .map(|a| rewrite_expr(a, instantiations))
+                                .collect(),
+                            span: *span,
+                            inferred_type: inferred_type.clone(),
+                        };
+                    }
+                }
+            }
+            Expr::AssociatedFunctionCall {
+                type_name: type_name.clone(),
+                type_args: type_args.clone(),
+                function: function.clone(),
+                fn_type_args: fn_type_args.clone(),
+                args: args
+                    .iter()
+                    .map(|a| rewrite_expr(a, instantiations))
+                    .collect(),
+                span: *span,
+                inferred_type: inferred_type.clone(),
+            }
+        }
         Expr::AsDyn {
             expr,
             span,
@@ -1751,6 +1846,7 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
             is_implicit: *is_implicit,
         },
         // Literals and identifiers don't need rewriting
+        // Note: NewLiteral is already desugared before monomorphisation
         _ => expr.clone(),
     }
 }

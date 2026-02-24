@@ -2600,6 +2600,9 @@ fn collect_nested_type_descriptors_inner(
         Type::Nullable(inner) => {
             collect_nested_type_descriptors_inner(inner, result, visited);
         }
+        Type::Ptr(inner) => {
+            collect_nested_type_descriptors_inner(inner, result, visited);
+        }
         Type::GenericStruct { type_args, .. } => {
             for arg in type_args {
                 collect_nested_type_descriptors_inner(arg, result, visited);
