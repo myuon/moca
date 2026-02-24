@@ -71,6 +71,10 @@ pub struct MicroOpJitCompiler {
     inline_vreg_base: usize,
     /// Loop-invariant VRegs pinned to hardware registers (loop JIT only).
     pinned_vregs: HashMap<usize, Reg>,
+    /// Hoisted inner pointers: obj VReg index → register holding pre-computed
+    /// inner_base = heap_base + (inner_ref + 1) * 8.
+    /// Used to optimize HeapLoad2/HeapStore2 by skipping the outer dereference.
+    hoisted_inner_ptrs: HashMap<usize, Reg>,
 }
 
 /// Kind of forward reference for patching.
@@ -100,6 +104,7 @@ impl MicroOpJitCompiler {
             inline_candidates: HashMap::new(),
             inline_vreg_base: 0,
             pinned_vregs: HashMap::new(),
+            hoisted_inner_ptrs: HashMap::new(),
         }
     }
 
@@ -437,6 +442,21 @@ impl MicroOpJitCompiler {
         invariants
     }
 
+    /// Count how many times each VReg is used as the `obj` operand of HeapLoad2/HeapStore2
+    /// within the given MicroOp range. Used to identify inner pointer hoisting candidates.
+    fn count_heap2_obj_usage(ops: &[MicroOp], start: usize, end: usize) -> HashMap<usize, usize> {
+        let mut counts: HashMap<usize, usize> = HashMap::new();
+        for op in &ops[start..=end] {
+            match op {
+                MicroOp::HeapLoad2 { obj, .. } | MicroOp::HeapStore2 { obj, .. } => {
+                    *counts.entry(obj.0).or_insert(0) += 1;
+                }
+                _ => {}
+            }
+        }
+        counts
+    }
+
     /// Convert a ValueType to the corresponding JIT tag constant.
     fn value_type_to_tag(ty: &ValueType) -> u64 {
         match ty {
@@ -509,6 +529,43 @@ impl MicroOpJitCompiler {
         }
     }
 
+    /// Load hoisted inner pointers into their assigned registers.
+    /// For each hoisted obj VReg, computes:
+    ///   inner_base = heap_base + (heap[obj][0].payload + 1) * 8
+    /// This is the address of slot 0 of the inner (data) array.
+    fn emit_inner_ptr_loads(&mut self) {
+        for (&vreg_idx, &inner_reg) in &self.hoisted_inner_ptrs.clone() {
+            let vreg = VReg(vreg_idx);
+            let pinned = &self.pinned_vregs;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // TMP0 = obj ref payload (from frame or pinned reg)
+            Self::load_vreg(&mut asm, regs::TMP0, &vreg, pinned);
+            // TMP1 = heap_base
+            asm.mov_rm(regs::TMP1, regs::VM_CTX, 48);
+            // Compute address of outer object slot 0: heap_base + (ref+1)*8
+            asm.add_ri32(regs::TMP0, 1); // skip header
+            asm.shl_ri(regs::TMP0, 3); // byte offset
+            asm.mov_rr(regs::TMP3, regs::TMP1);
+            asm.add_rr(regs::TMP3, regs::TMP0); // &heap[obj+1] = outer slot 0 tag
+            // TMP0 = inner ref payload (slot 0 payload at offset +8)
+            asm.mov_rm(regs::TMP0, regs::TMP3, 8);
+            // Compute inner_base: heap_base + (inner_ref+1)*8
+            asm.add_ri32(regs::TMP0, 1); // skip inner header
+            asm.shl_ri(regs::TMP0, 3); // byte offset
+            asm.mov_rr(inner_reg, regs::TMP1);
+            asm.add_rr(inner_reg, regs::TMP0); // inner_base = heap_base + offset
+        }
+    }
+
+    /// Reload hoisted inner pointers after a non-inlined function call.
+    /// The call may have mutated the heap (e.g. Vec resize), invalidating cached inner pointers.
+    fn emit_inner_ptr_reloads(&mut self) {
+        if self.hoisted_inner_ptrs.is_empty() {
+            return;
+        }
+        self.emit_inner_ptr_loads();
+    }
+
     /// Compile a MicroOp function to native x86-64 code.
     pub fn compile(
         mut self,
@@ -530,19 +587,53 @@ impl MicroOpJitCompiler {
         self.emit_prologue();
         self.emit_shadow_init();
 
-        // Pin function-wide invariant VRegs to callee-saved registers
+        // Pin function-wide invariant VRegs to callee-saved registers,
+        // with inner pointer hoisting for HeapLoad2/HeapStore2 hot objects.
         if !converted.micro_ops.is_empty() {
             let invariants = Self::analyze_loop_invariants(
                 &converted.micro_ops,
                 0,
                 converted.micro_ops.len() - 1,
             );
-            for (i, &(vreg_idx, _count)) in invariants.iter().take(regs::PIN_REGS.len()).enumerate()
-            {
-                self.pinned_vregs.insert(vreg_idx, regs::PIN_REGS[i]);
+            let heap2_usage =
+                Self::count_heap2_obj_usage(&converted.micro_ops, 0, converted.micro_ops.len() - 1);
+
+            // Find the best hoisting candidate: invariant VReg used as HeapLoad2/HeapStore2 obj >= 2 times
+            let mut reg_idx = 0;
+            let mut hoist_candidate: Option<(usize, usize)> = None;
+            for &(vreg_idx, _) in &invariants {
+                if let Some(&count) = heap2_usage.get(&vreg_idx)
+                    && count >= 2
+                    && (hoist_candidate.is_none() || count > hoist_candidate.unwrap().1)
+                {
+                    hoist_candidate = Some((vreg_idx, count));
+                }
             }
+
+            // Allocate: hoist first, then pin remaining
+            if let Some((vreg_idx, _)) = hoist_candidate
+                && reg_idx < regs::PIN_REGS.len()
+            {
+                self.hoisted_inner_ptrs
+                    .insert(vreg_idx, regs::PIN_REGS[reg_idx]);
+                reg_idx += 1;
+            }
+            for &(vreg_idx, _) in &invariants {
+                if reg_idx >= regs::PIN_REGS.len() {
+                    break;
+                }
+                if self.hoisted_inner_ptrs.contains_key(&vreg_idx) {
+                    continue;
+                }
+                self.pinned_vregs.insert(vreg_idx, regs::PIN_REGS[reg_idx]);
+                reg_idx += 1;
+            }
+
             if !self.pinned_vregs.is_empty() {
                 self.emit_pin_loads();
+            }
+            if !self.hoisted_inner_ptrs.is_empty() {
+                self.emit_inner_ptr_loads();
             }
         }
 
@@ -632,17 +723,53 @@ impl MicroOpJitCompiler {
         self.emit_prologue();
         self.emit_shadow_init();
 
-        // Pin loop-invariant VRegs to callee-saved registers
+        // Pin loop-invariant VRegs to callee-saved registers,
+        // with inner pointer hoisting for HeapLoad2/HeapStore2 hot objects.
         let invariants = Self::analyze_loop_invariants(
             &converted.micro_ops,
             loop_start_microop_pc,
             loop_end_microop_pc,
         );
-        for (i, &(vreg_idx, _count)) in invariants.iter().take(regs::PIN_REGS.len()).enumerate() {
-            self.pinned_vregs.insert(vreg_idx, regs::PIN_REGS[i]);
+        let heap2_usage = Self::count_heap2_obj_usage(
+            &converted.micro_ops,
+            loop_start_microop_pc,
+            loop_end_microop_pc,
+        );
+
+        let mut reg_idx = 0;
+        let mut hoist_candidate: Option<(usize, usize)> = None;
+        for &(vreg_idx, _) in &invariants {
+            if let Some(&count) = heap2_usage.get(&vreg_idx)
+                && count >= 2
+                && (hoist_candidate.is_none() || count > hoist_candidate.unwrap().1)
+            {
+                hoist_candidate = Some((vreg_idx, count));
+            }
         }
+
+        if let Some((vreg_idx, _)) = hoist_candidate
+            && reg_idx < regs::PIN_REGS.len()
+        {
+            self.hoisted_inner_ptrs
+                .insert(vreg_idx, regs::PIN_REGS[reg_idx]);
+            reg_idx += 1;
+        }
+        for &(vreg_idx, _) in &invariants {
+            if reg_idx >= regs::PIN_REGS.len() {
+                break;
+            }
+            if self.hoisted_inner_ptrs.contains_key(&vreg_idx) {
+                continue;
+            }
+            self.pinned_vregs.insert(vreg_idx, regs::PIN_REGS[reg_idx]);
+            reg_idx += 1;
+        }
+
         if !self.pinned_vregs.is_empty() {
             self.emit_pin_loads();
+        }
+        if !self.hoisted_inner_ptrs.is_empty() {
+            self.emit_inner_ptr_loads();
         }
 
         // Epilogue label: one past the loop end
@@ -1716,6 +1843,9 @@ impl MicroOpJitCompiler {
             asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
 
+        // Reload hoisted inner pointers (callee may have mutated the heap)
+        self.emit_inner_ptr_reloads();
+
         // jmp done (skip slow path)
         let jmp_done_site = self.buf.len();
         {
@@ -1792,6 +1922,9 @@ impl MicroOpJitCompiler {
             asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
             asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
+
+        // Reload hoisted inner pointers (callee may have mutated the heap)
+        self.emit_inner_ptr_reloads();
 
         let done_offset = self.buf.len();
 
@@ -1878,6 +2011,9 @@ impl MicroOpJitCompiler {
             asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
             asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
+
+        // Reload hoisted inner pointers (callee may have mutated the heap)
+        self.emit_inner_ptr_reloads();
 
         Ok(())
     }
@@ -1974,6 +2110,9 @@ impl MicroOpJitCompiler {
             asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(ret_vreg), Reg::Rdx);
             asm.mov_mr(regs::FRAME_BASE, shadow_off, Reg::Rax);
         }
+
+        // Reload hoisted inner pointers (callee may have mutated the heap)
+        self.emit_inner_ptr_reloads();
 
         Ok(())
     }
@@ -2493,6 +2632,27 @@ impl MicroOpJitCompiler {
     /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
     /// Stores payload to frame and tag to shadow area.
     fn emit_heap_load2(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+        // Optimized path: inner pointer is hoisted into a register
+        if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
+            let shadow_off = self.shadow_tag_offset(dst);
+            let pinned = &self.pinned_vregs;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // TMP0 = idx
+            Self::load_vreg(&mut asm, regs::TMP0, idx, pinned);
+            // TMP0 = idx * 16 (each slot = tag 8B + payload 8B)
+            asm.shl_ri(regs::TMP0, 4);
+            // TMP0 = inner_base + idx * 16
+            asm.add_rr(regs::TMP0, inner_base_reg);
+            // Load tag and payload
+            asm.mov_rm(regs::TMP1, regs::TMP0, 0); // tag
+            asm.mov_rm(regs::TMP2, regs::TMP0, 8); // payload
+            // Store payload to frame, tag to shadow
+            asm.mov_mr(regs::FRAME_BASE, Self::vreg_offset(dst), regs::TMP2);
+            asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+            return Ok(());
+        }
+
+        // Fallback path: full double indirection
         let shadow_off = self.shadow_tag_offset(dst);
         let pinned = &self.pinned_vregs;
         let mut asm = X86_64Assembler::new(&mut self.buf);
@@ -2530,6 +2690,27 @@ impl MicroOpJitCompiler {
     /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
     /// Reads tag from shadow area (set by HeapLoad); stores tag+payload to heap.
     fn emit_heap_store2(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+        // Optimized path: inner pointer is hoisted into a register
+        if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
+            let shadow_off = self.shadow_tag_offset(src);
+            let pinned = &self.pinned_vregs;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // TMP4 = tag (from shadow), TMP5 = payload
+            asm.mov_rm(regs::TMP4, regs::FRAME_BASE, shadow_off);
+            Self::load_vreg(&mut asm, regs::TMP5, src, pinned);
+            // TMP0 = idx
+            Self::load_vreg(&mut asm, regs::TMP0, idx, pinned);
+            // TMP0 = idx * 16
+            asm.shl_ri(regs::TMP0, 4);
+            // TMP0 = inner_base + idx * 16
+            asm.add_rr(regs::TMP0, inner_base_reg);
+            // Store tag and payload to heap
+            asm.mov_mr(regs::TMP0, 0, regs::TMP4);
+            asm.mov_mr(regs::TMP0, 8, regs::TMP5);
+            return Ok(());
+        }
+
+        // Fallback path: full double indirection
         let shadow_off = self.shadow_tag_offset(src);
         let pinned = &self.pinned_vregs;
         let mut asm = X86_64Assembler::new(&mut self.buf);
