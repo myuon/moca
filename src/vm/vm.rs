@@ -1713,7 +1713,7 @@ impl VM {
                             format!("runtime error: slot index {} out of bounds ({})", index, e)
                         })?;
                 }
-                MicroOp::HeapLoad2 { dst, obj, idx } => {
+                MicroOp::HeapLoad2 { dst, obj, idx, .. } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let index = self.stack[sb + idx.0]
                         .as_i64()
@@ -1740,7 +1740,7 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = value;
                 }
-                MicroOp::HeapStore2 { obj, idx, src } => {
+                MicroOp::HeapStore2 { obj, idx, src, .. } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let value = self.stack[sb + src.0];
                     let index = self.stack[sb + idx.0]
@@ -3138,7 +3138,7 @@ impl VM {
                     .write_slot(r, index as usize, value)
                     .map_err(|e| format!("runtime error: {}", e))?;
             }
-            Op::HeapLoad2 => {
+            Op::HeapLoad2(_) => {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
@@ -3158,7 +3158,7 @@ impl VM {
                     .ok_or_else(|| format!("runtime error: slot index {} out of bounds", index))?;
                 self.stack.push(value);
             }
-            Op::HeapStore2 => {
+            Op::HeapStore2(_) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;

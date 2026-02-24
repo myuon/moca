@@ -1,4 +1,5 @@
 use super::ValueType;
+use super::heap::ElemKind;
 use super::ops::Op;
 
 /// Virtual register index into a frame's register file.
@@ -447,16 +448,20 @@ pub enum MicroOp {
         src: VReg,
     },
     /// dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access)
+    /// elem_kind: Tagged = legacy 16B tagged slots, I64/Ref = 8B untagged elements
     HeapLoad2 {
         dst: VReg,
         obj: VReg,
         idx: VReg,
+        elem_kind: ElemKind,
     },
     /// heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store)
+    /// elem_kind: Tagged = legacy 16B tagged slots, I64/Ref = 8B untagged elements
     HeapStore2 {
         obj: VReg,
         idx: VReg,
         src: VReg,
+        elem_kind: ElemKind,
     },
     /// dst = ref with slot_offset += offset
     HeapOffsetRef {

@@ -5,11 +5,28 @@ use crate::compiler::resolver::{
     ResolvedStatement, ResolvedStruct,
 };
 use crate::compiler::types::Type;
-use crate::vm::{Chunk, DebugInfo, Function, FunctionDebugInfo, Op, ValueType};
+use crate::vm::{Chunk, DebugInfo, ElemKind, Function, FunctionDebugInfo, Op, ValueType};
 use std::collections::HashMap;
 
 /// Maximum nesting depth for @inline expansion (prevents code explosion).
 const MAX_INLINE_DEPTH: usize = 4;
+
+/// Determine ElemKind for a collection (Array/Vec) based on its element type.
+fn elem_kind_for_collection(object_type: &Option<Type>) -> ElemKind {
+    let elem_type = object_type
+        .as_ref()
+        .and_then(|t| t.collection_element_type());
+    match elem_type {
+        Some(Type::Int) | Some(Type::Float) | Some(Type::Bool) => ElemKind::I64,
+        Some(Type::String)
+        | Some(Type::Struct { .. })
+        | Some(Type::GenericStruct { .. })
+        | Some(Type::Nullable(_))
+        | Some(Type::Dyn) => ElemKind::Ref,
+        // For unknown/unresolved types or String container itself, fall back to Tagged
+        _ => ElemKind::Tagged,
+    }
+}
 
 /// Code generator that compiles resolved AST to bytecode.
 pub struct Codegen {
@@ -585,10 +602,11 @@ impl Codegen {
                 if has_ptr_layout {
                     // Ptr-based layout: indirect store via ptr field (slot 0)
                     // HeapStore2 = heap[heap[ref][0]][idx] = val in one op
+                    let ek = elem_kind_for_collection(object_type);
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
                     self.compile_expr(value, ops)?;
-                    ops.push(Op::HeapStore2);
+                    ops.push(Op::HeapStore2(ek));
                 } else {
                     // Struct/string assign: direct HeapStoreDyn
                     self.compile_expr(object, ops)?;
@@ -959,9 +977,10 @@ impl Codegen {
                 if has_ptr_layout {
                     // Ptr-based layout: indirect access via ptr field (slot 0)
                     // HeapLoad2 = heap[heap[ref][0]][idx] in one op
+                    let ek = elem_kind_for_collection(object_type);
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
-                    ops.push(Op::HeapLoad2);
+                    ops.push(Op::HeapLoad2(ek));
                 } else {
                     // Struct/string access: direct HeapLoadDyn
                     self.compile_expr(object, ops)?;

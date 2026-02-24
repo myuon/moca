@@ -8,6 +8,7 @@
 //! - Main function
 //! - Debug info (optional)
 
+use super::heap::ElemKind;
 use super::stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
 use super::{Chunk, Function, Op, ValueType};
 use std::io::{self, Read, Write};
@@ -680,8 +681,8 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
-        Op::HeapLoad2 => w.write_all(&[OP_HEAP_LOAD2])?,
-        Op::HeapStore2 => w.write_all(&[OP_HEAP_STORE2])?,
+        Op::HeapLoad2(_) => w.write_all(&[OP_HEAP_LOAD2])?,
+        Op::HeapStore2(_) => w.write_all(&[OP_HEAP_STORE2])?,
         Op::HeapOffsetRef => w.write_all(&[OP_HEAP_OFFSET_REF])?,
         // System / Builtins
         Op::Hostcall(num, argc) => {
@@ -875,8 +876,8 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
-        OP_HEAP_LOAD2 => Op::HeapLoad2,
-        OP_HEAP_STORE2 => Op::HeapStore2,
+        OP_HEAP_LOAD2 => Op::HeapLoad2(ElemKind::Tagged),
+        OP_HEAP_STORE2 => Op::HeapStore2(ElemKind::Tagged),
         OP_HEAP_OFFSET_REF => Op::HeapOffsetRef,
         // System / Builtins
         OP_HOSTCALL => Op::Hostcall(read_u32(r)? as usize, read_u32(r)? as usize),
@@ -1317,8 +1318,8 @@ mod tests {
             Op::HeapStore(2),
             Op::HeapLoadDyn,
             Op::HeapStoreDyn,
-            Op::HeapLoad2,
-            Op::HeapStore2,
+            Op::HeapLoad2(ElemKind::Tagged),
+            Op::HeapStore2(ElemKind::Tagged),
             Op::HeapOffsetRef,
             // System / Builtins
             Op::Hostcall(7, 2),

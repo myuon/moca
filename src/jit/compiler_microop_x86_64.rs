@@ -391,7 +391,8 @@ impl MicroOpJitCompiler {
                     mark_read(src.0);
                     mark_write(dst.0);
                 }
-                MicroOp::HeapLoadDyn { dst, obj, idx } | MicroOp::HeapLoad2 { dst, obj, idx } => {
+                MicroOp::HeapLoadDyn { dst, obj, idx }
+                | MicroOp::HeapLoad2 { dst, obj, idx, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_write(dst.0);
@@ -400,7 +401,8 @@ impl MicroOpJitCompiler {
                     mark_read(dst_obj.0);
                     mark_read(src.0);
                 }
-                MicroOp::HeapStoreDyn { obj, idx, src } | MicroOp::HeapStore2 { obj, idx, src } => {
+                MicroOp::HeapStoreDyn { obj, idx, src }
+                | MicroOp::HeapStore2 { obj, idx, src, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_read(src.0);
@@ -637,7 +639,8 @@ impl MicroOpJitCompiler {
                     mark_read(src.0);
                     mark_write(dst.0);
                 }
-                MicroOp::HeapLoadDyn { dst, obj, idx } | MicroOp::HeapLoad2 { dst, obj, idx } => {
+                MicroOp::HeapLoadDyn { dst, obj, idx }
+                | MicroOp::HeapLoad2 { dst, obj, idx, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_write(dst.0);
@@ -646,7 +649,8 @@ impl MicroOpJitCompiler {
                     mark_read(dst_obj.0);
                     mark_read(src.0);
                 }
-                MicroOp::HeapStoreDyn { obj, idx, src } | MicroOp::HeapStore2 { obj, idx, src } => {
+                MicroOp::HeapStoreDyn { obj, idx, src }
+                | MicroOp::HeapStore2 { obj, idx, src, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_read(src.0);
@@ -1557,15 +1561,27 @@ impl MicroOpJitCompiler {
                 imm: *imm,
                 cond: *cond,
             },
-            MicroOp::HeapLoad2 { dst, obj, idx } => MicroOp::HeapLoad2 {
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind,
+            } => MicroOp::HeapLoad2 {
                 dst: Self::remap_vreg(dst, vreg_map),
                 obj: Self::remap_vreg(obj, vreg_map),
                 idx: Self::remap_vreg(idx, vreg_map),
+                elem_kind: *elem_kind,
             },
-            MicroOp::HeapStore2 { obj, idx, src } => MicroOp::HeapStore2 {
+            MicroOp::HeapStore2 {
+                obj,
+                idx,
+                src,
+                elem_kind,
+            } => MicroOp::HeapStore2 {
                 obj: Self::remap_vreg(obj, vreg_map),
                 idx: Self::remap_vreg(idx, vreg_map),
                 src: Self::remap_vreg(src, vreg_map),
+                elem_kind: *elem_kind,
             },
             MicroOp::HeapLoad { dst, src, offset } => MicroOp::HeapLoad {
                 dst: Self::remap_vreg(dst, vreg_map),
@@ -1681,8 +1697,18 @@ impl MicroOpJitCompiler {
                 src,
             } => self.emit_heap_store(dst_obj, *offset, src),
             MicroOp::HeapStoreDyn { obj, idx, src } => self.emit_heap_store_dyn(obj, idx, src),
-            MicroOp::HeapLoad2 { dst, obj, idx } => self.emit_heap_load2(dst, obj, idx),
-            MicroOp::HeapStore2 { obj, idx, src } => self.emit_heap_store2(obj, idx, src),
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind: _elem_kind,
+            } => self.emit_heap_load2(dst, obj, idx),
+            MicroOp::HeapStore2 {
+                obj,
+                idx,
+                src,
+                elem_kind: _elem_kind,
+            } => self.emit_heap_store2(obj, idx, src),
 
             // f64 ALU
             MicroOp::ConstF64 { dst, imm } => self.emit_const_f64(dst, *imm),
