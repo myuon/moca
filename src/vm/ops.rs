@@ -155,15 +155,17 @@ pub enum Op {
     // ========================================
     HeapAlloc(usize),
     HeapAllocDyn,
-    HeapAllocDynSimple,
+    HeapAllocDynSimple(super::heap::ElemKind),
     HeapLoad(usize),
     HeapStore(usize),
     HeapLoadDyn,
     HeapStoreDyn,
     /// Indirect load: pop idx, pop ref → push heap[heap[ref][0]][idx]
-    HeapLoad2,
+    /// ElemKind: Tagged = legacy 16B, I64/Ref = 8B untagged
+    HeapLoad2(super::heap::ElemKind),
     /// Indirect store: pop val, pop idx, pop ref → heap[heap[ref][0]][idx] = val
-    HeapStore2,
+    /// ElemKind: Tagged = legacy 16B, I64/Ref = 8B untagged
+    HeapStore2(super::heap::ElemKind),
     /// Offset a reference: pop offset, pop ref → push ref with slot_offset += offset
     HeapOffsetRef,
 
@@ -319,13 +321,13 @@ impl Op {
             Op::Ret => "Ret",
             Op::HeapAlloc(_) => "HeapAlloc",
             Op::HeapAllocDyn => "HeapAllocDyn",
-            Op::HeapAllocDynSimple => "HeapAllocDynSimple",
+            Op::HeapAllocDynSimple(_) => "HeapAllocDynSimple",
             Op::HeapLoad(_) => "HeapLoad",
             Op::HeapStore(_) => "HeapStore",
             Op::HeapLoadDyn => "HeapLoadDyn",
             Op::HeapStoreDyn => "HeapStoreDyn",
-            Op::HeapLoad2 => "HeapLoad2",
-            Op::HeapStore2 => "HeapStore2",
+            Op::HeapLoad2(_) => "HeapLoad2",
+            Op::HeapStore2(_) => "HeapStore2",
             Op::HeapOffsetRef => "HeapOffsetRef",
             Op::Hostcall(_, _) => "Hostcall",
             Op::GcHint(_) => "GcHint",

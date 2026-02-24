@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use crate::vm::threads::{Channel, ThreadSpawner};
-use crate::vm::{Chunk, Function, GcRef, Heap, Op, Value, ValueType};
+use crate::vm::{Chunk, ElemKind, Function, GcRef, Heap, Op, Value, ValueType};
 
 #[cfg(all(target_arch = "aarch64", feature = "jit"))]
 use crate::jit::compiler::{CompiledCode, CompiledLoop};
@@ -1713,7 +1713,12 @@ impl VM {
                             format!("runtime error: slot index {} out of bounds ({})", index, e)
                         })?;
                 }
-                MicroOp::HeapLoad2 { dst, obj, idx } => {
+                MicroOp::HeapLoad2 {
+                    dst,
+                    obj,
+                    idx,
+                    elem_kind,
+                } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let index = self.stack[sb + idx.0]
                         .as_i64()
@@ -1731,16 +1736,39 @@ impl VM {
                     if index < 0 {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
-                    let value = self
-                        .heap
-                        .read_slot(ptr_ref, index as usize)
-                        .ok_or_else(|| {
-                            format!("runtime error: slot index {} out of bounds", index)
-                        })?;
+                    // Use the actual header's elem_kind (not the compile-time hint)
+                    // to ensure correct access regardless of how the array was allocated.
+                    let actual_kind = self.heap.get_elem_kind(ptr_ref);
+                    let value = if actual_kind.is_typed() {
+                        let raw =
+                            self.heap
+                                .read_typed(ptr_ref, index as usize)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "runtime error: typed array index {} out of bounds",
+                                        index
+                                    )
+                                })?;
+                        // Use compile-time elem_kind for value reconstruction
+                        // (actual_kind tells us the layout, elem_kind tells us the type)
+                        match elem_kind {
+                            ElemKind::F64 => Value::F64(f64::from_bits(raw)),
+                            ElemKind::Ref => Value::Ref(GcRef {
+                                index: raw as usize,
+                            }),
+                            _ => Value::I64(raw as i64),
+                        }
+                    } else {
+                        self.heap
+                            .read_slot(ptr_ref, index as usize)
+                            .ok_or_else(|| {
+                                format!("runtime error: slot index {} out of bounds", index)
+                            })?
+                    };
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = value;
                 }
-                MicroOp::HeapStore2 { obj, idx, src } => {
+                MicroOp::HeapStore2 { obj, idx, src, .. } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let value = self.stack[sb + src.0];
                     let index = self.stack[sb + idx.0]
@@ -1759,11 +1787,25 @@ impl VM {
                     if index < 0 {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
-                    self.heap
-                        .write_slot(ptr_ref, index as usize, value)
-                        .map_err(|e| {
-                            format!("runtime error: slot index {} out of bounds ({})", index, e)
-                        })?;
+                    // Use the actual header's elem_kind to determine storage format
+                    let actual_kind = self.heap.get_elem_kind(ptr_ref);
+                    if actual_kind.is_typed() {
+                        let raw = value.encode().1; // payload only, no tag
+                        self.heap
+                            .write_typed(ptr_ref, index as usize, raw)
+                            .map_err(|e| {
+                                format!(
+                                    "runtime error: typed array index {} out of bounds ({})",
+                                    index, e
+                                )
+                            })?;
+                    } else {
+                        self.heap
+                            .write_slot(ptr_ref, index as usize, value)
+                            .map_err(|e| {
+                                format!("runtime error: slot index {} out of bounds ({})", index, e)
+                            })?;
+                    }
                 }
                 MicroOp::HeapOffsetRef { dst, src, offset } => {
                     let sb = self.frames.last().unwrap().stack_base;
@@ -1835,14 +1877,22 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
-                MicroOp::HeapAllocDynSimple { dst, size } => {
+                MicroOp::HeapAllocDynSimple {
+                    dst,
+                    size,
+                    elem_kind,
+                } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let size_val = self.stack[sb + size.0]
                         .as_i64()
                         .ok_or("runtime error: HeapAllocDynSimple requires integer size")?
                         as usize;
-                    let slots = vec![Value::Null; size_val];
-                    let r = self.heap.alloc_slots(slots)?;
+                    let r = if elem_kind.is_typed() {
+                        self.heap.alloc_typed_array(size_val as u32, elem_kind)?
+                    } else {
+                        let slots = vec![Value::Null; size_val];
+                        self.heap.alloc_slots(slots)?
+                    };
                     self.stack[sb + dst.0] = Value::Ref(r);
                 }
                 MicroOp::Raw { op } => {
@@ -3138,7 +3188,7 @@ impl VM {
                     .write_slot(r, index as usize, value)
                     .map_err(|e| format!("runtime error: {}", e))?;
             }
-            Op::HeapLoad2 => {
+            Op::HeapLoad2(_) => {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
@@ -3158,7 +3208,7 @@ impl VM {
                     .ok_or_else(|| format!("runtime error: slot index {} out of bounds", index))?;
                 self.stack.push(value);
             }
-            Op::HeapStore2 => {
+            Op::HeapStore2(_) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
@@ -3206,15 +3256,19 @@ impl VM {
                 let r = self.heap.alloc_slots(slots)?;
                 self.stack.push(Value::Ref(r));
             }
-            Op::HeapAllocDynSimple => {
+            Op::HeapAllocDynSimple(ek) => {
                 // Pop size from stack, allocate that many null-initialized slots
                 let size_val = self.stack.pop().ok_or("stack underflow")?;
                 let size = size_val
                     .as_i64()
                     .ok_or("runtime error: HeapAllocDynSimple requires integer size")?
                     as usize;
-                let slots = vec![Value::Null; size];
-                let r = self.heap.alloc_slots(slots)?;
+                let r = if ek.is_typed() {
+                    self.heap.alloc_typed_array(size as u32, ek)?
+                } else {
+                    let slots = vec![Value::Null; size];
+                    self.heap.alloc_slots(slots)?
+                };
                 self.stack.push(Value::Ref(r));
             }
             // HeapAllocString removed — use HeapAlloc(2) instead
@@ -4423,11 +4477,14 @@ unsafe extern "C" fn jit_hostcall_helper(
 }
 
 /// JIT HeapAllocDynSimple helper function.
-/// Allocates `size` null-initialized slots on the heap.
+/// Allocates `size` slots on the heap with the given ElemKind.
+/// For typed arrays (I64/Ref/F64), allocates with 8B/element stride.
+/// For Tagged, allocates with 16B/slot stride (tag + payload).
 #[cfg(feature = "jit")]
 unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     ctx: *mut JitCallContext,
     size: u64,
+    elem_kind_raw: u64,
 ) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
@@ -4435,8 +4492,14 @@ unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     vm.record_opcode("HeapAllocDynSimple");
 
     let size = size as usize;
-    let slots = vec![Value::Null; size];
-    match vm.heap.alloc_slots(slots) {
+    let ek = ElemKind::from_raw(elem_kind_raw as u8);
+    let result = if ek.is_typed() {
+        vm.heap.alloc_typed_array(size as u32, ek)
+    } else {
+        let slots = vec![Value::Null; size];
+        vm.heap.alloc_slots(slots)
+    };
+    match result {
         Ok(r) => {
             ctx_ref.heap_base = vm.heap.memory_base_ptr();
             JitReturn {

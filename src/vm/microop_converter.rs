@@ -1517,7 +1517,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 );
                 micro_ops.push(MicroOp::HeapStoreDyn { obj, idx, src });
             }
-            Op::HeapLoad2 => {
+            Op::HeapLoad2(ek) => {
                 // pop index, pop ref → push heap[heap[ref][0]][idx]
                 let idx = pop_vreg(
                     &mut vstack,
@@ -1539,10 +1539,15 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     &mut vreg_types,
                     ValueType::I64,
                 );
-                micro_ops.push(MicroOp::HeapLoad2 { dst, obj, idx });
+                micro_ops.push(MicroOp::HeapLoad2 {
+                    dst,
+                    obj,
+                    idx,
+                    elem_kind: *ek,
+                });
                 vstack.push(Vse::Reg(dst));
             }
-            Op::HeapStore2 => {
+            Op::HeapStore2(ek) => {
                 // pop value, pop index, pop ref → heap[heap[ref][0]][idx] = value
                 let src = pop_vreg(
                     &mut vstack,
@@ -1565,7 +1570,12 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     &mut max_temp,
                     &mut vreg_types,
                 );
-                micro_ops.push(MicroOp::HeapStore2 { obj, idx, src });
+                micro_ops.push(MicroOp::HeapStore2 {
+                    obj,
+                    idx,
+                    src,
+                    elem_kind: *ek,
+                });
             }
             Op::HeapOffsetRef => {
                 // pop offset, pop ref → push ref with slot_offset += offset
@@ -1793,7 +1803,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 micro_ops.push(MicroOp::HeapAlloc { dst, args });
                 vstack.push(Vse::RegRef(dst));
             }
-            Op::HeapAllocDynSimple => {
+            Op::HeapAllocDynSimple(ek) => {
                 let size = pop_vreg(
                     &mut vstack,
                     &mut micro_ops,
@@ -1807,7 +1817,11 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     &mut vreg_types,
                     ValueType::Ref,
                 );
-                micro_ops.push(MicroOp::HeapAllocDynSimple { dst, size });
+                micro_ops.push(MicroOp::HeapAllocDynSimple {
+                    dst,
+                    size,
+                    elem_kind: *ek,
+                });
                 vstack.push(Vse::RegRef(dst));
             }
             // ============================================================

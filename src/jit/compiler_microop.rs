@@ -17,6 +17,8 @@ use super::compiler::{CompiledCode, CompiledLoop, value_tags};
 #[cfg(target_arch = "aarch64")]
 use super::memory::ExecutableMemory;
 #[cfg(target_arch = "aarch64")]
+use crate::vm::ElemKind;
+#[cfg(target_arch = "aarch64")]
 use crate::vm::ValueType;
 #[cfg(target_arch = "aarch64")]
 use crate::vm::microop::{CmpCond, ConvertedFunction, MicroOp, VReg};
@@ -510,8 +512,18 @@ impl MicroOpJitCompiler {
                 src,
             } => self.emit_heap_store(dst_obj, *offset, src),
             MicroOp::HeapStoreDyn { obj, idx, src } => self.emit_heap_store_dyn(obj, idx, src),
-            MicroOp::HeapLoad2 { dst, obj, idx } => self.emit_heap_load2(dst, obj, idx),
-            MicroOp::HeapStore2 { obj, idx, src } => self.emit_heap_store2(obj, idx, src),
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind,
+            } => self.emit_heap_load2(dst, obj, idx, *elem_kind),
+            MicroOp::HeapStore2 {
+                obj,
+                idx,
+                src,
+                elem_kind,
+            } => self.emit_heap_store2(obj, idx, src, *elem_kind),
 
             // f64 ALU
             MicroOp::ConstF64 { dst, imm } => self.emit_const_f64(dst, *imm),
@@ -570,7 +582,11 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             // Heap allocation operations
             MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
-            MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
+            MicroOp::HeapAllocDynSimple {
+                dst,
+                size,
+                elem_kind,
+            } => self.emit_heap_alloc_dyn_simple(dst, size, *elem_kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -1774,9 +1790,29 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
+    /// Convert ElemKind to the JIT value tag constant.
+    fn elem_kind_to_tag(ek: ElemKind) -> u64 {
+        match ek {
+            ElemKind::I64 => value_tags::TAG_INT,
+            ElemKind::F64 => value_tags::TAG_FLOAT,
+            ElemKind::Ref => value_tags::TAG_PTR,
+            ElemKind::Tagged => 0, // should not be called for Tagged
+        }
+    }
+
     /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
-    /// Loads tag+payload from heap; stores payload to frame, tag to shadow.
-    fn emit_heap_load2(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+    /// Stores payload to frame and tag to shadow area.
+    ///
+    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
+    /// Typed stride optimization requires Vec literal construction to use monomorphised
+    /// allocation functions (see #241). The elem_kind parameter is accepted for future use.
+    fn emit_heap_load2(
+        &mut self,
+        dst: &VReg,
+        obj: &VReg,
+        idx: &VReg,
+        _elem_kind: ElemKind,
+    ) -> Result<(), String> {
         let shadow_off = self.shadow_tag_offset(dst);
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
@@ -1789,17 +1825,14 @@ impl MicroOpJitCompiler {
         asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
         asm.ldr(regs::TMP0, regs::TMP3, 8); // inner ref payload
 
-        // Step 2: load slot[idx] of inner object → tag + payload
-        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+        // Step 2: load slot[idx] of inner object (Tagged: each slot = 2 words)
+        asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // idx * 2
         asm.add_imm(regs::TMP0, regs::TMP0, 1);
         asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
         asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
         asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-
-        // Load tag and payload from heap
         asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
         asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
-        // Store payload to frame, tag to shadow
         asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
         asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
         Ok(())
@@ -1807,11 +1840,19 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
     /// Reads tag from shadow area; stores tag+payload to heap.
-    fn emit_heap_store2(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+    ///
+    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
+    /// See emit_heap_load2 for details on why typed stride is deferred.
+    fn emit_heap_store2(
+        &mut self,
+        obj: &VReg,
+        idx: &VReg,
+        src: &VReg,
+        _elem_kind: ElemKind,
+    ) -> Result<(), String> {
         let shadow_off = self.shadow_tag_offset(src);
         let mut asm = AArch64Assembler::new(&mut self.buf);
-        // TMP4 = tag (from shadow), TMP5 = payload
-        asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
+        // TMP5 = payload
         asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
@@ -1823,7 +1864,8 @@ impl MicroOpJitCompiler {
         asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
         asm.ldr(regs::TMP0, regs::TMP3, 8);
 
-        // Step 2: store at slot[idx] of inner object
+        // Step 2: store at slot[idx] of inner object (Tagged: each slot = 2 words)
+        asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
         asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
         asm.add_imm(regs::TMP0, regs::TMP0, 1);
         asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
@@ -1934,14 +1976,20 @@ impl MicroOpJitCompiler {
 
     // ==================== Heap Allocation ====================
 
-    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload) -> (tag, payload)
-    fn emit_heap_alloc_dyn_simple(&mut self, dst: &VReg, size: &VReg) -> Result<(), String> {
+    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload, elem_kind) -> (tag, payload)
+    fn emit_heap_alloc_dyn_simple(
+        &mut self,
+        dst: &VReg,
+        size: &VReg,
+        elem_kind: crate::vm::ElemKind,
+    ) -> Result<(), String> {
         let dst_shadow_off = self.shadow_tag_offset(dst);
         {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.ldr(Reg::X1, regs::FRAME_BASE, Self::vreg_offset(size));
+            asm.mov_imm(Reg::X2, elem_kind as u8 as u16);
             asm.ldr(regs::TMP4, regs::VM_CTX, 72);
             asm.blr(regs::TMP4);
             asm.ldp_post(regs::VM_CTX, regs::FRAME_BASE, 16);
@@ -1962,6 +2010,7 @@ impl MicroOpJitCompiler {
             asm.stp_pre(regs::VM_CTX, regs::FRAME_BASE, -16);
             asm.mov(Reg::X0, regs::VM_CTX);
             asm.mov_imm(Reg::X1, size as u16);
+            asm.mov_imm(Reg::X2, 0); // elem_kind = Tagged (HeapAlloc is always tagged)
             // Load heap_alloc_dyn_simple_helper from JitCallContext offset 72
             asm.ldr(regs::TMP4, regs::VM_CTX, 72);
             asm.blr(regs::TMP4);

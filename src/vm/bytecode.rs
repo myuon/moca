@@ -8,6 +8,7 @@
 //! - Main function
 //! - Debug info (optional)
 
+use super::heap::ElemKind;
 use super::stackmap::{FunctionStackMap, RefBitset, StackMapEntry};
 use super::{Chunk, Function, Op, ValueType};
 use std::io::{self, Read, Write};
@@ -669,7 +670,10 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         // HeapAllocArray removed — use HeapAlloc instead
         Op::HeapAllocDyn => w.write_all(&[OP_HEAP_ALLOC_DYN])?,
-        Op::HeapAllocDynSimple => w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?,
+        Op::HeapAllocDynSimple(ek) => {
+            w.write_all(&[OP_HEAP_ALLOC_DYN_SIMPLE])?;
+            w.write_all(&[*ek as u8])?;
+        }
         Op::HeapLoad(offset) => {
             w.write_all(&[OP_HEAP_LOAD])?;
             write_u32(w, *offset as u32)?;
@@ -680,8 +684,8 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
         }
         Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
         Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
-        Op::HeapLoad2 => w.write_all(&[OP_HEAP_LOAD2])?,
-        Op::HeapStore2 => w.write_all(&[OP_HEAP_STORE2])?,
+        Op::HeapLoad2(_) => w.write_all(&[OP_HEAP_LOAD2])?,
+        Op::HeapStore2(_) => w.write_all(&[OP_HEAP_STORE2])?,
         Op::HeapOffsetRef => w.write_all(&[OP_HEAP_OFFSET_REF])?,
         // System / Builtins
         Op::Hostcall(num, argc) => {
@@ -870,13 +874,16 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         // OP_HEAP_ALLOC_ARRAY removed — use HeapAlloc instead
         OP_HEAP_ALLOC_ARRAY => Op::HeapAlloc(read_u32(r)? as usize),
         OP_HEAP_ALLOC_DYN => Op::HeapAllocDyn,
-        OP_HEAP_ALLOC_DYN_SIMPLE => Op::HeapAllocDynSimple,
+        OP_HEAP_ALLOC_DYN_SIMPLE => {
+            let ek_raw = read_u8(r)?;
+            Op::HeapAllocDynSimple(ElemKind::from_raw(ek_raw))
+        }
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
         OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
         OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
-        OP_HEAP_LOAD2 => Op::HeapLoad2,
-        OP_HEAP_STORE2 => Op::HeapStore2,
+        OP_HEAP_LOAD2 => Op::HeapLoad2(ElemKind::Tagged),
+        OP_HEAP_STORE2 => Op::HeapStore2(ElemKind::Tagged),
         OP_HEAP_OFFSET_REF => Op::HeapOffsetRef,
         // System / Builtins
         OP_HOSTCALL => Op::Hostcall(read_u32(r)? as usize, read_u32(r)? as usize),
@@ -1311,14 +1318,14 @@ mod tests {
             // Heap Operations
             Op::HeapAlloc(5),
             Op::HeapAllocDyn,
-            Op::HeapAllocDynSimple,
+            Op::HeapAllocDynSimple(ElemKind::Tagged),
             // HeapAllocArray removed from test
             Op::HeapLoad(1),
             Op::HeapStore(2),
             Op::HeapLoadDyn,
             Op::HeapStoreDyn,
-            Op::HeapLoad2,
-            Op::HeapStore2,
+            Op::HeapLoad2(ElemKind::Tagged),
+            Op::HeapStore2(ElemKind::Tagged),
             Op::HeapOffsetRef,
             // System / Builtins
             Op::Hostcall(7, 2),

@@ -16,7 +16,7 @@ pub mod verifier;
 mod vm;
 
 pub use debug::{DebugInfo, FunctionDebugInfo};
-pub use heap::{GcRef, Heap};
+pub use heap::{ElemKind, GcRef, Heap};
 pub use ops::Op;
 // StackMap types for precise GC (used by embedders/tools)
 #[allow(unused_imports)]

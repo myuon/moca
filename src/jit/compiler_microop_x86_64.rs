@@ -16,6 +16,8 @@ use super::memory::ExecutableMemory;
 #[cfg(target_arch = "x86_64")]
 use super::x86_64::{Cond, Reg, X86_64Assembler};
 #[cfg(target_arch = "x86_64")]
+use crate::vm::ElemKind;
+#[cfg(target_arch = "x86_64")]
 use crate::vm::ValueType;
 #[cfg(target_arch = "x86_64")]
 use crate::vm::microop::{CmpCond, ConvertedFunction, MicroOp, VReg};
@@ -391,7 +393,8 @@ impl MicroOpJitCompiler {
                     mark_read(src.0);
                     mark_write(dst.0);
                 }
-                MicroOp::HeapLoadDyn { dst, obj, idx } | MicroOp::HeapLoad2 { dst, obj, idx } => {
+                MicroOp::HeapLoadDyn { dst, obj, idx }
+                | MicroOp::HeapLoad2 { dst, obj, idx, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_write(dst.0);
@@ -400,7 +403,8 @@ impl MicroOpJitCompiler {
                     mark_read(dst_obj.0);
                     mark_read(src.0);
                 }
-                MicroOp::HeapStoreDyn { obj, idx, src } | MicroOp::HeapStore2 { obj, idx, src } => {
+                MicroOp::HeapStoreDyn { obj, idx, src }
+                | MicroOp::HeapStore2 { obj, idx, src, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_read(src.0);
@@ -418,7 +422,7 @@ impl MicroOpJitCompiler {
                     }
                     mark_write(dst.0);
                 }
-                MicroOp::HeapAllocDynSimple { dst, size } => {
+                MicroOp::HeapAllocDynSimple { dst, size, .. } => {
                     mark_read(size.0);
                     mark_write(dst.0);
                 }
@@ -637,7 +641,8 @@ impl MicroOpJitCompiler {
                     mark_read(src.0);
                     mark_write(dst.0);
                 }
-                MicroOp::HeapLoadDyn { dst, obj, idx } | MicroOp::HeapLoad2 { dst, obj, idx } => {
+                MicroOp::HeapLoadDyn { dst, obj, idx }
+                | MicroOp::HeapLoad2 { dst, obj, idx, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_write(dst.0);
@@ -646,7 +651,8 @@ impl MicroOpJitCompiler {
                     mark_read(dst_obj.0);
                     mark_read(src.0);
                 }
-                MicroOp::HeapStoreDyn { obj, idx, src } | MicroOp::HeapStore2 { obj, idx, src } => {
+                MicroOp::HeapStoreDyn { obj, idx, src }
+                | MicroOp::HeapStore2 { obj, idx, src, .. } => {
                     mark_read(obj.0);
                     mark_read(idx.0);
                     mark_read(src.0);
@@ -662,7 +668,7 @@ impl MicroOpJitCompiler {
                     }
                     mark_write(dst.0);
                 }
-                MicroOp::HeapAllocDynSimple { dst, size } => {
+                MicroOp::HeapAllocDynSimple { dst, size, .. } => {
                     mark_read(size.0);
                     mark_write(dst.0);
                 }
@@ -1340,6 +1346,16 @@ impl MicroOpJitCompiler {
         ((self.total_regs + vreg.0) * 8) as i32
     }
 
+    /// Convert ElemKind to the JIT value tag constant.
+    fn elem_kind_to_tag(ek: ElemKind) -> u64 {
+        match ek {
+            ElemKind::I64 => value_tags::TAG_INT,
+            ElemKind::F64 => value_tags::TAG_FLOAT,
+            ElemKind::Ref => value_tags::TAG_PTR,
+            ElemKind::Tagged => 0, // should not be called for Tagged
+        }
+    }
+
     // ==================== Prologue / Epilogue ====================
 
     fn emit_prologue(&mut self) {
@@ -1557,15 +1573,27 @@ impl MicroOpJitCompiler {
                 imm: *imm,
                 cond: *cond,
             },
-            MicroOp::HeapLoad2 { dst, obj, idx } => MicroOp::HeapLoad2 {
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind,
+            } => MicroOp::HeapLoad2 {
                 dst: Self::remap_vreg(dst, vreg_map),
                 obj: Self::remap_vreg(obj, vreg_map),
                 idx: Self::remap_vreg(idx, vreg_map),
+                elem_kind: *elem_kind,
             },
-            MicroOp::HeapStore2 { obj, idx, src } => MicroOp::HeapStore2 {
+            MicroOp::HeapStore2 {
+                obj,
+                idx,
+                src,
+                elem_kind,
+            } => MicroOp::HeapStore2 {
                 obj: Self::remap_vreg(obj, vreg_map),
                 idx: Self::remap_vreg(idx, vreg_map),
                 src: Self::remap_vreg(src, vreg_map),
+                elem_kind: *elem_kind,
             },
             MicroOp::HeapLoad { dst, src, offset } => MicroOp::HeapLoad {
                 dst: Self::remap_vreg(dst, vreg_map),
@@ -1681,8 +1709,18 @@ impl MicroOpJitCompiler {
                 src,
             } => self.emit_heap_store(dst_obj, *offset, src),
             MicroOp::HeapStoreDyn { obj, idx, src } => self.emit_heap_store_dyn(obj, idx, src),
-            MicroOp::HeapLoad2 { dst, obj, idx } => self.emit_heap_load2(dst, obj, idx),
-            MicroOp::HeapStore2 { obj, idx, src } => self.emit_heap_store2(obj, idx, src),
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind,
+            } => self.emit_heap_load2(dst, obj, idx, *elem_kind),
+            MicroOp::HeapStore2 {
+                obj,
+                idx,
+                src,
+                elem_kind,
+            } => self.emit_heap_store2(obj, idx, src, *elem_kind),
 
             // f64 ALU
             MicroOp::ConstF64 { dst, imm } => self.emit_const_f64(dst, *imm),
@@ -1741,7 +1779,11 @@ impl MicroOpJitCompiler {
             MicroOp::StringConst { dst, idx } => self.emit_string_const(dst, *idx),
             // Heap allocation operations
             MicroOp::HeapAlloc { dst, args } => self.emit_heap_alloc(dst, args),
-            MicroOp::HeapAllocDynSimple { dst, size } => self.emit_heap_alloc_dyn_simple(dst, size),
+            MicroOp::HeapAllocDynSimple {
+                dst,
+                size,
+                elem_kind,
+            } => self.emit_heap_alloc_dyn_simple(dst, size, *elem_kind),
             // Stack bridge (spill/restore across calls)
             MicroOp::StackPush { src } => self.emit_stack_push(src),
             MicroOp::StackPop { dst } => self.emit_stack_pop(dst),
@@ -3114,8 +3156,13 @@ impl MicroOpJitCompiler {
 
     // ==================== Heap Allocation ====================
 
-    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload) -> (tag, payload)
-    fn emit_heap_alloc_dyn_simple(&mut self, dst: &VReg, size: &VReg) -> Result<(), String> {
+    /// Emit HeapAllocDynSimple: call helper(ctx, size_payload, elem_kind) -> (tag, payload)
+    fn emit_heap_alloc_dyn_simple(
+        &mut self,
+        dst: &VReg,
+        size: &VReg,
+        elem_kind: crate::vm::ElemKind,
+    ) -> Result<(), String> {
         let dst_shadow_off = self.shadow_tag_offset(dst);
         // Spill loop-variant registers before helper call (R10/R11 are caller-saved)
         self.emit_loop_reg_spills();
@@ -3125,9 +3172,10 @@ impl MicroOpJitCompiler {
             // Save callee-saved
             asm.push(regs::VM_CTX);
             asm.push(regs::FRAME_BASE);
-            // Args: RDI=ctx, RSI=size (payload only)
+            // Args: RDI=ctx, RSI=size (payload only), RDX=elem_kind
             asm.mov_rr(Reg::Rdi, regs::VM_CTX);
             Self::load_vreg(&mut asm, Reg::Rsi, size, reg_map);
+            asm.mov_ri32(Reg::Rdx, elem_kind as u8 as i32);
             // Load heap_alloc_dyn_simple_helper from JitCallContext offset 72
             asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
             asm.call_r(regs::TMP4);
@@ -3158,6 +3206,7 @@ impl MicroOpJitCompiler {
             asm.push(regs::FRAME_BASE);
             asm.mov_rr(Reg::Rdi, regs::VM_CTX);
             asm.mov_ri64(Reg::Rsi, size as i64);
+            asm.mov_ri32(Reg::Rdx, 0); // elem_kind = Tagged (HeapAlloc is always tagged)
             // Load heap_alloc_dyn_simple_helper from JitCallContext offset 72
             asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
             asm.call_r(regs::TMP4);
@@ -3321,7 +3370,17 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
     /// Stores payload to frame and tag to shadow area.
-    fn emit_heap_load2(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+    ///
+    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
+    /// Typed stride optimization requires Vec literal construction to use monomorphised
+    /// allocation functions (see #241). The elem_kind parameter is accepted for future use.
+    fn emit_heap_load2(
+        &mut self,
+        dst: &VReg,
+        obj: &VReg,
+        idx: &VReg,
+        _elem_kind: ElemKind,
+    ) -> Result<(), String> {
         // Optimized path: inner pointer is hoisted into a register
         if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
             let shadow_off = self.shadow_tag_offset(dst);
@@ -3362,7 +3421,7 @@ impl MicroOpJitCompiler {
         asm.mov_rm(regs::TMP0, regs::TMP3, 8);
 
         // Step 2: load slot[idx] of inner object
-        asm.shl_ri(regs::TMP2, 1);
+        asm.shl_ri(regs::TMP2, 1); // idx * 2
         asm.add_ri32(regs::TMP0, 1);
         asm.add_rr(regs::TMP0, regs::TMP2);
         asm.shl_ri(regs::TMP0, 3);
@@ -3379,7 +3438,16 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
     /// Reads tag from shadow area (set by HeapLoad); stores tag+payload to heap.
-    fn emit_heap_store2(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+    ///
+    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
+    /// See emit_heap_load2 for details on why typed stride is deferred.
+    fn emit_heap_store2(
+        &mut self,
+        obj: &VReg,
+        idx: &VReg,
+        src: &VReg,
+        _elem_kind: ElemKind,
+    ) -> Result<(), String> {
         // Optimized path: inner pointer is hoisted into a register
         if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
             let shadow_off = self.shadow_tag_offset(src);

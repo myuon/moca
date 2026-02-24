@@ -764,10 +764,63 @@ impl TypeChecker {
             self.errors.push(e);
         }
 
+        // Re-apply substitution to all Let inferred_type fields.
+        // This resolves type variables that were created during inference
+        // but only unified later in the function body.
+        Self::resolve_let_types(&self.substitution, &mut fn_def.body.statements);
+
         // Clear current type params, bounds, and function name
         self.current_type_params.clear();
         self.current_type_param_bounds.clear();
         self.current_function_name = None;
+    }
+
+    /// Walk statements and apply substitution to Let inferred_type fields.
+    fn resolve_let_types(subst: &Substitution, stmts: &mut [Statement]) {
+        for stmt in stmts.iter_mut() {
+            match stmt {
+                Statement::Let {
+                    inferred_type: Some(ty),
+                    ..
+                } => {
+                    *ty = subst.apply(ty);
+                }
+                Statement::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    Self::resolve_let_types(subst, &mut then_block.statements);
+                    if let Some(else_block) = else_block {
+                        Self::resolve_let_types(subst, &mut else_block.statements);
+                    }
+                }
+                Statement::While { body, .. }
+                | Statement::ForIn { body, .. }
+                | Statement::ForRange { body, .. } => {
+                    Self::resolve_let_types(subst, &mut body.statements);
+                }
+                Statement::Try {
+                    try_block,
+                    catch_block,
+                    ..
+                } => {
+                    Self::resolve_let_types(subst, &mut try_block.statements);
+                    Self::resolve_let_types(subst, &mut catch_block.statements);
+                }
+                Statement::MatchDyn {
+                    arms,
+                    default_block,
+                    ..
+                } => {
+                    for arm in arms {
+                        Self::resolve_let_types(subst, &mut arm.body.statements);
+                    }
+                    Self::resolve_let_types(subst, &mut default_block.statements);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Register a struct definition.

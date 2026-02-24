@@ -1077,6 +1077,28 @@ fn rust_print_int<W: Write>(writer: &mut W) {
     }
 }
 
+#[cfg(feature = "jit")]
+fn rust_array_sum<W: Write>(writer: &mut W) {
+    // Same LCG as moca _array_lcg_next
+    let mut seed: i64 = 42;
+    let mut v: Vec<i64> = Vec::with_capacity(10000);
+    for _ in 0..10000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if seed < 0 {
+            seed = -seed;
+        }
+        v.push(seed % 1000000);
+    }
+
+    let mut total: i64 = 0;
+    for _ in 0..200 {
+        for i in 0..10000 {
+            total += v[i];
+        }
+    }
+    writeln!(writer, "{}", total).unwrap();
+}
+
 /// Run a moca file with JIT enabled and measure execution time
 #[cfg(feature = "jit")]
 fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize) {
@@ -1225,6 +1247,10 @@ fn snapshot_performance() {
     // Test print(int) bulk output with Rust reference
     let print_int_path = perf_dir.join("print_int.mc");
     run_performance_test(&print_int_path, |w| rust_print_int(w));
+
+    // Test array sequential sum scan with Rust reference
+    let array_sum_path = perf_dir.join("array_sum.mc");
+    run_performance_test(&array_sum_path, |w| rust_array_sum(w));
 }
 
 // ============================================================================
