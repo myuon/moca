@@ -16,6 +16,8 @@ use super::memory::ExecutableMemory;
 #[cfg(target_arch = "x86_64")]
 use super::x86_64::{Cond, Reg, X86_64Assembler};
 #[cfg(target_arch = "x86_64")]
+use crate::vm::ElemKind;
+#[cfg(target_arch = "x86_64")]
 use crate::vm::ValueType;
 #[cfg(target_arch = "x86_64")]
 use crate::vm::microop::{CmpCond, ConvertedFunction, MicroOp, VReg};
@@ -1344,6 +1346,16 @@ impl MicroOpJitCompiler {
         ((self.total_regs + vreg.0) * 8) as i32
     }
 
+    /// Convert ElemKind to the JIT value tag constant.
+    fn elem_kind_to_tag(ek: ElemKind) -> u64 {
+        match ek {
+            ElemKind::I64 => value_tags::TAG_INT,
+            ElemKind::F64 => value_tags::TAG_FLOAT,
+            ElemKind::Ref => value_tags::TAG_PTR,
+            ElemKind::Tagged => 0, // should not be called for Tagged
+        }
+    }
+
     // ==================== Prologue / Epilogue ====================
 
     fn emit_prologue(&mut self) {
@@ -1701,14 +1713,14 @@ impl MicroOpJitCompiler {
                 dst,
                 obj,
                 idx,
-                elem_kind: _elem_kind,
-            } => self.emit_heap_load2(dst, obj, idx),
+                elem_kind,
+            } => self.emit_heap_load2(dst, obj, idx, *elem_kind),
             MicroOp::HeapStore2 {
                 obj,
                 idx,
                 src,
-                elem_kind: _elem_kind,
-            } => self.emit_heap_store2(obj, idx, src),
+                elem_kind,
+            } => self.emit_heap_store2(obj, idx, src, *elem_kind),
 
             // f64 ALU
             MicroOp::ConstF64 { dst, imm } => self.emit_const_f64(dst, *imm),
@@ -3194,6 +3206,7 @@ impl MicroOpJitCompiler {
             asm.push(regs::FRAME_BASE);
             asm.mov_rr(Reg::Rdi, regs::VM_CTX);
             asm.mov_ri64(Reg::Rsi, size as i64);
+            asm.mov_ri32(Reg::Rdx, 0); // elem_kind = Tagged (HeapAlloc is always tagged)
             // Load heap_alloc_dyn_simple_helper from JitCallContext offset 72
             asm.mov_rm(regs::TMP4, regs::VM_CTX, 72);
             asm.call_r(regs::TMP4);
@@ -3357,7 +3370,17 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
     /// Stores payload to frame and tag to shadow area.
-    fn emit_heap_load2(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+    ///
+    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
+    /// Typed stride optimization requires Vec literal construction to use monomorphised
+    /// allocation functions (see #241). The elem_kind parameter is accepted for future use.
+    fn emit_heap_load2(
+        &mut self,
+        dst: &VReg,
+        obj: &VReg,
+        idx: &VReg,
+        _elem_kind: ElemKind,
+    ) -> Result<(), String> {
         // Optimized path: inner pointer is hoisted into a register
         if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
             let shadow_off = self.shadow_tag_offset(dst);
@@ -3398,7 +3421,7 @@ impl MicroOpJitCompiler {
         asm.mov_rm(regs::TMP0, regs::TMP3, 8);
 
         // Step 2: load slot[idx] of inner object
-        asm.shl_ri(regs::TMP2, 1);
+        asm.shl_ri(regs::TMP2, 1); // idx * 2
         asm.add_ri32(regs::TMP0, 1);
         asm.add_rr(regs::TMP0, regs::TMP2);
         asm.shl_ri(regs::TMP0, 3);
@@ -3415,7 +3438,16 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
     /// Reads tag from shadow area (set by HeapLoad); stores tag+payload to heap.
-    fn emit_heap_store2(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+    ///
+    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
+    /// See emit_heap_load2 for details on why typed stride is deferred.
+    fn emit_heap_store2(
+        &mut self,
+        obj: &VReg,
+        idx: &VReg,
+        src: &VReg,
+        _elem_kind: ElemKind,
+    ) -> Result<(), String> {
         // Optimized path: inner pointer is hoisted into a register
         if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
             let shadow_off = self.shadow_tag_offset(src);

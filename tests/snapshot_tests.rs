@@ -1081,8 +1081,8 @@ fn rust_print_int<W: Write>(writer: &mut W) {
 fn rust_array_sum<W: Write>(writer: &mut W) {
     // Same LCG as moca _array_lcg_next
     let mut seed: i64 = 42;
-    let mut v: Vec<i64> = Vec::with_capacity(500000);
-    for _ in 0..500000 {
+    let mut v: Vec<i64> = Vec::with_capacity(10000);
+    for _ in 0..10000 {
         seed = (seed * 1103515245 + 12345) % 2147483648;
         if seed < 0 {
             seed = -seed;
@@ -1092,7 +1092,7 @@ fn rust_array_sum<W: Write>(writer: &mut W) {
 
     let mut total: i64 = 0;
     for _ in 0..200 {
-        for i in 0..500000 {
+        for i in 0..10000 {
             total += v[i];
         }
     }

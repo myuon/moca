@@ -1399,12 +1399,11 @@ impl Codegen {
                             return Err("__alloc_heap takes exactly 1 argument (size)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        // Use the collection-level ElemKind if we're inside a Vec/Array method,
-                        // otherwise default to Tagged.
-                        let ek = self
-                            .current_collection_elem_kind
-                            .unwrap_or(ElemKind::Tagged);
-                        ops.push(Op::HeapAllocDynSimple(ek));
+                        // Always allocate Tagged for now: the JIT always uses Tagged stride
+                        // for HeapLoad2/HeapStore2, so typed allocation would cause a
+                        // stride mismatch. Typed allocation requires fixing the
+                        // monomorphise pass first (see #241).
+                        ops.push(Op::HeapAllocDynSimple(ElemKind::Tagged));
                     }
                     "__null_ptr" => {
                         // __null_ptr() -> null pointer (0 as Ref)

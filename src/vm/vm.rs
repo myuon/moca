@@ -4478,13 +4478,13 @@ unsafe extern "C" fn jit_hostcall_helper(
 
 /// JIT HeapAllocDynSimple helper function.
 /// Allocates `size` slots on the heap with the given ElemKind.
-/// The third argument (elem_kind) is currently unused in the JIT path;
-/// the interpreter handles typed allocation, while JIT always allocates Tagged.
+/// For typed arrays (I64/Ref/F64), allocates with 8B/element stride.
+/// For Tagged, allocates with 16B/slot stride (tag + payload).
 #[cfg(feature = "jit")]
 unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     ctx: *mut JitCallContext,
     size: u64,
-    _elem_kind_raw: u64,
+    elem_kind_raw: u64,
 ) -> JitReturn {
     let ctx_ref = unsafe { &mut *ctx };
     let vm = unsafe { &mut *(ctx_ref.vm as *mut VM) };
@@ -4492,8 +4492,14 @@ unsafe extern "C" fn jit_heap_alloc_dyn_simple_helper(
     vm.record_opcode("HeapAllocDynSimple");
 
     let size = size as usize;
-    let slots = vec![Value::Null; size];
-    match vm.heap.alloc_slots(slots) {
+    let ek = ElemKind::from_raw(elem_kind_raw as u8);
+    let result = if ek.is_typed() {
+        vm.heap.alloc_typed_array(size as u32, ek)
+    } else {
+        let slots = vec![Value::Null; size];
+        vm.heap.alloc_slots(slots)
+    };
+    match result {
         Ok(r) => {
             ctx_ref.heap_base = vm.heap.memory_base_ptr();
             JitReturn {

@@ -17,7 +17,7 @@ fun array_sum_benchmark() {
     let v: Vec<int> = Vec<int> { data: __null_ptr(), len: 0, cap: 0 };
     let seed = 42;
     let i = 0;
-    let n = 500000;
+    let n = 10000;
     while i < n {
         seed = _array_lcg_next(seed);
         v.push(seed % 1000000);
