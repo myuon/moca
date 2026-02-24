@@ -336,25 +336,34 @@ impl InstantiationCollector {
                 args,
                 ..
             } => {
-                // Check for generic associated function calls
-                let qualified_name = format!("{}::{}", type_name, function);
-                if self.generic_functions.contains_key(&qualified_name) {
-                    // Combine type_args and fn_type_args
-                    let mut all_type_args: Vec<Type> = type_args
+                // Register struct-level instantiation (e.g., Vec<int> → Vec + [Int])
+                if self.generic_structs.contains_key(type_name) && !type_args.is_empty() {
+                    let struct_types: Vec<Type> = type_args
                         .iter()
                         .filter_map(|ta| ta.to_type().ok())
                         .collect();
-                    let fn_types: Vec<Type> = fn_type_args
-                        .iter()
-                        .filter_map(|ta| ta.to_type().ok())
-                        .collect();
-                    all_type_args.extend(fn_types);
-
-                    if !all_type_args.is_empty() {
+                    if struct_types.len() == type_args.len() {
                         self.instantiations.insert(Instantiation {
-                            name: qualified_name,
-                            type_args: all_type_args,
+                            name: type_name.clone(),
+                            type_args: struct_types,
                         });
+                    }
+                }
+
+                // If the method itself has type params, register function-level instantiation
+                if !fn_type_args.is_empty() {
+                    let qualified_name = format!("{}::{}", type_name, function);
+                    if self.generic_functions.contains_key(&qualified_name) {
+                        let fn_types: Vec<Type> = fn_type_args
+                            .iter()
+                            .filter_map(|ta| ta.to_type().ok())
+                            .collect();
+                        if fn_types.len() == fn_type_args.len() {
+                            self.instantiations.insert(Instantiation {
+                                name: qualified_name,
+                                type_args: fn_types,
+                            });
+                        }
                     }
                 }
 
@@ -607,6 +616,13 @@ impl Monomorphiser {
         for generic_impl in generic_impls {
             // Check that type args match type params
             if generic_impl.type_params.len() != instantiation.type_args.len() {
+                continue;
+            }
+
+            // Skip interface impl blocks — monomorphising them would create
+            // duplicate vtable entries that interfere with the original generic
+            // interface resolution (e.g., impl<T> ToString for Vec<T>).
+            if generic_impl.interface_name.is_some() {
                 continue;
             }
 
