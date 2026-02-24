@@ -88,6 +88,8 @@ use std::sync::{Arc, Mutex};
 pub struct DumpOptions {
     /// Dump AST to stderr (Some(None)) or to a file (Some(Some(path)))
     pub dump_ast: Option<Option<PathBuf>>,
+    /// Dump AST after monomorphisation to stderr or to a file
+    pub dump_monomorphised: Option<Option<PathBuf>>,
     /// Dump resolved program to stderr (Some(None)) or to a file (Some(Some(path)))
     pub dump_resolved: Option<Option<PathBuf>>,
     /// Dump bytecode to stderr (Some(None)) or to a file (Some(Some(path)))
@@ -100,6 +102,7 @@ impl DumpOptions {
     /// Check if any dump option is enabled.
     pub fn any_enabled(&self) -> bool {
         self.dump_ast.is_some()
+            || self.dump_monomorphised.is_some()
             || self.dump_resolved.is_some()
             || self.dump_bytecode.is_some()
             || self.dump_microops.is_some()
@@ -382,6 +385,12 @@ pub fn run_file_with_dump(
     let start = Instant::now();
     let program = monomorphise::monomorphise_program(program);
     timings.monomorphise = start.elapsed();
+
+    // Dump monomorphised AST if requested
+    if let Some(ref output_path) = dump_opts.dump_monomorphised {
+        let ast_str = dump::format_ast(&program);
+        write_dump(&ast_str, output_path.as_ref(), "Monomorphised AST")?;
+    }
 
     // Name resolution
     let start = Instant::now();

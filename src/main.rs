@@ -121,6 +121,10 @@ enum Commands {
         #[arg(long, value_name = "FILE", num_args = 0..=1)]
         dump_ast: Option<Option<PathBuf>>,
 
+        /// Dump AST after monomorphisation to stderr, or to a file
+        #[arg(long, value_name = "FILE", num_args = 0..=1)]
+        dump_monomorphised: Option<Option<PathBuf>>,
+
         /// Dump resolved program to stderr, or to a file with --dump-resolved=path
         #[arg(long, value_name = "FILE", num_args = 0..=1)]
         dump_resolved: Option<Option<PathBuf>>,
@@ -187,6 +191,7 @@ fn main() -> ExitCode {
             gc_mode,
             gc_stats,
             dump_ast,
+            dump_monomorphised,
             dump_resolved,
             dump_bytecode,
             dump_microops,
@@ -205,6 +210,7 @@ fn main() -> ExitCode {
 
             let dump_opts = compiler::DumpOptions {
                 dump_ast,
+                dump_monomorphised,
                 dump_resolved,
                 dump_bytecode,
                 dump_microops,
