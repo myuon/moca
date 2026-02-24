@@ -108,6 +108,22 @@ PRを作成した後は以下のフローに従う:
   - ✅ `fn foo() -> int`
   - ❌ `fn foo(): int`
 
+## GitHub CLI (`gh`) の注意点
+
+このリポジトリでは Projects Classic が有効なため、`gh issue view` や `gh pr edit` を `--json` なしで実行するとエラーになる。**必ず `--json` フラグを使うこと。**
+
+```bash
+# ❌ エラーになる
+gh issue view 123
+gh pr edit 123 --title "..."
+
+# ✅ 正しい使い方
+gh issue view 123 --json title,body --jq '.body'       # issue本文を取得
+gh issue view 123 --json title,body                      # JSON形式で取得
+gh api repos/myuon/moca/issues/123 --jq '.body'         # REST APIで取得
+gh api repos/myuon/moca/pulls/123 -X PATCH -f title="..." -f body="..."  # PR更新
+```
+
 ## イシュー管理
 
 作業中にバグ、改善点、将来のタスクなどを発見した場合は、`gh issue create` でイシューを作成しておくこと。
