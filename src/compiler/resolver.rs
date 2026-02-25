@@ -922,6 +922,7 @@ impl<'a> Resolver<'a> {
                 "float" => Some(Type::Float),
                 "bool" => Some(Type::Bool),
                 "byte" => Some(Type::Byte),
+                "char" => Some(Type::Char),
                 "string" => Some(Type::string()),
                 "nil" => Some(Type::Nil),
                 _ => {

@@ -57,6 +57,7 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Float => "float".to_string(),
         Type::Bool => "bool".to_string(),
         Type::Byte => "byte".to_string(),
+        Type::Char => "char".to_string(),
         t if t.is_string() => "string".to_string(),
         Type::Nil => "nil".to_string(),
         Type::Ptr(elem) => format!("ptr_{}", mangle_type(elem)),
@@ -804,6 +805,7 @@ fn type_to_annotation(ty: &Type) -> crate::compiler::types::TypeAnnotation {
         Type::Float => TypeAnnotation::Named("float".to_string()),
         Type::Bool => TypeAnnotation::Named("bool".to_string()),
         Type::Byte => TypeAnnotation::Named("byte".to_string()),
+        Type::Char => TypeAnnotation::Named("char".to_string()),
         t if t.is_string() => TypeAnnotation::Named("string".to_string()),
         Type::Nil => TypeAnnotation::Named("nil".to_string()),
         Type::Ptr(elem) => TypeAnnotation::Generic {
