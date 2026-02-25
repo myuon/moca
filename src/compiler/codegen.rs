@@ -24,6 +24,15 @@ fn elem_kind_for_element_type(ty: &Type) -> ElemKind {
     }
 }
 
+/// Determine ElemKind for a HeapLoadDyn/HeapStoreDyn on a raw ptr type.
+/// The stride must match the allocation layout, which is determined by
+/// `current_collection_elem_kind`. We use the fallback (cek) exclusively
+/// because `object_type` tells us the TYPE of the pointer but not the
+/// LAYOUT of the allocated memory (allocation always uses cek).
+fn elem_kind_for_ptr(_object_type: &Option<Type>, fallback: Option<ElemKind>) -> ElemKind {
+    fallback.unwrap_or(ElemKind::Tagged)
+}
+
 /// Determine ElemKind for a collection (Array/Vec) based on its element type.
 fn elem_kind_for_collection(object_type: &Option<Type>) -> ElemKind {
     let elem_type = object_type
@@ -583,6 +592,16 @@ impl Codegen {
         // Save codegen state
         let saved_offset = self.local_offset;
         let saved_local_types = self.current_local_types.clone();
+        let saved_collection_elem_kind = self.current_collection_elem_kind;
+
+        // Set collection elem kind for the inlined function (e.g., Vec__int::set → I64)
+        let inline_ek = func
+            .name
+            .split_once("::")
+            .and_then(|(struct_name, _)| self.collection_elem_kind_from_struct(struct_name));
+        if inline_ek.is_some() {
+            self.current_collection_elem_kind = inline_ek;
+        }
 
         // Allocate local slots for the inlined function at the end of caller's locals
         let inline_offset = self.current_locals_count;
@@ -619,6 +638,7 @@ impl Codegen {
         // Restore codegen state
         self.local_offset = saved_offset;
         self.current_local_types = saved_local_types;
+        self.current_collection_elem_kind = saved_collection_elem_kind;
 
         Ok(())
     }
@@ -659,11 +679,12 @@ impl Codegen {
                     self.compile_expr(value, ops)?;
                     ops.push(Op::HeapStore2(ek));
                 } else {
-                    // Struct/string assign: direct HeapStoreDyn
+                    // Direct HeapStoreDyn (struct field or raw ptr index)
+                    let ek = elem_kind_for_ptr(object_type, self.current_collection_elem_kind);
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
                     self.compile_expr(value, ops)?;
-                    ops.push(Op::HeapStoreDyn);
+                    ops.push(Op::HeapStoreDyn(ek));
                 }
             }
             ResolvedStatement::FieldAssign {
@@ -674,11 +695,11 @@ impl Codegen {
             } => {
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field, struct_name.as_deref()) {
-                    // Known struct field - use heap slot assignment
+                    // Known struct field - use heap slot assignment (always Tagged)
                     self.compile_expr(object, ops)?;
                     ops.push(Op::I64Const(idx as i64));
                     self.compile_expr(value, ops)?;
-                    ops.push(Op::HeapStoreDyn);
+                    ops.push(Op::HeapStoreDyn(ElemKind::Tagged));
                 } else {
                     return Err(format!(
                         "unknown field '{}' - object type has been removed, use map functions instead",
@@ -786,7 +807,7 @@ impl Codegen {
                 ops.push(Op::LocalGet(arr_slot));
                 ops.push(Op::HeapLoad(0)); // ptr field of Array<T>
                 ops.push(Op::LocalGet(idx_slot));
-                ops.push(Op::HeapLoadDyn);
+                ops.push(Op::HeapLoadDyn(ElemKind::Tagged));
                 ops.push(Op::LocalSet(var_slot));
 
                 // Body
@@ -1033,10 +1054,11 @@ impl Codegen {
                     self.compile_expr(index, ops)?;
                     ops.push(Op::HeapLoad2(ek));
                 } else {
-                    // Struct/string access: direct HeapLoadDyn
+                    // Direct HeapLoadDyn (struct field or raw ptr index)
+                    let ek = elem_kind_for_ptr(object_type, self.current_collection_elem_kind);
                     self.compile_expr(object, ops)?;
                     self.compile_expr(index, ops)?;
-                    ops.push(Op::HeapLoadDyn);
+                    ops.push(Op::HeapLoadDyn(ek));
                 }
             }
             ResolvedExpr::Field {
@@ -1047,9 +1069,9 @@ impl Codegen {
                 self.compile_expr(object, ops)?;
                 // Check if this might be a struct field (structs are compiled as arrays)
                 if let Some(idx) = self.get_field_index(field, struct_name.as_deref()) {
-                    // Known struct field - use heap slot access
+                    // Known struct field - use heap slot access (always Tagged)
                     ops.push(Op::I64Const(idx as i64));
-                    ops.push(Op::HeapLoadDyn);
+                    ops.push(Op::HeapLoadDyn(ElemKind::Tagged));
                 } else {
                     return Err(format!(
                         "unknown field '{}' - object type has been removed, use map functions instead",
@@ -1377,7 +1399,7 @@ impl Codegen {
                         }
                         self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
-                        ops.push(Op::HeapLoadDyn);
+                        ops.push(Op::HeapLoadDyn(ElemKind::Tagged));
                     }
                     "__heap_store" => {
                         // __heap_store(ref, idx, val) -> nil, stores val at ref[idx]
@@ -1390,7 +1412,7 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         self.compile_expr(&args[1], ops)?;
                         self.compile_expr(&args[2], ops)?;
-                        ops.push(Op::HeapStoreDyn);
+                        ops.push(Op::HeapStoreDyn(ElemKind::Tagged));
                         ops.push(Op::RefNull); // returns nil
                     }
                     "__alloc_heap" => {
@@ -1399,11 +1421,10 @@ impl Codegen {
                             return Err("__alloc_heap takes exactly 1 argument (size)".to_string());
                         }
                         self.compile_expr(&args[0], ops)?;
-                        // Always allocate Tagged for now: the JIT always uses Tagged stride
-                        // for HeapLoad2/HeapStore2, so typed allocation would cause a
-                        // stride mismatch. Typed allocation requires fixing the
-                        // monomorphise pass first (see #241).
-                        ops.push(Op::HeapAllocDynSimple(ElemKind::Tagged));
+                        let ek = self
+                            .current_collection_elem_kind
+                            .unwrap_or(ElemKind::Tagged);
+                        ops.push(Op::HeapAllocDynSimple(ek));
                     }
                     "__null_ptr" => {
                         // __null_ptr() -> null pointer (0 as Ref)
@@ -1901,8 +1922,8 @@ impl Codegen {
                 let n = self.expect_int_arg(args, 0, "HeapStore")? as usize;
                 Ok(Op::HeapStore(n))
             }
-            "HeapLoadDyn" => Ok(Op::HeapLoadDyn),
-            "HeapStoreDyn" => Ok(Op::HeapStoreDyn),
+            "HeapLoadDyn" => Ok(Op::HeapLoadDyn(ElemKind::Tagged)),
+            "HeapStoreDyn" => Ok(Op::HeapStoreDyn(ElemKind::Tagged)),
 
             // Type operations
             // Exception handling

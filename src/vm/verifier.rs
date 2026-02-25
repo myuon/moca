@@ -459,8 +459,8 @@ impl Verifier {
             Op::HeapAllocDynSimple(_) => (1, 1), // pops size, pushes ref (null-initialized)
             Op::HeapLoad(_) => (1, 1),   // pops ref, pushes value
             Op::HeapStore(_) => (2, 0),  // pops ref and value
-            Op::HeapLoadDyn => (2, 1),   // pops ref and index, pushes value
-            Op::HeapStoreDyn => (3, 0),  // pops ref, index, and value
+            Op::HeapLoadDyn(_) => (2, 1), // pops ref and index, pushes value
+            Op::HeapStoreDyn(_) => (3, 0), // pops ref, index, and value
             Op::HeapLoad2(_) => (2, 1),  // pops ref and index, pushes value (indirect via slot 0)
             Op::HeapStore2(_) => (3, 0), // pops ref, index, and value (indirect via slot 0)
             Op::HeapOffsetRef => (2, 1), // pops ref and offset, pushes offset ref

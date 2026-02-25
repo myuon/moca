@@ -158,8 +158,12 @@ pub enum Op {
     HeapAllocDynSimple(super::heap::ElemKind),
     HeapLoad(usize),
     HeapStore(usize),
-    HeapLoadDyn,
-    HeapStoreDyn,
+    /// Dynamic index load: pop idx, pop ref → push heap[ref][idx]
+    /// ElemKind: Tagged = legacy 16B (tag+payload), Typed = 8B (payload only)
+    HeapLoadDyn(super::heap::ElemKind),
+    /// Dynamic index store: pop val, pop idx, pop ref → heap[ref][idx] = val
+    /// ElemKind: Tagged = legacy 16B (tag+payload), Typed = 8B (payload only)
+    HeapStoreDyn(super::heap::ElemKind),
     /// Indirect load: pop idx, pop ref → push heap[heap[ref][0]][idx]
     /// ElemKind: Tagged = legacy 16B, I64/Ref = 8B untagged
     HeapLoad2(super::heap::ElemKind),
@@ -324,8 +328,8 @@ impl Op {
             Op::HeapAllocDynSimple(_) => "HeapAllocDynSimple",
             Op::HeapLoad(_) => "HeapLoad",
             Op::HeapStore(_) => "HeapStore",
-            Op::HeapLoadDyn => "HeapLoadDyn",
-            Op::HeapStoreDyn => "HeapStoreDyn",
+            Op::HeapLoadDyn(_) => "HeapLoadDyn",
+            Op::HeapStoreDyn(_) => "HeapStoreDyn",
             Op::HeapLoad2(_) => "HeapLoad2",
             Op::HeapStore2(_) => "HeapStore2",
             Op::HeapOffsetRef => "HeapOffsetRef",

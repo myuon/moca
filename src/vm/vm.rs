@@ -1664,7 +1664,12 @@ impl VM {
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = value;
                 }
-                MicroOp::HeapLoadDyn { dst, obj, idx } => {
+                MicroOp::HeapLoadDyn {
+                    dst,
+                    obj,
+                    idx,
+                    elem_kind,
+                } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let index = self.stack[sb + idx.0]
                         .as_i64()
@@ -1675,9 +1680,22 @@ impl VM {
                     if index < 0 {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
-                    let value = self.heap.read_slot(r, index as usize).ok_or_else(|| {
-                        format!("runtime error: slot index {} out of bounds", index)
-                    })?;
+                    let value = if elem_kind.is_typed() {
+                        let raw = self.heap.read_typed(r, index as usize).ok_or_else(|| {
+                            format!("runtime error: typed index {} out of bounds", index)
+                        })?;
+                        match elem_kind {
+                            ElemKind::F64 => Value::F64(f64::from_bits(raw)),
+                            ElemKind::Ref => Value::Ref(GcRef {
+                                index: raw as usize,
+                            }),
+                            _ => Value::I64(raw as i64),
+                        }
+                    } else {
+                        self.heap.read_slot(r, index as usize).ok_or_else(|| {
+                            format!("runtime error: slot index {} out of bounds", index)
+                        })?
+                    };
                     let sb = self.frames.last().unwrap().stack_base;
                     self.stack[sb + dst.0] = value;
                 }
@@ -1695,7 +1713,12 @@ impl VM {
                         format!("runtime error: slot index {} out of bounds ({})", offset, e)
                     })?;
                 }
-                MicroOp::HeapStoreDyn { obj, idx, src } => {
+                MicroOp::HeapStoreDyn {
+                    obj,
+                    idx,
+                    src,
+                    elem_kind,
+                } => {
                     let sb = self.frames.last().unwrap().stack_base;
                     let value = self.stack[sb + src.0];
                     let index = self.stack[sb + idx.0]
@@ -1707,11 +1730,18 @@ impl VM {
                     if index < 0 {
                         return Err(format!("runtime error: slot index {} out of bounds", index));
                     }
-                    self.heap
-                        .write_slot(r, index as usize, value)
-                        .map_err(|e| {
-                            format!("runtime error: slot index {} out of bounds ({})", index, e)
+                    if elem_kind.is_typed() {
+                        let raw = value.encode().1; // payload only
+                        self.heap.write_typed(r, index as usize, raw).map_err(|e| {
+                            format!("runtime error: typed index {} out of bounds ({})", index, e)
                         })?;
+                    } else {
+                        self.heap
+                            .write_slot(r, index as usize, value)
+                            .map_err(|e| {
+                                format!("runtime error: slot index {} out of bounds ({})", index, e)
+                            })?;
+                    }
                 }
                 MicroOp::HeapLoad2 {
                     dst,
@@ -3162,7 +3192,7 @@ impl VM {
                     format!("runtime error: slot index {} out of bounds ({})", offset, e)
                 })?;
             }
-            Op::HeapLoadDyn => {
+            Op::HeapLoadDyn(ek) => {
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
                 let r = val.as_ref().ok_or("runtime error: expected reference")?;
@@ -3170,13 +3200,26 @@ impl VM {
                 if index < 0 {
                     return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
-                let value = self
-                    .heap
-                    .read_slot(r, index as usize)
-                    .ok_or_else(|| format!("runtime error: slot index {} out of bounds", index))?;
-                self.stack.push(value);
+                if ek.is_typed() {
+                    let raw = self.heap.read_typed(r, index as usize).ok_or_else(|| {
+                        format!("runtime error: typed index {} out of bounds", index)
+                    })?;
+                    let value = match ek {
+                        ElemKind::F64 => Value::F64(f64::from_bits(raw)),
+                        ElemKind::Ref => Value::Ref(GcRef {
+                            index: raw as usize,
+                        }),
+                        _ => Value::I64(raw as i64),
+                    };
+                    self.stack.push(value);
+                } else {
+                    let value = self.heap.read_slot(r, index as usize).ok_or_else(|| {
+                        format!("runtime error: slot index {} out of bounds", index)
+                    })?;
+                    self.stack.push(value);
+                }
             }
-            Op::HeapStoreDyn => {
+            Op::HeapStoreDyn(ek) => {
                 let value = self.stack.pop().ok_or("stack underflow")?;
                 let index = self.pop_int()?;
                 let val = self.stack.pop().ok_or("stack underflow")?;
@@ -3184,9 +3227,16 @@ impl VM {
                 if index < 0 {
                     return Err(format!("runtime error: slot index {} out of bounds", index));
                 }
-                self.heap
-                    .write_slot(r, index as usize, value)
-                    .map_err(|e| format!("runtime error: {}", e))?;
+                if ek.is_typed() {
+                    let raw = value.encode().1; // payload only
+                    self.heap
+                        .write_typed(r, index as usize, raw)
+                        .map_err(|e| format!("runtime error: {}", e))?;
+                } else {
+                    self.heap
+                        .write_slot(r, index as usize, value)
+                        .map_err(|e| format!("runtime error: {}", e))?;
+                }
             }
             Op::HeapLoad2(_) => {
                 let index = self.pop_int()?;

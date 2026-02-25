@@ -430,10 +430,12 @@ pub enum MicroOp {
         offset: usize,
     },
     /// dst = heap[obj][idx] (dynamic index access)
+    /// elem_kind: Tagged = legacy 16B tagged slots, Typed = 8B untagged elements
     HeapLoadDyn {
         dst: VReg,
         obj: VReg,
         idx: VReg,
+        elem_kind: super::heap::ElemKind,
     },
     /// heap[dst_obj][offset] = src (static offset field store)
     HeapStore {
@@ -442,10 +444,12 @@ pub enum MicroOp {
         src: VReg,
     },
     /// heap[obj][idx] = src (dynamic index store)
+    /// elem_kind: Tagged = legacy 16B tagged slots, Typed = 8B untagged elements
     HeapStoreDyn {
         obj: VReg,
         idx: VReg,
         src: VReg,
+        elem_kind: super::heap::ElemKind,
     },
     /// dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access)
     /// elem_kind: Tagged = legacy 16B tagged slots, I64/Ref = 8B untagged elements
