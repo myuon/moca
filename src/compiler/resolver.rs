@@ -481,10 +481,17 @@ impl<'a> Resolver<'a> {
             match stmt {
                 Statement::Let {
                     name,
-                    inferred_type: Some(ty),
+                    inferred_type,
+                    init,
                     ..
                 } => {
-                    type_map.insert(name.clone(), ty.clone());
+                    if let Some(ty) = inferred_type {
+                        type_map.insert(name.clone(), ty.clone());
+                    }
+                    Self::collect_var_types_from_expr(init, type_map);
+                }
+                Statement::Expr { expr, .. } => {
+                    Self::collect_var_types_from_expr(expr, type_map);
                 }
                 Statement::If {
                     then_block,
@@ -519,6 +526,49 @@ impl<'a> Resolver<'a> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Walk into expressions to find Block expressions containing Let statements.
+    fn collect_var_types_from_expr(expr: &Expr, type_map: &mut HashMap<String, Type>) {
+        match expr {
+            Expr::Block {
+                statements, expr, ..
+            } => {
+                Self::collect_var_types_inner(statements, type_map);
+                Self::collect_var_types_from_expr(expr, type_map);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    Self::collect_var_types_from_expr(arg, type_map);
+                }
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::collect_var_types_from_expr(object, type_map);
+                for arg in args {
+                    Self::collect_var_types_from_expr(arg, type_map);
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                Self::collect_var_types_from_expr(left, type_map);
+                Self::collect_var_types_from_expr(right, type_map);
+            }
+            Expr::Unary { operand, .. } => {
+                Self::collect_var_types_from_expr(operand, type_map);
+            }
+            Expr::Index { object, index, .. } => {
+                Self::collect_var_types_from_expr(object, type_map);
+                Self::collect_var_types_from_expr(index, type_map);
+            }
+            Expr::Field { object, .. } => {
+                Self::collect_var_types_from_expr(object, type_map);
+            }
+            Expr::Array { elements, .. } => {
+                for elem in elements {
+                    Self::collect_var_types_from_expr(elem, type_map);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -871,7 +921,8 @@ impl<'a> Resolver<'a> {
                 "int" => Some(Type::Int),
                 "float" => Some(Type::Float),
                 "bool" => Some(Type::Bool),
-                "string" => Some(Type::String),
+                "byte" => Some(Type::Byte),
+                "string" => Some(Type::string()),
                 "nil" => Some(Type::Nil),
                 _ => {
                     if self.structs.contains_key(name) {
@@ -1831,7 +1882,7 @@ impl<'a> Resolver<'a> {
                     Type::Int => Some("int"),
                     Type::Float => Some("float"),
                     Type::Bool => Some("bool"),
-                    Type::String => Some("string"),
+                    t if t.is_string() => Some("string"),
                     _ => None,
                 });
 
@@ -2249,6 +2300,8 @@ impl<'a> Resolver<'a> {
                 // Using the Type directly (instead of resolved_structs) ensures
                 // generic structs like Container<int> get correct field info.
                 let (field_names, field_type_tags) = match &inner_type {
+                    // String (array<byte>) is treated as a primitive in the dyn system
+                    t if t.is_string() => (vec![], vec![]),
                     Type::Struct { fields, .. } | Type::GenericStruct { fields, .. } => {
                         let names = fields.iter().map(|(n, _)| n.clone()).collect();
                         let type_tags = fields
@@ -2441,7 +2494,7 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
         Type::Bool => "bool".to_string(),
-        Type::String => "string".to_string(),
+        t if t.is_string() => "string".to_string(),
         Type::Nil => "nil".to_string(),
         Type::Struct { name, .. } => name.clone(),
         Type::GenericStruct {
@@ -2466,7 +2519,7 @@ fn type_to_impl_name(ty: &Type) -> String {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
         Type::Bool => "bool".to_string(),
-        Type::String => "string".to_string(),
+        t if t.is_string() => "string".to_string(),
         Type::Struct { name, .. } => name.clone(),
         Type::GenericStruct {
             name, type_args, ..
@@ -2490,6 +2543,10 @@ fn type_to_impl_name(ty: &Type) -> String {
 /// Compute auxiliary type tags for container element types.
 /// Vec/Array → [elem_tag], Map → [key_tag, val_tag], Struct fields → field type tags.
 fn compute_aux_type_tags(ty: &Type) -> Vec<String> {
+    // String (array<byte>) is treated as a primitive in the dyn system
+    if ty.is_string() {
+        return vec![];
+    }
     match ty {
         Type::Nullable(inner) => {
             vec![type_to_dyn_tag_name(inner)]
@@ -2566,6 +2623,13 @@ fn collect_nested_type_descriptors_inner(
         return;
     }
     visited.insert(tag.clone());
+
+    // String (array<byte>) is treated as a primitive in the dyn system;
+    // don't recurse into its type_args or give it struct fields.
+    if ty.is_string() {
+        result.push((tag, vec![], vec![], vec![]));
+        return;
+    }
 
     // Extract field info for this type
     let (field_names, field_type_tags): (Vec<String>, Vec<String>) = match ty {

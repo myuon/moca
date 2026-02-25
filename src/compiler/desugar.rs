@@ -40,7 +40,7 @@ impl Desugar {
     /// Convert an expression to string via `.to_string()` method call.
     /// For strings, returns the expression as-is (identity).
     fn to_string_method_call(arg: Expr, arg_type: Option<&Type>, span: Span) -> Expr {
-        if matches!(arg_type, Some(Type::String)) {
+        if arg_type.is_some_and(|t| t.is_string()) {
             return arg;
         }
         Expr::MethodCall {
@@ -50,7 +50,7 @@ impl Desugar {
             args: vec![],
             span,
             object_type: arg_type.cloned(),
-            inferred_type: Some(Type::String),
+            inferred_type: Some(Type::string()),
         }
     }
 
@@ -70,7 +70,7 @@ impl Desugar {
         let key_type = Self::extract_map_key_type(obj_type)?;
         let suffix = match key_type {
             Type::Int => "int",
-            Type::String => "string",
+            t if t.is_string() => "string",
             _ => return None,
         };
         match method {
@@ -92,7 +92,6 @@ impl Desugar {
             // Vec<T>/Array<T> uses ptr-based layout and is handled directly in codegen
             Type::GenericStruct { name, .. } if name == "Vec" || name == "Array" => false,
             // String and other types should NOT be desugared
-            Type::String => false,
             // Struct types should NOT be desugared
             Type::Struct { .. } => false,
             // Default: don't desugar
@@ -545,7 +544,7 @@ impl Desugar {
                 let object = self.desugar_expr(*object);
 
                 // String field access: s.data → __heap_load(s, 0), s.len → __heap_load(s, 1)
-                if matches!(obj_type.as_ref(), Some(Type::String)) {
+                if obj_type.as_ref().is_some_and(|t| t.is_string()) {
                     let idx = match field.as_str() {
                         "data" => 0,
                         "len" => 1,
@@ -601,7 +600,7 @@ impl Desugar {
                 let right = Box::new(self.desugar_expr(*right));
 
                 // String equality: a == b → _string_eq(a, b), a != b → !_string_eq(a, b)
-                if matches!(left_type.as_ref(), Some(Type::String))
+                if left_type.as_ref().is_some_and(|t| t.is_string())
                     && matches!(op, BinaryOp::Eq | BinaryOp::Ne)
                 {
                     let call = Expr::Call {
@@ -691,7 +690,7 @@ impl Desugar {
                                         is_implicit: true,
                                     }],
                                     span,
-                                    inferred_type: Some(Type::String),
+                                    inferred_type: Some(Type::string()),
                                 }],
                                 span,
                                 inferred_type: Some(Type::Nil),
@@ -704,7 +703,7 @@ impl Desugar {
                             args: vec![Expr::Str {
                                 value: "\n".to_string(),
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             }],
                             span,
                             inferred_type: Some(Type::Nil),
@@ -898,7 +897,7 @@ impl Desugar {
                     return Expr::Str {
                         value: String::new(),
                         span,
-                        inferred_type: Some(Type::String),
+                        inferred_type: Some(Type::string()),
                     };
                 }
 
@@ -910,9 +909,9 @@ impl Desugar {
                             InterpPart::Literal(s) => Expr::Str {
                                 value: s,
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             },
-                            InterpPart::TypedExpr(expr, Some(Type::String)) => *expr,
+                            InterpPart::TypedExpr(expr, Some(ref t)) if t.is_string() => *expr,
                             InterpPart::TypedExpr(expr, ref ty) => {
                                 Self::to_string_method_call(*expr, ty.as_ref(), span)
                             }
@@ -931,7 +930,7 @@ impl Desugar {
                         left: Box::new(acc),
                         right: Box::new(expr),
                         span,
-                        inferred_type: Some(Type::String),
+                        inferred_type: Some(Type::string()),
                     });
                 }
 
@@ -1008,13 +1007,13 @@ impl Desugar {
                             stmts.push(Statement::Expr { expr, span });
                             part_infos.push(PartInfo::Nil);
                         }
-                        Some(Type::String) => {
+                        Some(t) if t.is_string() => {
                             stmts.push(Statement::Let {
                                 name: var.clone(),
                                 type_annotation: None,
                                 init: expr,
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             });
                             part_infos.push(PartInfo::String(var));
                         }
@@ -1042,10 +1041,10 @@ impl Desugar {
                                     args: vec![],
                                     span,
                                     object_type: obj_type,
-                                    inferred_type: Some(Type::String),
+                                    inferred_type: Some(Type::string()),
                                 },
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             });
                             part_infos.push(PartInfo::String(var));
                         }
@@ -1074,7 +1073,7 @@ impl Desugar {
                         args: vec![Expr::Ident {
                             name: var.clone(),
                             span,
-                            inferred_type: Some(Type::String),
+                            inferred_type: Some(Type::string()),
                         }],
                         span,
                         inferred_type: Some(Type::Int),
@@ -1156,6 +1155,7 @@ impl Desugar {
 
         // Phase 2: let __interp_buf = __alloc_heap(__interp_total);
         let buf_var = self.fresh_var();
+        let ptr_int = Type::Ptr(Box::new(Type::Int));
         stmts.push(Statement::Let {
             name: buf_var.clone(),
             type_annotation: None,
@@ -1168,10 +1168,10 @@ impl Desugar {
                     inferred_type: Some(Type::Int),
                 }],
                 span,
-                inferred_type: None,
+                inferred_type: Some(ptr_int.clone()),
             },
             span,
-            inferred_type: None,
+            inferred_type: Some(ptr_int.clone()),
         });
 
         // let __interp_off = 0;
@@ -1192,7 +1192,7 @@ impl Desugar {
         let buf_ident = || Expr::Ident {
             name: buf_var.clone(),
             span,
-            inferred_type: None,
+            inferred_type: Some(ptr_int.clone()),
         };
         let off_ident = || Expr::Ident {
             name: off_var.clone(),
@@ -1213,7 +1213,7 @@ impl Desugar {
                             Expr::Str {
                                 value: s.clone(),
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             },
                         ],
                         span,
@@ -1231,7 +1231,7 @@ impl Desugar {
                             Expr::Ident {
                                 name: var.clone(),
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             },
                         ],
                         span,
@@ -1304,7 +1304,7 @@ impl Desugar {
                             Expr::Str {
                                 value: "nil".to_string(),
                                 span,
-                                inferred_type: Some(Type::String),
+                                inferred_type: Some(Type::string()),
                             },
                         ],
                         span,
@@ -1334,14 +1334,14 @@ impl Desugar {
                 },
             ],
             span,
-            inferred_type: Some(Type::String),
+            inferred_type: Some(Type::string()),
         };
 
         Expr::Block {
             statements: stmts,
             expr: Box::new(final_expr),
             span,
-            inferred_type: Some(Type::String),
+            inferred_type: Some(Type::string()),
         }
     }
 
