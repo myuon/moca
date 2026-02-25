@@ -14,7 +14,7 @@ const MAX_INLINE_DEPTH: usize = 4;
 /// Determine ElemKind for a direct element type.
 fn elem_kind_for_element_type(ty: &Type) -> ElemKind {
     match ty {
-        Type::Int | Type::Bool | Type::Byte => ElemKind::I64,
+        Type::Int | Type::Bool | Type::Byte | Type::Char => ElemKind::I64,
         Type::Float => ElemKind::F64,
         Type::GenericStruct { .. } | Type::Nullable(_) | Type::Dyn => ElemKind::Ref,
         // Only treat Struct as Ref if it has fields (concrete struct).
@@ -163,7 +163,7 @@ impl Codegen {
     /// Convert the typechecker's full Type to a simplified ValueType for the VM.
     fn type_to_value_type(ty: &Type) -> ValueType {
         match ty {
-            Type::Int | Type::Byte => ValueType::I64,
+            Type::Int | Type::Byte | Type::Char => ValueType::I64,
             Type::Float => ValueType::F64,
             Type::Bool => ValueType::I32,
             Type::Struct { .. }

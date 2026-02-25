@@ -19,6 +19,8 @@ pub enum Type {
     Bool,
     /// Byte type: `byte` (0-255, stored as i64 at runtime)
     Byte,
+    /// Char type: `char` (Unicode code point, stored as i64 at runtime)
+    Char,
     /// Nil type: `nil`
     Nil,
     /// Nullable type: `T?` (equivalent to T | nil)
@@ -61,15 +63,15 @@ pub enum Type {
 }
 
 impl Type {
-    /// Create a string type (alias for `array<byte>`).
+    /// Create a string type (alias for `array<char>`).
     pub fn string() -> Type {
-        Type::array(Type::Byte)
+        Type::array(Type::Char)
     }
 
-    /// Check if this type is a string (`array<byte>`).
+    /// Check if this type is a string (`array<char>`).
     pub fn is_string(&self) -> bool {
         matches!(self, Type::GenericStruct { name, type_args, .. }
-            if name == "Array" && type_args.len() == 1 && type_args[0] == Type::Byte)
+            if name == "Array" && type_args.len() == 1 && type_args[0] == Type::Char)
     }
 
     /// Create a new array type.
@@ -154,6 +156,7 @@ impl Type {
             | Type::Float
             | Type::Bool
             | Type::Byte
+            | Type::Char
             | Type::Nil
             | Type::Any
             | Type::Dyn => false,
@@ -187,6 +190,7 @@ impl Type {
             | Type::Float
             | Type::Bool
             | Type::Byte
+            | Type::Char
             | Type::Nil
             | Type::Any
             | Type::Dyn => {}
@@ -231,6 +235,7 @@ impl Type {
             Type::Float => Some(TypeAnnotation::Named("float".to_string())),
             Type::Bool => Some(TypeAnnotation::Named("bool".to_string())),
             Type::Byte => Some(TypeAnnotation::Named("byte".to_string())),
+            Type::Char => Some(TypeAnnotation::Named("char".to_string())),
             Type::Nil => Some(TypeAnnotation::Named("nil".to_string())),
             Type::Any => Some(TypeAnnotation::Named("any".to_string())),
             Type::Dyn => Some(TypeAnnotation::Named("dyn".to_string())),
@@ -295,6 +300,7 @@ impl Type {
             | Type::Float
             | Type::Bool
             | Type::Byte
+            | Type::Char
             | Type::Nil
             | Type::Any
             | Type::Dyn => self.clone(),
@@ -351,6 +357,7 @@ impl fmt::Display for Type {
             Type::Float => write!(f, "float"),
             Type::Bool => write!(f, "bool"),
             Type::Byte => write!(f, "byte"),
+            Type::Char => write!(f, "char"),
             Type::Nil => write!(f, "nil"),
             Type::Nullable(inner) => write!(f, "{}?", inner),
             Type::Function { params, ret } => {
@@ -400,7 +407,7 @@ impl fmt::Display for Type {
 /// This is parsed from source and later converted to Type during type checking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeAnnotation {
-    /// Simple named type: `int`, `float`, `bool`, `string`, `byte`, `nil`
+    /// Simple named type: `int`, `float`, `bool`, `string`, `byte`, `char`, `nil`
     Named(std::string::String),
     /// Array type: `array<T>`
     Array(Box<TypeAnnotation>),
@@ -434,6 +441,7 @@ impl TypeAnnotation {
                 "float" => Ok(Type::Float),
                 "bool" => Ok(Type::Bool),
                 "byte" => Ok(Type::Byte),
+                "char" => Ok(Type::Char),
                 "string" => Ok(Type::string()),
                 "nil" => Ok(Type::Nil),
                 "any" => Ok(Type::Any),
@@ -519,7 +527,8 @@ mod tests {
         assert_eq!(Type::Nil.to_string(), "nil");
         assert_eq!(Type::Any.to_string(), "any");
         assert_eq!(Type::array(Type::Int).to_string(), "array<int>");
-        assert_eq!(Type::array(Type::Byte).to_string(), "string");
+        assert_eq!(Type::Char.to_string(), "char");
+        assert_eq!(Type::array(Type::Char).to_string(), "string");
         assert_eq!(Type::vector(Type::Int).to_string(), "vec<int>");
         assert_eq!(
             Type::map(Type::string(), Type::Int).to_string(),
@@ -547,6 +556,10 @@ mod tests {
         assert_eq!(
             TypeAnnotation::Named("byte".to_string()).to_type().unwrap(),
             Type::Byte
+        );
+        assert_eq!(
+            TypeAnnotation::Named("char".to_string()).to_type().unwrap(),
+            Type::Char
         );
         assert_eq!(
             TypeAnnotation::Named("any".to_string()).to_type().unwrap(),
@@ -595,7 +608,8 @@ mod tests {
     #[test]
     fn test_is_string() {
         assert!(Type::string().is_string());
-        assert!(Type::array(Type::Byte).is_string());
+        assert!(Type::array(Type::Char).is_string());
+        assert!(!Type::array(Type::Byte).is_string());
         assert!(!Type::array(Type::Int).is_string());
         assert!(!Type::Int.is_string());
     }
@@ -604,6 +618,7 @@ mod tests {
     fn test_has_type_vars() {
         assert!(!Type::Int.has_type_vars());
         assert!(!Type::Byte.has_type_vars());
+        assert!(!Type::Char.has_type_vars());
         assert!(!Type::Any.has_type_vars());
         assert!(!Type::array(Type::Int).has_type_vars());
         assert!(!Type::vector(Type::Int).has_type_vars());

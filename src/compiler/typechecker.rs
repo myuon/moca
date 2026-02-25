@@ -114,6 +114,7 @@ impl Substitution {
             | Type::Float
             | Type::Bool
             | Type::Byte
+            | Type::Char
             | Type::Nil
             | Type::Any
             | Type::Dyn => ty.clone(),
@@ -294,6 +295,7 @@ impl TypeChecker {
                     "float" => Ok(Type::Float),
                     "bool" => Ok(Type::Bool),
                     "byte" => Ok(Type::Byte),
+                    "char" => Ok(Type::Char),
                     "string" => Ok(Type::string()),
                     "nil" => Ok(Type::Nil),
                     "any" => Ok(Type::Any),
@@ -416,10 +418,14 @@ impl TypeChecker {
             | (Type::Float, Type::Float)
             | (Type::Bool, Type::Bool)
             | (Type::Byte, Type::Byte)
+            | (Type::Char, Type::Char)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
 
             // byte and int are implicitly convertible (byte is stored as i64 at runtime)
             (Type::Byte, Type::Int) | (Type::Int, Type::Byte) => Ok(Substitution::new()),
+
+            // char and int are implicitly convertible (char is stored as i64 at runtime)
+            (Type::Char, Type::Int) | (Type::Int, Type::Char) => Ok(Substitution::new()),
 
             // Ptr<T> unification
             (Type::Ptr(a), Type::Ptr(b)) => self.unify(a, b, span),
