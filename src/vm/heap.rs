@@ -405,9 +405,13 @@ impl Heap {
     /// String is stored as a struct [ptr, len] where ptr points to a data array
     /// containing each character as Value::I64 (Unicode code point).
     pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
-        let slots: Vec<Value> = value.chars().map(|c| Value::I64(c as i64)).collect();
-        let len = slots.len();
-        let data_ref = self.alloc_slots(slots)?;
+        let chars: Vec<i64> = value.chars().map(|c| c as i64).collect();
+        let len = chars.len();
+        // Allocate data as a typed I64 array (1 word per element, matching byte array layout)
+        let data_ref = self.alloc_typed_array(len as u32, ElemKind::I64)?;
+        for (i, &ch) in chars.iter().enumerate() {
+            self.write_typed(data_ref, i, ch as u64)?;
+        }
         let struct_slots = vec![Value::Ref(data_ref), Value::I64(len as i64)];
         self.alloc_slots(struct_slots)
     }

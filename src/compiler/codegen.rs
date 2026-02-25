@@ -14,9 +14,9 @@ const MAX_INLINE_DEPTH: usize = 4;
 /// Determine ElemKind for a direct element type.
 fn elem_kind_for_element_type(ty: &Type) -> ElemKind {
     match ty {
-        Type::Int | Type::Bool => ElemKind::I64,
+        Type::Int | Type::Bool | Type::Byte => ElemKind::I64,
         Type::Float => ElemKind::F64,
-        Type::String | Type::GenericStruct { .. } | Type::Nullable(_) | Type::Dyn => ElemKind::Ref,
+        Type::GenericStruct { .. } | Type::Nullable(_) | Type::Dyn => ElemKind::Ref,
         // Only treat Struct as Ref if it has fields (concrete struct).
         // Struct { name: "T", fields: [] } is an unresolved type parameter, not a real struct.
         Type::Struct { fields, .. } if !fields.is_empty() => ElemKind::Ref,
@@ -25,11 +25,17 @@ fn elem_kind_for_element_type(ty: &Type) -> ElemKind {
 }
 
 /// Determine ElemKind for a HeapLoadDyn/HeapStoreDyn on a raw ptr type.
-/// The stride must match the allocation layout, which is determined by
-/// `current_collection_elem_kind`. We use the fallback (cek) exclusively
-/// because `object_type` tells us the TYPE of the pointer but not the
-/// LAYOUT of the allocated memory (allocation always uses cek).
-fn elem_kind_for_ptr(_object_type: &Option<Type>, fallback: Option<ElemKind>) -> ElemKind {
+/// When the object type is `ptr<T>`, we derive the ElemKind from T directly
+/// so that loads/stores use the correct stride for typed arrays (e.g. ptr<byte> → I64).
+/// Falls back to `current_collection_elem_kind` or Tagged when the ptr element type
+/// is unknown.
+fn elem_kind_for_ptr(object_type: &Option<Type>, fallback: Option<ElemKind>) -> ElemKind {
+    if let Some(Type::Ptr(inner)) = object_type {
+        let ek = elem_kind_for_element_type(inner);
+        if ek != ElemKind::Tagged {
+            return ek;
+        }
+    }
     fallback.unwrap_or(ElemKind::Tagged)
 }
 
@@ -157,10 +163,9 @@ impl Codegen {
     /// Convert the typechecker's full Type to a simplified ValueType for the VM.
     fn type_to_value_type(ty: &Type) -> ValueType {
         match ty {
-            Type::Int => ValueType::I64,
+            Type::Int | Type::Byte => ValueType::I64,
             Type::Float => ValueType::F64,
             Type::Bool => ValueType::I32,
-            Type::String => ValueType::Ref,
             Type::Struct { .. }
             | Type::GenericStruct { .. }
             | Type::Nullable(_)
@@ -173,7 +178,6 @@ impl Codegen {
 
     fn infer_index_element_type(object_type: &Option<Type>) -> ValueType {
         match object_type {
-            Some(Type::String) => ValueType::I64, // string[i] returns char code (int)
             Some(t) if t.is_array() || t.is_vec() => t
                 .collection_element_type()
                 .map(Self::type_to_value_type)
@@ -469,6 +473,9 @@ impl Codegen {
 
         // Compile main body
         self.current_locals_count = program.main_locals_count;
+        self.current_local_full_types = program.main_local_types.clone();
+        self.current_collection_elem_kind =
+            Self::infer_collection_elem_kind_from_locals(&program.main_local_types);
         let mut main_ops = Vec::new();
         for stmt in program.main_body {
             self.compile_statement(&stmt, &mut main_ops)?;
@@ -542,6 +549,27 @@ impl Codegen {
         None
     }
 
+    /// Infer collection ElemKind from a function's local variable types.
+    /// Scans for `ptr<T>` types and returns the ElemKind if all ptr types agree.
+    /// This handles standalone functions (not struct methods) like `string_concat`
+    /// that operate on typed ptr data (e.g. `ptr<byte>` → I64).
+    fn infer_collection_elem_kind_from_locals(local_types: &[Type]) -> Option<ElemKind> {
+        let mut found: Option<ElemKind> = None;
+        for ty in local_types {
+            if let Type::Ptr(inner) = ty {
+                let ek = elem_kind_for_element_type(inner);
+                if ek != ElemKind::Tagged {
+                    match found {
+                        None => found = Some(ek),
+                        Some(prev) if prev == ek => {}
+                        Some(_) => return None, // conflicting ptr types
+                    }
+                }
+            }
+        }
+        found
+    }
+
     fn compile_function(&mut self, func: &ResolvedFunction) -> Result<Function, String> {
         self.current_local_full_types = func.local_types.clone();
 
@@ -551,6 +579,12 @@ impl Codegen {
             .name
             .split_once("::")
             .and_then(|(struct_name, _)| self.collection_elem_kind_from_struct(struct_name));
+
+        // For standalone functions, infer from ptr<T> local types
+        if self.current_collection_elem_kind.is_none() {
+            self.current_collection_elem_kind =
+                Self::infer_collection_elem_kind_from_locals(&func.local_types);
+        }
 
         let mut ops = Vec::new();
 
@@ -598,7 +632,8 @@ impl Codegen {
         let inline_ek = func
             .name
             .split_once("::")
-            .and_then(|(struct_name, _)| self.collection_elem_kind_from_struct(struct_name));
+            .and_then(|(struct_name, _)| self.collection_elem_kind_from_struct(struct_name))
+            .or_else(|| Self::infer_collection_elem_kind_from_locals(&func.local_types));
         if inline_ek.is_some() {
             self.current_collection_elem_kind = inline_ek;
         }
@@ -667,7 +702,7 @@ impl Codegen {
                 // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
                 let has_ptr_layout = object_type
                     .as_ref()
-                    .map(|t| t.is_array() || t.is_vec() || matches!(t, Type::String))
+                    .map(|t| t.is_array() || t.is_vec())
                     .unwrap_or(false);
 
                 if has_ptr_layout {
@@ -1043,7 +1078,7 @@ impl Codegen {
                 // Check if the object is a Vector, Vec<T>, or Array<T> (ptr-based layout)
                 let has_ptr_layout = object_type
                     .as_ref()
-                    .map(|t| t.is_array() || t.is_vec() || matches!(t, Type::String))
+                    .map(|t| t.is_array() || t.is_vec())
                     .unwrap_or(false);
 
                 if has_ptr_layout {

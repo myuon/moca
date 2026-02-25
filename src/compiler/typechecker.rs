@@ -113,7 +113,7 @@ impl Substitution {
             Type::Int
             | Type::Float
             | Type::Bool
-            | Type::String
+            | Type::Byte
             | Type::Nil
             | Type::Any
             | Type::Dyn => ty.clone(),
@@ -293,7 +293,8 @@ impl TypeChecker {
                     "int" => Ok(Type::Int),
                     "float" => Ok(Type::Float),
                     "bool" => Ok(Type::Bool),
-                    "string" => Ok(Type::String),
+                    "byte" => Ok(Type::Byte),
+                    "string" => Ok(Type::string()),
                     "nil" => Ok(Type::Nil),
                     "any" => Ok(Type::Any),
                     "dyn" => Ok(Type::Dyn),
@@ -414,8 +415,11 @@ impl TypeChecker {
             (Type::Int, Type::Int)
             | (Type::Float, Type::Float)
             | (Type::Bool, Type::Bool)
-            | (Type::String, Type::String)
+            | (Type::Byte, Type::Byte)
             | (Type::Nil, Type::Nil) => Ok(Substitution::new()),
+
+            // byte and int are implicitly convertible (byte is stored as i64 at runtime)
+            (Type::Byte, Type::Int) | (Type::Int, Type::Byte) => Ok(Substitution::new()),
 
             // Ptr<T> unification
             (Type::Ptr(a), Type::Ptr(b)) => self.unify(a, b, span),
@@ -667,6 +671,14 @@ impl TypeChecker {
             }
         }
 
+        // Re-apply substitution to all top-level statement types.
+        // This resolves type variables created during inference but unified later.
+        for item in &mut program.items {
+            if let Item::Statement(stmt) = item {
+                Self::resolve_stmt_types(&self.substitution, stmt);
+            }
+        }
+
         // Apply final substitution and check for unresolved type variables
         self.finalize()?;
 
@@ -775,51 +787,149 @@ impl TypeChecker {
         self.current_function_name = None;
     }
 
-    /// Walk statements and apply substitution to Let inferred_type fields.
+    /// Walk statements and apply substitution to Let inferred_type fields
+    /// and object_type fields on Index/IndexAssign/MethodCall expressions.
     fn resolve_let_types(subst: &Substitution, stmts: &mut [Statement]) {
         for stmt in stmts.iter_mut() {
-            match stmt {
-                Statement::Let {
-                    inferred_type: Some(ty),
-                    ..
-                } => {
+            Self::resolve_stmt_types(subst, stmt);
+        }
+    }
+
+    fn resolve_stmt_types(subst: &Substitution, stmt: &mut Statement) {
+        match stmt {
+            Statement::Let {
+                inferred_type: Some(ty),
+                init,
+                ..
+            } => {
+                *ty = subst.apply(ty);
+                Self::resolve_expr_types(subst, init);
+            }
+            Statement::Assign { value, .. } => {
+                Self::resolve_expr_types(subst, value);
+            }
+            Statement::IndexAssign {
+                object,
+                index,
+                value,
+                object_type,
+                ..
+            } => {
+                if let Some(ty) = object_type {
                     *ty = subst.apply(ty);
                 }
-                Statement::If {
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    Self::resolve_let_types(subst, &mut then_block.statements);
-                    if let Some(else_block) = else_block {
-                        Self::resolve_let_types(subst, &mut else_block.statements);
-                    }
-                }
-                Statement::While { body, .. }
-                | Statement::ForIn { body, .. }
-                | Statement::ForRange { body, .. } => {
-                    Self::resolve_let_types(subst, &mut body.statements);
-                }
-                Statement::Try {
-                    try_block,
-                    catch_block,
-                    ..
-                } => {
-                    Self::resolve_let_types(subst, &mut try_block.statements);
-                    Self::resolve_let_types(subst, &mut catch_block.statements);
-                }
-                Statement::MatchDyn {
-                    arms,
-                    default_block,
-                    ..
-                } => {
-                    for arm in arms {
-                        Self::resolve_let_types(subst, &mut arm.body.statements);
-                    }
-                    Self::resolve_let_types(subst, &mut default_block.statements);
-                }
-                _ => {}
+                Self::resolve_expr_types(subst, object);
+                Self::resolve_expr_types(subst, index);
+                Self::resolve_expr_types(subst, value);
             }
+            Statement::FieldAssign { object, value, .. } => {
+                Self::resolve_expr_types(subst, object);
+                Self::resolve_expr_types(subst, value);
+            }
+            Statement::Expr { expr, .. } => {
+                Self::resolve_expr_types(subst, expr);
+            }
+            Statement::Return { value: Some(v), .. } => {
+                Self::resolve_expr_types(subst, v);
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                Self::resolve_expr_types(subst, condition);
+                Self::resolve_let_types(subst, &mut then_block.statements);
+                if let Some(else_block) = else_block {
+                    Self::resolve_let_types(subst, &mut else_block.statements);
+                }
+            }
+            Statement::While {
+                condition, body, ..
+            } => {
+                Self::resolve_expr_types(subst, condition);
+                Self::resolve_let_types(subst, &mut body.statements);
+            }
+            Statement::ForIn { body, .. } | Statement::ForRange { body, .. } => {
+                Self::resolve_let_types(subst, &mut body.statements);
+            }
+            Statement::Try {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                Self::resolve_let_types(subst, &mut try_block.statements);
+                Self::resolve_let_types(subst, &mut catch_block.statements);
+            }
+            Statement::MatchDyn {
+                arms,
+                default_block,
+                ..
+            } => {
+                for arm in arms {
+                    Self::resolve_let_types(subst, &mut arm.body.statements);
+                }
+                Self::resolve_let_types(subst, &mut default_block.statements);
+            }
+            _ => {}
+        }
+    }
+
+    fn resolve_expr_types(subst: &Substitution, expr: &mut Expr) {
+        match expr {
+            Expr::Index {
+                object,
+                index,
+                object_type,
+                ..
+            } => {
+                if let Some(ty) = object_type {
+                    *ty = subst.apply(ty);
+                }
+                Self::resolve_expr_types(subst, object);
+                Self::resolve_expr_types(subst, index);
+            }
+            Expr::MethodCall {
+                object,
+                args,
+                object_type,
+                ..
+            } => {
+                if let Some(ty) = object_type {
+                    *ty = subst.apply(ty);
+                }
+                Self::resolve_expr_types(subst, object);
+                for arg in args {
+                    Self::resolve_expr_types(subst, arg);
+                }
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    Self::resolve_expr_types(subst, arg);
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                Self::resolve_expr_types(subst, left);
+                Self::resolve_expr_types(subst, right);
+            }
+            Expr::Unary { operand, .. } => {
+                Self::resolve_expr_types(subst, operand);
+            }
+            Expr::Block {
+                statements, expr, ..
+            } => {
+                Self::resolve_let_types(subst, statements);
+                Self::resolve_expr_types(subst, expr);
+            }
+            Expr::Field { object, .. } => {
+                Self::resolve_expr_types(subst, object);
+            }
+            Expr::Array { elements, .. } => {
+                for elem in elements {
+                    Self::resolve_expr_types(subst, elem);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1100,7 +1210,8 @@ impl TypeChecker {
     /// Returns true for primitives, structs (auto-derived), and other types with known ToString.
     fn field_has_tostring(&self, field_type: &Type) -> bool {
         match field_type {
-            Type::Int | Type::Float | Type::Bool | Type::String => true,
+            Type::Int | Type::Float | Type::Bool => true,
+            t if t.is_string() => true,
             Type::Struct { name, .. } | Type::GenericStruct { name, .. } => {
                 // All structs are auto-derived, so they have ToString
                 // (unless they're internal types, but those would be checked separately)
@@ -1203,7 +1314,7 @@ impl TypeChecker {
                 "int" => Type::Int,
                 "float" => Type::Float,
                 "bool" => Type::Bool,
-                "string" => Type::String,
+                "string" => Type::string(),
                 _ => unreachable!(),
             })
         } else if is_builtin_type && impl_block.interface_name.is_none() {
@@ -1681,7 +1792,7 @@ impl TypeChecker {
                 self.infer_block(try_block, env);
                 env.enter_scope();
                 // Catch variable is string (error message)
-                env.bind(catch_var.clone(), Type::String);
+                env.bind(catch_var.clone(), Type::string());
                 self.infer_block(catch_block, env);
                 env.exit_scope();
                 Type::Nil
@@ -1702,14 +1813,14 @@ impl TypeChecker {
             Expr::Int { .. } => Type::Int,
             Expr::Float { .. } => Type::Float,
             Expr::Bool { .. } => Type::Bool,
-            Expr::Str { .. } => Type::String,
+            Expr::Str { .. } => Type::string(),
             Expr::StringInterpolation { parts, .. } => {
                 for part in parts.iter_mut() {
                     if let crate::compiler::ast::StringInterpPart::Expr(e) = part {
                         self.infer_expr(e, env);
                     }
                 }
-                Type::String
+                Type::string()
             }
             Expr::Nil { .. } => Type::Nil,
 
@@ -1768,13 +1879,6 @@ impl TypeChecker {
                         t.collection_element_type()
                             .map(|e| self.substitution.apply(e))
                             .unwrap_or_else(|| self.fresh_var())
-                    }
-                    Type::String => {
-                        // Index should be int for String
-                        if let Err(e) = self.unify(&idx_type, &Type::Int, *span) {
-                            self.errors.push(e);
-                        }
-                        Type::Int // String index returns byte value as int
                     }
                     Type::GenericStruct {
                         ref name,
@@ -1853,7 +1957,34 @@ impl TypeChecker {
                         ));
                         self.fresh_var()
                     }
-                    Type::GenericStruct { name, fields, .. } => {
+                    Type::GenericStruct {
+                        name,
+                        fields,
+                        type_args,
+                    } => {
+                        // string (array<byte>) and array<T> have .data and .len fields
+                        let t = Type::GenericStruct {
+                            name: name.clone(),
+                            fields: fields.clone(),
+                            type_args: type_args.clone(),
+                        };
+                        if t.is_array() || t.is_string() {
+                            let elem_type = type_args
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| self.fresh_var());
+                            match field.as_str() {
+                                "data" => return Type::Ptr(Box::new(elem_type)),
+                                "len" => return Type::Int,
+                                _ => {
+                                    self.errors.push(TypeError::new(
+                                        format!("string has no field `{}`", field),
+                                        *span,
+                                    ));
+                                    return self.fresh_var();
+                                }
+                            }
+                        }
                         // Look up field in generic struct (fields already have type params substituted)
                         for (field_name, field_type) in &fields {
                             if field_name == field {
@@ -1866,17 +1997,6 @@ impl TypeChecker {
                         ));
                         self.fresh_var()
                     }
-                    Type::String => match field.as_str() {
-                        "data" => Type::Ptr(Box::new(Type::Int)),
-                        "len" => Type::Int,
-                        _ => {
-                            self.errors.push(TypeError::new(
-                                format!("string has no field `{}`", field),
-                                *span,
-                            ));
-                            self.fresh_var()
-                        }
-                    },
                     Type::Var(_) => {
                         // Can't infer field access on unknown object type
                         self.fresh_var()
@@ -1944,10 +2064,10 @@ impl TypeChecker {
                             && self.unify(&right_type, &Type::Float, *span).is_ok()
                         {
                             Type::Float
-                        } else if self.unify(&left_type, &Type::String, *span).is_ok()
-                            && self.unify(&right_type, &Type::String, *span).is_ok()
+                        } else if self.unify(&left_type, &Type::string(), *span).is_ok()
+                            && self.unify(&right_type, &Type::string(), *span).is_ok()
                         {
-                            Type::String
+                            Type::string()
                         } else {
                             // Unify left and right, require numeric or string
                             if let Err(e) = self.unify(&left_type, &right_type, *span) {
@@ -2504,7 +2624,7 @@ impl TypeChecker {
                     Type::Int => Some("int"),
                     Type::Float => Some("float"),
                     Type::Bool => Some("bool"),
-                    Type::String => Some("string"),
+                    t if t.is_string() => Some("string"),
                     _ => None,
                 };
                 if let Some(type_name) = primitive_type_name {
@@ -2644,7 +2764,7 @@ impl TypeChecker {
                 if method_type.is_none() && struct_name == "Map" && !type_args.is_empty() {
                     let suffix = match &type_args[0] {
                         Type::Int => Some("int"),
-                        Type::String => Some("string"),
+                        t if t.is_string() => Some("string"),
                         _ => None,
                     };
                     if let Some(suffix) = suffix {
@@ -2743,7 +2863,7 @@ impl TypeChecker {
                     Some("i64") => Type::Int,
                     Some("f64") => Type::Float,
                     Some("bool") => Type::Bool,
-                    Some("string") => Type::String,
+                    Some("string") => Type::string(),
                     Some("nil") => Type::Nil,
                     _ => self.fresh_var(), // Any/unknown type
                 }
@@ -3174,7 +3294,6 @@ impl TypeChecker {
                 // len works on array or string
                 match &resolved {
                     t if t.is_array() => {}
-                    Type::String => {}
                     Type::Var(_) => {}
                     _ => {
                         self.errors.push(TypeError::new(
@@ -3227,7 +3346,7 @@ impl TypeChecker {
                 for arg in args {
                     self.infer_expr(arg, env);
                 }
-                Some(Type::String)
+                Some(Type::string())
             }
             // Thread operations - for now just return appropriate types
             "spawn" | "channel" | "send" | "recv" | "join" => {
@@ -3375,20 +3494,20 @@ impl TypeChecker {
                 if args.len() != 1 {
                     self.errors
                         .push(TypeError::new("argv expects 1 argument (index)", span));
-                    return Some(Type::String);
+                    return Some(Type::string());
                 }
                 let arg_type = self.infer_expr(&mut args[0], env);
                 if let Err(e) = self.unify(&arg_type, &Type::Int, span) {
                     self.errors.push(e);
                 }
-                Some(Type::String)
+                Some(Type::string())
             }
             "args" => {
                 if !args.is_empty() {
                     self.errors
                         .push(TypeError::new("args expects 0 arguments", span));
                 }
-                Some(Type::array(Type::String))
+                Some(Type::array(Type::string()))
             }
             // vec_new and map_new are now associated functions (vec::new(), map::new())
             // They are defined in prelude.mc using impl vec/map blocks
@@ -3493,7 +3612,7 @@ impl TypeChecker {
             Type::Int => "int".to_string(),
             Type::Float => "float".to_string(),
             Type::Bool => "bool".to_string(),
-            Type::String => "string".to_string(),
+            t if t.is_string() => "string".to_string(),
             Type::Struct { name, .. } => name.clone(),
             Type::GenericStruct { name, .. } => name.clone(),
             _ => ty.to_string(),
