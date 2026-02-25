@@ -829,9 +829,7 @@ impl TypeChecker {
             Statement::Expr { expr, .. } => {
                 Self::resolve_expr_types(subst, expr);
             }
-            Statement::Return {
-                value: Some(v), ..
-            } => {
+            Statement::Return { value: Some(v), .. } => {
                 Self::resolve_expr_types(subst, v);
             }
             Statement::If {
