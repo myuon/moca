@@ -1850,8 +1850,8 @@ impl<'a> Disassembler<'a> {
                 .push_str(&format!("HeapAllocDynSimple({:?})", ek)),
             Op::HeapLoad(offset) => self.output.push_str(&format!("HeapLoad {}", offset)),
             Op::HeapStore(offset) => self.output.push_str(&format!("HeapStore {}", offset)),
-            Op::HeapLoadDyn => self.output.push_str("HeapLoadDyn"),
-            Op::HeapStoreDyn => self.output.push_str("HeapStoreDyn"),
+            Op::HeapLoadDyn(ek) => self.output.push_str(&format!("HeapLoadDyn({:?})", ek)),
+            Op::HeapStoreDyn(ek) => self.output.push_str(&format!("HeapStoreDyn({:?})", ek)),
             Op::HeapLoad2(_) => self.output.push_str("HeapLoad2"),
             Op::HeapStore2(_) => self.output.push_str("HeapStore2"),
             Op::HeapOffsetRef => self.output.push_str("HeapOffsetRef"),
@@ -2348,8 +2348,14 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             format_vreg(src),
             offset
         )),
-        MicroOp::HeapLoadDyn { dst, obj, idx } => output.push_str(&format!(
-            "HeapLoadDyn {}, {}, {}",
+        MicroOp::HeapLoadDyn {
+            dst,
+            obj,
+            idx,
+            elem_kind,
+        } => output.push_str(&format!(
+            "HeapLoadDyn({:?}) {}, {}, {}",
+            elem_kind,
             format_vreg(dst),
             format_vreg(obj),
             format_vreg(idx)
@@ -2364,8 +2370,14 @@ fn format_single_microop(output: &mut String, mop: &MicroOp, chunk: &Chunk) {
             offset,
             format_vreg(src)
         )),
-        MicroOp::HeapStoreDyn { obj, idx, src } => output.push_str(&format!(
-            "HeapStoreDyn {}, {}, {}",
+        MicroOp::HeapStoreDyn {
+            obj,
+            idx,
+            src,
+            elem_kind,
+        } => output.push_str(&format!(
+            "HeapStoreDyn({:?}) {}, {}, {}",
+            elem_kind,
             format_vreg(obj),
             format_vreg(idx),
             format_vreg(src)

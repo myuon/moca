@@ -682,8 +682,14 @@ fn write_op<W: Write>(w: &mut W, op: &Op) -> io::Result<()> {
             w.write_all(&[OP_HEAP_STORE])?;
             write_u32(w, *offset as u32)?;
         }
-        Op::HeapLoadDyn => w.write_all(&[OP_HEAP_LOAD_DYN])?,
-        Op::HeapStoreDyn => w.write_all(&[OP_HEAP_STORE_DYN])?,
+        Op::HeapLoadDyn(ek) => {
+            w.write_all(&[OP_HEAP_LOAD_DYN])?;
+            w.write_all(&[*ek as u8])?;
+        }
+        Op::HeapStoreDyn(ek) => {
+            w.write_all(&[OP_HEAP_STORE_DYN])?;
+            w.write_all(&[*ek as u8])?;
+        }
         Op::HeapLoad2(_) => w.write_all(&[OP_HEAP_LOAD2])?,
         Op::HeapStore2(_) => w.write_all(&[OP_HEAP_STORE2])?,
         Op::HeapOffsetRef => w.write_all(&[OP_HEAP_OFFSET_REF])?,
@@ -880,8 +886,14 @@ fn read_op<R: Read>(r: &mut R) -> Result<Op, BytecodeError> {
         }
         OP_HEAP_LOAD => Op::HeapLoad(read_u32(r)? as usize),
         OP_HEAP_STORE => Op::HeapStore(read_u32(r)? as usize),
-        OP_HEAP_LOAD_DYN => Op::HeapLoadDyn,
-        OP_HEAP_STORE_DYN => Op::HeapStoreDyn,
+        OP_HEAP_LOAD_DYN => {
+            let ek_raw = read_u8(r)?;
+            Op::HeapLoadDyn(ElemKind::from_raw(ek_raw))
+        }
+        OP_HEAP_STORE_DYN => {
+            let ek_raw = read_u8(r)?;
+            Op::HeapStoreDyn(ElemKind::from_raw(ek_raw))
+        }
         OP_HEAP_LOAD2 => Op::HeapLoad2(ElemKind::Tagged),
         OP_HEAP_STORE2 => Op::HeapStore2(ElemKind::Tagged),
         OP_HEAP_OFFSET_REF => Op::HeapOffsetRef,
@@ -1322,8 +1334,8 @@ mod tests {
             // HeapAllocArray removed from test
             Op::HeapLoad(1),
             Op::HeapStore(2),
-            Op::HeapLoadDyn,
-            Op::HeapStoreDyn,
+            Op::HeapLoadDyn(ElemKind::Tagged),
+            Op::HeapStoreDyn(ElemKind::Tagged),
             Op::HeapLoad2(ElemKind::Tagged),
             Op::HeapStore2(ElemKind::Tagged),
             Op::HeapOffsetRef,

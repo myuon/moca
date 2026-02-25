@@ -505,13 +505,23 @@ impl MicroOpJitCompiler {
             MicroOp::Ret { src } => self.emit_ret(src.as_ref()),
 
             MicroOp::HeapLoad { dst, src, offset } => self.emit_heap_load(dst, src, *offset),
-            MicroOp::HeapLoadDyn { dst, obj, idx } => self.emit_heap_load_dyn(dst, obj, idx),
+            MicroOp::HeapLoadDyn {
+                dst,
+                obj,
+                idx,
+                elem_kind,
+            } => self.emit_heap_load_dyn(dst, obj, idx, *elem_kind),
             MicroOp::HeapStore {
                 dst_obj,
                 offset,
                 src,
             } => self.emit_heap_store(dst_obj, *offset, src),
-            MicroOp::HeapStoreDyn { obj, idx, src } => self.emit_heap_store_dyn(obj, idx, src),
+            MicroOp::HeapStoreDyn {
+                obj,
+                idx,
+                src,
+                elem_kind,
+            } => self.emit_heap_store_dyn(obj, idx, src, *elem_kind),
             MicroOp::HeapLoad2 {
                 dst,
                 obj,
@@ -1727,23 +1737,46 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapLoadDyn: dst = heap[obj][idx] (dynamic index access).
     /// Loads tag+payload from heap; stores payload to frame, tag to shadow.
-    fn emit_heap_load_dyn(&mut self, dst: &VReg, obj: &VReg, idx: &VReg) -> Result<(), String> {
+    ///
+    /// For Typed arrays (I64/F64/Ref), uses 8B stride and sets shadow tag from elem_kind.
+    /// For Tagged arrays, uses 16B stride and loads tag from heap.
+    fn emit_heap_load_dyn(
+        &mut self,
+        dst: &VReg,
+        obj: &VReg,
+        idx: &VReg,
+        elem_kind: ElemKind,
+    ) -> Result<(), String> {
         let shadow_off = self.shadow_tag_offset(dst);
+        let typed = elem_kind.is_typed();
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
-        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
-        asm.add_imm(regs::TMP0, regs::TMP0, 1);
-        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        // Load tag and payload from heap
-        asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
-        asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
-        // Store payload to frame, tag to shadow
-        asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
-        asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+        if typed {
+            // Typed: addr = heap_base + (ref + 1 + index) * 8
+            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2); // + index (not index*2)
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // * 8
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // Load payload only
+            asm.ldr(regs::TMP2, regs::TMP1, 0);
+            asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
+            // Set shadow tag from compile-time elem_kind
+            asm.mov_imm(regs::TMP0, Self::elem_kind_to_tag(elem_kind) as u16);
+            asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+        } else {
+            // Tagged: addr = heap_base + (ref + 1 + 2*index) * 8
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // index * 2
+            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // * 8
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
+            asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
+            asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
+            asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+        }
         Ok(())
     }
 
@@ -1771,22 +1804,47 @@ impl MicroOpJitCompiler {
 
     /// Emit HeapStoreDyn: heap[obj][idx] = src (dynamic index store).
     /// Reads tag from shadow area; stores tag+payload to heap.
-    fn emit_heap_store_dyn(&mut self, obj: &VReg, idx: &VReg, src: &VReg) -> Result<(), String> {
+    ///
+    /// For Typed arrays (I64/F64/Ref), uses 8B stride and stores payload only.
+    /// For Tagged arrays, uses 16B stride and stores tag+payload.
+    fn emit_heap_store_dyn(
+        &mut self,
+        obj: &VReg,
+        idx: &VReg,
+        src: &VReg,
+        elem_kind: ElemKind,
+    ) -> Result<(), String> {
         let shadow_off = self.shadow_tag_offset(src);
+        let typed = elem_kind.is_typed();
         let mut asm = AArch64Assembler::new(&mut self.buf);
-        // TMP4 = tag (from shadow), TMP5 = payload
-        asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
-        asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
-        asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
-        asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
-        asm.ldr(regs::TMP1, regs::VM_CTX, 48);
-        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
-        asm.add_imm(regs::TMP0, regs::TMP0, 1);
-        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        asm.str(regs::TMP4, regs::TMP1, 0);
-        asm.str(regs::TMP5, regs::TMP1, 8);
+        if typed {
+            // Typed: only payload, no tag
+            asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
+            asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
+            asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+            // addr = heap_base + (ref + 1 + index) * 8
+            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2); // + index (not index*2)
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // * 8
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // Store payload only
+            asm.str(regs::TMP5, regs::TMP1, 0);
+        } else {
+            // Tagged: tag+payload, 16B stride
+            asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
+            asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
+            asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
+            asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // index * 2
+            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            asm.str(regs::TMP4, regs::TMP1, 0);
+            asm.str(regs::TMP5, regs::TMP1, 8);
+        }
         Ok(())
     }
 
@@ -1803,54 +1861,69 @@ impl MicroOpJitCompiler {
     /// Emit HeapLoad2: dst = heap[heap[obj][0]][idx] (ptr-indirect dynamic access).
     /// Stores payload to frame and tag to shadow area.
     ///
-    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
-    /// Typed stride optimization requires Vec literal construction to use monomorphised
-    /// allocation functions (see #241). The elem_kind parameter is accepted for future use.
+    /// For Typed arrays (I64/F64/Ref), uses 8B stride and sets shadow tag from elem_kind.
+    /// For Tagged arrays, uses 16B stride and loads tag from heap.
     fn emit_heap_load2(
         &mut self,
         dst: &VReg,
         obj: &VReg,
         idx: &VReg,
-        _elem_kind: ElemKind,
+        elem_kind: ElemKind,
     ) -> Result<(), String> {
+        let typed = elem_kind.is_typed();
         let shadow_off = self.shadow_tag_offset(dst);
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
 
-        // Step 1: load slot 0 of outer object → inner ref payload
+        // Step 1: load slot 0 of outer object → inner ref payload (always Tagged)
         asm.add_imm(regs::TMP0, regs::TMP0, 1);
         asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
         asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
         asm.ldr(regs::TMP0, regs::TMP3, 8); // inner ref payload
 
-        // Step 2: load slot[idx] of inner object (Tagged: each slot = 2 words)
-        asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // idx * 2
-        asm.add_imm(regs::TMP0, regs::TMP0, 1);
-        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
-        asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
-        asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
-        asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+        // Step 2: load element[idx] of inner object
+        if typed {
+            // Typed: (inner_ref + 1 + idx) * 8
+            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // Load payload only
+            asm.ldr(regs::TMP2, regs::TMP1, 0);
+            asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
+            // Set shadow tag from known ElemKind
+            asm.mov_imm(regs::TMP0, Self::elem_kind_to_tag(elem_kind) as u16);
+            asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+        } else {
+            // Tagged: (inner_ref + 1 + idx * 2) * 8
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // idx * 2
+            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
+            asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
+            asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
+            asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+        }
         Ok(())
     }
 
     /// Emit HeapStore2: heap[heap[obj][0]][idx] = src (ptr-indirect dynamic store).
     /// Reads tag from shadow area; stores tag+payload to heap.
     ///
-    /// NOTE: Currently always uses Tagged stride (16B/slot) regardless of elem_kind.
-    /// See emit_heap_load2 for details on why typed stride is deferred.
+    /// For Typed arrays (I64/F64/Ref), uses 8B stride and stores payload only.
+    /// For Tagged arrays, uses 16B stride and stores tag+payload.
     fn emit_heap_store2(
         &mut self,
         obj: &VReg,
         idx: &VReg,
         src: &VReg,
-        _elem_kind: ElemKind,
+        elem_kind: ElemKind,
     ) -> Result<(), String> {
-        let shadow_off = self.shadow_tag_offset(src);
+        let typed = elem_kind.is_typed();
         let mut asm = AArch64Assembler::new(&mut self.buf);
         // TMP5 = payload
         asm.ldr(regs::TMP5, regs::FRAME_BASE, Self::vreg_offset(src));
@@ -1858,21 +1931,32 @@ impl MicroOpJitCompiler {
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
 
-        // Step 1: load slot 0 of outer object → inner ref payload
+        // Step 1: load slot 0 of outer object → inner ref payload (always Tagged)
         asm.add_imm(regs::TMP0, regs::TMP0, 1);
         asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
         asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
         asm.ldr(regs::TMP0, regs::TMP3, 8);
 
-        // Step 2: store at slot[idx] of inner object (Tagged: each slot = 2 words)
-        asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
-        asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
-        asm.add_imm(regs::TMP0, regs::TMP0, 1);
-        asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        asm.str(regs::TMP4, regs::TMP1, 0);
-        asm.str(regs::TMP5, regs::TMP1, 8);
+        // Step 2: store at element[idx] of inner object
+        if typed {
+            // Typed: (inner_ref + 1 + idx) * 8, store payload only
+            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            asm.str(regs::TMP5, regs::TMP1, 0);
+        } else {
+            // Tagged: (inner_ref + 1 + idx * 2) * 8, store tag+payload
+            let shadow_off = self.shadow_tag_offset(src);
+            asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
+            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
+            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            asm.str(regs::TMP4, regs::TMP1, 0);
+            asm.str(regs::TMP5, regs::TMP1, 8);
+        }
         Ok(())
     }
 

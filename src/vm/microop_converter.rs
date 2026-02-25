@@ -1445,7 +1445,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                 });
                 vstack.push(Vse::Reg(dst));
             }
-            Op::HeapLoadDyn => {
+            Op::HeapLoadDyn(ek) => {
                 // pop index, pop ref, push ref[index]
                 let idx = pop_vreg(
                     &mut vstack,
@@ -1467,7 +1467,12 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     &mut vreg_types,
                     ValueType::I64,
                 );
-                micro_ops.push(MicroOp::HeapLoadDyn { dst, obj, idx });
+                micro_ops.push(MicroOp::HeapLoadDyn {
+                    dst,
+                    obj,
+                    idx,
+                    elem_kind: *ek,
+                });
                 vstack.push(Vse::Reg(dst));
             }
             Op::HeapStore(offset) => {
@@ -1492,7 +1497,7 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     src,
                 });
             }
-            Op::HeapStoreDyn => {
+            Op::HeapStoreDyn(ek) => {
                 // pop value, pop index, pop ref → ref[index] = value
                 let src = pop_vreg(
                     &mut vstack,
@@ -1515,7 +1520,12 @@ pub fn convert(func: &Function) -> ConvertedFunction {
                     &mut max_temp,
                     &mut vreg_types,
                 );
-                micro_ops.push(MicroOp::HeapStoreDyn { obj, idx, src });
+                micro_ops.push(MicroOp::HeapStoreDyn {
+                    obj,
+                    idx,
+                    src,
+                    elem_kind: *ek,
+                });
             }
             Op::HeapLoad2(ek) => {
                 // pop index, pop ref → push heap[heap[ref][0]][idx]
