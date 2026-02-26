@@ -9,18 +9,19 @@ use super::Value;
 /// Describes how elements are stored within a heap object.
 ///
 /// - `Tagged` (0): legacy 16B/slot format (tag u64 + payload u64). Used for structs, closures.
+/// - `U8` (1): untagged 1B/element, no GC trace. For byte arrays, UTF-8 strings.
 /// - `I64` (3): untagged 8B/element, no GC trace. For arrays of int, bool.
 /// - `Ref` (4): untagged 8B/element, GC trace. For arrays of references.
 /// - `F64` (5): untagged 8B/element, no GC trace. For arrays of float.
 ///
-/// Values 1 (U8) and 2 (I32) are reserved for future 1B and 4B element support.
+/// Value 2 (I32) is reserved for future 4B element support.
 /// I64 and F64 have identical heap behavior (8B, no trace) but differ in
 /// how the interpreter/JIT reconstructs the Value tag on load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ElemKind {
     Tagged = 0,
-    // U8 = 1,  // reserved for future 1-byte elements
+    U8 = 1,
     // I32 = 2, // reserved for future 4-byte elements
     I64 = 3,
     Ref = 4,
@@ -31,6 +32,7 @@ impl ElemKind {
     /// Decode from the 3-bit field stored in the header.
     fn from_bits(bits: u8) -> Self {
         match bits {
+            1 => ElemKind::U8,
             3 => ElemKind::I64,
             4 => ElemKind::Ref,
             5 => ElemKind::F64,
@@ -182,6 +184,7 @@ const fn object_size_words(slot_count: u32) -> usize {
 const fn object_size_words_for_kind(count: u32, kind: ElemKind) -> usize {
     match kind {
         ElemKind::Tagged => 1 + 2 * (count as usize),
+        ElemKind::U8 => 1 + (count as usize).div_ceil(8),
         ElemKind::I64 | ElemKind::Ref | ElemKind::F64 => 1 + (count as usize),
     }
 }
@@ -200,12 +203,18 @@ fn object_size_bytes(slot_count: u32) -> usize {
 
 /// Calculate the total size in bytes for an object with the given elem kind.
 fn object_size_bytes_for_kind(count: u32, kind: ElemKind) -> usize {
-    object_size_words_for_kind(count, kind) * 8
+    match kind {
+        // U8: header 8B + count bytes aligned up to 8
+        ElemKind::U8 => 8 + ((count as usize + 7) & !7),
+        _ => object_size_words_for_kind(count, kind) * 8,
+    }
 }
 
 /// Calculate the object size in bytes from a decoded header.
 fn object_size_bytes_from_header(header: u64) -> usize {
-    object_size_from_header(header) * 8
+    let count = decode_slot_count(header);
+    let kind = decode_elem_kind(header);
+    object_size_bytes_for_kind(count, kind)
 }
 
 // =============================================================================
@@ -265,6 +274,11 @@ impl HeapObject {
                     let payload = read_u64(memory, tag_byte_offset + 8);
                     let value = Value::decode(tag, payload)?;
                     slots.push(value);
+                }
+            }
+            ElemKind::U8 => {
+                for i in 0..slot_count {
+                    slots.push(Value::I64(memory[offset + 8 + i] as i64));
                 }
             }
             ElemKind::I64 => {
@@ -504,7 +518,7 @@ impl Heap {
     pub fn alloc_typed_array(&mut self, count: u32, kind: ElemKind) -> Result<GcRef, String> {
         debug_assert!(
             kind.is_typed(),
-            "alloc_typed_array only supports typed kinds (I64, F64, Ref)"
+            "alloc_typed_array only supports typed kinds (U8, I64, F64, Ref)"
         );
 
         let obj_size_bytes = object_size_bytes_for_kind(count, kind);
@@ -534,8 +548,16 @@ impl Heap {
         );
 
         // Zero-initialize elements (already 0 from resize, but be explicit for reused blocks)
-        for i in 0..count as usize {
-            write_u64(&mut self.memory, offset + 8 + i * 8, 0);
+        match kind {
+            ElemKind::U8 => {
+                let data_size = ((count as usize) + 7) & !7;
+                self.memory[offset + 8..offset + 8 + data_size].fill(0);
+            }
+            _ => {
+                for i in 0..count as usize {
+                    write_u64(&mut self.memory, offset + 8 + i * 8, 0);
+                }
+            }
         }
 
         Ok(GcRef::from_offset(offset))
@@ -553,7 +575,7 @@ impl Heap {
         }
     }
 
-    /// Read a single element from a typed array (ElemKind::I64 or ElemKind::Ref).
+    /// Read a single element from a typed array.
     /// Returns the raw u64 payload without tag.
     pub fn read_typed(&self, r: GcRef, index: usize) -> Option<u64> {
         if !r.is_valid() {
@@ -568,10 +590,17 @@ impl Heap {
             return None;
         }
 
-        try_read_u64(&self.memory, offset + 8 + actual_index * 8)
+        let kind = decode_elem_kind(header);
+        match kind {
+            ElemKind::U8 => self
+                .memory
+                .get(offset + 8 + actual_index)
+                .map(|&b| b as u64),
+            _ => try_read_u64(&self.memory, offset + 8 + actual_index * 8),
+        }
     }
 
-    /// Write a single element to a typed array (ElemKind::I64 or ElemKind::Ref).
+    /// Write a single element to a typed array.
     /// Stores the raw u64 payload without tag.
     pub fn write_typed(&mut self, r: GcRef, index: usize, value: u64) -> Result<(), String> {
         if !r.is_valid() {
@@ -590,7 +619,15 @@ impl Heap {
             ));
         }
 
-        write_u64(&mut self.memory, offset + 8 + actual_index * 8, value);
+        let kind = decode_elem_kind(header);
+        match kind {
+            ElemKind::U8 => {
+                self.memory[offset + 8 + actual_index] = value as u8;
+            }
+            _ => {
+                write_u64(&mut self.memory, offset + 8 + actual_index * 8, value);
+            }
+        }
         Ok(())
     }
 
@@ -688,6 +725,10 @@ impl Heap {
                 let payload = try_read_u64(&self.memory, tag_byte_offset + 8)?;
                 Value::decode(tag, payload)
             }
+            ElemKind::U8 => {
+                let byte = *self.memory.get(offset + 8 + actual_slot)?;
+                Some(Value::I64(byte as i64))
+            }
             ElemKind::I64 => {
                 let raw = try_read_u64(&self.memory, offset + 8 + actual_slot * 8)?;
                 Some(Value::I64(raw as i64))
@@ -732,6 +773,13 @@ impl Heap {
                 let (tag, payload) = value.encode();
                 write_u64(&mut self.memory, tag_byte_offset, tag);
                 write_u64(&mut self.memory, tag_byte_offset + 8, payload);
+            }
+            ElemKind::U8 => {
+                let raw = match value {
+                    Value::I64(v) => v as u8,
+                    _ => value.encode().1 as u8,
+                };
+                self.memory[offset + 8 + actual_slot] = raw;
             }
             ElemKind::I64 | ElemKind::F64 => {
                 let raw = match value {
@@ -843,7 +891,7 @@ impl Heap {
                         worklist.extend(obj.trace());
                     }
                 }
-                ElemKind::I64 | ElemKind::F64 => {
+                ElemKind::I64 | ElemKind::F64 | ElemKind::U8 => {
                     // Primitive-only array: no references to trace
                 }
                 ElemKind::Ref => {
@@ -1414,5 +1462,133 @@ mod tests {
         let mut heap = Heap::new();
         let r = heap.alloc_typed_array(5, ElemKind::I64).unwrap();
         assert_eq!(heap.slot_count(r), Some(5));
+    }
+
+    // =========================================================================
+    // ElemKind::U8 Tests
+    // =========================================================================
+
+    #[test]
+    fn test_u8_object_size() {
+        // header 8B + align_up(count, 8)
+        assert_eq!(object_size_bytes_for_kind(0, ElemKind::U8), 8);
+        assert_eq!(object_size_bytes_for_kind(1, ElemKind::U8), 16);
+        assert_eq!(object_size_bytes_for_kind(7, ElemKind::U8), 16);
+        assert_eq!(object_size_bytes_for_kind(8, ElemKind::U8), 16);
+        assert_eq!(object_size_bytes_for_kind(9, ElemKind::U8), 24);
+        assert_eq!(object_size_bytes_for_kind(16, ElemKind::U8), 24);
+        assert_eq!(object_size_bytes_for_kind(17, ElemKind::U8), 32);
+    }
+
+    #[test]
+    fn test_alloc_typed_u8_array() {
+        let mut heap = Heap::new();
+        let r = heap.alloc_typed_array(5, ElemKind::U8).unwrap();
+
+        // All elements should be zero-initialized
+        for i in 0..5 {
+            assert_eq!(heap.read_typed(r, i), Some(0));
+        }
+        assert_eq!(heap.read_typed(r, 5), None); // out of bounds
+
+        // Write and read back
+        heap.write_typed(r, 0, 0x41).unwrap(); // 'A'
+        heap.write_typed(r, 1, 0xFF).unwrap();
+        heap.write_typed(r, 4, 0x7F).unwrap();
+
+        assert_eq!(heap.read_typed(r, 0), Some(0x41));
+        assert_eq!(heap.read_typed(r, 1), Some(0xFF));
+        assert_eq!(heap.read_typed(r, 4), Some(0x7F));
+
+        // Write out of bounds should fail
+        assert!(heap.write_typed(r, 5, 0).is_err());
+    }
+
+    #[test]
+    fn test_u8_read_write_slot() {
+        let mut heap = Heap::new();
+        let r = heap.alloc_typed_array(3, ElemKind::U8).unwrap();
+
+        // Write via write_slot
+        heap.write_slot(r, 0, Value::I64(65)).unwrap();
+        heap.write_slot(r, 1, Value::I64(66)).unwrap();
+        heap.write_slot(r, 2, Value::I64(67)).unwrap();
+
+        // Read via read_slot
+        assert_eq!(heap.read_slot(r, 0), Some(Value::I64(65)));
+        assert_eq!(heap.read_slot(r, 1), Some(Value::I64(66)));
+        assert_eq!(heap.read_slot(r, 2), Some(Value::I64(67)));
+        assert_eq!(heap.read_slot(r, 3), None); // out of bounds
+
+        // Truncation: writing 256+ should truncate to u8
+        heap.write_slot(r, 0, Value::I64(256)).unwrap();
+        assert_eq!(heap.read_slot(r, 0), Some(Value::I64(0))); // 256 & 0xFF = 0
+    }
+
+    #[test]
+    fn test_u8_from_memory() {
+        let mut heap = Heap::new();
+        let r = heap.alloc_typed_array(3, ElemKind::U8).unwrap();
+        heap.write_typed(r, 0, 10).unwrap();
+        heap.write_typed(r, 1, 20).unwrap();
+        heap.write_typed(r, 2, 30).unwrap();
+
+        let obj = HeapObject::from_memory(heap.memory(), r.offset()).unwrap();
+        assert_eq!(obj.slots.len(), 3);
+        assert_eq!(obj.slots[0], Value::I64(10));
+        assert_eq!(obj.slots[1], Value::I64(20));
+        assert_eq!(obj.slots[2], Value::I64(30));
+    }
+
+    #[test]
+    fn test_gc_u8_array() {
+        let mut heap = Heap::new();
+
+        let r = heap.alloc_typed_array(10, ElemKind::U8).unwrap();
+        heap.write_typed(r, 0, 0x48).unwrap(); // 'H'
+        heap.write_typed(r, 1, 0x65).unwrap(); // 'e'
+
+        let _garbage = heap.alloc_slots(vec![Value::I64(999)]).unwrap();
+
+        // GC: only U8 array is root
+        heap.collect(&[Value::Ref(r)]);
+
+        // U8 array survives with correct data
+        assert_eq!(heap.read_typed(r, 0), Some(0x48));
+        assert_eq!(heap.read_typed(r, 1), Some(0x65));
+        assert_eq!(heap.object_count(), 1);
+    }
+
+    #[test]
+    fn test_u8_elem_kind_header() {
+        let mut heap = Heap::new();
+        let r = heap.alloc_typed_array(4, ElemKind::U8).unwrap();
+
+        let header = read_u64(heap.memory(), r.offset());
+        assert_eq!(decode_slot_count(header), 4);
+        assert_eq!(decode_elem_kind(header), ElemKind::U8);
+        assert_eq!(heap.get_elem_kind(r), ElemKind::U8);
+    }
+
+    #[test]
+    fn test_u8_mixed_with_other_types() {
+        let mut heap = Heap::new();
+
+        let tagged = heap.alloc_slots(vec![Value::I64(1)]).unwrap();
+        let u8_arr = heap.alloc_typed_array(8, ElemKind::U8).unwrap();
+        let i64_arr = heap.alloc_typed_array(2, ElemKind::I64).unwrap();
+
+        heap.write_typed(u8_arr, 0, 0xAB).unwrap();
+        heap.write_typed(i64_arr, 0, 12345).unwrap();
+
+        assert_eq!(heap.object_count(), 3);
+
+        // GC: all are roots
+        heap.collect(&[Value::Ref(tagged), Value::Ref(u8_arr), Value::Ref(i64_arr)]);
+        assert_eq!(heap.object_count(), 3);
+
+        assert_eq!(heap.read_slot(tagged, 0), Some(Value::I64(1)));
+        assert_eq!(heap.read_typed(u8_arr, 0), Some(0xAB));
+        assert_eq!(heap.read_typed(i64_arr, 0), Some(12345));
     }
 }

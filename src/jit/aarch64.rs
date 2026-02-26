@@ -357,6 +357,28 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// LDRB Wt, [Xn, #imm12] (load byte with zero-extension, unsigned offset)
+    /// imm12 is NOT scaled (byte offset directly).
+    pub fn ldrb(&mut self, rt: Reg, rn: Reg, imm12: u16) {
+        // 0011 1001 01ii iiii iiii iinn nnnt tttt
+        let inst = 0x39400000
+            | (((imm12 as u32) & 0xFFF) << 10)
+            | ((rn.code() as u32) << 5)
+            | (rt.code() as u32);
+        self.emit_raw(inst);
+    }
+
+    /// STRB Wt, [Xn, #imm12] (store byte, unsigned offset)
+    /// imm12 is NOT scaled (byte offset directly).
+    pub fn strb(&mut self, rt: Reg, rn: Reg, imm12: u16) {
+        // 0011 1001 00ii iiii iiii iinn nnnt tttt
+        let inst = 0x39000000
+            | (((imm12 as u32) & 0xFFF) << 10)
+            | ((rn.code() as u32) << 5)
+            | (rt.code() as u32);
+        self.emit_raw(inst);
+    }
+
     /// LDR Xt, [Xn], #imm9 (load with post-increment)
     pub fn ldr_post(&mut self, rt: Reg, rn: Reg, imm9: i16) {
         // 1111 1000 010i iiii iiii 01nn nnnt tttt
