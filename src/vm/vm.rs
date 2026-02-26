@@ -3967,13 +3967,35 @@ impl VM {
                     .as_i64()
                     .ok_or_else(|| "write: count must be an integer".to_string())?;
 
-                // Get the string from heap (String struct: [ptr, len])
-                let buf_str = self.ref_to_rust_string(buf_ref)?;
+                // Get string data directly from heap slots (skip Rust String allocation)
+                let obj = self
+                    .heap
+                    .get(buf_ref)
+                    .ok_or("write: invalid string reference")?;
+                let data_ref = obj.slots[0].as_ref().ok_or("write: invalid string ptr")?;
+                let data = self
+                    .heap
+                    .get(data_ref)
+                    .ok_or("write: invalid string data")?;
+                let actual_count = (count as usize).min(data.slots.len());
 
-                // Calculate actual bytes to write
-                let buf_bytes = buf_str.as_bytes();
-                let actual_count = (count as usize).min(buf_bytes.len());
-                let bytes_to_write = &buf_bytes[..actual_count];
+                // Convert slots to bytes directly (skip Rust String allocation)
+                let mut stack_buf = [0u8; 256];
+                let heap_buf: Vec<u8>;
+                let bytes_to_write: &[u8] = if actual_count <= 256 {
+                    for (i, slot) in data.slots.iter().take(actual_count).enumerate() {
+                        stack_buf[i] = slot.as_i64().unwrap_or(0) as u8;
+                    }
+                    &stack_buf[..actual_count]
+                } else {
+                    heap_buf = data
+                        .slots
+                        .iter()
+                        .take(actual_count)
+                        .map(|v| v.as_i64().unwrap_or(0) as u8)
+                        .collect();
+                    &heap_buf
+                };
 
                 // Write to the appropriate output based on fd
                 let result = if fd == 1 {
