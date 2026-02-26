@@ -15,6 +15,7 @@
 // Hostcall 9: accept(fd) -> client_fd
 // Hostcall 10: time() -> epoch_seconds
 // Hostcall 11: time_nanos() -> epoch_nanoseconds
+// Hostcall 12: print_int(n) -> 0 (write int directly to stdout with newline)
 
 // ============================================================================
 // POSIX-like Constants (as functions to avoid polluting the stack)

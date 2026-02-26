@@ -393,6 +393,8 @@ impl<'a> Resolver<'a> {
                 "argc".to_string(),
                 "argv".to_string(),
                 "args".to_string(),
+                // Specialized print builtins
+                "__print_int".to_string(),
             ],
             structs: HashMap::new(),
             primitive_methods: HashMap::new(),

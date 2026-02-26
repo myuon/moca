@@ -3840,6 +3840,7 @@ impl VM {
         const HOSTCALL_ACCEPT: usize = 9;
         const HOSTCALL_TIME: usize = 10;
         const HOSTCALL_TIME_NANOS: usize = 11;
+        const HOSTCALL_PRINT_INT: usize = 12;
 
         // Error codes (negative return values)
         const EBADF: i64 = -1; // Bad file descriptor
@@ -4261,6 +4262,21 @@ impl VM {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|e| format!("time_nanos hostcall failed: {}", e))?;
                 Ok(Value::I64(duration.as_nanos() as i64))
+            }
+            HOSTCALL_PRINT_INT => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "print_int hostcall expects 1 argument, got {}",
+                        args.len()
+                    ));
+                }
+                let n = args[0]
+                    .as_i64()
+                    .ok_or_else(|| "print_int: argument must be an integer".to_string())?;
+                use std::io::Write;
+                writeln!(self.output, "{}", n)
+                    .map_err(|e| format!("print_int write failed: {}", e))?;
+                Ok(Value::I64(0))
             }
             _ => Err(format!("unknown hostcall: {}", hostcall_num)),
         }

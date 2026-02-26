@@ -2179,6 +2179,11 @@ impl TypeChecker {
                 if callee == "print" && args.len() == 1 && type_args.is_empty() {
                     let arg_type = self.infer_expr(&mut args[0], env);
                     let resolved_arg_type = self.substitution.apply(&arg_type);
+                    // Fast path: print(int) bypasses ToString/alloc via hostcall
+                    if resolved_arg_type == Type::Int {
+                        *callee = "__print_int".to_string();
+                        return Type::Int;
+                    }
                     if matches!(
                         resolved_arg_type,
                         Type::Any | Type::Nullable(_) | Type::Var(_)

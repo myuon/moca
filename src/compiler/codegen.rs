@@ -1346,6 +1346,13 @@ impl Codegen {
                         self.compile_expr(&args[0], ops)?;
                         ops.push(Op::HeapSize);
                     }
+                    "__print_int" => {
+                        if args.len() != 1 {
+                            return Err("__print_int requires exactly 1 argument".to_string());
+                        }
+                        self.compile_expr(&args[0], ops)?;
+                        ops.push(Op::Hostcall(12, 1));
+                    }
                     "__hostcall" => {
                         // __hostcall(num, ...args) -> result
                         // First argument must be a compile-time constant (hostcall number)
