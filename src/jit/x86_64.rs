@@ -568,6 +568,67 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(Self::modrm(0b11, dst.code(), src.code()));
     }
 
+    /// MOVZX r64, BYTE PTR [base + disp32] (load byte with zero-extension to 64-bit)
+    pub fn movzx_rm_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.emit_rex_w(dst, base);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0xB6); // MOVZX r64, r/m8
+
+        if base == Reg::Rsp || base == Reg::R12 {
+            if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+                self.buf.emit_u8(Self::modrm(0b00, dst.code(), 0b100));
+                self.buf.emit_u8(0x24);
+            } else if (-128..=127).contains(&disp) {
+                self.buf.emit_u8(Self::modrm(0b01, dst.code(), 0b100));
+                self.buf.emit_u8(0x24);
+                self.buf.emit_u8(disp as u8);
+            } else {
+                self.buf.emit_u8(Self::modrm(0b10, dst.code(), 0b100));
+                self.buf.emit_u8(0x24);
+                self.buf.emit_u32(disp as u32);
+            }
+        } else if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+            self.buf.emit_u8(Self::modrm(0b00, dst.code(), base.code()));
+        } else if (-128..=127).contains(&disp) {
+            self.buf.emit_u8(Self::modrm(0b01, dst.code(), base.code()));
+            self.buf.emit_u8(disp as u8);
+        } else {
+            self.buf.emit_u8(Self::modrm(0b10, dst.code(), base.code()));
+            self.buf.emit_u32(disp as u32);
+        }
+    }
+
+    /// MOV BYTE PTR [base + disp32], r8 (store low byte of register to memory)
+    pub fn mov_mr_byte(&mut self, base: Reg, disp: i32, src: Reg) {
+        // Always emit REX to ensure SPL/BPL/SIL/DIL encoding (avoid AH/CH/DH/BH trap)
+        let rex = 0x40 | src.rex_r() | base.rex_b();
+        self.buf.emit_u8(rex);
+        self.buf.emit_u8(0x88); // MOV r/m8, r8
+
+        if base == Reg::Rsp || base == Reg::R12 {
+            if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+                self.buf.emit_u8(Self::modrm(0b00, src.code(), 0b100));
+                self.buf.emit_u8(0x24);
+            } else if (-128..=127).contains(&disp) {
+                self.buf.emit_u8(Self::modrm(0b01, src.code(), 0b100));
+                self.buf.emit_u8(0x24);
+                self.buf.emit_u8(disp as u8);
+            } else {
+                self.buf.emit_u8(Self::modrm(0b10, src.code(), 0b100));
+                self.buf.emit_u8(0x24);
+                self.buf.emit_u32(disp as u32);
+            }
+        } else if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+            self.buf.emit_u8(Self::modrm(0b00, src.code(), base.code()));
+        } else if (-128..=127).contains(&disp) {
+            self.buf.emit_u8(Self::modrm(0b01, src.code(), base.code()));
+            self.buf.emit_u8(disp as u8);
+        } else {
+            self.buf.emit_u8(Self::modrm(0b10, src.code(), base.code()));
+            self.buf.emit_u32(disp as u32);
+        }
+    }
+
     // ==================== SSE2 Floating Point ====================
 
     /// MOVQ xmm, r64 (move quadword from GP register to XMM)
