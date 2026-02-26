@@ -1,7 +1,7 @@
 // Test I/O error handling
 
 // Test 1: Write to invalid fd (should return EBADF = -1)
-let result1 = write(99, "test", 4);
+let result1 = write_str(99, "test", 4);
 print(result1);
 
 // Test 2: Read from invalid fd (should return EBADF = -1)

@@ -10,7 +10,7 @@ if fd < 0 {
     print("ERROR: Failed to open file for writing");
 } else {
     // Write content
-    let written = write(fd, content, len(content));
+    let written = write_str(fd, content, len(content));
     print(written);
 
     // Close file

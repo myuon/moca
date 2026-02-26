@@ -43,7 +43,7 @@ fun main() {
     // Send HTTP response
     let body = "Hello from Moca!";
     let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 16\r\nConnection: close\r\n\r\n" + body;
-    write(client_fd, response, len(response));
+    write_str(client_fd, response, len(response));
 
     // Close connections
     close(client_fd);

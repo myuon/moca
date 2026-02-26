@@ -19,7 +19,7 @@ if fd >= 0 {
     if result >= 0 {
         // Send HTTP GET request
         let request = "GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
-        let written = write(fd, request, len(request));
+        let written = write_str(fd,request, len(request));
 
         // Read response
         let response = read(fd, 4096);

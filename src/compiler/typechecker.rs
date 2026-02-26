@@ -651,6 +651,35 @@ impl TypeChecker {
         }
         program.items.extend(synthetic_items);
 
+        // Pass 2.6: auto-derive WriteTo for structs that have ToString.
+        // WriteTo wraps to_string() + write_str(), so structs can be used with print<T: WriteTo>.
+        let has_writeto_interface = self.interfaces.contains_key("WriteTo");
+        if has_writeto_interface {
+            let mut writeto_items = Vec::new();
+            for struct_name in &struct_names {
+                // Skip if WriteTo already explicitly implemented
+                if self
+                    .interface_impls
+                    .contains(&("WriteTo".to_string(), struct_name.clone()))
+                {
+                    continue;
+                }
+                // Only derive for types that have ToString
+                if !self
+                    .interface_impls
+                    .contains(&("ToString".to_string(), struct_name.clone()))
+                {
+                    continue;
+                }
+                if let Some(impl_block) = self.generate_writeto_from_tostring_impl(struct_name) {
+                    self.register_impl_methods(&impl_block);
+                    self.register_interface_impl(&impl_block);
+                    writeto_items.push(Item::ImplBlock(impl_block));
+                }
+            }
+            program.items.extend(writeto_items);
+        }
+
         // Third pass: type check function bodies and statements (mutable)
         let mut main_env = TypeEnv::new();
         for item in &mut program.items {
@@ -1212,6 +1241,105 @@ impl TypeChecker {
         })
     }
 
+    /// Generate a synthetic `impl WriteTo for StructName` that wraps ToString.
+    /// Body: `let s = self.to_string(); write_str(fd, s, len(s));`
+    fn generate_writeto_from_tostring_impl(&self, struct_name: &str) -> Option<ImplBlock> {
+        let struct_info = self.structs.get(struct_name)?;
+        let span = Span::new(0, 0);
+        let type_params = struct_info.type_params.clone();
+
+        // Build: let s = self.to_string();
+        let let_s = Statement::Let {
+            name: "s".to_string(),
+            type_annotation: None,
+            init: Expr::MethodCall {
+                object: Box::new(Expr::Ident {
+                    name: "self".to_string(),
+                    span,
+                    inferred_type: None,
+                }),
+                method: "to_string".to_string(),
+                type_args: Vec::new(),
+                args: Vec::new(),
+                span,
+                object_type: None,
+                inferred_type: None,
+            },
+            span,
+            inferred_type: None,
+        };
+
+        // Build: write_str(fd, s, len(s));
+        let write_call = Statement::Expr {
+            expr: Expr::Call {
+                callee: "write_str".to_string(),
+                type_args: Vec::new(),
+                args: vec![
+                    Expr::Ident {
+                        name: "fd".to_string(),
+                        span,
+                        inferred_type: None,
+                    },
+                    Expr::Ident {
+                        name: "s".to_string(),
+                        span,
+                        inferred_type: None,
+                    },
+                    Expr::Call {
+                        callee: "len".to_string(),
+                        type_args: Vec::new(),
+                        args: vec![Expr::Ident {
+                            name: "s".to_string(),
+                            span,
+                            inferred_type: None,
+                        }],
+                        span,
+                        inferred_type: None,
+                    },
+                ],
+                span,
+                inferred_type: None,
+            },
+            span,
+        };
+
+        let body = Block {
+            statements: vec![let_s, write_call],
+            span,
+        };
+
+        let write_to_fn = FnDef {
+            name: "write_to".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: Vec::new(),
+            params: vec![
+                Param {
+                    name: "self".to_string(),
+                    type_annotation: None,
+                    span,
+                },
+                Param {
+                    name: "fd".to_string(),
+                    type_annotation: Some(TypeAnnotation::Named("int".to_string())),
+                    span,
+                },
+            ],
+            return_type: None,
+            body,
+            attributes: Vec::new(),
+            span,
+        };
+
+        Some(ImplBlock {
+            type_params,
+            interface_name: Some("WriteTo".to_string()),
+            struct_name: struct_name.to_string(),
+            struct_type_args: Vec::new(),
+            methods: vec![write_to_fn],
+            span,
+        })
+    }
+
     /// Check if a field type has a ToString implementation.
     /// Returns true for primitives, structs (auto-derived), and other types with known ToString.
     fn field_has_tostring(&self, field_type: &Type) -> bool {
@@ -1408,6 +1536,9 @@ impl TypeChecker {
             {
                 self.errors.push(e);
             }
+
+            // Re-apply substitution to resolve type variables in Let inferred_type fields
+            Self::resolve_let_types(&self.substitution, &mut method.body.statements);
 
             // Clear current type params
             self.current_type_params.clear();
@@ -2242,7 +2373,7 @@ impl TypeChecker {
                                         .contains(&(bound.clone(), type_name.clone()))
                                     {
                                         // print fallback: suppress error and use dyn-based formatter
-                                        if callee.as_str() == "print" && bound == "ToString" {
+                                        if callee.as_str() == "print" && bound == "WriteTo" {
                                             print_fallback = true;
                                         } else {
                                             self.errors.push(TypeError::new(
@@ -2323,7 +2454,7 @@ impl TypeChecker {
                                                 .contains(&(bound.clone(), type_name.clone()))
                                             {
                                                 // print fallback: suppress error and use dyn-based formatter
-                                                if callee.as_str() == "print" && bound == "ToString"
+                                                if callee.as_str() == "print" && bound == "WriteTo"
                                                 {
                                                     print_fallback = true;
                                                 } else {

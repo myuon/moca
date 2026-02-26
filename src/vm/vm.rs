@@ -3959,24 +3959,19 @@ impl VM {
                 let fd = args[0]
                     .as_i64()
                     .ok_or_else(|| "write: fd must be an integer".to_string())?;
-                let buf_ref = match &args[1] {
+                let data_ref = match &args[1] {
                     Value::Ref(r) => *r,
-                    _ => return Err("write: buf must be a string".to_string()),
+                    _ => return Err("write: buf must be a reference".to_string()),
                 };
                 let count = args[2]
                     .as_i64()
                     .ok_or_else(|| "write: count must be an integer".to_string())?;
 
-                // Get string data directly from heap slots (skip Rust String allocation)
-                let obj = self
-                    .heap
-                    .get(buf_ref)
-                    .ok_or("write: invalid string reference")?;
-                let data_ref = obj.slots[0].as_ref().ok_or("write: invalid string ptr")?;
+                // Read directly from data buffer (caller passes raw data ref, not string struct)
                 let data = self
                     .heap
                     .get(data_ref)
-                    .ok_or("write: invalid string data")?;
+                    .ok_or("write: invalid data reference")?;
                 let actual_count = (count as usize).min(data.slots.len());
 
                 // Convert slots to bytes directly (skip Rust String allocation)
@@ -4780,7 +4775,8 @@ mod tests {
         let stack = run_code_with_strings(
             vec![
                 Op::I64Const(99),   // invalid fd
-                Op::StringConst(0), // buffer
+                Op::StringConst(0), // string struct
+                Op::HeapLoad(0),    // extract data ref from string struct
                 Op::I64Const(5),    // count
                 Op::Hostcall(1, 3), // hostcall_write
             ],
@@ -4841,7 +4837,8 @@ mod tests {
                     Op::LocalSet(0),     // store fd in local 0
                     // write(fd, "hello", 5)
                     Op::LocalGet(0),    // fd
-                    Op::StringConst(1), // buffer
+                    Op::StringConst(1), // string struct
+                    Op::HeapLoad(0),    // extract data ref from string struct
                     Op::I64Const(5),    // count
                     Op::Hostcall(1, 3), // hostcall_write
                     Op::Drop,           // discard write result
@@ -5171,6 +5168,7 @@ mod tests {
                     // write(fd, request, len)
                     Op::LocalGet(0),           // push fd
                     Op::StringConst(1),        // request string
+                    Op::HeapLoad(0),           // extract data ref from string struct
                     Op::I64Const(request_len), // count
                     Op::Hostcall(1, 3),        // hostcall_write
                     Op::Drop,                  // discard write result
