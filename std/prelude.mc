@@ -175,6 +175,9 @@ fun _int_digit_count(n: int) -> int {
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
 // dcount must be the result of _int_digit_count(n).
+// For val < 10^9, division by 10 is replaced with multiply+shift:
+//   q = (val * 3435973837) >> 35  (Granlund-Montgomery style)
+//   r = val - q * 10
 @inline
 fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
     if n == 0 {
@@ -182,6 +185,7 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
         return off + 1;
     }
     let val = n;
+    let q = 0;
     if val < 0 {
         buf[off] = 45;
         // Extract last digit safely: -(MIN % 10) won't overflow
@@ -189,16 +193,34 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
         buf[pos] = -(val % 10) + 48;
         val = -(val / 10);
         pos = pos - 1;
+        // Large values: use regular division
+        while val >= 1000000000 {
+            q = val / 10;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
+            pos = pos - 1;
+        }
+        // Small values (< 10^9): multiply+shift instead of division
         while val > 0 {
-            buf[pos] = val % 10 + 48;
-            val = val / 10;
+            q = (val * 3435973837) >> 35;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
             pos = pos - 1;
         }
     } else {
         let pos = off + dcount - 1;
+        // Large values: use regular division
+        while val >= 1000000000 {
+            q = val / 10;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
+            pos = pos - 1;
+        }
+        // Small values (< 10^9): multiply+shift instead of division
         while val > 0 {
-            buf[pos] = val % 10 + 48;
-            val = val / 10;
+            q = (val * 3435973837) >> 35;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
             pos = pos - 1;
         }
     }
