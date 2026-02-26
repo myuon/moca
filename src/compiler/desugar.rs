@@ -963,10 +963,10 @@ impl Desugar {
         // - PartInfo::Nil for nil values
         enum PartInfo {
             Literal(String),
-            String(String), // var name holding a string ref
-            Int(String),    // var name holding an int
-            Float(String),  // var name holding a float
-            Bool(String),   // var name holding a bool
+            String(String),      // var name holding a string ref
+            Int(String, String), // (var name holding an int, var name holding digit count)
+            Float(String),       // var name holding a float
+            Bool(String),        // var name holding a bool
             Nil,
         }
 
@@ -990,7 +990,26 @@ impl Desugar {
                                 span,
                                 inferred_type: Some(Type::Int),
                             });
-                            part_infos.push(PartInfo::Int(var));
+                            // let _dc = _int_digit_count(_var);
+                            let dc_var = self.fresh_var();
+                            stmts.push(Statement::Let {
+                                name: dc_var.clone(),
+                                type_annotation: None,
+                                init: Expr::Call {
+                                    callee: "_int_digit_count".to_string(),
+                                    type_args: vec![],
+                                    args: vec![Expr::Ident {
+                                        name: var.clone(),
+                                        span,
+                                        inferred_type: Some(Type::Int),
+                                    }],
+                                    span,
+                                    inferred_type: Some(Type::Int),
+                                },
+                                span,
+                                inferred_type: Some(Type::Int),
+                            });
+                            part_infos.push(PartInfo::Int(var, dc_var));
                         }
                         Some(Type::Bool) => {
                             stmts.push(Statement::Let {
@@ -1079,16 +1098,10 @@ impl Desugar {
                         inferred_type: Some(Type::Int),
                     });
                 }
-                PartInfo::Int(var) => {
-                    // _int_digit_count(var)
-                    len_parts.push(Expr::Call {
-                        callee: "_int_digit_count".to_string(),
-                        type_args: vec![],
-                        args: vec![Expr::Ident {
-                            name: var.clone(),
-                            span,
-                            inferred_type: Some(Type::Int),
-                        }],
+                PartInfo::Int(_, dc_var) => {
+                    // use pre-computed digit count
+                    len_parts.push(Expr::Ident {
+                        name: dc_var.clone(),
                         span,
                         inferred_type: Some(Type::Int),
                     });
@@ -1238,8 +1251,8 @@ impl Desugar {
                         inferred_type: Some(Type::Int),
                     }
                 }
-                PartInfo::Int(var) => {
-                    // _int_write_to(buf, off, var)
+                PartInfo::Int(var, dc_var) => {
+                    // _int_write_to(buf, off, var, dcount)
                     Expr::Call {
                         callee: "_int_write_to".to_string(),
                         type_args: vec![],
@@ -1248,6 +1261,11 @@ impl Desugar {
                             off_ident(),
                             Expr::Ident {
                                 name: var.clone(),
+                                span,
+                                inferred_type: Some(Type::Int),
+                            },
+                            Expr::Ident {
+                                name: dc_var.clone(),
                                 span,
                                 inferred_type: Some(Type::Int),
                             },
