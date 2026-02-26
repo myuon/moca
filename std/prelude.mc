@@ -125,26 +125,59 @@ fun time_nanos() -> int {
 // Count decimal digits of an integer (no heap allocation).
 @inline
 fun _int_digit_count(n: int) -> int {
-    if n == 0 {
-        return 1;
+    let result = 20;
+    if n > 0 {
+        if n < 10 { result = 1; }
+        else if n < 100 { result = 2; }
+        else if n < 1000 { result = 3; }
+        else if n < 10000 { result = 4; }
+        else if n < 100000 { result = 5; }
+        else if n < 1000000 { result = 6; }
+        else if n < 10000000 { result = 7; }
+        else if n < 100000000 { result = 8; }
+        else if n < 1000000000 { result = 9; }
+        else if n < 10000000000 { result = 10; }
+        else if n < 100000000000 { result = 11; }
+        else if n < 1000000000000 { result = 12; }
+        else if n < 10000000000000 { result = 13; }
+        else if n < 100000000000000 { result = 14; }
+        else if n < 1000000000000000 { result = 15; }
+        else if n < 10000000000000000 { result = 16; }
+        else if n < 100000000000000000 { result = 17; }
+        else if n < 1000000000000000000 { result = 18; }
+        else { result = 19; }
+    } else if n == 0 {
+        result = 1;
+    } else {
+        // n < 0: digit count + 1 for minus sign
+        if n > -10 { result = 2; }
+        else if n > -100 { result = 3; }
+        else if n > -1000 { result = 4; }
+        else if n > -10000 { result = 5; }
+        else if n > -100000 { result = 6; }
+        else if n > -1000000 { result = 7; }
+        else if n > -10000000 { result = 8; }
+        else if n > -100000000 { result = 9; }
+        else if n > -1000000000 { result = 10; }
+        else if n > -10000000000 { result = 11; }
+        else if n > -100000000000 { result = 12; }
+        else if n > -1000000000000 { result = 13; }
+        else if n > -10000000000000 { result = 14; }
+        else if n > -100000000000000 { result = 15; }
+        else if n > -1000000000000000 { result = 16; }
+        else if n > -10000000000000000 { result = 17; }
+        else if n > -100000000000000000 { result = 18; }
+        else if n > -1000000000000000000 { result = 19; }
+        // else: result stays 20 (i64::MIN has 19 digits + minus)
     }
-    let count = 0;
-    let val = n;
-    if val < 0 {
-        count = 1;
-        val = -(val / 10);
-        count = count + 1;
-        // val is now positive (works even for i64::MIN)
-    }
-    while val > 0 {
-        val = val / 10;
-        count = count + 1;
-    }
-    return count;
+    return result;
 }
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
 // dcount must be the result of _int_digit_count(n).
+// For val < 10^9, division by 10 is replaced with multiply+shift:
+//   q = (val * 3435973837) >> 35  (Granlund-Montgomery style)
+//   r = val - q * 10
 @inline
 fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
     if n == 0 {
@@ -152,6 +185,7 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
         return off + 1;
     }
     let val = n;
+    let q = 0;
     if val < 0 {
         buf[off] = 45;
         // Extract last digit safely: -(MIN % 10) won't overflow
@@ -159,16 +193,34 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
         buf[pos] = -(val % 10) + 48;
         val = -(val / 10);
         pos = pos - 1;
+        // Large values: use regular division
+        while val >= 1000000000 {
+            q = val / 10;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
+            pos = pos - 1;
+        }
+        // Small values (< 10^9): multiply+shift instead of division
         while val > 0 {
-            buf[pos] = val % 10 + 48;
-            val = val / 10;
+            q = (val * 3435973837) >> 35;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
             pos = pos - 1;
         }
     } else {
         let pos = off + dcount - 1;
+        // Large values: use regular division
+        while val >= 1000000000 {
+            q = val / 10;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
+            pos = pos - 1;
+        }
+        // Small values (< 10^9): multiply+shift instead of division
         while val > 0 {
-            buf[pos] = val % 10 + 48;
-            val = val / 10;
+            q = (val * 3435973837) >> 35;
+            buf[pos] = val - q * 10 + 48;
+            val = q;
             pos = pos - 1;
         }
     }
