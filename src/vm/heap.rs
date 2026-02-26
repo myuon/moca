@@ -55,6 +55,33 @@ impl ElemKind {
 }
 
 // =============================================================================
+// Byte-level access helpers for Vec<u8> memory
+// =============================================================================
+
+/// Read a u64 from the byte buffer at the given byte offset (must be 8-byte aligned).
+#[inline(always)]
+fn read_u64(memory: &[u8], byte_offset: usize) -> u64 {
+    let bytes: [u8; 8] = memory[byte_offset..byte_offset + 8]
+        .try_into()
+        .expect("aligned u64 read");
+    u64::from_le_bytes(bytes)
+}
+
+/// Write a u64 to the byte buffer at the given byte offset (must be 8-byte aligned).
+#[inline(always)]
+fn write_u64(memory: &mut [u8], byte_offset: usize, value: u64) {
+    memory[byte_offset..byte_offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// Try to read a u64, returning None if out of bounds.
+#[inline(always)]
+fn try_read_u64(memory: &[u8], byte_offset: usize) -> Option<u64> {
+    let slice = memory.get(byte_offset..byte_offset + 8)?;
+    let bytes: [u8; 8] = slice.try_into().ok()?;
+    Some(u64::from_le_bytes(bytes))
+}
+
+// =============================================================================
 // Header Layout (64 bits)
 // =============================================================================
 //
@@ -98,10 +125,9 @@ fn encode_header_with_kind(marked: bool, count: u32, kind: ElemKind) -> u64 {
 }
 
 /// Encode a free block header.
-fn encode_free_header(size_words: usize) -> u64 {
-    // For free blocks, we store the size in words (not slot count)
-    // in the slot_count field for simplicity
-    let size = size_words as u64;
+fn encode_free_header(size_bytes: usize) -> u64 {
+    // For free blocks, we store the size in bytes in the slot_count field.
+    let size = size_bytes as u64;
     (size << HEADER_SLOT_COUNT_SHIFT) | HEADER_FREE_BIT
 }
 
@@ -120,8 +146,8 @@ fn decode_slot_count(header: u64) -> u32 {
     ((header & HEADER_SLOT_COUNT_MASK) >> HEADER_SLOT_COUNT_SHIFT) as u32
 }
 
-/// Decode size in words from free block header.
-fn decode_free_size(header: u64) -> usize {
+/// Decode size in bytes from free block header.
+fn decode_free_size_bytes(header: u64) -> usize {
     ((header & HEADER_SLOT_COUNT_MASK) >> HEADER_SLOT_COUNT_SHIFT) as usize
 }
 
@@ -160,11 +186,26 @@ const fn object_size_words_for_kind(count: u32, kind: ElemKind) -> usize {
     }
 }
 
-/// Calculate the object size from a decoded header.
+/// Calculate the object size from a decoded header (in words).
 fn object_size_from_header(header: u64) -> usize {
     let count = decode_slot_count(header);
     let kind = decode_elem_kind(header);
     object_size_words_for_kind(count, kind)
+}
+
+/// Calculate the total size in bytes for a Tagged object with n slots.
+fn object_size_bytes(slot_count: u32) -> usize {
+    object_size_words(slot_count) * 8
+}
+
+/// Calculate the total size in bytes for an object with the given elem kind.
+fn object_size_bytes_for_kind(count: u32, kind: ElemKind) -> usize {
+    object_size_words_for_kind(count, kind) * 8
+}
+
+/// Calculate the object size in bytes from a decoded header.
+fn object_size_bytes_from_header(header: u64) -> usize {
+    object_size_from_header(header) * 8
 }
 
 // =============================================================================
@@ -192,25 +233,25 @@ impl HeapObject {
         }
     }
 
-    /// Parse a HeapObject from linear memory at the given offset.
+    /// Parse a HeapObject from linear memory at the given byte offset.
     ///
     /// # Arguments
-    /// * `memory` - The linear memory buffer
-    /// * `offset` - Offset in words (not bytes) where the object starts
+    /// * `memory` - The linear memory buffer (byte-addressed)
+    /// * `offset` - Byte offset where the object starts
     ///
     /// # Returns
     /// * `Some(HeapObject)` if the offset is valid and the object can be parsed
     /// * `None` if the offset is out of bounds or invalid
-    pub fn from_memory(memory: &[u64], offset: usize) -> Option<Self> {
+    pub fn from_memory(memory: &[u8], offset: usize) -> Option<Self> {
         // Read header
-        let header = *memory.get(offset)?;
+        let header = try_read_u64(memory, offset)?;
         let marked = decode_marked(header);
         let elem_kind = decode_elem_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
         // Check if we have enough memory for all slots
-        let total_size = object_size_words_for_kind(slot_count as u32, elem_kind);
-        if offset + total_size > memory.len() {
+        let total_size_bytes = object_size_bytes_for_kind(slot_count as u32, elem_kind);
+        if offset + total_size_bytes > memory.len() {
             return None;
         }
 
@@ -219,27 +260,30 @@ impl HeapObject {
         match elem_kind {
             ElemKind::Tagged => {
                 for i in 0..slot_count {
-                    let tag_offset = offset + 1 + 2 * i;
-                    let tag = memory[tag_offset];
-                    let payload = memory[tag_offset + 1];
+                    let tag_byte_offset = offset + 8 + 16 * i;
+                    let tag = read_u64(memory, tag_byte_offset);
+                    let payload = read_u64(memory, tag_byte_offset + 8);
                     let value = Value::decode(tag, payload)?;
                     slots.push(value);
                 }
             }
             ElemKind::I64 => {
                 for i in 0..slot_count {
-                    slots.push(Value::I64(memory[offset + 1 + i] as i64));
+                    slots.push(Value::I64(read_u64(memory, offset + 8 + i * 8) as i64));
                 }
             }
             ElemKind::F64 => {
                 for i in 0..slot_count {
-                    slots.push(Value::F64(f64::from_bits(memory[offset + 1 + i])));
+                    slots.push(Value::F64(f64::from_bits(read_u64(
+                        memory,
+                        offset + 8 + i * 8,
+                    ))));
                 }
             }
             ElemKind::Ref => {
                 for i in 0..slot_count {
                     slots.push(Value::Ref(GcRef {
-                        index: memory[offset + 1 + i] as usize,
+                        index: read_u64(memory, offset + 8 + i * 8) as usize,
                     }));
                 }
             }
@@ -274,11 +318,11 @@ impl fmt::Display for HeapObject {
 // =============================================================================
 
 /// A reference to a heap object.
-/// The index field represents the offset in words into linear memory.
+/// The index field represents the byte offset into linear memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GcRef {
     /// Encodes both base offset and slot offset via bit-packing.
-    /// Lower 40 bits: base offset in words (heap header position).
+    /// Lower 40 bits: base offset in bytes (heap header position).
     /// Upper 24 bits: slot offset (added to slot_index in read_slot/write_slot).
     /// Offset 0 is reserved as an invalid/null reference.
     pub index: usize,
@@ -330,13 +374,13 @@ impl GcRef {
 // Heap - Linear memory based heap
 // =============================================================================
 
-/// The garbage-collected heap using linear memory (Vec<u64>).
+/// The garbage-collected heap using linear memory (Vec<u8>).
 pub struct Heap {
-    /// Linear memory buffer
-    memory: Vec<u64>,
-    /// Next allocation offset (in words)
+    /// Linear memory buffer (byte-addressed)
+    memory: Vec<u8>,
+    /// Next allocation byte offset
     next_alloc: usize,
-    /// Head of free list (offset, or 0 if empty)
+    /// Head of free list (byte offset, or 0 if empty)
     free_list_head: usize,
     /// Bytes allocated (for GC threshold)
     bytes_allocated: usize,
@@ -349,8 +393,8 @@ pub struct Heap {
 }
 
 impl Heap {
-    /// Initial capacity in words (1 MB / 8 bytes = 128K words)
-    const INITIAL_CAPACITY: usize = 128 * 1024;
+    /// Initial capacity in bytes (1 MB)
+    const INITIAL_CAPACITY: usize = 128 * 1024 * 8;
 
     pub fn new() -> Self {
         Self::new_with_config(None, true)
@@ -362,13 +406,12 @@ impl Heap {
     /// * `heap_limit` - Hard limit on heap size in bytes (None = unlimited)
     /// * `gc_enabled` - Whether GC is enabled
     pub fn new_with_config(heap_limit: Option<usize>, gc_enabled: bool) -> Self {
-        let mut memory = Vec::with_capacity(Self::INITIAL_CAPACITY);
-        // Reserve offset 0 as invalid/null (write a dummy word)
-        memory.push(0);
+        let mut memory = vec![0u8; 8]; // Reserve first 8 bytes as invalid/null
+        memory.reserve(Self::INITIAL_CAPACITY - 8);
 
         Self {
             memory,
-            next_alloc: 1, // Start after reserved word
+            next_alloc: 8, // Start after reserved 8-byte null word
             free_list_head: 0,
             bytes_allocated: 0,
             gc_threshold: 1024 * 1024, // 1MB initial threshold
@@ -383,7 +426,7 @@ impl Heap {
     /// # Safety
     /// The returned pointer is valid as long as no heap reallocation occurs.
     /// JIT code should only use this during a single execution without GC.
-    pub fn memory_base_ptr(&self) -> *const u64 {
+    pub fn memory_base_ptr(&self) -> *const u8 {
         self.memory.as_ptr()
     }
 
@@ -419,37 +462,36 @@ impl Heap {
     /// Allocate a new slot-based heap object.
     pub fn alloc_slots(&mut self, slots: Vec<Value>) -> Result<GcRef, String> {
         let slot_count = slots.len() as u32;
-        let obj_size_words = object_size_words(slot_count);
-        let obj_size_bytes = obj_size_words * 8;
+        let obj_size_bytes = object_size_bytes(slot_count);
 
         self.check_heap_limit(obj_size_bytes)?;
 
         // Try to find a suitable free block (first-fit)
-        let offset = if let Some(offset) = self.find_free_block(obj_size_words) {
+        let offset = if let Some(offset) = self.find_free_block(obj_size_bytes) {
             offset
         } else {
             // No suitable free block, allocate from bump pointer
-            let required_len = self.next_alloc + obj_size_words;
+            let required_len = self.next_alloc + obj_size_bytes;
             if required_len > self.memory.len() {
                 self.memory
                     .resize(required_len.max(self.memory.len() * 2), 0);
             }
 
             let offset = self.next_alloc;
-            self.next_alloc += obj_size_words;
+            self.next_alloc += obj_size_bytes;
             offset
         };
 
         self.bytes_allocated += obj_size_bytes;
 
         // Write header (not marked, not free)
-        self.memory[offset] = encode_header(false, slot_count);
+        write_u64(&mut self.memory, offset, encode_header(false, slot_count));
 
         // Write slots
         for (i, value) in slots.iter().enumerate() {
             let (tag, payload) = value.encode();
-            self.memory[offset + 1 + 2 * i] = tag;
-            self.memory[offset + 1 + 2 * i + 1] = payload;
+            write_u64(&mut self.memory, offset + 8 + 16 * i, tag);
+            write_u64(&mut self.memory, offset + 8 + 16 * i + 8, payload);
         }
 
         Ok(GcRef::from_offset(offset))
@@ -457,7 +499,7 @@ impl Heap {
 
     /// Allocate a typed array with `count` zero-initialized elements.
     ///
-    /// For `ElemKind::I64` and `ElemKind::Ref`, each element occupies 1 u64 word
+    /// For `ElemKind::I64` and `ElemKind::Ref`, each element occupies 8 bytes
     /// (no tag). This is 50% smaller than the tagged representation.
     pub fn alloc_typed_array(&mut self, count: u32, kind: ElemKind) -> Result<GcRef, String> {
         debug_assert!(
@@ -465,32 +507,35 @@ impl Heap {
             "alloc_typed_array only supports typed kinds (I64, F64, Ref)"
         );
 
-        let obj_size_words = object_size_words_for_kind(count, kind);
-        let obj_size_bytes = obj_size_words * 8;
+        let obj_size_bytes = object_size_bytes_for_kind(count, kind);
 
         self.check_heap_limit(obj_size_bytes)?;
 
-        let offset = if let Some(offset) = self.find_free_block(obj_size_words) {
+        let offset = if let Some(offset) = self.find_free_block(obj_size_bytes) {
             offset
         } else {
-            let required_len = self.next_alloc + obj_size_words;
+            let required_len = self.next_alloc + obj_size_bytes;
             if required_len > self.memory.len() {
                 self.memory
                     .resize(required_len.max(self.memory.len() * 2), 0);
             }
             let offset = self.next_alloc;
-            self.next_alloc += obj_size_words;
+            self.next_alloc += obj_size_bytes;
             offset
         };
 
         self.bytes_allocated += obj_size_bytes;
 
         // Write header with elem_kind
-        self.memory[offset] = encode_header_with_kind(false, count, kind);
+        write_u64(
+            &mut self.memory,
+            offset,
+            encode_header_with_kind(false, count, kind),
+        );
 
         // Zero-initialize elements (already 0 from resize, but be explicit for reused blocks)
         for i in 0..count as usize {
-            self.memory[offset + 1 + i] = 0;
+            write_u64(&mut self.memory, offset + 8 + i * 8, 0);
         }
 
         Ok(GcRef::from_offset(offset))
@@ -502,8 +547,8 @@ impl Heap {
             return ElemKind::Tagged;
         }
         let offset = r.base();
-        match self.memory.get(offset) {
-            Some(&header) => decode_elem_kind(header),
+        match try_read_u64(&self.memory, offset) {
+            Some(header) => decode_elem_kind(header),
             None => ElemKind::Tagged,
         }
     }
@@ -516,14 +561,14 @@ impl Heap {
         }
         let actual_index = index + r.slot_offset();
         let offset = r.base();
-        let header = *self.memory.get(offset)?;
+        let header = try_read_u64(&self.memory, offset)?;
         let count = decode_slot_count(header) as usize;
 
         if actual_index >= count {
             return None;
         }
 
-        self.memory.get(offset + 1 + actual_index).copied()
+        try_read_u64(&self.memory, offset + 8 + actual_index * 8)
     }
 
     /// Write a single element to a typed array (ElemKind::I64 or ElemKind::Ref).
@@ -534,10 +579,8 @@ impl Heap {
         }
         let actual_index = index + r.slot_offset();
         let offset = r.base();
-        let header = *self
-            .memory
-            .get(offset)
-            .ok_or("invalid reference: out of bounds")?;
+        let header =
+            try_read_u64(&self.memory, offset).ok_or("invalid reference: out of bounds")?;
         let count = decode_slot_count(header) as usize;
 
         if actual_index >= count {
@@ -547,41 +590,49 @@ impl Heap {
             ));
         }
 
-        self.memory[offset + 1 + actual_index] = value;
+        write_u64(&mut self.memory, offset + 8 + actual_index * 8, value);
         Ok(())
     }
 
-    /// Find a free block of at least the given size (first-fit).
-    /// If found, removes it from the free list and returns its offset.
+    /// Find a free block of at least the given size in bytes (first-fit).
+    /// If found, removes it from the free list and returns its byte offset.
     /// May split the block if it's larger than needed.
-    fn find_free_block(&mut self, needed_words: usize) -> Option<usize> {
-        // Minimum free block size: header + next pointer = 2 words
-        const MIN_FREE_BLOCK_SIZE: usize = 2;
+    fn find_free_block(&mut self, needed_bytes: usize) -> Option<usize> {
+        // Minimum free block size: header + next pointer = 16 bytes
+        const MIN_FREE_BLOCK_SIZE: usize = 16;
 
         let mut prev_offset: Option<usize> = None;
         let mut current = self.free_list_head;
 
         while current != 0 {
-            let header = self.memory[current];
-            let block_size = decode_free_size(header);
-            let next = self.memory[current + 1] as usize;
+            let header = read_u64(&self.memory, current);
+            let block_size = decode_free_size_bytes(header);
+            let next = read_u64(&self.memory, current + 8) as usize;
 
-            if block_size >= needed_words {
+            if block_size >= needed_bytes {
                 // Found a suitable block
                 // Remove from free list
                 if let Some(prev) = prev_offset {
-                    self.memory[prev + 1] = next as u64;
+                    write_u64(&mut self.memory, prev + 8, next as u64);
                 } else {
                     self.free_list_head = next;
                 }
 
                 // Check if we should split the block
-                let remaining = block_size - needed_words;
+                let remaining = block_size - needed_bytes;
                 if remaining >= MIN_FREE_BLOCK_SIZE {
                     // Split: create a new free block for the remainder
-                    let new_free_offset = current + needed_words;
-                    self.memory[new_free_offset] = encode_free_header(remaining);
-                    self.memory[new_free_offset + 1] = self.free_list_head as u64;
+                    let new_free_offset = current + needed_bytes;
+                    write_u64(
+                        &mut self.memory,
+                        new_free_offset,
+                        encode_free_header(remaining),
+                    );
+                    write_u64(
+                        &mut self.memory,
+                        new_free_offset + 8,
+                        self.free_list_head as u64,
+                    );
                     self.free_list_head = new_free_offset;
                 }
 
@@ -596,11 +647,11 @@ impl Heap {
     }
 
     /// Add a block to the free list.
-    fn add_to_free_list(&mut self, offset: usize, size_words: usize) {
+    fn add_to_free_list(&mut self, offset: usize, size_bytes: usize) {
         // Write free block header
-        self.memory[offset] = encode_free_header(size_words);
+        write_u64(&mut self.memory, offset, encode_free_header(size_bytes));
         // Link to current head
-        self.memory[offset + 1] = self.free_list_head as u64;
+        write_u64(&mut self.memory, offset + 8, self.free_list_head as u64);
         // Update head
         self.free_list_head = offset;
     }
@@ -622,7 +673,7 @@ impl Heap {
 
         let actual_slot = slot_index + r.slot_offset();
         let offset = r.base();
-        let header = *self.memory.get(offset)?;
+        let header = try_read_u64(&self.memory, offset)?;
         let elem_kind = decode_elem_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
@@ -632,21 +683,21 @@ impl Heap {
 
         match elem_kind {
             ElemKind::Tagged => {
-                let tag_offset = offset + 1 + 2 * actual_slot;
-                let tag = *self.memory.get(tag_offset)?;
-                let payload = *self.memory.get(tag_offset + 1)?;
+                let tag_byte_offset = offset + 8 + 16 * actual_slot;
+                let tag = try_read_u64(&self.memory, tag_byte_offset)?;
+                let payload = try_read_u64(&self.memory, tag_byte_offset + 8)?;
                 Value::decode(tag, payload)
             }
             ElemKind::I64 => {
-                let raw = *self.memory.get(offset + 1 + actual_slot)?;
+                let raw = try_read_u64(&self.memory, offset + 8 + actual_slot * 8)?;
                 Some(Value::I64(raw as i64))
             }
             ElemKind::F64 => {
-                let raw = *self.memory.get(offset + 1 + actual_slot)?;
+                let raw = try_read_u64(&self.memory, offset + 8 + actual_slot * 8)?;
                 Some(Value::F64(f64::from_bits(raw)))
             }
             ElemKind::Ref => {
-                let raw = *self.memory.get(offset + 1 + actual_slot)?;
+                let raw = try_read_u64(&self.memory, offset + 8 + actual_slot * 8)?;
                 Some(Value::Ref(GcRef {
                     index: raw as usize,
                 }))
@@ -663,10 +714,8 @@ impl Heap {
 
         let actual_slot = slot_index + r.slot_offset();
         let offset = r.base();
-        let header = *self
-            .memory
-            .get(offset)
-            .ok_or("invalid reference: out of bounds")?;
+        let header =
+            try_read_u64(&self.memory, offset).ok_or("invalid reference: out of bounds")?;
         let elem_kind = decode_elem_kind(header);
         let slot_count = decode_slot_count(header) as usize;
 
@@ -679,10 +728,10 @@ impl Heap {
 
         match elem_kind {
             ElemKind::Tagged => {
-                let tag_offset = offset + 1 + 2 * actual_slot;
+                let tag_byte_offset = offset + 8 + 16 * actual_slot;
                 let (tag, payload) = value.encode();
-                self.memory[tag_offset] = tag;
-                self.memory[tag_offset + 1] = payload;
+                write_u64(&mut self.memory, tag_byte_offset, tag);
+                write_u64(&mut self.memory, tag_byte_offset + 8, payload);
             }
             ElemKind::I64 | ElemKind::F64 => {
                 let raw = match value {
@@ -690,7 +739,7 @@ impl Heap {
                     Value::F64(v) => v.to_bits(),
                     _ => value.encode().1,
                 };
-                self.memory[offset + 1 + actual_slot] = raw;
+                write_u64(&mut self.memory, offset + 8 + actual_slot * 8, raw);
             }
             ElemKind::Ref => {
                 let raw = match value {
@@ -698,7 +747,7 @@ impl Heap {
                     Value::Null => 0,
                     _ => value.encode().1,
                 };
-                self.memory[offset + 1 + actual_slot] = raw;
+                write_u64(&mut self.memory, offset + 8 + actual_slot * 8, raw);
             }
         }
         Ok(())
@@ -709,7 +758,7 @@ impl Heap {
         if !r.is_valid() {
             return None;
         }
-        let header = *self.memory.get(r.offset())?;
+        let header = try_read_u64(&self.memory, r.offset())?;
         Some(decode_slot_count(header) as usize)
     }
 
@@ -720,11 +769,11 @@ impl Heap {
         if offset == 0 || offset >= self.next_alloc {
             return false;
         }
-        if let Some(&header) = self.memory.get(offset) {
+        if let Some(header) = try_read_u64(&self.memory, offset) {
             if decode_free(header) {
                 return false;
             }
-            let obj_size = object_size_from_header(header);
+            let obj_size = object_size_bytes_from_header(header);
             offset + obj_size <= self.next_alloc
         } else {
             false
@@ -743,20 +792,20 @@ impl Heap {
 
     /// Set the marked flag for an object.
     fn set_marked(&mut self, offset: usize, marked: bool) {
-        if let Some(header) = self.memory.get_mut(offset) {
-            if marked {
-                *header |= HEADER_MARKED_BIT;
+        if let Some(header) = try_read_u64(&self.memory, offset) {
+            let new_header = if marked {
+                header | HEADER_MARKED_BIT
             } else {
-                *header &= !HEADER_MARKED_BIT;
-            }
+                header & !HEADER_MARKED_BIT
+            };
+            write_u64(&mut self.memory, offset, new_header);
         }
     }
 
     /// Get the marked flag for an object.
     fn is_marked(&self, offset: usize) -> bool {
-        self.memory
-            .get(offset)
-            .map(|h| decode_marked(*h))
+        try_read_u64(&self.memory, offset)
+            .map(decode_marked)
             .unwrap_or(false)
     }
 
@@ -780,8 +829,8 @@ impl Heap {
             self.set_marked(offset, true);
 
             // Trace children based on elem_kind
-            let header = match self.memory.get(offset) {
-                Some(&h) => h,
+            let header = match try_read_u64(&self.memory, offset) {
+                Some(h) => h,
                 None => continue,
             };
             let kind = decode_elem_kind(header);
@@ -800,8 +849,8 @@ impl Heap {
                 ElemKind::Ref => {
                     // All elements are references: trace each one
                     for i in 0..count {
-                        let word_offset = offset + 1 + i;
-                        if let Some(&payload) = self.memory.get(word_offset) {
+                        let byte_off = offset + 8 + i * 8;
+                        if let Some(payload) = try_read_u64(&self.memory, byte_off) {
                             let child = GcRef {
                                 index: payload as usize,
                             };
@@ -818,31 +867,31 @@ impl Heap {
     /// Sweep phase: free all unmarked objects by adding them to the free list.
     pub fn sweep(&mut self) {
         // Walk through all allocated objects
-        let mut offset = 1; // Start after reserved word
+        let mut offset = 8; // Start after reserved 8-byte null word
         let mut live_bytes = 0;
 
         while offset < self.next_alloc {
-            let header = self.memory[offset];
+            let header = read_u64(&self.memory, offset);
 
             // Skip free blocks (already in free list)
             if decode_free(header) {
-                let block_size = decode_free_size(header);
+                let block_size = decode_free_size_bytes(header);
                 offset += block_size;
                 continue;
             }
 
-            let obj_size = object_size_from_header(header);
+            let obj_size = object_size_bytes_from_header(header);
 
             if decode_marked(header) {
                 // Live object - reset mark for next GC cycle
                 self.set_marked(offset, false);
-                live_bytes += obj_size * 8;
+                live_bytes += obj_size;
             } else {
                 // Dead object - add to free list if large enough.
-                // Free blocks need at least 2 words (header + next pointer).
-                // 1-word objects (slot_count=0) cannot hold a next pointer,
+                // Free blocks need at least 16 bytes (header + next pointer).
+                // 8-byte objects (slot_count=0) cannot hold a next pointer,
                 // so adding them would corrupt adjacent memory.
-                if obj_size >= 2 {
+                if obj_size >= 16 {
                     self.add_to_free_list(offset, obj_size);
                 }
             }
@@ -864,20 +913,20 @@ impl Heap {
     /// Note: This counts all allocated objects (some may be garbage before GC).
     pub fn object_count(&self) -> usize {
         let mut count = 0;
-        let mut offset = 1;
+        let mut offset = 8;
 
         while offset < self.next_alloc {
-            let header = self.memory[offset];
+            let header = read_u64(&self.memory, offset);
 
             // Skip free blocks
             if decode_free(header) {
-                let block_size = decode_free_size(header);
+                let block_size = decode_free_size_bytes(header);
                 offset += block_size;
                 continue;
             }
 
             count += 1;
-            offset += object_size_from_header(header);
+            offset += object_size_bytes_from_header(header);
         }
 
         count
@@ -885,7 +934,7 @@ impl Heap {
 
     /// Get raw memory for testing/debugging.
     #[cfg(test)]
-    pub fn memory(&self) -> &[u64] {
+    pub fn memory(&self) -> &[u8] {
         &self.memory
     }
 }
@@ -1047,15 +1096,15 @@ mod tests {
 
     #[test]
     fn test_free_header_encoding() {
-        // Test free block header encoding/decoding
-        let h = encode_free_header(10);
+        // Test free block header encoding/decoding (now in bytes)
+        let h = encode_free_header(80);
         assert!(decode_free(h));
         assert!(!decode_marked(h));
-        assert_eq!(decode_free_size(h), 10);
+        assert_eq!(decode_free_size_bytes(h), 80);
 
-        let h2 = encode_free_header(1000);
+        let h2 = encode_free_header(8000);
         assert!(decode_free(h2));
-        assert_eq!(decode_free_size(h2), 1000);
+        assert_eq!(decode_free_size_bytes(h2), 8000);
     }
 
     #[test]
@@ -1254,16 +1303,16 @@ mod tests {
         heap.write_typed(r, 1, 20).unwrap();
         heap.write_typed(r, 2, 30).unwrap();
 
-        // Typed array should use 1 + 3 = 4 words (vs Tagged: 1 + 2*3 = 7)
+        // Typed array should use 1 + 3 = 4 words = 32 bytes (vs Tagged: 1 + 2*3 = 7 words = 56 bytes)
         let offset = r.offset();
-        let header = heap.memory()[offset];
+        let header = read_u64(heap.memory(), offset);
         assert_eq!(decode_slot_count(header), 3);
         assert_eq!(decode_elem_kind(header), ElemKind::I64);
 
-        // Elements stored directly (no tags)
-        assert_eq!(heap.memory()[offset + 1], 10);
-        assert_eq!(heap.memory()[offset + 2], 20);
-        assert_eq!(heap.memory()[offset + 3], 30);
+        // Elements stored directly (no tags), each at 8-byte stride
+        assert_eq!(read_u64(heap.memory(), offset + 8), 10);
+        assert_eq!(read_u64(heap.memory(), offset + 16), 20);
+        assert_eq!(read_u64(heap.memory(), offset + 24), 30);
     }
 
     #[test]
