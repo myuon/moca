@@ -1365,11 +1365,9 @@ impl MicroOpJitCompiler {
             let mut asm = AArch64Assembler::new(&mut self.buf);
             asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(callee));
             asm.ldr(regs::TMP1, regs::VM_CTX, 48); // heap_base
-            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // byte offset
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-            // TMP1 now points to slot 0 tag; slot 0 payload is at +8
-            asm.ldr(regs::TMP4, regs::TMP1, 8); // func_index in TMP4
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0); // heap_base + ref_bytes
+            // slot 0 payload at +16 (header 8B + tag 8B)
+            asm.ldr(regs::TMP4, regs::TMP1, 16); // func_index in TMP4
         }
 
         // Step 2: Allocate space for args (JitValue = 16B for call_helper)
@@ -1722,13 +1720,12 @@ impl MicroOpJitCompiler {
         let mut asm = AArch64Assembler::new(&mut self.buf);
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(src));
         asm.ldr(regs::TMP1, regs::VM_CTX, 48); // heap_base
-        let slot_offset = (1 + 2 * offset) as u16;
-        asm.add_imm(regs::TMP0, regs::TMP0, slot_offset);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        // TMP1 = heap_base + ref_bytes
         asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        // Load tag and payload from heap
-        asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
-        asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
+        // Load tag and payload at static byte displacement
+        let tag_disp = (8 + 16 * offset) as u16;
+        asm.ldr(regs::TMP0, regs::TMP1, tag_disp); // tag
+        asm.ldr(regs::TMP2, regs::TMP1, tag_disp + 8); // payload
         // Store payload to frame, tag to shadow
         asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
         asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
@@ -1753,12 +1750,13 @@ impl MicroOpJitCompiler {
         asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+        // TMP1 = heap_base + ref_bytes
+        asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
         if typed {
-            // Typed: addr = heap_base + (ref + 1 + index) * 8
-            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
-            asm.add(regs::TMP0, regs::TMP0, regs::TMP2); // + index (not index*2)
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // * 8
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // Typed: addr = heap_base + ref_bytes + 8 + idx * 8
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 3); // idx * 8
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP2);
             // Load payload only
             asm.ldr(regs::TMP2, regs::TMP1, 0);
             asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
@@ -1766,12 +1764,10 @@ impl MicroOpJitCompiler {
             asm.mov_imm(regs::TMP0, Self::elem_kind_to_tag(elem_kind) as u16);
             asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
         } else {
-            // Tagged: addr = heap_base + (ref + 1 + 2*index) * 8
-            asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // index * 2
-            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
-            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // * 8
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // Tagged: addr = heap_base + ref_bytes + 8 + idx * 16
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 4); // idx * 16
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP2);
             asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
             asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
             asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
@@ -1788,17 +1784,16 @@ impl MicroOpJitCompiler {
         // TMP2 = tag (from shadow), TMP3 = payload
         asm.ldr(regs::TMP2, regs::FRAME_BASE, shadow_off);
         asm.ldr(regs::TMP3, regs::FRAME_BASE, Self::vreg_offset(src));
-        // TMP0 = ref payload
+        // TMP0 = ref payload (byte offset)
         asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(dst_obj));
         // TMP1 = heap_base
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
-        let slot_offset = (1 + 2 * offset) as u16;
-        asm.add_imm(regs::TMP0, regs::TMP0, slot_offset);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        // TMP1 = heap_base + ref_bytes
         asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-        // Store tag and payload to heap
-        asm.str(regs::TMP2, regs::TMP1, 0);
-        asm.str(regs::TMP3, regs::TMP1, 8);
+        // Store tag and payload at static byte displacement
+        let tag_disp = (8 + 16 * offset) as u16;
+        asm.str(regs::TMP2, regs::TMP1, tag_disp);
+        asm.str(regs::TMP3, regs::TMP1, tag_disp + 8);
         Ok(())
     }
 
@@ -1823,11 +1818,11 @@ impl MicroOpJitCompiler {
             asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
             asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
             asm.ldr(regs::TMP1, regs::VM_CTX, 48);
-            // addr = heap_base + (ref + 1 + index) * 8
-            asm.add_imm(regs::TMP0, regs::TMP0, 1); // skip header
-            asm.add(regs::TMP0, regs::TMP0, regs::TMP2); // + index (not index*2)
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3); // * 8
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // addr = heap_base + ref_bytes + 8 + idx * 8
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0); // heap_base + ref_bytes
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 3); // idx * 8
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP2);
             // Store payload only
             asm.str(regs::TMP5, regs::TMP1, 0);
         } else {
@@ -1837,11 +1832,11 @@ impl MicroOpJitCompiler {
             asm.ldr(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(idx));
             asm.ldr(regs::TMP0, regs::FRAME_BASE, Self::vreg_offset(obj));
             asm.ldr(regs::TMP1, regs::VM_CTX, 48);
-            asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // index * 2
-            asm.add_imm(regs::TMP0, regs::TMP0, 1);
-            asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
+            // addr = heap_base + ref_bytes + 8 + idx * 16
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP0); // heap_base + ref_bytes
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 4); // idx * 16
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
+            asm.add(regs::TMP1, regs::TMP1, regs::TMP2);
             asm.str(regs::TMP4, regs::TMP1, 0);
             asm.str(regs::TMP5, regs::TMP1, 8);
         }
@@ -1878,35 +1873,34 @@ impl MicroOpJitCompiler {
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
 
         // Step 1: load slot 0 of outer object → inner ref payload (always Tagged)
-        asm.add_imm(regs::TMP0, regs::TMP0, 1);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        // addr = heap_base + ref_bytes; slot 0 payload at +16 (header 8B + tag 8B)
         asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
-        asm.ldr(regs::TMP0, regs::TMP3, 8); // inner ref payload
+        asm.ldr(regs::TMP0, regs::TMP3, 16); // inner ref payload (byte offset)
 
         // Step 2: load element[idx] of inner object
+        // addr = heap_base + inner_ref_bytes + 8 + idx * stride
         if typed {
-            // Typed: (inner_ref + 1 + idx) * 8
-            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            // Typed: heap_base + inner_ref_bytes + 8 + idx * 8
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP1); // heap_base + inner_ref_bytes
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 3); // idx * 8
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
             asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
             // Load payload only
-            asm.ldr(regs::TMP2, regs::TMP1, 0);
+            asm.ldr(regs::TMP2, regs::TMP0, 0);
             asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
             // Set shadow tag from known ElemKind
             asm.mov_imm(regs::TMP0, Self::elem_kind_to_tag(elem_kind) as u16);
             asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
         } else {
-            // Tagged: (inner_ref + 1 + idx * 2) * 8
-            asm.lsl_imm(regs::TMP2, regs::TMP2, 1); // idx * 2
-            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            // Tagged: heap_base + inner_ref_bytes + 8 + idx * 16
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP1); // heap_base + inner_ref_bytes
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 4); // idx * 16
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
             asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-            asm.ldr(regs::TMP0, regs::TMP1, 0); // tag
-            asm.ldr(regs::TMP2, regs::TMP1, 8); // payload
+            asm.ldr(regs::TMP1, regs::TMP0, 0); // tag
+            asm.ldr(regs::TMP2, regs::TMP0, 8); // payload
             asm.str(regs::TMP2, regs::FRAME_BASE, Self::vreg_offset(dst));
-            asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+            asm.str(regs::TMP1, regs::FRAME_BASE, shadow_off);
         }
         Ok(())
     }
@@ -1932,30 +1926,29 @@ impl MicroOpJitCompiler {
         asm.ldr(regs::TMP1, regs::VM_CTX, 48);
 
         // Step 1: load slot 0 of outer object → inner ref payload (always Tagged)
-        asm.add_imm(regs::TMP0, regs::TMP0, 1);
-        asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
+        // addr = heap_base + ref_bytes; slot 0 payload at +16
         asm.add(regs::TMP3, regs::TMP1, regs::TMP0);
-        asm.ldr(regs::TMP0, regs::TMP3, 8);
+        asm.ldr(regs::TMP0, regs::TMP3, 16); // inner ref payload (byte offset)
 
         // Step 2: store at element[idx] of inner object
+        // addr = heap_base + inner_ref_bytes + 8 + idx * stride
         if typed {
-            // Typed: (inner_ref + 1 + idx) * 8, store payload only
-            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            // Typed: heap_base + inner_ref_bytes + 8 + idx * 8
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP1); // heap_base + inner_ref_bytes
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 3); // idx * 8
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
             asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-            asm.str(regs::TMP5, regs::TMP1, 0);
+            asm.str(regs::TMP5, regs::TMP0, 0);
         } else {
-            // Tagged: (inner_ref + 1 + idx * 2) * 8, store tag+payload
+            // Tagged: heap_base + inner_ref_bytes + 8 + idx * 16
             let shadow_off = self.shadow_tag_offset(src);
             asm.ldr(regs::TMP4, regs::FRAME_BASE, shadow_off);
-            asm.lsl_imm(regs::TMP2, regs::TMP2, 1);
-            asm.add_imm(regs::TMP0, regs::TMP0, 1);
+            asm.add(regs::TMP0, regs::TMP0, regs::TMP1); // heap_base + inner_ref_bytes
+            asm.lsl_imm(regs::TMP2, regs::TMP2, 4); // idx * 16
+            asm.add_imm(regs::TMP2, regs::TMP2, 8); // + 8 (skip header)
             asm.add(regs::TMP0, regs::TMP0, regs::TMP2);
-            asm.lsl_imm(regs::TMP0, regs::TMP0, 3);
-            asm.add(regs::TMP1, regs::TMP1, regs::TMP0);
-            asm.str(regs::TMP4, regs::TMP1, 0);
-            asm.str(regs::TMP5, regs::TMP1, 8);
+            asm.str(regs::TMP4, regs::TMP0, 0);
+            asm.str(regs::TMP5, regs::TMP0, 8);
         }
         Ok(())
     }

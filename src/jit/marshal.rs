@@ -185,8 +185,8 @@ pub struct JitCallContext {
     pub hostcall_helper:
         unsafe extern "C" fn(*mut JitCallContext, u64, u64, *const JitValue) -> JitReturn,
     /// Pointer to heap memory base (for direct heap access from JIT code)
-    /// This points to the first element of the heap's memory Vec<u64>.
-    pub heap_base: *const u64,
+    /// This points to the first byte of the heap's memory Vec<u8>.
+    pub heap_base: *const u8,
     /// Pointer to string constant cache (for direct access from JIT code)
     /// This points to the first element of VM's string_cache Vec<Option<GcRef>>.
     /// Each entry is 16 bytes: Option<GcRef> where GcRef is 8 bytes (usize).
