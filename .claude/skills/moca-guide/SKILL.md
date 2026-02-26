@@ -1,3 +1,9 @@
+---
+name: moca-guide
+description: mocaコードを書く際のリファレンス。言語仕様、構文、組み込み関数などを参照できる。
+allowed-tools: Read, Glob, Grep
+---
+
 # Moca Guide
 
 mocaコードを書く際のリファレンスとして使用するスキル。言語仕様、構文、組み込み関数などを参照できる。
