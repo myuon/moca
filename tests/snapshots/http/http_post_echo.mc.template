@@ -80,7 +80,7 @@ if fd >= 0 {
         let body = "{\"x\":123}";
         let headers = "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: " + len(body).to_string() + "\r\nConnection: close\r\n\r\n";
         let request = headers + body;
-        let written = write(fd, request, len(request));
+        let written = write_str(fd,request, len(request));
 
         // Read response - first read enough to get headers
         let response = read(fd, 1024);
@@ -104,7 +104,7 @@ if fd >= 0 {
 
             // Output the complete response (headers + body)
             // Use write to stdout (fd=1) to avoid extra newline from print
-            write(1, response, header_end + 4 + content_length);
+            write_str(1, response, header_end + 4 + content_length);
             print("");  // Final newline
         }
     }

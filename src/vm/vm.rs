@@ -3959,49 +3959,45 @@ impl VM {
                 let fd = args[0]
                     .as_i64()
                     .ok_or_else(|| "write: fd must be an integer".to_string())?;
-                let buf_ref = match &args[1] {
+                let data_ref = match &args[1] {
                     Value::Ref(r) => *r,
-                    _ => return Err("write: buf must be a string".to_string()),
+                    _ => return Err("write: buf must be a reference".to_string()),
                 };
                 let count = args[2]
                     .as_i64()
                     .ok_or_else(|| "write: count must be an integer".to_string())?;
 
-                // Get the string from heap (String struct: [ptr, len])
-                let buf_str = self.ref_to_rust_string(buf_ref)?;
+                // Read directly from data buffer (caller passes raw data ref, not string struct)
+                let data = self
+                    .heap
+                    .get(data_ref)
+                    .ok_or("write: invalid data reference")?;
+                let actual_count = (count as usize).min(data.slots.len());
 
-                // Calculate actual bytes to write
-                let buf_bytes = buf_str.as_bytes();
-                let actual_count = (count as usize).min(buf_bytes.len());
-                let bytes_to_write = &buf_bytes[..actual_count];
-
-                // Write to the appropriate output based on fd
-                let result = if fd == 1 {
-                    // stdout
-                    self.output
-                        .write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
+                // Get the writer for this fd
+                let writer: &mut dyn std::io::Write = if fd == 1 {
+                    &mut self.output
                 } else if fd == 2 {
-                    // stderr
-                    self.stderr
-                        .write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
+                    &mut self.stderr
                 } else if let Some(file) = self.file_descriptors.get_mut(&fd) {
-                    // File from fd table
-                    file.write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
+                    file
                 } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
-                    // Socket from socket_descriptors table
                     socket
-                        .write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
                 } else {
-                    // Invalid fd
+                    return Ok(Value::I64(EBADF));
+                };
+
+                // Convert slots to bytes and write
+                let bytes: Vec<u8> = data
+                    .slots
+                    .iter()
+                    .take(actual_count)
+                    .map(|v| v.as_i64().unwrap_or(0) as u8)
+                    .collect();
+                let result = if writer.write_all(&bytes).is_err() {
                     EBADF
+                } else {
+                    actual_count as i64
                 };
 
                 Ok(Value::I64(result))
@@ -4758,7 +4754,8 @@ mod tests {
         let stack = run_code_with_strings(
             vec![
                 Op::I64Const(99),   // invalid fd
-                Op::StringConst(0), // buffer
+                Op::StringConst(0), // string struct
+                Op::HeapLoad(0),    // extract data ref from string struct
                 Op::I64Const(5),    // count
                 Op::Hostcall(1, 3), // hostcall_write
             ],
@@ -4819,7 +4816,8 @@ mod tests {
                     Op::LocalSet(0),     // store fd in local 0
                     // write(fd, "hello", 5)
                     Op::LocalGet(0),    // fd
-                    Op::StringConst(1), // buffer
+                    Op::StringConst(1), // string struct
+                    Op::HeapLoad(0),    // extract data ref from string struct
                     Op::I64Const(5),    // count
                     Op::Hostcall(1, 3), // hostcall_write
                     Op::Drop,           // discard write result
@@ -5149,6 +5147,7 @@ mod tests {
                     // write(fd, request, len)
                     Op::LocalGet(0),           // push fd
                     Op::StringConst(1),        // request string
+                    Op::HeapLoad(0),           // extract data ref from string struct
                     Op::I64Const(request_len), // count
                     Op::Hostcall(1, 3),        // hostcall_write
                     Op::Drop,                  // discard write result

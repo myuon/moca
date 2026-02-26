@@ -53,9 +53,16 @@ fun open(path: string, flags: int) -> int {
 
 // Write to a file descriptor.
 // fd: 1 = stdout, 2 = stderr, >=3 = file/socket
+// buf: raw data pointer (ptr<int>, I64 array of byte values)
 // Returns: bytes written on success, negative error code on failure
-fun write(fd: int, buf: string, count: int) -> int {
+fun write(fd: int, buf: ptr<int>, count: int) -> int {
     return __hostcall(1, fd, buf, count);
+}
+
+// Write a string to a file descriptor.
+// Convenience wrapper that extracts the data pointer from a string.
+fun write_str(fd: int, s: string, count: int) -> int {
+    return write(fd, __heap_load(s, 0), count);
 }
 
 // Read from a file descriptor.
@@ -784,6 +791,52 @@ impl ToString for string {
     }
 }
 
+// ============================================================================
+// WriteTo Interface
+// ============================================================================
+
+interface WriteTo {
+    fun write_to(self, fd: int);
+}
+
+impl WriteTo for int {
+    fun write_to(self, fd: int) {
+        if self == 0 {
+            write_str(fd, "0", 1);
+            return;
+        }
+        let dcount = _int_digit_count(self);
+        let data = __alloc_heap(dcount);
+        _int_write_to(data, 0, self, dcount);
+        write(fd, data, dcount);
+    }
+}
+
+impl WriteTo for float {
+    fun write_to(self, fd: int) {
+        let dcount = _float_digit_count(self);
+        let data = __alloc_heap(dcount);
+        _float_write_to(data, 0, self);
+        write(fd, data, dcount);
+    }
+}
+
+impl WriteTo for bool {
+    fun write_to(self, fd: int) {
+        if self {
+            write_str(fd, "true", 4);
+        } else {
+            write_str(fd, "false", 5);
+        }
+    }
+}
+
+impl WriteTo for string {
+    fun write_to(self, fd: int) {
+        write_str(fd, self, len(self));
+    }
+}
+
 // Zero-pad an integer to 2 digits.
 fun _pad2(n: int) -> string {
     if n < 10 {
@@ -944,15 +997,14 @@ fun string_join(parts: array<string>) -> string {
 
 // Print a string to stdout without a newline.
 fun print_str(s: string) {
-    let n = len(s);
-    write(1, s, n);
+    write_str(1, s, len(s));
 }
 
 // Print a value to stdout with a trailing newline.
-// Requires the value's type to implement the ToString interface.
-fun print<T: ToString>(v: T) {
-    print_str(v.to_string());
-    print_str("\n");
+// Requires the value's type to implement the WriteTo interface.
+fun print<T: WriteTo>(v: T) {
+    v.write_to(1);
+    write_str(1, "\n", 1);
 }
 
 // Recursively format a dyn value [type_info_ref, raw_value].
@@ -1116,8 +1168,7 @@ fun debug(v: dyn) -> string {
 
 // Print a string to stderr without a newline.
 fun eprint_str(s: string) {
-    let n = len(s);
-    write(2, s, n);
+    write_str(2, s, len(s));
 }
 
 // ============================================================================
