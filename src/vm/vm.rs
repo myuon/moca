@@ -3974,51 +3974,30 @@ impl VM {
                     .ok_or("write: invalid data reference")?;
                 let actual_count = (count as usize).min(data.slots.len());
 
-                // Convert slots to bytes directly (skip Rust String allocation)
-                let mut stack_buf = [0u8; 256];
-                let heap_buf: Vec<u8>;
-                let bytes_to_write: &[u8] = if actual_count <= 256 {
-                    for (i, slot) in data.slots.iter().take(actual_count).enumerate() {
-                        stack_buf[i] = slot.as_i64().unwrap_or(0) as u8;
-                    }
-                    &stack_buf[..actual_count]
+                // Get the writer for this fd
+                let writer: &mut dyn std::io::Write = if fd == 1 {
+                    &mut self.output
+                } else if fd == 2 {
+                    &mut self.stderr
+                } else if let Some(file) = self.file_descriptors.get_mut(&fd) {
+                    file
+                } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
+                    socket
                 } else {
-                    heap_buf = data
-                        .slots
-                        .iter()
-                        .take(actual_count)
-                        .map(|v| v.as_i64().unwrap_or(0) as u8)
-                        .collect();
-                    &heap_buf
+                    return Ok(Value::I64(EBADF));
                 };
 
-                // Write to the appropriate output based on fd
-                let result = if fd == 1 {
-                    // stdout
-                    self.output
-                        .write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
-                } else if fd == 2 {
-                    // stderr
-                    self.stderr
-                        .write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
-                } else if let Some(file) = self.file_descriptors.get_mut(&fd) {
-                    // File from fd table
-                    file.write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
-                } else if let Some(socket) = self.socket_descriptors.get_mut(&fd) {
-                    // Socket from socket_descriptors table
-                    socket
-                        .write_all(bytes_to_write)
-                        .map(|_| actual_count as i64)
-                        .unwrap_or(EBADF)
-                } else {
-                    // Invalid fd
+                // Convert slots to bytes and write
+                let bytes: Vec<u8> = data
+                    .slots
+                    .iter()
+                    .take(actual_count)
+                    .map(|v| v.as_i64().unwrap_or(0) as u8)
+                    .collect();
+                let result = if writer.write_all(&bytes).is_err() {
                     EBADF
+                } else {
+                    actual_count as i64
                 };
 
                 Ok(Value::I64(result))
