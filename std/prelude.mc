@@ -144,13 +144,13 @@ fun _int_digit_count(n: int) -> int {
 }
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
+// dcount must be the result of _int_digit_count(n).
 @inline
-fun _int_write_to(buf: ptr<int>, off: int, n: int) -> int {
+fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
     if n == 0 {
         buf[off] = 48;
         return off + 1;
     }
-    let dcount = _int_digit_count(n);
     let val = n;
     if val < 0 {
         buf[off] = 45;
@@ -631,7 +631,7 @@ fun _int_to_string(n: int) -> string {
     }
     let dcount = _int_digit_count(n);
     let data = __alloc_heap(dcount);
-    _int_write_to(data, 0, n);
+    _int_write_to(data, 0, n, dcount);
     return __alloc_string(data, dcount);
 }
 
