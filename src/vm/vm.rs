@@ -3661,42 +3661,29 @@ impl VM {
                     .get(*r)
                     .ok_or("runtime error: invalid reference")?;
 
-                // Structural heuristic for 2-slot [Ref, I64] objects:
-                // Try to detect string vs array by checking if the data array
-                // contains only printable characters.
+                // Detect string vs array for 2-slot [Ref, I64] objects
+                // by checking the data array's ElemKind.
                 if obj.slots.len() == 2
                     && let (Some(data_ref), Some(len)) =
                         (obj.slots[0].as_ref(), obj.slots[1].as_i64())
                 {
                     let len_usize = len as usize;
-                    // Check if data looks like a string (non-empty, all printable chars)
-                    let mut is_string = len_usize > 0;
-                    let mut chars = String::new();
-                    for i in 0..len_usize {
-                        match self.heap.read_slot(data_ref, i) {
-                            Some(Value::I64(c)) => {
-                                if let Some(ch) = char::from_u32(c as u32) {
-                                    // Accept printable chars + common whitespace
-                                    if ch >= ' ' || ch == '\n' || ch == '\r' || ch == '\t' {
-                                        chars.push(ch);
-                                    } else {
-                                        is_string = false;
-                                        break;
-                                    }
-                                } else {
-                                    is_string = false;
-                                    break;
-                                }
-                            }
-                            _ => {
-                                is_string = false;
-                                break;
-                            }
-                        }
-                    }
-                    // Empty 2-slot objects and string-like data → display as string
-                    if is_string {
-                        return Ok(chars);
+                    let data_ek = self.heap.get_elem_kind(data_ref);
+
+                    if data_ek == ElemKind::U8 {
+                        // UTF-8 string: read bytes and decode
+                        let data = self
+                            .heap
+                            .get(data_ref)
+                            .ok_or("runtime error: invalid string data")?;
+                        let bytes: Vec<u8> = data
+                            .slots
+                            .iter()
+                            .take(len_usize)
+                            .filter_map(|v| v.as_i64())
+                            .map(|b| b as u8)
+                            .collect();
+                        return Ok(String::from_utf8_lossy(&bytes).into_owned());
                     }
                     // Otherwise display as array
                     let mut parts = Vec::new();

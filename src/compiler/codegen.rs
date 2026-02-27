@@ -14,7 +14,8 @@ const MAX_INLINE_DEPTH: usize = 4;
 /// Determine ElemKind for a direct element type.
 fn elem_kind_for_element_type(ty: &Type) -> ElemKind {
     match ty {
-        Type::Int | Type::Bool | Type::Byte | Type::Char => ElemKind::I64,
+        Type::Int | Type::Bool | Type::Byte => ElemKind::I64,
+        Type::Char => ElemKind::U8, // UTF-8 byte storage for string data
         Type::Float => ElemKind::F64,
         Type::GenericStruct { .. } | Type::Nullable(_) | Type::Dyn => ElemKind::Ref,
         // Only treat Struct as Ref if it has fields (concrete struct).

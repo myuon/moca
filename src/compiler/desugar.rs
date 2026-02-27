@@ -1168,7 +1168,7 @@ impl Desugar {
 
         // Phase 2: let __interp_buf = __alloc_heap(__interp_total);
         let buf_var = self.fresh_var();
-        let ptr_int = Type::Ptr(Box::new(Type::Int));
+        let ptr_int = Type::Ptr(Box::new(Type::Char));
         stmts.push(Statement::Let {
             name: buf_var.clone(),
             type_annotation: None,
