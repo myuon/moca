@@ -2472,9 +2472,7 @@ impl TypeChecker {
                                 }
                             }
 
-                            let result = self.substitution.apply(&ret);
-
-                            result
+                            self.substitution.apply(&ret)
                         }
                         _ => {
                             self.errors.push(TypeError::new(
