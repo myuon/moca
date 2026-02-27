@@ -306,13 +306,15 @@ impl HeapObject {
         Some(HeapObject { marked, slots })
     }
 
-    /// Convert slots to a Rust String (interpreting slots as Unicode code points)
+    /// Convert slots to a Rust String (interpreting slots as UTF-8 bytes)
     pub fn slots_to_string(&self) -> String {
-        self.slots
+        let bytes: Vec<u8> = self
+            .slots
             .iter()
             .filter_map(|v| v.as_i64())
-            .filter_map(|c| char::from_u32(c as u32))
-            .collect()
+            .map(|b| b as u8)
+            .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     /// Get all Value references in this object for GC tracing.
@@ -460,14 +462,13 @@ impl Heap {
 
     /// Allocate a new string on the heap.
     /// String is stored as a struct [ptr, len] where ptr points to a data array
-    /// containing each character as Value::I64 (Unicode code point).
+    /// containing UTF-8 bytes (ElemKind::U8).
     pub fn alloc_string(&mut self, value: String) -> Result<GcRef, String> {
-        let chars: Vec<i64> = value.chars().map(|c| c as i64).collect();
-        let len = chars.len();
-        // Allocate data as a typed I64 array (1 word per element, matching byte array layout)
-        let data_ref = self.alloc_typed_array(len as u32, ElemKind::I64)?;
-        for (i, &ch) in chars.iter().enumerate() {
-            self.write_typed(data_ref, i, ch as u64)?;
+        let bytes = value.as_bytes();
+        let len = bytes.len();
+        let data_ref = self.alloc_typed_array(len as u32, ElemKind::U8)?;
+        for (i, &b) in bytes.iter().enumerate() {
+            self.write_typed(data_ref, i, b as u64)?;
         }
         let struct_slots = vec![Value::Ref(data_ref), Value::I64(len as i64)];
         self.alloc_slots(struct_slots)

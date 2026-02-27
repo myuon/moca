@@ -186,7 +186,7 @@ fun _int_digit_count(n: int) -> int {
 //   q = (val * 3435973837) >> 35  (Granlund-Montgomery style)
 //   r = val - q * 10
 @inline
-fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
+fun _int_write_to(buf: ptr<char>, off: int, n: int, dcount: int) -> int {
     if n == 0 {
         buf[off] = 48;
         return off + 1;
@@ -236,7 +236,7 @@ fun _int_write_to(buf: ptr<int>, off: int, n: int, dcount: int) -> int {
 
 // Copy string data into buf at offset, return new offset.
 @inline
-fun _str_copy_to(buf: ptr<int>, off: int, s: string) -> int {
+fun _str_copy_to(buf: ptr<char>, off: int, s: string) -> int {
     let sptr = s.data;
     let slen = s.len;
     let j = 0;
@@ -258,7 +258,7 @@ fun _bool_str_len(b: bool) -> int {
 
 // Write "true" or "false" into buf at offset, return new offset.
 @inline
-fun _bool_write_to(buf: ptr<int>, off: int, b: bool) -> int {
+fun _bool_write_to(buf: ptr<char>, off: int, b: bool) -> int {
     if b {
         buf[off] = 116;
         buf[off + 1] = 114;
@@ -588,7 +588,7 @@ fun _ryu_formatted_length(mantissa: int, exponent: int, length: int, kk: int) ->
     return kk + 2;
 }
 
-fun _ryu_write_to(buf: ptr<int>, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
+fun _ryu_write_to(buf: ptr<char>, off: int, mantissa: int, exponent: int, length: int, kk: int, sign: int) -> int {
     let pos = off;
     if sign != 0 { buf[pos] = 45; pos = pos + 1; }
     if kk <= 0 {
@@ -649,7 +649,7 @@ fun _float_digit_count(f: float) -> int {
     return sign + _ryu_formatted_length(mantissa, exponent, length, kk);
 }
 
-fun _float_write_to(buf: ptr<int>, off: int, f: float) -> int {
+fun _float_write_to(buf: ptr<char>, off: int, f: float) -> int {
     let bits = __float_bits(f);
     let sign = _ushr(bits, 63);
     let ieee_exp = _ushr(bits, 52) & 2047;
