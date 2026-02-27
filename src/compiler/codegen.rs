@@ -674,6 +674,16 @@ impl Codegen {
         // Restore codegen state
         self.local_offset = saved_offset;
         self.current_local_types = saved_local_types;
+        // Pad current_local_types to match current_locals_count.
+        // current_locals_count grows permanently with each inline expansion
+        // (to give each expansion unique local slots), but current_local_types
+        // is restored to the caller's original types. Without padding, subsequent
+        // inline expansions have a mismatch between local_offset (derived from
+        // current_locals_count) and the type array indices, causing infer_expr_type
+        // to return wrong types (e.g., Ref instead of I64).
+        while self.current_local_types.len() < self.current_locals_count {
+            self.current_local_types.push(ValueType::I64);
+        }
         self.current_collection_elem_kind = saved_collection_elem_kind;
 
         Ok(())

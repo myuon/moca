@@ -41,3 +41,25 @@ fun find_first_ge(threshold: int) -> int {
 }
 
 print(find_first_ge(7));
+
+// Regression test for #257: multiple inline expansions with multiple returns
+// caused current_local_types / current_locals_count mismatch, leading to
+// wrong type inference (Ref instead of I64) and runtime crash.
+@inline
+fun digit_count(n: int) -> int {
+    if n < 10 { return 1; }
+    if n < 100 { return 2; }
+    if n < 1000 { return 3; }
+    return 4;
+}
+
+// Call inline function with multiple returns, then use string interpolation
+// (which triggers another inline expansion of string_concat)
+let x = 42;
+let d = digit_count(x);
+print(d);
+print($"x={x}");
+
+// Multiple inline calls in same expression
+let a = digit_count(5) + digit_count(99) + digit_count(500);
+print(a);
