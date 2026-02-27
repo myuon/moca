@@ -2304,9 +2304,10 @@ impl TypeChecker {
                     return result_type;
                 }
 
-                // print fallback for types that can't resolve through the generic path:
-                // `any` unifies with everything (empty substitution), `Var` is unresolved,
-                // `Nullable` doesn't implement ToString. Handle these before generic function check.
+                // For print(v: dyn), wrap any/Var/Nullable arguments in AsDyn.
+                // These types are normally excluded from auto-boxing in check_call_args
+                // (to avoid double-boxing dyn values stored as any), but print needs
+                // a properly boxed dyn value for runtime WriteTo dispatch.
                 if callee == "print" && args.len() == 1 && type_args.is_empty() {
                     let arg_type = self.infer_expr(&mut args[0], env);
                     let resolved_arg_type = self.substitution.apply(&arg_type);
@@ -2314,7 +2315,20 @@ impl TypeChecker {
                         resolved_arg_type,
                         Type::Any | Type::Nullable(_) | Type::Var(_)
                     ) {
-                        *callee = "__print_dyn_fallback".to_string();
+                        let span = args[0].span();
+                        let inner = mem::replace(
+                            &mut args[0],
+                            Expr::Nil {
+                                span,
+                                inferred_type: None,
+                            },
+                        );
+                        args[0] = Expr::AsDyn {
+                            expr: Box::new(inner),
+                            span,
+                            inferred_type: Some(Type::Dyn),
+                            is_implicit: true,
+                        };
                         return Type::Nil;
                     }
                 }
@@ -2323,9 +2337,6 @@ impl TypeChecker {
                 if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
                     // Track fresh type variables for implicit generic calls
                     let mut fresh_vars: Vec<Type> = Vec::new();
-                    // Flag for print fallback: when print(v) is called but T doesn't implement ToString,
-                    // we rename the callee to __print_dyn_fallback so desugar can transform it.
-                    let mut print_fallback = false;
                     // Instantiate the generic function with the provided type arguments
                     let fn_type = if !type_args.is_empty() {
                         // Check that the number of type arguments matches
@@ -2372,18 +2383,13 @@ impl TypeChecker {
                                         .interface_impls
                                         .contains(&(bound.clone(), type_name.clone()))
                                     {
-                                        // print fallback: suppress error and use dyn-based formatter
-                                        if callee.as_str() == "print" && bound == "WriteTo" {
-                                            print_fallback = true;
-                                        } else {
-                                            self.errors.push(TypeError::new(
-                                                format!(
-                                                    "type `{}` does not implement interface `{}`",
-                                                    concrete_type, bound
-                                                ),
-                                                *span,
-                                            ));
-                                        }
+                                        self.errors.push(TypeError::new(
+                                            format!(
+                                                "type `{}` does not implement interface `{}`",
+                                                concrete_type, bound
+                                            ),
+                                            *span,
+                                        ));
                                     }
                                 }
                             }
@@ -2453,19 +2459,13 @@ impl TypeChecker {
                                                 .interface_impls
                                                 .contains(&(bound.clone(), type_name.clone()))
                                             {
-                                                // print fallback: suppress error and use dyn-based formatter
-                                                if callee.as_str() == "print" && bound == "WriteTo"
-                                                {
-                                                    print_fallback = true;
-                                                } else {
-                                                    self.errors.push(TypeError::new(
-                                                        format!(
-                                                            "type `{}` does not implement interface `{}`",
-                                                            concrete_type, bound
-                                                        ),
-                                                        *span,
-                                                    ));
-                                                }
+                                                self.errors.push(TypeError::new(
+                                                    format!(
+                                                        "type `{}` does not implement interface `{}`",
+                                                        concrete_type, bound
+                                                    ),
+                                                    *span,
+                                                ));
                                             }
                                         }
                                     }
@@ -2473,12 +2473,6 @@ impl TypeChecker {
                             }
 
                             let result = self.substitution.apply(&ret);
-
-                            // Apply print fallback: rename callee so desugar transforms it
-                            if print_fallback {
-                                *callee = "__print_dyn_fallback".to_string();
-                                type_args.clear();
-                            }
 
                             result
                         }
@@ -3348,6 +3342,9 @@ impl TypeChecker {
             let resolved_arg = self.substitution.apply(&arg_type);
             // Implicit dyn coercion: only for concrete value types, not for
             // types that are already compatible (dyn, any) or unresolved (Var, Param).
+            // Note: `any` and `Var` are excluded because they may already be dyn at runtime
+            // (e.g., from _dyn_to_string calling __dyn_type_name). Auto-boxing them would
+            // cause double-boxing.
             if matches!(resolved_param, Type::Dyn)
                 && !matches!(
                     resolved_arg,

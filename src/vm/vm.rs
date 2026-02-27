@@ -3958,7 +3958,7 @@ impl VM {
                 let data = self
                     .heap
                     .get(data_ref)
-                    .ok_or("write: invalid data reference")?;
+                    .ok_or_else(|| "write: invalid data reference".to_string())?;
                 let actual_count = (count as usize).min(data.slots.len());
 
                 // Get the writer for this fd

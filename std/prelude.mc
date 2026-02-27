@@ -998,10 +998,18 @@ fun print_str(s: string) {
 }
 
 // Print a value to stdout with a trailing newline.
-// Requires the value's type to implement the WriteTo interface.
-fun print<T: WriteTo>(v: T) {
-    v.write_to(1);
-    write_str(1, "\n", 1);
+// Uses runtime WriteTo vtable dispatch for dyn values.
+fun print(v: dyn) {
+    match dyn v {
+        w: WriteTo => {
+            w.write_to(1);
+            write_str(1, "\n", 1);
+        }
+        _ => {
+            print_str(_value_to_string(v));
+            print_str("\n");
+        }
+    }
 }
 
 // Recursively format a dyn value [type_info_ref, raw_value].
@@ -1025,6 +1033,20 @@ fun _try_to_string_vtable(ti: any, fc: int, raw: any) -> any {
         vi = vi + 1;
     }
     return nil;
+}
+
+// Strip generic type parameters from a type name: "Wrapper<int>" -> "Wrapper"
+fun _strip_type_params(s: string) -> string {
+    let angle = str_index_of(s, "<");
+    if angle <= 0 { return s; }
+    let src = s.data;
+    let buf = __alloc_heap(angle);
+    let i = 0;
+    while i < angle {
+        buf[i] = src[i];
+        i = i + 1;
+    }
+    return __alloc_string(buf, angle);
 }
 
 fun _any_to_string(d: any) -> string {
@@ -1065,8 +1087,8 @@ fun _any_to_string(d: any) -> string {
         }
     }
 
-    // Vec_*
-    if str_index_of(tn, "Vec_") == 0 {
+    // Vec<*>
+    if str_index_of(tn, "Vec<") == 0 {
         let data = __heap_load(raw, 0);
         let vec_len: int = __heap_load(raw, 1);
         if vec_len == 0 { return "[]"; }
@@ -1084,8 +1106,8 @@ fun _any_to_string(d: any) -> string {
         return result + "]";
     }
 
-    // Map_*
-    if str_index_of(tn, "Map_") == 0 {
+    // Map<*>
+    if str_index_of(tn, "Map<") == 0 {
         let buckets = __heap_load(raw, 0);
         let map_size: int = __heap_load(raw, 1);
         let map_cap: int = __heap_load(raw, 2);
@@ -1114,8 +1136,8 @@ fun _any_to_string(d: any) -> string {
         return result + "}";
     }
 
-    // Array_*
-    if str_index_of(tn, "Array_") == 0 {
+    // Array<*>
+    if str_index_of(tn, "Array<") == 0 {
         let data = __heap_load(raw, 0);
         let arr_len: int = __heap_load(raw, 1);
         if arr_len == 0 { return "[]"; }
@@ -1138,8 +1160,8 @@ fun _any_to_string(d: any) -> string {
         return __value_to_string(raw);
     }
 
-    // Struct with named fields
-    let result = tn + " { ";
+    // Struct with named fields — strip type params from display name
+    let result = _strip_type_params(tn) + " { ";
     let i = 0;
     while i < fc {
         if i > 0 { result = result + ", "; }

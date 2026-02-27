@@ -568,6 +568,9 @@ impl<'a> Resolver<'a> {
                     Self::collect_var_types_from_expr(elem, type_map);
                 }
             }
+            Expr::AsDyn { expr, .. } => {
+                Self::collect_var_types_from_expr(expr, type_map);
+            }
             _ => {}
         }
     }
@@ -1635,8 +1638,8 @@ impl<'a> Resolver<'a> {
                                         },
                                     })
                                     .collect::<Vec<_>>()
-                                    .join("_");
-                                format!("{}_{}", name, args)
+                                    .join(",");
+                                format!("{}<{}>", name, args)
                             }
                             _ => {
                                 let ty = arm
@@ -2488,8 +2491,8 @@ impl<'a> Resolver<'a> {
 }
 
 /// Convert a Type to a dyn type tag name.
-/// For generic types, includes type parameters (e.g. "Container_int")
-/// using the same mangling format as monomorphise.
+/// For generic types, uses angle bracket format (e.g. "Vec<int>", "Map<string,int>")
+/// so that the base name can be extracted by stripping the type parameters.
 fn type_to_dyn_tag_name(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
@@ -2505,8 +2508,8 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
                 .iter()
                 .map(type_to_dyn_tag_name)
                 .collect::<Vec<_>>()
-                .join("_");
-            format!("{}_{}", name, args)
+                .join(",");
+            format!("{}<{}>", name, args)
         }
         Type::Nullable(inner) => format!("{}?", type_to_dyn_tag_name(inner)),
         _ => ty.to_string(),
@@ -2515,6 +2518,8 @@ fn type_to_dyn_tag_name(ty: &Type) -> String {
 
 /// Convert a Type to the name used in interface_impls lookup.
 /// This must match the typechecker's `type_to_impl_name`.
+/// For generic structs, uses the mangled name (e.g. "Wrapper__int") to avoid
+/// accidentally dispatching to broken generic implementations (like Map::to_string).
 fn type_to_impl_name(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
@@ -2528,7 +2533,6 @@ fn type_to_impl_name(ty: &Type) -> String {
             if type_args.is_empty() {
                 name.clone()
             } else {
-                // Use the same mangling as Instantiation::mangled_name()
                 let type_suffix = type_args
                     .iter()
                     .map(super::monomorphise::mangle_type)
