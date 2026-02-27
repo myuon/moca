@@ -130,54 +130,51 @@ fun time_nanos() -> int {
 // ============================================================================
 
 // Count decimal digits of an integer (no heap allocation).
+// Uses early return comparison chains — no local variable needed.
 @inline
 fun _int_digit_count(n: int) -> int {
-    let result = 20;
     if n > 0 {
-        if n < 10 { result = 1; }
-        else if n < 100 { result = 2; }
-        else if n < 1000 { result = 3; }
-        else if n < 10000 { result = 4; }
-        else if n < 100000 { result = 5; }
-        else if n < 1000000 { result = 6; }
-        else if n < 10000000 { result = 7; }
-        else if n < 100000000 { result = 8; }
-        else if n < 1000000000 { result = 9; }
-        else if n < 10000000000 { result = 10; }
-        else if n < 100000000000 { result = 11; }
-        else if n < 1000000000000 { result = 12; }
-        else if n < 10000000000000 { result = 13; }
-        else if n < 100000000000000 { result = 14; }
-        else if n < 1000000000000000 { result = 15; }
-        else if n < 10000000000000000 { result = 16; }
-        else if n < 100000000000000000 { result = 17; }
-        else if n < 1000000000000000000 { result = 18; }
-        else { result = 19; }
-    } else if n == 0 {
-        result = 1;
-    } else {
-        // n < 0: digit count + 1 for minus sign
-        if n > -10 { result = 2; }
-        else if n > -100 { result = 3; }
-        else if n > -1000 { result = 4; }
-        else if n > -10000 { result = 5; }
-        else if n > -100000 { result = 6; }
-        else if n > -1000000 { result = 7; }
-        else if n > -10000000 { result = 8; }
-        else if n > -100000000 { result = 9; }
-        else if n > -1000000000 { result = 10; }
-        else if n > -10000000000 { result = 11; }
-        else if n > -100000000000 { result = 12; }
-        else if n > -1000000000000 { result = 13; }
-        else if n > -10000000000000 { result = 14; }
-        else if n > -100000000000000 { result = 15; }
-        else if n > -1000000000000000 { result = 16; }
-        else if n > -10000000000000000 { result = 17; }
-        else if n > -100000000000000000 { result = 18; }
-        else if n > -1000000000000000000 { result = 19; }
-        // else: result stays 20 (i64::MIN has 19 digits + minus)
+        if n < 10 { return 1; }
+        if n < 100 { return 2; }
+        if n < 1000 { return 3; }
+        if n < 10000 { return 4; }
+        if n < 100000 { return 5; }
+        if n < 1000000 { return 6; }
+        if n < 10000000 { return 7; }
+        if n < 100000000 { return 8; }
+        if n < 1000000000 { return 9; }
+        if n < 10000000000 { return 10; }
+        if n < 100000000000 { return 11; }
+        if n < 1000000000000 { return 12; }
+        if n < 10000000000000 { return 13; }
+        if n < 100000000000000 { return 14; }
+        if n < 1000000000000000 { return 15; }
+        if n < 10000000000000000 { return 16; }
+        if n < 100000000000000000 { return 17; }
+        if n < 1000000000000000000 { return 18; }
+        return 19;
     }
-    return result;
+    if n == 0 { return 1; }
+    // n < 0: digit count + 1 for minus sign
+    if n > -10 { return 2; }
+    if n > -100 { return 3; }
+    if n > -1000 { return 4; }
+    if n > -10000 { return 5; }
+    if n > -100000 { return 6; }
+    if n > -1000000 { return 7; }
+    if n > -10000000 { return 8; }
+    if n > -100000000 { return 9; }
+    if n > -1000000000 { return 10; }
+    if n > -10000000000 { return 11; }
+    if n > -100000000000 { return 12; }
+    if n > -1000000000000 { return 13; }
+    if n > -10000000000000 { return 14; }
+    if n > -100000000000000 { return 15; }
+    if n > -1000000000000000 { return 16; }
+    if n > -10000000000000000 { return 17; }
+    if n > -100000000000000000 { return 18; }
+    if n > -1000000000000000000 { return 19; }
+    return 20;
 }
 
 // Write integer digits into buf at offset, return new offset (no heap allocation).
