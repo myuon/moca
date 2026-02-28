@@ -279,7 +279,7 @@ jobs:
               with open(filename) as f:
                   for line in f:
                       # Parse: [name] moca: X.XXXXs, Rust: X.XXXXs, vs_rust: X.Xx
-                      match = re.match(r'\[(\w+)\] moca: ([\d.]+)s, Rust: ([\d.]+)s, vs_rust: ([\d.]+)x', line)
+                      match = re.match(r'\[([^\]]+)\] moca: ([\d.]+)s, Rust: ([\d.]+)s, vs_rust: ([\d.]+)x', line)
                       if match:
                           name = match.group(1)
                           moca = float(match.group(2))
