@@ -1129,9 +1129,19 @@ fn run_performance_test<F>(test_path: &Path, rust_impl: F)
 where
     F: Fn(&mut Cursor<Vec<u8>>),
 {
+    run_performance_test_named(test_path, None, rust_impl);
+}
+
+#[cfg(feature = "jit")]
+fn run_performance_test_named<F>(test_path: &Path, label: Option<&str>, rust_impl: F)
+where
+    F: Fn(&mut Cursor<Vec<u8>>),
+{
     use std::time::{Duration, Instant};
 
-    let test_name = test_path.file_stem().unwrap().to_string_lossy().to_string();
+    let test_name = label
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| test_path.file_stem().unwrap().to_string_lossy().to_string());
 
     // Warmup runs (discard results)
     for _ in 0..PERF_WARMUP_RUNS {
@@ -1251,7 +1261,9 @@ fn snapshot_performance() {
 
     // Test array sequential sum scan with Rust reference
     let array_sum_path = perf_dir.join("array_sum.mc");
-    run_performance_test(&array_sum_path, |w| rust_array_sum(w));
+    run_performance_test_named(&array_sum_path, Some("array_sum (no simd)"), |w| {
+        rust_array_sum(w)
+    });
 }
 
 // ============================================================================
