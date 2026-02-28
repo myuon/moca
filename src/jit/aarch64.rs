@@ -379,6 +379,16 @@ impl<'a> AArch64Assembler<'a> {
         self.emit_raw(inst);
     }
 
+    /// LDR Xt, [Xn, Xm, LSL #3] (load 64-bit with register offset, scaled by 8)
+    pub fn ldr_reg_shifted(&mut self, rt: Reg, rn: Reg, rm: Reg) {
+        // 1111 1000 011m mmmm 0111 10nn nnnt tttt
+        let inst = 0xF8607800
+            | ((rm.code() as u32) << 16)
+            | ((rn.code() as u32) << 5)
+            | (rt.code() as u32);
+        self.emit_raw(inst);
+    }
+
     /// LDR Xt, [Xn], #imm9 (load with post-increment)
     pub fn ldr_post(&mut self, rt: Reg, rn: Reg, imm9: i16) {
         // 1111 1000 010i iiii iiii 01nn nnnt tttt

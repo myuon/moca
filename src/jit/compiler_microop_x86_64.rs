@@ -48,7 +48,8 @@ mod regs {
     pub const PIN_REGS: [Reg; 3] = [Reg::Rbx, Reg::R14, Reg::R15];
 
     /// Caller-saved registers available for loop-variant VReg allocation.
-    pub const LOOP_REGS: [Reg; 2] = [Reg::R10, Reg::R11];
+    /// Rdi is free after prologue (its value is moved to VM_CTX=R12).
+    pub const LOOP_REGS: [Reg; 3] = [Reg::R10, Reg::R11, Reg::Rdi];
 }
 
 /// MicroOp-based JIT compiler for x86-64.
@@ -706,6 +707,134 @@ impl MicroOpJitCompiler {
         variants
     }
 
+    /// Detect VRegs that are only written by CmpI64/CmpI64Imm and only read by
+    /// BrIfFalse/BrIf immediately after (fusion-eligible). These VRegs don't
+    /// benefit from register allocation since the cmp+branch is emitted as a
+    /// single fused instruction sequence.
+    fn detect_fused_only_vregs(
+        ops: &[MicroOp],
+        loop_start: usize,
+        loop_end: usize,
+    ) -> HashSet<usize> {
+        let mut fused_candidates: HashSet<usize> = HashSet::new();
+        let mut non_fused_readers: HashSet<usize> = HashSet::new();
+
+        for pc in loop_start..=loop_end {
+            match &ops[pc] {
+                MicroOp::CmpI64 { dst, .. } | MicroOp::CmpI64Imm { dst, .. } => {
+                    // Check if next op is a branch using this dst
+                    if pc < loop_end {
+                        match &ops[pc + 1] {
+                            MicroOp::BrIfFalse { cond, .. } | MicroOp::BrIf { cond, .. }
+                                if cond == dst =>
+                            {
+                                fused_candidates.insert(dst.0);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {
+                    // Track all VRegs read by non-cmp ops
+                    match &ops[pc] {
+                        MicroOp::BrIfFalse { cond, .. } | MicroOp::BrIf { cond, .. } => {
+                            // This is fine if it's part of a fused pair (handled above)
+                            // But if the cond is read elsewhere, mark it
+                            if pc == loop_start
+                                || !matches!(
+                                    &ops[pc - 1],
+                                    MicroOp::CmpI64 { dst, .. } | MicroOp::CmpI64Imm { dst, .. }
+                                    if dst == cond
+                                )
+                            {
+                                non_fused_readers.insert(cond.0);
+                            }
+                        }
+                        MicroOp::AddI64 { a, b, .. }
+                        | MicroOp::SubI64 { a, b, .. }
+                        | MicroOp::MulI64 { a, b, .. } => {
+                            non_fused_readers.insert(a.0);
+                            non_fused_readers.insert(b.0);
+                        }
+                        MicroOp::AddI64Imm { a, .. } => {
+                            non_fused_readers.insert(a.0);
+                        }
+                        MicroOp::HeapLoad2 { obj, idx, .. } => {
+                            non_fused_readers.insert(obj.0);
+                            non_fused_readers.insert(idx.0);
+                        }
+                        MicroOp::Mov { src, .. } => {
+                            non_fused_readers.insert(src.0);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Only keep candidates that are never read outside of fused pairs
+        fused_candidates
+            .into_iter()
+            .filter(|v| !non_fused_readers.contains(v))
+            .collect()
+    }
+
+    /// Override vreg_types for VRegs whose loop-body writes produce a different
+    /// type than the function-wide assignment. This happens when a temp VReg is
+    /// reused across basic blocks (e.g., v7 is HeapLoad2(I64) in the loop but
+    /// RefNull after the loop). Fixing vreg_types ensures emit_shadow_init and
+    /// needs_shadow_update use the correct type for the loop scope.
+    fn override_vreg_types_for_loop(
+        vreg_types: &mut [ValueType],
+        ops: &[MicroOp],
+        loop_start: usize,
+        loop_end: usize,
+    ) {
+        for op in &ops[loop_start..=loop_end] {
+            let (dst_idx, ty) = match op {
+                MicroOp::ConstI64 { dst, .. }
+                | MicroOp::AddI64 { dst, .. }
+                | MicroOp::SubI64 { dst, .. }
+                | MicroOp::MulI64 { dst, .. }
+                | MicroOp::DivI64 { dst, .. }
+                | MicroOp::RemI64 { dst, .. }
+                | MicroOp::NegI64 { dst, .. }
+                | MicroOp::AddI64Imm { dst, .. }
+                | MicroOp::AndI64 { dst, .. }
+                | MicroOp::OrI64 { dst, .. }
+                | MicroOp::XorI64 { dst, .. }
+                | MicroOp::ShlI64 { dst, .. }
+                | MicroOp::ShlI64Imm { dst, .. }
+                | MicroOp::ShrI64 { dst, .. }
+                | MicroOp::ShrI64Imm { dst, .. }
+                | MicroOp::ShrU64 { dst, .. }
+                | MicroOp::ShrU64Imm { dst, .. }
+                | MicroOp::CmpI64 { dst, .. }
+                | MicroOp::CmpI64Imm { dst, .. }
+                | MicroOp::UMul128Hi { dst, .. } => (dst.0, ValueType::I64),
+                MicroOp::ConstF64 { dst, .. }
+                | MicroOp::AddF64 { dst, .. }
+                | MicroOp::SubF64 { dst, .. }
+                | MicroOp::MulF64 { dst, .. }
+                | MicroOp::DivF64 { dst, .. }
+                | MicroOp::NegF64 { dst, .. } => (dst.0, ValueType::F64),
+                MicroOp::HeapLoad2 { dst, elem_kind, .. } => {
+                    let ty = match elem_kind {
+                        ElemKind::I64 | ElemKind::U8 => ValueType::I64,
+                        ElemKind::F64 => ValueType::F64,
+                        ElemKind::Ref | ElemKind::Tagged => ValueType::Ref,
+                    };
+                    (dst.0, ty)
+                }
+                MicroOp::RefNull { dst } => (dst.0, ValueType::Ref),
+                _ => continue,
+            };
+            if dst_idx < vreg_types.len() {
+                vreg_types[dst_idx] = ty;
+            }
+        }
+    }
+
     /// Convert a ValueType to the corresponding JIT tag constant.
     fn value_type_to_tag(ty: &ValueType) -> u64 {
         match ty {
@@ -945,6 +1074,7 @@ impl MicroOpJitCompiler {
             // Allocate LOOP_REGS for loop-variant VRegs.
             if let Some((ls, le)) = detected_loop {
                 let variants = Self::analyze_loop_variants(&converted.micro_ops, ls, le);
+                let fused_only = Self::detect_fused_only_vregs(&converted.micro_ops, ls, le);
                 let mut loop_reg_idx = 0;
                 for (vreg_idx, _) in &variants {
                     if loop_reg_idx >= regs::LOOP_REGS.len() {
@@ -954,6 +1084,9 @@ impl MicroOpJitCompiler {
                         continue;
                     }
                     if self.hoisted_inner_ptrs.contains_key(vreg_idx) {
+                        continue;
+                    }
+                    if fused_only.contains(vreg_idx) {
                         continue;
                     }
                     self.loop_regs
@@ -974,6 +1107,20 @@ impl MicroOpJitCompiler {
             }
         }
 
+        // Compute loop-scoped shadow conflicts and vreg type overrides.
+        // Within the detected inner loop, use narrower scope to avoid false
+        // shadow-conflict marking (e.g., a VReg written with one type inside
+        // the loop but different type outside doesn't need shadow updates per iteration).
+        let saved_shadow_conflicts = detected_loop.map(|_| self.shadow_conflict_vregs.clone());
+        let saved_vreg_types = detected_loop.map(|_| self.vreg_types.clone());
+        let loop_shadow_conflicts = detected_loop
+            .map(|(ls, le)| Self::compute_shadow_conflicts(&converted.micro_ops[ls..=le]));
+        let loop_vreg_types = detected_loop.map(|(ls, le)| {
+            let mut types = self.vreg_types.clone();
+            Self::override_vreg_types_for_loop(&mut types, &converted.micro_ops, ls, le);
+            types
+        });
+
         // Pre-compute jump targets for peephole optimization safety
         let jump_targets: HashSet<usize> = converted
             .micro_ops
@@ -989,14 +1136,40 @@ impl MicroOpJitCompiler {
         // Compile each MicroOp
         let ops = &converted.micro_ops;
         let mut pc = 0;
+        let mut in_loop_scope = false;
         while pc < ops.len() {
-            // Loop entry: activate loop_regs
+            // Restore function-wide shadow state when leaving the loop range
+            if in_loop_scope
+                && let Some((_, le)) = self.loop_range
+                && pc > le
+            {
+                if let Some(ref ssc) = saved_shadow_conflicts {
+                    self.shadow_conflict_vregs = ssc.clone();
+                }
+                if let Some(ref svt) = saved_vreg_types {
+                    self.vreg_types = svt.clone();
+                }
+                in_loop_scope = false;
+            }
+
+            // Loop entry: activate loop_regs and swap in loop-scoped shadow state
             if let Some((ls, _)) = self.loop_range
                 && pc == ls
-                && !self.loop_regs.is_empty()
             {
-                for (&vreg_idx, &reg) in &self.loop_regs.clone() {
-                    self.all_reg_map.insert(vreg_idx, reg);
+                if !self.loop_regs.is_empty() {
+                    for (&vreg_idx, &reg) in &self.loop_regs.clone() {
+                        self.all_reg_map.insert(vreg_idx, reg);
+                    }
+                }
+                // Swap in loop-scoped shadow conflicts and vreg types
+                if !in_loop_scope {
+                    if let Some(ref lsc) = loop_shadow_conflicts {
+                        self.shadow_conflict_vregs = lsc.clone();
+                    }
+                    if let Some(ref lvt) = loop_vreg_types {
+                        self.vreg_types = lvt.clone();
+                    }
+                    in_loop_scope = true;
                 }
             }
 
@@ -1091,9 +1264,18 @@ impl MicroOpJitCompiler {
                 let rel = body_offset as i32 - (jmp_start as i32) - 5; // 5 = jmp rel32 size
                 asm.jmp_rel32(rel);
 
-                // Deactivate loop_regs
+                // Deactivate loop_regs and restore function-wide shadow state
                 for &vreg_idx in self.loop_regs.clone().keys() {
                     self.all_reg_map.remove(&vreg_idx);
+                }
+                if in_loop_scope {
+                    if let Some(ref ssc) = saved_shadow_conflicts {
+                        self.shadow_conflict_vregs = ssc.clone();
+                    }
+                    if let Some(ref svt) = saved_vreg_types {
+                        self.vreg_types = svt.clone();
+                    }
+                    in_loop_scope = false;
                 }
                 pc += 1;
                 continue;
@@ -1147,7 +1329,21 @@ impl MicroOpJitCompiler {
         self.self_func_index = func_index;
         self.self_locals_count = locals_count;
         self.vreg_types = converted.vreg_types.clone();
-        self.shadow_conflict_vregs = Self::compute_shadow_conflicts(&converted.micro_ops);
+        // For loop compilation, override vreg_types for VRegs whose loop-body
+        // writes differ from the function-wide type assignment. This ensures
+        // shadow_init and needs_shadow_update use the correct types for the loop.
+        Self::override_vreg_types_for_loop(
+            &mut self.vreg_types,
+            &converted.micro_ops,
+            loop_start_microop_pc,
+            loop_end_microop_pc,
+        );
+        // For loop compilation, scope shadow conflicts to the loop body only.
+        // Writes outside the loop (e.g., ConstI64 before the loop) don't affect
+        // tag consistency within the loop.
+        self.shadow_conflict_vregs = Self::compute_shadow_conflicts(
+            &converted.micro_ops[loop_start_microop_pc..=loop_end_microop_pc],
+        );
 
         // Pre-scan for inlinable call targets
         self.scan_inline_candidates(&converted.micro_ops, all_functions);
@@ -1205,6 +1401,16 @@ impl MicroOpJitCompiler {
                 loop_start_microop_pc,
                 loop_end_microop_pc,
             );
+
+            // Detect "fused-only" VRegs: written only by CmpI64/CmpI64Imm and
+            // consumed only by BrIfFalse/BrIf immediately after. These don't
+            // benefit from being in registers since the cmp+branch is fused.
+            let fused_only = Self::detect_fused_only_vregs(
+                &converted.micro_ops,
+                loop_start_microop_pc,
+                loop_end_microop_pc,
+            );
+
             let mut loop_reg_idx = 0;
             for (vreg_idx, _) in variants {
                 if loop_reg_idx >= regs::LOOP_REGS.len() {
@@ -1214,6 +1420,9 @@ impl MicroOpJitCompiler {
                     continue;
                 }
                 if self.hoisted_inner_ptrs.contains_key(&vreg_idx) {
+                    continue;
+                }
+                if fused_only.contains(&vreg_idx) {
                     continue;
                 }
                 self.loop_regs
@@ -1852,6 +2061,36 @@ impl MicroOpJitCompiler {
     fn emit_binop_i64(&mut self, dst: &VReg, a: &VReg, b: &VReg, op: BinOp) -> Result<(), String> {
         let shadow = self.needs_shadow_update(dst, value_tags::TAG_INT);
         let reg_map = &self.all_reg_map;
+
+        // Fast path: dst == a, both in registers, commutative/simple op
+        // Emits 1 instruction (e.g., `add r11, rdi`) instead of 4.
+        if dst == a
+            && !matches!(op, BinOp::Div)
+            && let Some(&dst_reg) = reg_map.get(&dst.0)
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Load b: use mapped register directly or load to TMP1
+            let b_reg = if let Some(&br) = reg_map.get(&b.0) {
+                br
+            } else {
+                asm.mov_rm(regs::TMP1, regs::FRAME_BASE, Self::vreg_offset(b));
+                regs::TMP1
+            };
+            match op {
+                BinOp::Add => asm.add_rr(dst_reg, b_reg),
+                BinOp::Sub => asm.sub_rr(dst_reg, b_reg),
+                BinOp::Mul => asm.imul_rr(dst_reg, b_reg),
+                BinOp::And => asm.and_rr(dst_reg, b_reg),
+                BinOp::Or => asm.or_rr(dst_reg, b_reg),
+                BinOp::Xor => asm.xor_rr(dst_reg, b_reg),
+                BinOp::Div => unreachable!(),
+            }
+            if let Some(off) = shadow {
+                Self::emit_shadow_update(&mut asm, off, value_tags::TAG_INT);
+            }
+            return Ok(());
+        }
+
         let mut asm = X86_64Assembler::new(&mut self.buf);
         Self::load_vreg(&mut asm, regs::TMP0, a, reg_map);
         Self::load_vreg(&mut asm, regs::TMP1, b, reg_map);
@@ -2390,27 +2629,40 @@ impl MicroOpJitCompiler {
         invert: bool,
     ) -> Result<(), String> {
         let reg_map = &self.all_reg_map;
-        // Load operand a
-        {
-            let mut asm = X86_64Assembler::new(&mut self.buf);
-            Self::load_vreg(&mut asm, regs::TMP0, a, reg_map);
-        }
 
-        // Compare with operand b
-        match b {
+        // Optimized: compare mapped registers directly
+        match &b {
             CmpOperand::Reg(b_vreg) => {
-                let mut asm = X86_64Assembler::new(&mut self.buf);
-                Self::load_vreg(&mut asm, regs::TMP1, b_vreg, reg_map);
-                asm.cmp_rr(regs::TMP0, regs::TMP1);
-            }
-            CmpOperand::Imm(imm) => {
-                if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+                if let (Some(&ra), Some(&rb)) = (reg_map.get(&a.0), reg_map.get(&b_vreg.0)) {
                     let mut asm = X86_64Assembler::new(&mut self.buf);
-                    asm.cmp_ri32(regs::TMP0, imm as i32);
+                    asm.cmp_rr(ra, rb);
                 } else {
                     let mut asm = X86_64Assembler::new(&mut self.buf);
-                    asm.mov_ri64(regs::TMP1, imm);
+                    Self::load_vreg(&mut asm, regs::TMP0, a, reg_map);
+                    Self::load_vreg(&mut asm, regs::TMP1, b_vreg, reg_map);
                     asm.cmp_rr(regs::TMP0, regs::TMP1);
+                }
+            }
+            CmpOperand::Imm(imm) => {
+                let imm = *imm;
+                if let Some(&ra) = reg_map.get(&a.0) {
+                    if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+                        let mut asm = X86_64Assembler::new(&mut self.buf);
+                        asm.cmp_ri32(ra, imm as i32);
+                    } else {
+                        let mut asm = X86_64Assembler::new(&mut self.buf);
+                        asm.mov_ri64(regs::TMP1, imm);
+                        asm.cmp_rr(ra, regs::TMP1);
+                    }
+                } else {
+                    let mut asm = X86_64Assembler::new(&mut self.buf);
+                    Self::load_vreg(&mut asm, regs::TMP0, a, reg_map);
+                    if imm >= i32::MIN as i64 && imm <= i32::MAX as i64 {
+                        asm.cmp_ri32(regs::TMP0, imm as i32);
+                    } else {
+                        asm.mov_ri64(regs::TMP1, imm);
+                        asm.cmp_rr(regs::TMP0, regs::TMP1);
+                    }
                 }
             }
         }
@@ -3451,44 +3703,83 @@ impl MicroOpJitCompiler {
     ) -> Result<(), String> {
         // Optimized path: inner pointer is hoisted into a register
         if let Some(&inner_base_reg) = self.hoisted_inner_ptrs.get(&obj.0) {
-            let shadow_off = self.shadow_tag_offset(dst);
+            // Pre-compute shadow update info before borrowing self.buf
+            let shadow = match elem_kind {
+                ElemKind::Tagged => Some(self.shadow_tag_offset(dst)),
+                _ => {
+                    let tag = Self::elem_kind_to_tag(elem_kind);
+                    self.needs_shadow_update(dst, tag)
+                }
+            };
             let reg_map = &self.all_reg_map;
             let mut asm = X86_64Assembler::new(&mut self.buf);
-            // TMP0 = idx
-            Self::load_vreg(&mut asm, regs::TMP0, idx, reg_map);
             match elem_kind {
                 ElemKind::U8 => {
                     // U8: idx * 1 (no shift)
+                    Self::load_vreg(&mut asm, regs::TMP0, idx, reg_map);
                     asm.add_rr(regs::TMP0, inner_base_reg);
                     asm.movzx_rm_byte(regs::TMP2, regs::TMP0, 0);
                     Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
-                    asm.mov_ri64(regs::TMP1, Self::elem_kind_to_tag(elem_kind) as i64);
-                    asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+                    if let Some(shadow_off) = shadow {
+                        Self::emit_shadow_update(
+                            &mut asm,
+                            shadow_off,
+                            Self::elem_kind_to_tag(elem_kind),
+                        );
+                    }
                 }
                 ElemKind::I64 | ElemKind::F64 | ElemKind::Ref => {
-                    // Typed 8B: idx * 8
-                    asm.shl_ri(regs::TMP0, 3);
-                    asm.add_rr(regs::TMP0, inner_base_reg);
-                    asm.mov_rm(regs::TMP2, regs::TMP0, 0);
-                    Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
-                    asm.mov_ri64(regs::TMP1, Self::elem_kind_to_tag(elem_kind) as i64);
-                    asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+                    // Typed 8B: use SIB addressing [base + idx*8] if idx in register
+                    if let Some(&idx_reg) = reg_map.get(&idx.0) {
+                        // Load directly into dst register if mapped, otherwise TMP2
+                        let load_dst = reg_map.get(&dst.0).copied().unwrap_or(regs::TMP2);
+                        asm.mov_rm_sib_scale8(load_dst, inner_base_reg, idx_reg);
+                        if load_dst == regs::TMP2 {
+                            Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
+                        }
+                    } else {
+                        Self::load_vreg(&mut asm, regs::TMP0, idx, reg_map);
+                        asm.shl_ri(regs::TMP0, 3);
+                        asm.add_rr(regs::TMP0, inner_base_reg);
+                        let load_dst = reg_map.get(&dst.0).copied().unwrap_or(regs::TMP2);
+                        asm.mov_rm(load_dst, regs::TMP0, 0);
+                        if load_dst == regs::TMP2 {
+                            Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
+                        }
+                    }
+                    if let Some(shadow_off) = shadow {
+                        Self::emit_shadow_update(
+                            &mut asm,
+                            shadow_off,
+                            Self::elem_kind_to_tag(elem_kind),
+                        );
+                    }
                 }
                 ElemKind::Tagged => {
-                    // Tagged: idx * 16
+                    // Tagged: idx * 16, tag is dynamic — always write
+                    Self::load_vreg(&mut asm, regs::TMP0, idx, reg_map);
                     asm.shl_ri(regs::TMP0, 4);
                     asm.add_rr(regs::TMP0, inner_base_reg);
                     asm.mov_rm(regs::TMP1, regs::TMP0, 0); // tag
                     asm.mov_rm(regs::TMP2, regs::TMP0, 8); // payload
                     Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
-                    asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+                    if let Some(shadow_off) = shadow {
+                        asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+                    }
                 }
             }
             return Ok(());
         }
 
         // Fallback path: full double indirection
-        let shadow_off = self.shadow_tag_offset(dst);
+        // Pre-compute shadow update info before borrowing self.buf
+        let shadow = match elem_kind {
+            ElemKind::Tagged => Some(self.shadow_tag_offset(dst)),
+            _ => {
+                let tag = Self::elem_kind_to_tag(elem_kind);
+                self.needs_shadow_update(dst, tag)
+            }
+        };
         let reg_map = &self.all_reg_map;
         let mut asm = X86_64Assembler::new(&mut self.buf);
         // TMP2 = dynamic index
@@ -3515,8 +3806,13 @@ impl MicroOpJitCompiler {
                 asm.add_rr(regs::TMP0, regs::TMP2);
                 asm.movzx_rm_byte(regs::TMP2, regs::TMP0, 0);
                 Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
-                asm.mov_ri64(regs::TMP0, Self::elem_kind_to_tag(elem_kind) as i64);
-                asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
+                if let Some(shadow_off) = shadow {
+                    Self::emit_shadow_update(
+                        &mut asm,
+                        shadow_off,
+                        Self::elem_kind_to_tag(elem_kind),
+                    );
+                }
             }
             ElemKind::I64 | ElemKind::F64 | ElemKind::Ref => {
                 // Typed 8B: heap_base + inner_ref_bytes + 8 + idx * 8
@@ -3526,8 +3822,13 @@ impl MicroOpJitCompiler {
                 asm.add_rr(regs::TMP0, regs::TMP2);
                 asm.mov_rm(regs::TMP2, regs::TMP0, 0);
                 Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
-                asm.mov_ri64(regs::TMP0, Self::elem_kind_to_tag(elem_kind) as i64);
-                asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP0);
+                if let Some(shadow_off) = shadow {
+                    Self::emit_shadow_update(
+                        &mut asm,
+                        shadow_off,
+                        Self::elem_kind_to_tag(elem_kind),
+                    );
+                }
             }
             ElemKind::Tagged => {
                 // Tagged: heap_base + inner_ref_bytes + 8 + idx * 16
@@ -3538,7 +3839,9 @@ impl MicroOpJitCompiler {
                 asm.mov_rm(regs::TMP1, regs::TMP0, 0); // tag
                 asm.mov_rm(regs::TMP2, regs::TMP0, 8); // payload
                 Self::store_vreg(&mut asm, regs::TMP2, dst, reg_map);
-                asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+                if let Some(shadow_off) = shadow {
+                    asm.mov_mr(regs::FRAME_BASE, shadow_off, regs::TMP1);
+                }
             }
         }
         Ok(())

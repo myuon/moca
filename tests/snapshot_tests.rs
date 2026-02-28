@@ -1090,10 +1090,13 @@ fn rust_array_sum<W: Write>(writer: &mut W) {
         v.push(seed % 1000000);
     }
 
+    // Use black_box on the accumulator to prevent auto-vectorization.
+    // moca's JIT generates scalar code, so using SIMD in the Rust reference
+    // would be an unfair comparison of JIT quality vs native compilation.
     let mut total: i64 = 0;
     for _ in 0..200 {
         for i in 0..10000 {
-            total += v[i];
+            total = std::hint::black_box(total) + v[i];
         }
     }
     writeln!(writer, "{}", total).unwrap();
