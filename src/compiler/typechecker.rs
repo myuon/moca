@@ -2306,7 +2306,7 @@ impl TypeChecker {
 
                 // print fallback for types that can't resolve through the generic path:
                 // `any` unifies with everything (empty substitution), `Var` is unresolved,
-                // `Nullable` doesn't implement ToString. Handle these before generic function check.
+                // `Nullable` doesn't implement WriteTo. Redirect to _print_dyn.
                 if callee == "print" && args.len() == 1 && type_args.is_empty() {
                     let arg_type = self.infer_expr(&mut args[0], env);
                     let resolved_arg_type = self.substitution.apply(&arg_type);
@@ -2314,7 +2314,21 @@ impl TypeChecker {
                         resolved_arg_type,
                         Type::Any | Type::Nullable(_) | Type::Var(_)
                     ) {
-                        *callee = "__print_dyn_fallback".to_string();
+                        let span = args[0].span();
+                        let inner = mem::replace(
+                            &mut args[0],
+                            Expr::Nil {
+                                span,
+                                inferred_type: None,
+                            },
+                        );
+                        args[0] = Expr::AsDyn {
+                            expr: Box::new(inner),
+                            span,
+                            inferred_type: Some(Type::Dyn),
+                            is_implicit: true,
+                        };
+                        *callee = "_print_dyn".to_string();
                         return Type::Nil;
                     }
                 }
@@ -2323,8 +2337,8 @@ impl TypeChecker {
                 if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
                     // Track fresh type variables for implicit generic calls
                     let mut fresh_vars: Vec<Type> = Vec::new();
-                    // Flag for print fallback: when print(v) is called but T doesn't implement ToString,
-                    // we rename the callee to __print_dyn_fallback so desugar can transform it.
+                    // Flag for print fallback: when print(v) is called but T doesn't
+                    // implement WriteTo, redirect to _print_dyn (defined in prelude.mc).
                     let mut print_fallback = false;
                     // Instantiate the generic function with the provided type arguments
                     let fn_type = if !type_args.is_empty() {
@@ -2372,7 +2386,7 @@ impl TypeChecker {
                                         .interface_impls
                                         .contains(&(bound.clone(), type_name.clone()))
                                     {
-                                        // print fallback: suppress error and use dyn-based formatter
+                                        // print fallback: suppress error and redirect to _print_dyn
                                         if callee.as_str() == "print" && bound == "WriteTo" {
                                             print_fallback = true;
                                         } else {
@@ -2453,7 +2467,7 @@ impl TypeChecker {
                                                 .interface_impls
                                                 .contains(&(bound.clone(), type_name.clone()))
                                             {
-                                                // print fallback: suppress error and use dyn-based formatter
+                                                // print fallback: suppress error and redirect to _print_dyn
                                                 if callee.as_str() == "print" && bound == "WriteTo"
                                                 {
                                                     print_fallback = true;
@@ -2472,15 +2486,30 @@ impl TypeChecker {
                                 }
                             }
 
-                            let result = self.substitution.apply(&ret);
-
-                            // Apply print fallback: rename callee so desugar transforms it
+                            // Apply print fallback: redirect to _print_dyn
+                            // and wrap the argument in AsDyn for dyn dispatch
                             if print_fallback {
-                                *callee = "__print_dyn_fallback".to_string();
+                                *callee = "_print_dyn".to_string();
                                 type_args.clear();
+                                if let Some(arg) = args.first_mut() {
+                                    let arg_span = arg.span();
+                                    let inner = mem::replace(
+                                        arg,
+                                        Expr::Nil {
+                                            span: arg_span,
+                                            inferred_type: None,
+                                        },
+                                    );
+                                    *arg = Expr::AsDyn {
+                                        expr: Box::new(inner),
+                                        span: arg_span,
+                                        inferred_type: Some(Type::Dyn),
+                                        is_implicit: true,
+                                    };
+                                }
                             }
 
-                            result
+                            self.substitution.apply(&ret)
                         }
                         _ => {
                             self.errors.push(TypeError::new(
@@ -3348,6 +3377,9 @@ impl TypeChecker {
             let resolved_arg = self.substitution.apply(&arg_type);
             // Implicit dyn coercion: only for concrete value types, not for
             // types that are already compatible (dyn, any) or unresolved (Var, Param).
+            // Note: `any` and `Var` are excluded because they may already be dyn at runtime
+            // (e.g., from _dyn_to_string calling __dyn_type_name). Auto-boxing them would
+            // cause double-boxing.
             if matches!(resolved_param, Type::Dyn)
                 && !matches!(
                     resolved_arg,
