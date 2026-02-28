@@ -190,6 +190,19 @@ impl<'a> X86_64Assembler<'a> {
         }
     }
 
+    /// MOV r64, [base + index*8] (load with SIB, scale=8, no displacement)
+    pub fn mov_rm_sib_scale8(&mut self, dst: Reg, base: Reg, index: Reg) {
+        // REX.W prefix: need to encode dst (REX.R), index (REX.X), base (REX.B)
+        let rex = 0x48 | dst.rex_r() | if index.needs_rex_ext() { 0x02 } else { 0 } | base.rex_b();
+        self.buf.emit_u8(rex);
+        self.buf.emit_u8(0x8B); // MOV r64, r/m64
+        // ModRM: mod=00, reg=dst, rm=100 (SIB follows)
+        self.buf.emit_u8(Self::modrm(0b00, dst.code(), 0b100));
+        // SIB: scale=11 (×8), index=index, base=base
+        let sib = (0b11 << 6) | ((index.code() & 0x7) << 3) | (base.code() & 0x7);
+        self.buf.emit_u8(sib);
+    }
+
     /// MOV [r64 + disp32], r64 (store to memory)
     pub fn mov_mr(&mut self, base: Reg, disp: i32, src: Reg) {
         self.emit_rex_w(src, base);

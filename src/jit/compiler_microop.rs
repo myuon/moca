@@ -199,73 +199,87 @@ impl MicroOpJitCompiler {
         // Epilogue label: one past the loop end
         let epilogue_label = loop_end_microop_pc + 1;
 
-        // Pre-compute jump targets for peephole optimization safety
-        let jump_targets: HashSet<usize> = converted.micro_ops
-            [loop_start_microop_pc..=loop_end_microop_pc]
-            .iter()
-            .filter_map(|op| match op {
-                MicroOp::Jmp { target, .. } => Some(*target),
-                MicroOp::BrIf { target, .. } => Some(*target),
-                MicroOp::BrIfFalse { target, .. } => Some(*target),
-                _ => None,
-            })
-            .collect();
-
-        // Compile each MicroOp in the loop range
         let ops = &converted.micro_ops;
-        let mut pc = loop_start_microop_pc;
-        while pc <= loop_end_microop_pc {
-            self.labels.insert(pc, self.buf.len());
 
-            // Peephole: fuse CmpI64/CmpI64Imm + BrIfFalse/BrIf
-            let next_pc = pc + 1;
-            if next_pc <= loop_end_microop_pc && !jump_targets.contains(&next_pc) {
-                // Check if the branch in a fused pair is a loop exit
-                if let Some(fused) =
-                    self.try_fuse_cmp_branch_loop(&ops[pc], &ops[next_pc], loop_end_microop_pc)
-                {
-                    fused?;
-                    self.labels.insert(next_pc, self.buf.len());
-                    pc += 2;
-                    continue;
+        // Try register-pinned loop optimization first
+        if let Some(result) = self.try_compile_pinned_loop(
+            ops,
+            loop_start_microop_pc,
+            loop_end_microop_pc,
+            epilogue_label,
+        ) {
+            result?;
+        } else {
+            // Fall back to normal per-instruction compilation
+
+            // Pre-compute jump targets for peephole optimization safety
+            let jump_targets: HashSet<usize> = converted.micro_ops
+                [loop_start_microop_pc..=loop_end_microop_pc]
+                .iter()
+                .filter_map(|op| match op {
+                    MicroOp::Jmp { target, .. } => Some(*target),
+                    MicroOp::BrIf { target, .. } => Some(*target),
+                    MicroOp::BrIfFalse { target, .. } => Some(*target),
+                    _ => None,
+                })
+                .collect();
+
+            // Compile each MicroOp in the loop range
+            let mut pc = loop_start_microop_pc;
+            while pc <= loop_end_microop_pc {
+                self.labels.insert(pc, self.buf.len());
+
+                // Peephole: fuse CmpI64/CmpI64Imm + BrIfFalse/BrIf
+                let next_pc = pc + 1;
+                if next_pc <= loop_end_microop_pc && !jump_targets.contains(&next_pc) {
+                    // Check if the branch in a fused pair is a loop exit
+                    if let Some(fused) =
+                        self.try_fuse_cmp_branch_loop(&ops[pc], &ops[next_pc], loop_end_microop_pc)
+                    {
+                        fused?;
+                        self.labels.insert(next_pc, self.buf.len());
+                        pc += 2;
+                        continue;
+                    }
                 }
+
+                // Handle loop-specific patterns
+                match &ops[pc] {
+                    MicroOp::BrIfFalse { target, .. } if *target > loop_end_microop_pc => {
+                        // Loop exit: branch to epilogue
+                        let cond = match &ops[pc] {
+                            MicroOp::BrIfFalse { cond, .. } => cond,
+                            _ => unreachable!(),
+                        };
+                        self.emit_br_if_false(cond, epilogue_label)?;
+                    }
+                    MicroOp::BrIf { target, .. } if *target > loop_end_microop_pc => {
+                        // Loop exit: branch to epilogue
+                        let cond = match &ops[pc] {
+                            MicroOp::BrIf { cond, .. } => cond,
+                            _ => unreachable!(),
+                        };
+                        self.emit_br_if(cond, epilogue_label)?;
+                    }
+                    MicroOp::Jmp { target, .. } if *target == loop_start_microop_pc => {
+                        // Backward branch: jump to loop start
+                        self.emit_jmp(loop_start_microop_pc)?;
+                    }
+                    MicroOp::Ret { .. } => {
+                        return Err("Loop contains Ret instruction".to_string());
+                    }
+                    _ => {
+                        self.compile_microop(&ops[pc], pc)?;
+                    }
+                }
+
+                pc += 1;
             }
 
-            // Handle loop-specific patterns
-            match &ops[pc] {
-                MicroOp::BrIfFalse { target, .. } if *target > loop_end_microop_pc => {
-                    // Loop exit: branch to epilogue
-                    let cond = match &ops[pc] {
-                        MicroOp::BrIfFalse { cond, .. } => cond,
-                        _ => unreachable!(),
-                    };
-                    self.emit_br_if_false(cond, epilogue_label)?;
-                }
-                MicroOp::BrIf { target, .. } if *target > loop_end_microop_pc => {
-                    // Loop exit: branch to epilogue
-                    let cond = match &ops[pc] {
-                        MicroOp::BrIf { cond, .. } => cond,
-                        _ => unreachable!(),
-                    };
-                    self.emit_br_if(cond, epilogue_label)?;
-                }
-                MicroOp::Jmp { target, .. } if *target == loop_start_microop_pc => {
-                    // Backward branch: jump to loop start
-                    self.emit_jmp(loop_start_microop_pc)?;
-                }
-                MicroOp::Ret { .. } => {
-                    return Err("Loop contains Ret instruction".to_string());
-                }
-                _ => {
-                    self.compile_microop(&ops[pc], pc)?;
-                }
-            }
-
-            pc += 1;
+            // Emit epilogue label
+            self.labels.insert(epilogue_label, self.buf.len());
         }
 
-        // Emit epilogue label and code, then patch forward refs
-        self.labels.insert(epilogue_label, self.buf.len());
         self.emit_epilogue();
         self.patch_forward_refs();
 
@@ -2159,6 +2173,489 @@ impl MicroOpJitCompiler {
         Ok(())
     }
 
+    // ==================== Register-Pinned Loop Optimization ====================
+
+    /// Analyze a loop to determine if register pinning is applicable.
+    /// Returns None if not applicable (unsupported ops, too many VRegs, etc.).
+    fn analyze_for_pinning(
+        &self,
+        ops: &[MicroOp],
+        loop_start: usize,
+        loop_end: usize,
+    ) -> Option<PinnedLoopInfo> {
+        let mut used_vregs: HashSet<usize> = HashSet::new();
+        let mut written_vregs: HashSet<usize> = HashSet::new();
+        let mut heap_load2_objs: HashMap<usize, ElemKind> = HashMap::new();
+
+        for pc in loop_start..=loop_end {
+            match &ops[pc] {
+                MicroOp::CmpI64 { dst, a, b, .. } => {
+                    used_vregs.extend([dst.0, a.0, b.0]);
+                    written_vregs.insert(dst.0);
+                }
+                MicroOp::CmpI64Imm { dst, a, .. } => {
+                    used_vregs.extend([dst.0, a.0]);
+                    written_vregs.insert(dst.0);
+                }
+                MicroOp::BrIfFalse { cond, .. } | MicroOp::BrIf { cond, .. } => {
+                    used_vregs.insert(cond.0);
+                }
+                MicroOp::HeapLoad2 {
+                    dst,
+                    obj,
+                    idx,
+                    elem_kind,
+                } => {
+                    used_vregs.extend([dst.0, obj.0, idx.0]);
+                    written_vregs.insert(dst.0);
+                    match elem_kind {
+                        ElemKind::I64 | ElemKind::F64 | ElemKind::Ref => {
+                            heap_load2_objs.insert(obj.0, *elem_kind);
+                        }
+                        _ => return None,
+                    }
+                }
+                MicroOp::AddI64 { dst, a, b }
+                | MicroOp::SubI64 { dst, a, b }
+                | MicroOp::MulI64 { dst, a, b } => {
+                    used_vregs.extend([dst.0, a.0, b.0]);
+                    written_vregs.insert(dst.0);
+                }
+                MicroOp::AddI64Imm { dst, a, .. } => {
+                    used_vregs.extend([dst.0, a.0]);
+                    written_vregs.insert(dst.0);
+                }
+                MicroOp::Mov { dst, src } => {
+                    used_vregs.extend([dst.0, src.0]);
+                    written_vregs.insert(dst.0);
+                }
+                MicroOp::Jmp { .. } => {}
+                // Unsupported ops
+                _ => {
+                    return None;
+                }
+            }
+        }
+
+        // Check HeapLoad2 objs are loop-invariant (not written in loop)
+        for obj_vreg in heap_load2_objs.keys() {
+            if written_vregs.contains(obj_vreg) {
+                return None;
+            }
+        }
+
+        // Detect CmpI64/CmpI64Imm + BrIfFalse/BrIf fusion candidates
+        let mut fused_vregs: HashSet<usize> = HashSet::new();
+        for pc in loop_start..loop_end {
+            let next_pc = pc + 1;
+            if next_pc <= loop_end {
+                let cmp_dst = match &ops[pc] {
+                    MicroOp::CmpI64 { dst, .. } | MicroOp::CmpI64Imm { dst, .. } => Some(dst.0),
+                    _ => None,
+                };
+                let branch_cond = match &ops[next_pc] {
+                    MicroOp::BrIfFalse { cond, .. } | MicroOp::BrIf { cond, .. } => Some(cond.0),
+                    _ => None,
+                };
+                if let (Some(cd), Some(bc)) = (cmp_dst, branch_cond) {
+                    if cd == bc {
+                        fused_vregs.insert(cd);
+                    }
+                }
+            }
+        }
+
+        // VRegs needing hardware registers (exclude fused temporaries)
+        let mut vregs_needing_regs: Vec<usize> = used_vregs
+            .iter()
+            .filter(|v| !fused_vregs.contains(v))
+            .copied()
+            .collect();
+        vregs_needing_regs.sort();
+
+        // Check if we have enough registers (VRegs + HeapLoad2 bases)
+        let num_needed = vregs_needing_regs.len() + heap_load2_objs.len();
+        if num_needed > PINNABLE_REGS.len() {
+            return None;
+        }
+
+        // Assign registers: first HeapLoad2 bases, then VRegs
+        let mut reg_idx = 0;
+        let mut heap_load2_bases = HashMap::new();
+        for (obj_vreg, elem_kind) in &heap_load2_objs {
+            heap_load2_bases.insert(*obj_vreg, (PINNABLE_REGS[reg_idx], *elem_kind));
+            reg_idx += 1;
+        }
+
+        let mut vreg_to_reg = HashMap::new();
+        for vreg in &vregs_needing_regs {
+            vreg_to_reg.insert(*vreg, PINNABLE_REGS[reg_idx]);
+            reg_idx += 1;
+        }
+
+        Some(PinnedLoopInfo {
+            vreg_to_reg,
+            written_vregs,
+            heap_load2_bases,
+            fused_vregs,
+        })
+    }
+
+    /// Try to compile a loop with register pinning.
+    /// Returns None if not applicable, Some(Ok(())) if successful.
+    fn try_compile_pinned_loop(
+        &mut self,
+        ops: &[MicroOp],
+        loop_start: usize,
+        loop_end: usize,
+        epilogue_label: usize,
+    ) -> Option<Result<(), String>> {
+        let info = self.analyze_for_pinning(ops, loop_start, loop_end)?;
+
+        Some(self.emit_pinned_loop(ops, loop_start, loop_end, epilogue_label, &info))
+    }
+
+    /// Emit the full pinned loop: pre-loop loads, loop body, post-loop writeback.
+    fn emit_pinned_loop(
+        &mut self,
+        ops: &[MicroOp],
+        loop_start: usize,
+        loop_end: usize,
+        epilogue_label: usize,
+        info: &PinnedLoopInfo,
+    ) -> Result<(), String> {
+        // Pre-loop: load VRegs from frame into pinned registers
+        for (&vreg_idx, &reg) in &info.vreg_to_reg {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(reg, regs::FRAME_BASE, (vreg_idx * 8) as u16);
+        }
+
+        // Pre-loop: compute HeapLoad2 data_base pointers
+        for (&obj_vreg, &(base_reg, _elem_kind)) in &info.heap_load2_bases {
+            // heap_base = [VM_CTX + 48]
+            // obj_value = [FRAME_BASE + obj_vreg * 8]
+            // outer_addr = heap_base + obj_value
+            // inner_ptr = [outer_addr + 16]   (slot 0)
+            // data_base = heap_base + inner_ptr + 8   (skip header)
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.ldr(regs::TMP0, regs::FRAME_BASE, (obj_vreg * 8) as u16);
+            asm.ldr(regs::TMP1, regs::VM_CTX, 48);
+            asm.add(regs::TMP0, regs::TMP1, regs::TMP0);
+            asm.ldr(regs::TMP0, regs::TMP0, 16);
+            asm.add(regs::TMP0, regs::TMP1, regs::TMP0);
+            asm.add_imm(base_reg, regs::TMP0, 8);
+        }
+
+        // Loop body: compile each MicroOp using pinned registers
+        let mut pc = loop_start;
+        while pc <= loop_end {
+            self.labels.insert(pc, self.buf.len());
+
+            // Try cmp+branch fusion
+            let next_pc = pc + 1;
+            if next_pc <= loop_end {
+                if let Some(result) =
+                    self.try_pinned_fuse_cmp_branch(&ops[pc], &ops[next_pc], loop_end, info)
+                {
+                    result?;
+                    self.labels.insert(next_pc, self.buf.len());
+                    pc += 2;
+                    continue;
+                }
+            }
+
+            self.emit_pinned_microop(&ops[pc], loop_start, loop_end, info)?;
+            pc += 1;
+        }
+
+        // Epilogue label: writeback modified VRegs to frame
+        self.labels.insert(epilogue_label, self.buf.len());
+        for (&vreg_idx, &reg) in &info.vreg_to_reg {
+            if info.written_vregs.contains(&vreg_idx) {
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.str(reg, regs::FRAME_BASE, (vreg_idx * 8) as u16);
+            }
+        }
+
+        // Update shadow tags for written VRegs that have conflicts
+        for &vreg_idx in &info.written_vregs {
+            if info.fused_vregs.contains(&vreg_idx) {
+                continue;
+            }
+            if self.shadow_conflict_vregs.contains(&vreg_idx) {
+                let shadow_off = ((self.total_regs + vreg_idx) * 8) as u16;
+                // Determine the tag based on what writes to this VReg
+                let tag = self.determine_pinned_write_tag(ops, loop_start, loop_end, vreg_idx);
+                self.emit_load_imm64(tag as i64, regs::TMP0);
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.str(regs::TMP0, regs::FRAME_BASE, shadow_off);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Determine the shadow tag for a VReg based on operations that write to it.
+    fn determine_pinned_write_tag(
+        &self,
+        ops: &[MicroOp],
+        loop_start: usize,
+        loop_end: usize,
+        vreg_idx: usize,
+    ) -> u64 {
+        for pc in loop_start..=loop_end {
+            match &ops[pc] {
+                MicroOp::HeapLoad2 { dst, elem_kind, .. } if dst.0 == vreg_idx => {
+                    return Self::elem_kind_to_tag(*elem_kind);
+                }
+                MicroOp::AddI64 { dst, .. }
+                | MicroOp::SubI64 { dst, .. }
+                | MicroOp::MulI64 { dst, .. }
+                | MicroOp::AddI64Imm { dst, .. }
+                | MicroOp::CmpI64 { dst, .. }
+                | MicroOp::CmpI64Imm { dst, .. }
+                    if dst.0 == vreg_idx =>
+                {
+                    return value_tags::TAG_INT;
+                }
+                MicroOp::Mov { dst, .. } if dst.0 == vreg_idx => {
+                    return value_tags::TAG_INT;
+                }
+                _ => {}
+            }
+        }
+        value_tags::TAG_INT
+    }
+
+    /// Try to fuse CmpI64/CmpI64Imm + BrIfFalse/BrIf in pinned mode.
+    fn try_pinned_fuse_cmp_branch(
+        &mut self,
+        cmp_op: &MicroOp,
+        branch_op: &MicroOp,
+        loop_end: usize,
+        info: &PinnedLoopInfo,
+    ) -> Option<Result<(), String>> {
+        let (cmp_dst, cmp_cond, a_vreg, b_operand) = match cmp_op {
+            MicroOp::CmpI64 { dst, a, b, cond } => (dst, cond, a, CmpOperand::Reg(b)),
+            MicroOp::CmpI64Imm { dst, a, imm, cond } => (dst, cond, a, CmpOperand::Imm(*imm)),
+            _ => return None,
+        };
+
+        let (branch_cond_vreg, target, invert) = match branch_op {
+            MicroOp::BrIfFalse { cond, target } => (cond, *target, true),
+            MicroOp::BrIf { cond, target } => (cond, *target, false),
+            _ => return None,
+        };
+
+        if branch_cond_vreg != cmp_dst {
+            return None;
+        }
+
+        // Resolve target: loop exit → epilogue
+        let resolved_target = if target > loop_end {
+            loop_end + 1
+        } else {
+            target
+        };
+
+        let reg_a = *info.vreg_to_reg.get(&a_vreg.0)?;
+
+        // Emit compare
+        match b_operand {
+            CmpOperand::Reg(b_vreg) => {
+                let reg_b = *info.vreg_to_reg.get(&b_vreg.0)?;
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.cmp(reg_a, reg_b);
+            }
+            CmpOperand::Imm(imm) => {
+                if imm >= 0 && imm <= 4095 {
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.cmp_imm(reg_a, imm as u16);
+                } else {
+                    self.emit_load_imm64(imm, regs::TMP0);
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.cmp(reg_a, regs::TMP0);
+                }
+            }
+        }
+
+        // Emit conditional branch
+        let mut aarch64_cond = Self::cmp_cond_to_aarch64(cmp_cond);
+        if invert {
+            aarch64_cond = Self::invert_cond(aarch64_cond);
+        }
+
+        let current = self.buf.len();
+        self.forward_refs.push((current, resolved_target));
+        {
+            let mut asm = AArch64Assembler::new(&mut self.buf);
+            asm.b_cond(aarch64_cond, 0);
+        }
+
+        Some(Ok(()))
+    }
+
+    /// Emit a single MicroOp in pinned mode (using hardware registers).
+    fn emit_pinned_microop(
+        &mut self,
+        op: &MicroOp,
+        loop_start: usize,
+        loop_end: usize,
+        info: &PinnedLoopInfo,
+    ) -> Result<(), String> {
+        match op {
+            MicroOp::AddI64 { dst, a, b } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let ra = info.vreg_to_reg[&a.0];
+                let rb = info.vreg_to_reg[&b.0];
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.add(rd, ra, rb);
+                Ok(())
+            }
+            MicroOp::SubI64 { dst, a, b } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let ra = info.vreg_to_reg[&a.0];
+                let rb = info.vreg_to_reg[&b.0];
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.sub(rd, ra, rb);
+                Ok(())
+            }
+            MicroOp::MulI64 { dst, a, b } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let ra = info.vreg_to_reg[&a.0];
+                let rb = info.vreg_to_reg[&b.0];
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.mul(rd, ra, rb);
+                Ok(())
+            }
+            MicroOp::AddI64Imm { dst, a, imm } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let ra = info.vreg_to_reg[&a.0];
+                if *imm >= 0 && *imm <= 4095 {
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.add_imm(rd, ra, *imm as u16);
+                } else if *imm < 0 && (-*imm) <= 4095 {
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.sub_imm(rd, ra, (-*imm) as u16);
+                } else {
+                    self.emit_load_imm64(*imm, regs::TMP0);
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.add(rd, ra, regs::TMP0);
+                }
+                Ok(())
+            }
+            MicroOp::Mov { dst, src } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let rs = info.vreg_to_reg[&src.0];
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.mov(rd, rs);
+                Ok(())
+            }
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind,
+            } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let ri = info.vreg_to_reg[&idx.0];
+
+                if let Some(&(base_reg, _)) = info.heap_load2_bases.get(&obj.0) {
+                    // Hoisted: use pre-computed data_base
+                    match elem_kind {
+                        ElemKind::I64 | ElemKind::F64 | ElemKind::Ref => {
+                            let mut asm = AArch64Assembler::new(&mut self.buf);
+                            asm.ldr_reg_shifted(rd, base_reg, ri);
+                        }
+                        _ => {
+                            return Err(format!(
+                                "Unsupported elem_kind {:?} in pinned HeapLoad2",
+                                elem_kind
+                            ));
+                        }
+                    }
+                } else {
+                    // Not hoisted, fall back to normal (shouldn't happen if analysis is correct)
+                    return Err("HeapLoad2 without hoisted base in pinned loop".to_string());
+                }
+                Ok(())
+            }
+            MicroOp::CmpI64 { dst, a, b, cond } => {
+                // Standalone compare (not fused with branch)
+                let rd = info.vreg_to_reg[&dst.0];
+                let ra = info.vreg_to_reg[&a.0];
+                let rb = info.vreg_to_reg[&b.0];
+                let aarch64_cond = Self::cmp_cond_to_aarch64(cond);
+                let inv = Self::invert_cond(aarch64_cond);
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.cmp(ra, rb);
+                // CSET rd, cond → CSINC rd, XZR, XZR, inv_cond
+                let inst = 0x9A9F07E0 | ((inv as u32) << 12) | (rd.code() as u32);
+                asm.emit_raw(inst);
+                Ok(())
+            }
+            MicroOp::CmpI64Imm { dst, a, imm, cond } => {
+                let rd = info.vreg_to_reg[&dst.0];
+                let ra = info.vreg_to_reg[&a.0];
+                let aarch64_cond = Self::cmp_cond_to_aarch64(cond);
+                let inv = Self::invert_cond(aarch64_cond);
+
+                if *imm >= 0 && *imm <= 4095 {
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.cmp_imm(ra, *imm as u16);
+                } else {
+                    self.emit_load_imm64(*imm, regs::TMP0);
+                    let mut asm = AArch64Assembler::new(&mut self.buf);
+                    asm.cmp(ra, regs::TMP0);
+                }
+
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                let inst = 0x9A9F07E0 | ((inv as u32) << 12) | (rd.code() as u32);
+                asm.emit_raw(inst);
+                Ok(())
+            }
+            MicroOp::BrIfFalse { cond, target } => {
+                let rc = info.vreg_to_reg[&cond.0];
+                let resolved = if *target > loop_end {
+                    loop_end + 1
+                } else {
+                    *target
+                };
+                let current = self.buf.len();
+                self.forward_refs.push((current, resolved));
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.cbz(rc, 0);
+                Ok(())
+            }
+            MicroOp::BrIf { cond, target } => {
+                let rc = info.vreg_to_reg[&cond.0];
+                let resolved = if *target > loop_end {
+                    loop_end + 1
+                } else {
+                    *target
+                };
+                let current = self.buf.len();
+                self.forward_refs.push((current, resolved));
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.cbnz(rc, 0);
+                Ok(())
+            }
+            MicroOp::Jmp { target, .. } => {
+                let resolved = if *target == loop_start {
+                    loop_start
+                } else {
+                    *target
+                };
+                let current = self.buf.len();
+                self.forward_refs.push((current, resolved));
+                let mut asm = AArch64Assembler::new(&mut self.buf);
+                asm.b(0);
+                Ok(())
+            }
+            _ => Err(format!("Unsupported op in pinned loop: {:?}", op)),
+        }
+    }
+
     // ==================== Utilities ====================
 
     /// Load a 64-bit immediate into a register.
@@ -2256,4 +2753,34 @@ enum FpBinOp {
 enum CmpOperand<'a> {
     Reg(&'a VReg),
     Imm(i64),
+}
+
+/// Registers available for VReg pinning in optimized loops.
+/// Excludes: X0-X3 (TMP0-TMP3), X9-X10 (TMP4-TMP5), X19 (VM_CTX), X20 (FRAME_BASE),
+/// X16-X18 (platform/IP registers on macOS).
+#[cfg(target_arch = "aarch64")]
+const PINNABLE_REGS: [Reg; 10] = [
+    Reg::X4,
+    Reg::X5,
+    Reg::X6,
+    Reg::X7,
+    Reg::X8,
+    Reg::X11,
+    Reg::X12,
+    Reg::X13,
+    Reg::X14,
+    Reg::X15,
+];
+
+/// Information about a register-pinned loop optimization.
+#[cfg(target_arch = "aarch64")]
+struct PinnedLoopInfo {
+    /// VReg index → pinned hardware register.
+    vreg_to_reg: HashMap<usize, Reg>,
+    /// VRegs that are written in the loop (need post-loop writeback).
+    written_vregs: HashSet<usize>,
+    /// HeapLoad2 hoisting: obj_vreg_index → (data_base_reg, elem_kind).
+    heap_load2_bases: HashMap<usize, (Reg, ElemKind)>,
+    /// VRegs that are pure fusion temporaries (cmp dst consumed only by adjacent branch).
+    fused_vregs: HashSet<usize>,
 }

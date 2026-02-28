@@ -998,7 +998,7 @@ impl VM {
             (unsafe { compiled.entry_point() }, compiled.total_regs)
         };
 
-        // Allocate frame: total_regs * 2 slots (payload + shadow tags, 8 bytes per slot)
+        // Reuse frame buffer (avoids heap allocation per call)
         let frame_regs = if total_regs > 0 {
             total_regs
         } else {
