@@ -619,14 +619,9 @@ impl TypeChecker {
         }
 
         // Pass 2.5: auto-derive ToString for structs without explicit impl
-        // Only run when ToString interface is defined (i.e., prelude is loaded)
         let struct_names: Vec<String> = self.structs.keys().cloned().collect();
         let mut synthetic_items = Vec::new();
-        let has_tostring_interface = self.interfaces.contains_key("ToString");
         for struct_name in &struct_names {
-            if !has_tostring_interface {
-                break;
-            }
             // Skip if explicit impl ToString already exists
             if self
                 .interface_impls
@@ -653,32 +648,29 @@ impl TypeChecker {
 
         // Pass 2.6: auto-derive WriteTo for structs that have ToString.
         // WriteTo wraps to_string() + write_str(), so structs can be used with print<T: WriteTo>.
-        let has_writeto_interface = self.interfaces.contains_key("WriteTo");
-        if has_writeto_interface {
-            let mut writeto_items = Vec::new();
-            for struct_name in &struct_names {
-                // Skip if WriteTo already explicitly implemented
-                if self
-                    .interface_impls
-                    .contains(&("WriteTo".to_string(), struct_name.clone()))
-                {
-                    continue;
-                }
-                // Only derive for types that have ToString
-                if !self
-                    .interface_impls
-                    .contains(&("ToString".to_string(), struct_name.clone()))
-                {
-                    continue;
-                }
-                if let Some(impl_block) = self.generate_writeto_from_tostring_impl(struct_name) {
-                    self.register_impl_methods(&impl_block);
-                    self.register_interface_impl(&impl_block);
-                    writeto_items.push(Item::ImplBlock(impl_block));
-                }
+        let mut writeto_items = Vec::new();
+        for struct_name in &struct_names {
+            // Skip if WriteTo already explicitly implemented
+            if self
+                .interface_impls
+                .contains(&("WriteTo".to_string(), struct_name.clone()))
+            {
+                continue;
             }
-            program.items.extend(writeto_items);
+            // Only derive for types that have ToString
+            if !self
+                .interface_impls
+                .contains(&("ToString".to_string(), struct_name.clone()))
+            {
+                continue;
+            }
+            if let Some(impl_block) = self.generate_writeto_from_tostring_impl(struct_name) {
+                self.register_impl_methods(&impl_block);
+                self.register_interface_impl(&impl_block);
+                writeto_items.push(Item::ImplBlock(impl_block));
+            }
         }
+        program.items.extend(writeto_items);
 
         // Third pass: type check function bodies and statements (mutable)
         let mut main_env = TypeEnv::new();
@@ -3823,12 +3815,14 @@ mod tests {
     use super::*;
     use crate::compiler::lexer::Lexer;
     use crate::compiler::parser::Parser;
+    use crate::compiler::prepend_stdlib;
 
     fn check(source: &str) -> Result<(), Vec<TypeError>> {
         let mut lexer = Lexer::new("test.mc", source);
         let tokens = lexer.scan_tokens().unwrap();
         let mut parser = Parser::new("test.mc", tokens);
-        let mut program = parser.parse().unwrap();
+        let parsed_program = parser.parse().unwrap();
+        let mut program = prepend_stdlib(parsed_program).unwrap();
         let mut checker = TypeChecker::new("test.mc");
         checker.check_program(&mut program)
     }
