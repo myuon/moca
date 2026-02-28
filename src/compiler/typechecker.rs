@@ -2304,10 +2304,9 @@ impl TypeChecker {
                     return result_type;
                 }
 
-                // For print(v: dyn), wrap any/Var/Nullable arguments in AsDyn.
-                // These types are normally excluded from auto-boxing in check_call_args
-                // (to avoid double-boxing dyn values stored as any), but print needs
-                // a properly boxed dyn value for runtime WriteTo dispatch.
+                // print fallback for types that can't resolve through the generic path:
+                // `any` unifies with everything (empty substitution), `Var` is unresolved,
+                // `Nullable` doesn't implement WriteTo. Redirect to _print_dyn.
                 if callee == "print" && args.len() == 1 && type_args.is_empty() {
                     let arg_type = self.infer_expr(&mut args[0], env);
                     let resolved_arg_type = self.substitution.apply(&arg_type);
@@ -2329,6 +2328,7 @@ impl TypeChecker {
                             inferred_type: Some(Type::Dyn),
                             is_implicit: true,
                         };
+                        *callee = "_print_dyn".to_string();
                         return Type::Nil;
                     }
                 }
@@ -2337,6 +2337,9 @@ impl TypeChecker {
                 if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
                     // Track fresh type variables for implicit generic calls
                     let mut fresh_vars: Vec<Type> = Vec::new();
+                    // Flag for print fallback: when print(v) is called but T doesn't
+                    // implement WriteTo, redirect to _print_dyn (defined in prelude.mc).
+                    let mut print_fallback = false;
                     // Instantiate the generic function with the provided type arguments
                     let fn_type = if !type_args.is_empty() {
                         // Check that the number of type arguments matches
@@ -2383,13 +2386,18 @@ impl TypeChecker {
                                         .interface_impls
                                         .contains(&(bound.clone(), type_name.clone()))
                                     {
-                                        self.errors.push(TypeError::new(
-                                            format!(
-                                                "type `{}` does not implement interface `{}`",
-                                                concrete_type, bound
-                                            ),
-                                            *span,
-                                        ));
+                                        // print fallback: suppress error and redirect to _print_dyn
+                                        if callee.as_str() == "print" && bound == "WriteTo" {
+                                            print_fallback = true;
+                                        } else {
+                                            self.errors.push(TypeError::new(
+                                                format!(
+                                                    "type `{}` does not implement interface `{}`",
+                                                    concrete_type, bound
+                                                ),
+                                                *span,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -2459,16 +2467,45 @@ impl TypeChecker {
                                                 .interface_impls
                                                 .contains(&(bound.clone(), type_name.clone()))
                                             {
-                                                self.errors.push(TypeError::new(
-                                                    format!(
-                                                        "type `{}` does not implement interface `{}`",
-                                                        concrete_type, bound
-                                                    ),
-                                                    *span,
-                                                ));
+                                                // print fallback: suppress error and redirect to _print_dyn
+                                                if callee.as_str() == "print" && bound == "WriteTo"
+                                                {
+                                                    print_fallback = true;
+                                                } else {
+                                                    self.errors.push(TypeError::new(
+                                                        format!(
+                                                            "type `{}` does not implement interface `{}`",
+                                                            concrete_type, bound
+                                                        ),
+                                                        *span,
+                                                    ));
+                                                }
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            // Apply print fallback: redirect to _print_dyn
+                            // and wrap the argument in AsDyn for dyn dispatch
+                            if print_fallback {
+                                *callee = "_print_dyn".to_string();
+                                type_args.clear();
+                                if let Some(arg) = args.first_mut() {
+                                    let arg_span = arg.span();
+                                    let inner = mem::replace(
+                                        arg,
+                                        Expr::Nil {
+                                            span: arg_span,
+                                            inferred_type: None,
+                                        },
+                                    );
+                                    *arg = Expr::AsDyn {
+                                        expr: Box::new(inner),
+                                        span: arg_span,
+                                        inferred_type: Some(Type::Dyn),
+                                        is_implicit: true,
+                                    };
                                 }
                             }
 

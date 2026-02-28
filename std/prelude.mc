@@ -998,8 +998,16 @@ fun print_str(s: string) {
 }
 
 // Print a value to stdout with a trailing newline.
-// Uses runtime WriteTo vtable dispatch for dyn values.
-fun print(v: dyn) {
+// Requires the value's type to implement the WriteTo interface.
+fun print<T: WriteTo>(v: T) {
+    v.write_to(1);
+    write_str(1, "\n", 1);
+}
+
+// Fallback print for types that don't implement WriteTo.
+// Called by the typechecker when print(v) is used with a non-WriteTo type.
+// Uses runtime dyn dispatch: tries WriteTo vtable first, then formats via _value_to_string.
+fun _print_dyn(v: dyn) {
     match dyn v {
         w: WriteTo => {
             w.write_to(1);
