@@ -34,7 +34,6 @@ fn get_config_for_dir(dir_name: &str) -> RuntimeConfig {
     match dir_name {
         "jit" => RuntimeConfig {
             jit_mode: JitMode::On,
-            jit_threshold: 1, // Low threshold to trigger JIT quickly in tests
             ..RuntimeConfig::default()
         },
         _ => RuntimeConfig::default(),
@@ -1109,7 +1108,6 @@ fn run_performance_benchmark(path: &Path) -> (std::time::Duration, String, usize
 
     let config = RuntimeConfig {
         jit_mode: JitMode::On,
-        jit_threshold: 1,
         ..Default::default()
     };
 

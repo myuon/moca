@@ -6,7 +6,7 @@ fun fib(n) {
 }
 
 let i = 0;
-while i < 10 {
+while i < 20 {
     print(fib(i));
     i = i + 1;
 }
