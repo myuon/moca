@@ -1,0 +1,4 @@
+Inner { value: 42 }
+Outer { inner: Inner { value: 42 } }
+DeepA { child: Outer { inner: Inner { value: 42 } } }
+DeepB { child: DeepA { child: Outer { inner: Inner { value: 42 } } } }
