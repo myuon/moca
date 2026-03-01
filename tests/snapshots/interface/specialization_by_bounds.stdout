@@ -1,0 +1,3 @@
+specialized: int
+specialized: string:hello
+fallback

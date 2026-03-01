@@ -1005,8 +1005,13 @@ fun print<T: WriteTo>(v: T) {
 }
 
 // Fallback print for types that don't implement WriteTo.
-// Called by the typechecker when print(v) is used with a non-WriteTo type.
-// Uses runtime dyn dispatch: tries WriteTo vtable first, then formats via _value_to_string.
+// Selected by overload resolution when T doesn't satisfy WriteTo bounds.
+fun print<T>(v: T) {
+    _print_dyn(v as dyn);
+}
+
+// Runtime dyn dispatch for printing.
+// Tries WriteTo vtable first, then formats via _value_to_string.
 fun _print_dyn(v: dyn) {
     match dyn v {
         w: WriteTo => {
