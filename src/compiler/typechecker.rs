@@ -199,6 +199,9 @@ pub struct GenericFunctionInfo {
     pub type_param_bounds: Vec<Vec<String>>,
     /// Function type (with Type::Param for generic parameters)
     pub fn_type: Type,
+    /// Internal name used for distinguishing overloaded variants.
+    /// For non-overloaded functions this equals the function name.
+    pub internal_name: String,
 }
 
 /// Information about an interface definition
@@ -216,8 +219,8 @@ pub struct TypeChecker {
     errors: Vec<TypeError>,
     /// Function signatures (name -> type)
     functions: HashMap<String, Type>,
-    /// Generic function signatures (name -> generic info)
-    generic_functions: HashMap<String, GenericFunctionInfo>,
+    /// Generic function signatures (name -> overload variants)
+    generic_functions: HashMap<String, Vec<GenericFunctionInfo>>,
     /// Struct definitions (name -> struct info)
     structs: HashMap<String, StructInfo>,
     /// Primitive type methods: type_name -> (method_name -> method_type)
@@ -599,14 +602,26 @@ impl TypeChecker {
                 Item::FnDef(fn_def) => {
                     let (fn_type, is_generic) = self.infer_function_signature(fn_def);
                     if is_generic {
-                        self.generic_functions.insert(
-                            fn_def.name.clone(),
-                            GenericFunctionInfo {
-                                type_params: fn_def.type_params.clone(),
-                                type_param_bounds: fn_def.type_param_bounds.clone(),
-                                fn_type: fn_type.clone(),
-                            },
-                        );
+                        let overloads = self
+                            .generic_functions
+                            .entry(fn_def.name.clone())
+                            .or_default();
+                        let index = overloads.len();
+                        let internal_name = if index == 0 {
+                            fn_def.name.clone()
+                        } else {
+                            // When we add a second overload, rename the first one too
+                            if index == 1 {
+                                overloads[0].internal_name = format!("{}$$0", fn_def.name);
+                            }
+                            format!("{}$${}", fn_def.name, index)
+                        };
+                        overloads.push(GenericFunctionInfo {
+                            type_params: fn_def.type_params.clone(),
+                            type_param_bounds: fn_def.type_param_bounds.clone(),
+                            fn_type: fn_type.clone(),
+                            internal_name,
+                        });
                     }
                     self.functions.insert(fn_def.name.clone(), fn_type);
                 }
@@ -615,6 +630,27 @@ impl TypeChecker {
                     self.register_interface_impl(impl_block);
                 }
                 _ => {}
+            }
+        }
+
+        // Register overloaded function variants under their internal names.
+        // This allows subsequent lookups (e.g., when a call is inferred twice)
+        // to find the function by its rewritten name (e.g., show$$0).
+        {
+            let additional: Vec<(String, GenericFunctionInfo)> = self
+                .generic_functions
+                .values()
+                .filter(|overloads| overloads.len() > 1)
+                .flat_map(|overloads| {
+                    overloads
+                        .iter()
+                        .map(|o| (o.internal_name.clone(), o.clone()))
+                })
+                .collect();
+            for (internal_name, info) in additional {
+                self.functions
+                    .insert(internal_name.clone(), info.fn_type.clone());
+                self.generic_functions.insert(internal_name, vec![info]);
             }
         }
 
@@ -678,6 +714,25 @@ impl TypeChecker {
                 }
             }
             program.items.extend(writeto_items);
+        }
+
+        // Pass 2.7: Rename overloaded generic function definitions.
+        // When the same function name has multiple generic definitions with different
+        // bounds, each definition gets a unique internal name (e.g., print$$0, print$$1).
+        {
+            let mut overload_counters: HashMap<String, usize> = HashMap::new();
+            for item in &mut program.items {
+                if let Item::FnDef(fn_def) = item
+                    && let Some(overloads) = self.generic_functions.get(&fn_def.name)
+                    && overloads.len() > 1
+                {
+                    let counter = overload_counters.entry(fn_def.name.clone()).or_insert(0);
+                    if let Some(overload) = overloads.get(*counter) {
+                        fn_def.name = overload.internal_name.clone();
+                    }
+                    *counter += 1;
+                }
+            }
         }
 
         // Third pass: type check function bodies and statements (mutable)
@@ -2334,7 +2389,12 @@ impl TypeChecker {
                 }
 
                 // Check if it's a generic function with explicit type arguments
-                if let Some(generic_info) = self.generic_functions.get(callee).cloned() {
+                if let Some(overloads) = self.generic_functions.get(callee.as_str()).cloned() {
+                    // Use the first overload for type inference.
+                    // All overloads share compatible function types.
+                    let generic_info = overloads[0].clone();
+                    let has_overloads = overloads.len() > 1;
+
                     // Track fresh type variables for implicit generic calls
                     let mut fresh_vars: Vec<Type> = Vec::new();
                     // Flag for print fallback: when print(v) is called but T doesn't
@@ -2374,29 +2434,37 @@ impl TypeChecker {
                                     instantiated.substitute_param(param_name, &resolved_arg);
                             }
 
-                            // Check interface bounds
-                            for (i, bounds) in generic_info.type_param_bounds.iter().enumerate() {
-                                if bounds.is_empty() {
-                                    continue;
-                                }
-                                let concrete_type = &resolved_args[i];
-                                let type_name = self.type_to_impl_name(concrete_type);
-                                for bound in bounds {
-                                    if !self
-                                        .interface_impls
-                                        .contains(&(bound.clone(), type_name.clone()))
-                                    {
-                                        // print fallback: suppress error and redirect to _print_dyn
-                                        if callee.as_str() == "print" && bound == "WriteTo" {
-                                            print_fallback = true;
-                                        } else {
-                                            self.errors.push(TypeError::new(
-                                                format!(
-                                                    "type `{}` does not implement interface `{}`",
-                                                    concrete_type, bound
-                                                ),
-                                                *span,
-                                            ));
+                            // Overload resolution or bounds checking
+                            if has_overloads {
+                                let selected_idx =
+                                    self.resolve_overload(&overloads, &resolved_args);
+                                let selected = &overloads[selected_idx];
+                                *callee = selected.internal_name.clone();
+                            } else {
+                                // Check interface bounds (single overload)
+                                for (i, bounds) in generic_info.type_param_bounds.iter().enumerate()
+                                {
+                                    if bounds.is_empty() {
+                                        continue;
+                                    }
+                                    let concrete_type = &resolved_args[i];
+                                    let type_name = self.type_to_impl_name(concrete_type);
+                                    for bound in bounds {
+                                        if !self
+                                            .interface_impls
+                                            .contains(&(bound.clone(), type_name.clone()))
+                                        {
+                                            if callee.as_str() == "print" && bound == "WriteTo" {
+                                                print_fallback = true;
+                                            } else {
+                                                self.errors.push(TypeError::new(
+                                                    format!(
+                                                        "type `{}` does not implement interface `{}`",
+                                                        concrete_type, bound
+                                                    ),
+                                                    *span,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -2449,36 +2517,44 @@ impl TypeChecker {
                                 if all_resolved {
                                     *type_args = inferred_type_args;
 
-                                    // Check interface bounds for inferred types
+                                    // Overload resolution or bounds checking for inferred types
                                     let resolved_args: Vec<Type> = fresh_vars
                                         .iter()
                                         .map(|f| self.substitution.apply(f))
                                         .collect();
-                                    for (i, bounds) in
-                                        generic_info.type_param_bounds.iter().enumerate()
-                                    {
-                                        if bounds.is_empty() {
-                                            continue;
-                                        }
-                                        let concrete_type = &resolved_args[i];
-                                        let type_name = self.type_to_impl_name(concrete_type);
-                                        for bound in bounds {
-                                            if !self
-                                                .interface_impls
-                                                .contains(&(bound.clone(), type_name.clone()))
-                                            {
-                                                // print fallback: suppress error and redirect to _print_dyn
-                                                if callee.as_str() == "print" && bound == "WriteTo"
+
+                                    if has_overloads {
+                                        let selected_idx =
+                                            self.resolve_overload(&overloads, &resolved_args);
+                                        let selected = &overloads[selected_idx];
+                                        *callee = selected.internal_name.clone();
+                                    } else {
+                                        for (i, bounds) in
+                                            generic_info.type_param_bounds.iter().enumerate()
+                                        {
+                                            if bounds.is_empty() {
+                                                continue;
+                                            }
+                                            let concrete_type = &resolved_args[i];
+                                            let type_name = self.type_to_impl_name(concrete_type);
+                                            for bound in bounds {
+                                                if !self
+                                                    .interface_impls
+                                                    .contains(&(bound.clone(), type_name.clone()))
                                                 {
-                                                    print_fallback = true;
-                                                } else {
-                                                    self.errors.push(TypeError::new(
-                                                        format!(
-                                                            "type `{}` does not implement interface `{}`",
-                                                            concrete_type, bound
-                                                        ),
-                                                        *span,
-                                                    ));
+                                                    if callee.as_str() == "print"
+                                                        && bound == "WriteTo"
+                                                    {
+                                                        print_fallback = true;
+                                                    } else {
+                                                        self.errors.push(TypeError::new(
+                                                            format!(
+                                                                "type `{}` does not implement interface `{}`",
+                                                                concrete_type, bound
+                                                            ),
+                                                            *span,
+                                                        ));
+                                                    }
                                                 }
                                             }
                                         }
@@ -3776,6 +3852,53 @@ impl TypeChecker {
     }
 
     /// Convert a concrete Type to the name used in interface_impls lookup.
+    /// Resolve the best overload for a function call based on concrete type arguments.
+    /// Returns the index of the overload whose bounds are all satisfied and has the
+    /// highest specificity (most total bounds). Falls back to an unbounded overload
+    /// if no bounded overload is fully satisfied.
+    fn resolve_overload(&self, overloads: &[GenericFunctionInfo], resolved_args: &[Type]) -> usize {
+        let mut best_index = 0;
+        let mut best_score: i32 = -1;
+
+        for (i, overload) in overloads.iter().enumerate() {
+            let mut all_satisfied = true;
+            let mut score: i32 = 0;
+
+            for (j, bounds) in overload.type_param_bounds.iter().enumerate() {
+                if bounds.is_empty() {
+                    continue;
+                }
+                if j >= resolved_args.len() {
+                    all_satisfied = false;
+                    break;
+                }
+                let concrete_type = &resolved_args[j];
+                let type_name = self.type_to_impl_name(concrete_type);
+                for bound in bounds {
+                    if self
+                        .interface_impls
+                        .contains(&(bound.clone(), type_name.clone()))
+                    {
+                        score += 1;
+                    } else {
+                        all_satisfied = false;
+                        break;
+                    }
+                }
+                if !all_satisfied {
+                    break;
+                }
+            }
+
+            if all_satisfied && score > best_score {
+                best_score = score;
+                best_index = i;
+            }
+        }
+
+        best_index
+    }
+
     fn type_to_impl_name(&self, ty: &Type) -> String {
         match ty {
             Type::Int => "int".to_string(),
