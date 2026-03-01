@@ -1655,9 +1655,20 @@ impl VM {
                 // ========================================
                 MicroOp::HeapLoad { dst, src, offset } => {
                     let sb = self.frames.last().unwrap().stack_base;
-                    let r = self.stack[sb + src.0]
-                        .as_ref()
-                        .ok_or("runtime error: expected reference")?;
+                    debug_assert!(
+                        sb + src.0 < self.stack.len(),
+                        "HeapLoad: VReg({}) out of bounds (stack_base={}, stack_len={})",
+                        src.0,
+                        sb,
+                        self.stack.len()
+                    );
+                    let r = self.stack[sb + src.0].as_ref().ok_or_else(|| {
+                        format!(
+                            "runtime error: expected reference at VReg({}), got {:?}",
+                            src.0,
+                            self.stack[sb + src.0]
+                        )
+                    })?;
                     let value = self.heap.read_slot(r, offset).ok_or_else(|| {
                         format!("runtime error: slot index {} out of bounds", offset)
                     })?;
@@ -1865,7 +1876,16 @@ impl VM {
                     let val = self.pop_operand()?;
                     let frame = self.frames.last().unwrap();
                     let idx = frame.stack_base + dst.0;
-                    // Ensure register file slot exists
+                    debug_assert!(
+                        idx < self.stack.len(),
+                        "StackPop: VReg({}) out of register file (stack_base={}, stack_len={}, \
+                         stack_floor={}). This likely indicates temps_count is too small.",
+                        dst.0,
+                        frame.stack_base,
+                        self.stack.len(),
+                        frame.stack_floor
+                    );
+                    // Ensure register file slot exists (fallback for safety)
                     while self.stack.len() <= idx {
                         self.stack.push(Value::Null);
                     }

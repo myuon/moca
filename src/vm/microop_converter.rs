@@ -1866,12 +1866,241 @@ pub fn convert(func: &Function) -> ConvertedFunction {
 
     let temps_count = max_temp - locals_count;
 
+    // Debug validation: check that all VReg indices are within bounds
+    let total_regs = locals_count + temps_count.max(1);
+    for (i, mop) in micro_ops.iter().enumerate() {
+        for vreg_idx in extract_vregs(mop) {
+            debug_assert!(
+                vreg_idx < total_regs,
+                "MicroOp #{i} in func '{}' references VReg({vreg_idx}) but total_regs={total_regs} \
+                 (locals={locals_count}, temps={}). Op: {:?}",
+                func.name,
+                temps_count.max(1),
+                mop
+            );
+        }
+    }
+
     ConvertedFunction {
         micro_ops,
         temps_count: temps_count.max(1),
         pc_map,
         vreg_types,
     }
+}
+
+/// Extract all VReg indices referenced by a MicroOp.
+fn extract_vregs(mop: &MicroOp) -> Vec<usize> {
+    let mut vregs = Vec::new();
+    match mop {
+        MicroOp::Jmp { .. } => {}
+        MicroOp::BrIf { cond, .. } => vregs.push(cond.0),
+        MicroOp::BrIfFalse { cond, .. } => vregs.push(cond.0),
+        MicroOp::Call { args, ret, .. } => {
+            for a in args {
+                vregs.push(a.0);
+            }
+            if let Some(r) = ret {
+                vregs.push(r.0);
+            }
+        }
+        MicroOp::Ret { src } => {
+            if let Some(s) = src {
+                vregs.push(s.0);
+            }
+        }
+        MicroOp::CallIndirect { callee, args, ret } => {
+            vregs.push(callee.0);
+            for a in args {
+                vregs.push(a.0);
+            }
+            if let Some(r) = ret {
+                vregs.push(r.0);
+            }
+        }
+        MicroOp::CallDynamic {
+            func_idx,
+            args,
+            ret,
+        } => {
+            vregs.push(func_idx.0);
+            for a in args {
+                vregs.push(a.0);
+            }
+            if let Some(r) = ret {
+                vregs.push(r.0);
+            }
+        }
+        MicroOp::Mov { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::ConstI64 { dst, .. } => vregs.push(dst.0),
+        MicroOp::ConstI32 { dst, .. } => vregs.push(dst.0),
+        MicroOp::ConstF64 { dst, .. } => vregs.push(dst.0),
+        MicroOp::ConstF32 { dst, .. } => vregs.push(dst.0),
+        MicroOp::AddI64 { dst, a, b }
+        | MicroOp::SubI64 { dst, a, b }
+        | MicroOp::MulI64 { dst, a, b }
+        | MicroOp::DivI64 { dst, a, b }
+        | MicroOp::RemI64 { dst, a, b }
+        | MicroOp::AndI64 { dst, a, b }
+        | MicroOp::OrI64 { dst, a, b }
+        | MicroOp::XorI64 { dst, a, b }
+        | MicroOp::ShlI64 { dst, a, b }
+        | MicroOp::ShrI64 { dst, a, b }
+        | MicroOp::ShrU64 { dst, a, b }
+        | MicroOp::UMul128Hi { dst, a, b } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+            vregs.push(b.0);
+        }
+        MicroOp::AddI64Imm { dst, a, .. }
+        | MicroOp::ShlI64Imm { dst, a, .. }
+        | MicroOp::ShrI64Imm { dst, a, .. }
+        | MicroOp::ShrU64Imm { dst, a, .. } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+        }
+        MicroOp::NegI64 { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::AddI32 { dst, a, b }
+        | MicroOp::SubI32 { dst, a, b }
+        | MicroOp::MulI32 { dst, a, b }
+        | MicroOp::DivI32 { dst, a, b }
+        | MicroOp::RemI32 { dst, a, b } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+            vregs.push(b.0);
+        }
+        MicroOp::EqzI32 { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::AddF64 { dst, a, b }
+        | MicroOp::SubF64 { dst, a, b }
+        | MicroOp::MulF64 { dst, a, b }
+        | MicroOp::DivF64 { dst, a, b } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+            vregs.push(b.0);
+        }
+        MicroOp::NegF64 { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::AddF32 { dst, a, b }
+        | MicroOp::SubF32 { dst, a, b }
+        | MicroOp::MulF32 { dst, a, b }
+        | MicroOp::DivF32 { dst, a, b } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+            vregs.push(b.0);
+        }
+        MicroOp::NegF32 { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::CmpI64 { dst, a, b, .. }
+        | MicroOp::CmpI32 { dst, a, b, .. }
+        | MicroOp::CmpF64 { dst, a, b, .. }
+        | MicroOp::CmpF32 { dst, a, b, .. } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+            vregs.push(b.0);
+        }
+        MicroOp::CmpI64Imm { dst, a, .. } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+        }
+        MicroOp::I32WrapI64 { dst, src }
+        | MicroOp::I64ExtendI32S { dst, src }
+        | MicroOp::I64ExtendI32U { dst, src }
+        | MicroOp::F64ConvertI64S { dst, src }
+        | MicroOp::I64TruncF64S { dst, src }
+        | MicroOp::F64ConvertI32S { dst, src }
+        | MicroOp::F32ConvertI32S { dst, src }
+        | MicroOp::F32ConvertI64S { dst, src }
+        | MicroOp::I32TruncF32S { dst, src }
+        | MicroOp::I32TruncF64S { dst, src }
+        | MicroOp::I64TruncF32S { dst, src }
+        | MicroOp::F32DemoteF64 { dst, src }
+        | MicroOp::F64PromoteF32 { dst, src }
+        | MicroOp::F64ReinterpretAsI64 { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::RefEq { dst, a, b } => {
+            vregs.push(dst.0);
+            vregs.push(a.0);
+            vregs.push(b.0);
+        }
+        MicroOp::RefIsNull { dst, src } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::RefNull { dst } => vregs.push(dst.0),
+        MicroOp::HeapLoad { dst, src, .. } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+        }
+        MicroOp::HeapLoadDyn { dst, obj, idx, .. } => {
+            vregs.push(dst.0);
+            vregs.push(obj.0);
+            vregs.push(idx.0);
+        }
+        MicroOp::HeapStore { dst_obj, src, .. } => {
+            vregs.push(dst_obj.0);
+            vregs.push(src.0);
+        }
+        MicroOp::HeapStoreDyn { obj, idx, src, .. } => {
+            vregs.push(obj.0);
+            vregs.push(idx.0);
+            vregs.push(src.0);
+        }
+        MicroOp::HeapLoad2 { dst, obj, idx, .. } => {
+            vregs.push(dst.0);
+            vregs.push(obj.0);
+            vregs.push(idx.0);
+        }
+        MicroOp::HeapStore2 { obj, idx, src, .. } => {
+            vregs.push(obj.0);
+            vregs.push(idx.0);
+            vregs.push(src.0);
+        }
+        MicroOp::HeapOffsetRef { dst, src, offset } => {
+            vregs.push(dst.0);
+            vregs.push(src.0);
+            vregs.push(offset.0);
+        }
+        MicroOp::HeapAlloc { dst, args } => {
+            vregs.push(dst.0);
+            for a in args {
+                vregs.push(a.0);
+            }
+        }
+        MicroOp::HeapAllocDynSimple { dst, size, .. } => {
+            vregs.push(dst.0);
+            vregs.push(size.0);
+        }
+        MicroOp::StringConst { dst, .. } => vregs.push(dst.0),
+        MicroOp::GlobalGet { dst, .. } => vregs.push(dst.0),
+        MicroOp::VtableLookup {
+            dst,
+            type_info,
+            iface_desc,
+        } => {
+            vregs.push(dst.0);
+            vregs.push(type_info.0);
+            vregs.push(iface_desc.0);
+        }
+        MicroOp::StackPush { src } => vregs.push(src.0),
+        MicroOp::StackPop { dst } => vregs.push(dst.0),
+        MicroOp::Raw { .. } => {} // Can't check Raw ops
+    }
+    vregs
 }
 
 // ─── Helper functions ───────────────────────────────────────────────
