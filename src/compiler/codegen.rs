@@ -95,6 +95,16 @@ pub struct Codegen {
     /// ElemKind for the current collection method (Vec/Array) being compiled.
     /// Derived from the struct's `data: ptr<T>` field when compiling a method.
     current_collection_elem_kind: Option<ElemKind>,
+    /// Stack of loop contexts for break/continue backpatching
+    loop_context_stack: Vec<LoopContext>,
+}
+
+/// Tracking info for break/continue inside a loop during codegen.
+struct LoopContext {
+    /// Positions of break Jmp(0) instructions to backpatch with loop_end
+    break_patches: Vec<usize>,
+    /// Positions of continue Jmp(0) instructions to backpatch with continue_target
+    continue_patches: Vec<usize>,
 }
 
 impl Default for Codegen {
@@ -131,6 +141,7 @@ impl Codegen {
             current_local_full_types: Vec::new(),
             struct_field_type_map: HashMap::new(),
             current_collection_elem_kind: None,
+            loop_context_stack: Vec::new(),
         }
     }
 
@@ -158,6 +169,7 @@ impl Codegen {
             current_local_full_types: Vec::new(),
             struct_field_type_map: HashMap::new(),
             current_collection_elem_kind: None,
+            loop_context_stack: Vec::new(),
         }
     }
 
@@ -792,7 +804,11 @@ impl Codegen {
                     ops[jump_to_else] = Op::BrIfFalse(after_then);
                 }
             }
-            ResolvedStatement::While { condition, body } => {
+            ResolvedStatement::While {
+                condition,
+                body,
+                post_body,
+            } => {
                 let loop_start = ops.len();
 
                 self.compile_expr(condition, ops)?;
@@ -800,7 +816,19 @@ impl Codegen {
                 let jump_to_end = ops.len();
                 ops.push(Op::BrIfFalse(0)); // Placeholder
 
+                self.loop_context_stack.push(LoopContext {
+                    break_patches: Vec::new(),
+                    continue_patches: Vec::new(),
+                });
+
                 for stmt in body {
+                    self.compile_statement(stmt, ops)?;
+                }
+
+                // continue target: just before post_body (or loop_start if no post_body)
+                let continue_target = ops.len();
+
+                for stmt in post_body {
                     self.compile_statement(stmt, ops)?;
                 }
 
@@ -808,6 +836,15 @@ impl Codegen {
 
                 let loop_end = ops.len();
                 ops[jump_to_end] = Op::BrIfFalse(loop_end);
+
+                // Backpatch break/continue
+                let ctx = self.loop_context_stack.pop().unwrap();
+                for patch_idx in ctx.break_patches {
+                    ops[patch_idx] = Op::Jmp(loop_end);
+                }
+                for patch_idx in ctx.continue_patches {
+                    ops[patch_idx] = Op::Jmp(continue_target);
+                }
             }
             ResolvedStatement::ForIn {
                 slot,
@@ -856,10 +893,18 @@ impl Codegen {
                 ops.push(Op::HeapLoadDyn(ElemKind::Tagged));
                 ops.push(Op::LocalSet(var_slot));
 
+                self.loop_context_stack.push(LoopContext {
+                    break_patches: Vec::new(),
+                    continue_patches: Vec::new(),
+                });
+
                 // Body
                 for stmt in body {
                     self.compile_statement(stmt, ops)?;
                 }
+
+                // continue target: just before idx increment
+                let continue_target = ops.len();
 
                 // idx = idx + 1
                 ops.push(Op::LocalGet(idx_slot));
@@ -873,6 +918,15 @@ impl Codegen {
                 // End of loop
                 let loop_end = ops.len();
                 ops[jump_to_end] = Op::BrIfFalse(loop_end);
+
+                // Backpatch break/continue
+                let ctx = self.loop_context_stack.pop().unwrap();
+                for patch_idx in ctx.break_patches {
+                    ops[patch_idx] = Op::Jmp(loop_end);
+                }
+                for patch_idx in ctx.continue_patches {
+                    ops[patch_idx] = Op::Jmp(continue_target);
+                }
             }
             ResolvedStatement::Return { value } => {
                 if let Some(value) = value {
@@ -1035,6 +1089,22 @@ impl Codegen {
                 for patch_idx in jump_to_end_patches {
                     ops[patch_idx] = Op::Jmp(end);
                 }
+            }
+            ResolvedStatement::Break => {
+                let ctx = self
+                    .loop_context_stack
+                    .last_mut()
+                    .expect("break outside of loop (should be caught by resolver)");
+                ctx.break_patches.push(ops.len());
+                ops.push(Op::Jmp(0)); // Placeholder, patched at loop end
+            }
+            ResolvedStatement::Continue => {
+                let ctx = self
+                    .loop_context_stack
+                    .last_mut()
+                    .expect("continue outside of loop (should be caught by resolver)");
+                ctx.continue_patches.push(ops.len());
+                ops.push(Op::Jmp(0)); // Placeholder, patched at continue target
             }
         }
 

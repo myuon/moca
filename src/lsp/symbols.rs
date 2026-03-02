@@ -425,6 +425,7 @@ impl SymbolTable {
             Statement::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }
+            Statement::Break { .. } | Statement::Continue { .. } => {}
             Statement::MatchDyn {
                 expr,
                 arms,

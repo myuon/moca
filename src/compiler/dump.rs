@@ -237,6 +237,14 @@ impl<'a> AstPrinter<'a> {
                 let body_child = format!("{}    ", parent_prefix);
                 self.print_block_contents(body, &body_child);
             }
+            Statement::Break { .. } => {
+                self.write_prefixed(prefix, "Break");
+                self.newline();
+            }
+            Statement::Continue { .. } => {
+                self.write_prefixed(prefix, "Continue");
+                self.newline();
+            }
 
             Statement::ForIn {
                 var,
@@ -1041,7 +1049,9 @@ impl ResolvedProgramPrinter {
                 }
             }
 
-            ResolvedStatement::While { condition, body } => {
+            ResolvedStatement::While {
+                condition, body, ..
+            } => {
                 self.write(&format!("{}While", prefix));
                 self.newline();
                 let cond_child = format!("{}│   ", parent_prefix);
@@ -1158,6 +1168,14 @@ impl ResolvedProgramPrinter {
                 self.newline();
                 let default_child = format!("{}    ", parent_prefix);
                 self.print_block(default_block, &default_child);
+            }
+            ResolvedStatement::Break => {
+                self.write(&format!("{}Break", prefix));
+                self.newline();
+            }
+            ResolvedStatement::Continue => {
+                self.write(&format!("{}Continue", prefix));
+                self.newline();
             }
         }
     }

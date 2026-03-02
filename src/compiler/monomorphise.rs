@@ -217,11 +217,18 @@ impl InstantiationCollector {
                 }
             }
             Statement::While {
-                condition, body, ..
+                condition,
+                body,
+                post_body,
+                ..
             } => {
                 self.collect_expr(condition);
                 self.collect_block(body);
+                for s in post_body {
+                    self.collect_statement(s);
+                }
             }
+            Statement::Break { .. } | Statement::Continue { .. } => {}
             Statement::ForIn { iterable, body, .. } => {
                 self.collect_expr(iterable);
                 self.collect_block(body);
@@ -923,12 +930,19 @@ fn substitute_statement(stmt: &Statement, type_map: &HashMap<String, Type>) -> S
         Statement::While {
             condition,
             body,
+            post_body,
             span,
         } => Statement::While {
             condition: substitute_expr(condition, type_map),
             body: substitute_block(body, type_map),
+            post_body: post_body
+                .iter()
+                .map(|s| substitute_statement(s, type_map))
+                .collect(),
             span: *span,
         },
+        Statement::Break { span } => Statement::Break { span: *span },
+        Statement::Continue { span } => Statement::Continue { span: *span },
         Statement::ForIn {
             var,
             iterable,
@@ -1540,12 +1554,19 @@ fn rewrite_statement(stmt: &Statement, instantiations: &HashSet<Instantiation>) 
         Statement::While {
             condition,
             body,
+            post_body,
             span,
         } => Statement::While {
             condition: rewrite_expr(condition, instantiations),
             body: rewrite_block(body, instantiations),
+            post_body: post_body
+                .iter()
+                .map(|s| rewrite_statement(s, instantiations))
+                .collect(),
             span: *span,
         },
+        Statement::Break { span } => Statement::Break { span: *span },
+        Statement::Continue { span } => Statement::Continue { span: *span },
         Statement::ForIn {
             var,
             iterable,

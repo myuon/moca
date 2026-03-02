@@ -426,6 +426,10 @@ impl<'a> Parser<'a> {
             self.while_stmt()
         } else if self.check(&TokenKind::For) {
             self.for_stmt()
+        } else if self.check(&TokenKind::Break) {
+            self.break_stmt()
+        } else if self.check(&TokenKind::Continue) {
+            self.continue_stmt()
         } else if self.check(&TokenKind::Return) {
             self.return_stmt()
         } else if self.check(&TokenKind::Throw) {
@@ -574,6 +578,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::While {
             condition,
             body,
+            post_body: Vec::new(),
             span,
         })
     }
@@ -621,6 +626,20 @@ impl<'a> Parser<'a> {
             body,
             span,
         })
+    }
+
+    fn break_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Break)?;
+        self.expect(&TokenKind::Semi)?;
+        Ok(Statement::Break { span })
+    }
+
+    fn continue_stmt(&mut self) -> Result<Statement, String> {
+        let span = self.current_span();
+        self.expect(&TokenKind::Continue)?;
+        self.expect(&TokenKind::Semi)?;
+        Ok(Statement::Continue { span })
     }
 
     fn return_stmt(&mut self) -> Result<Statement, String> {

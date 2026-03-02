@@ -84,12 +84,15 @@ pub enum ResolvedStatement {
     While {
         condition: ResolvedExpr,
         body: Vec<ResolvedStatement>,
+        post_body: Vec<ResolvedStatement>,
     },
     ForIn {
         slot: usize,
         iterable: ResolvedExpr,
         body: Vec<ResolvedStatement>,
     },
+    Break,
+    Continue,
     Return {
         value: Option<ResolvedExpr>,
     },
@@ -356,6 +359,8 @@ pub struct Resolver<'a> {
     /// Struct field types: struct_name -> Vec<(field_name, field_type)>
     /// Used to enrich Type::Struct with empty fields (from monomorphiser substitution)
     struct_field_types: HashMap<String, Vec<(String, Type)>>,
+    /// Depth of nested loops (for break/continue validation)
+    loop_depth: usize,
 }
 
 impl<'a> Resolver<'a> {
@@ -402,6 +407,7 @@ impl<'a> Resolver<'a> {
             base_func_count: 0,
             interface_vtable_slots: HashMap::new(),
             struct_field_types: HashMap::new(),
+            loop_depth: 0,
         }
     }
 
@@ -1061,10 +1067,16 @@ impl<'a> Resolver<'a> {
                 }
             }
             Statement::While {
-                condition, body, ..
+                condition,
+                body,
+                post_body,
+                ..
             } => {
                 Self::collect_reassigned_vars_expr(condition, reassigned);
                 Self::collect_reassigned_vars(&body.statements, reassigned);
+                for s in post_body {
+                    Self::collect_reassigned_vars_stmt(s, reassigned);
+                }
             }
             Statement::ForIn { body, .. } => {
                 Self::collect_reassigned_vars(&body.statements, reassigned);
@@ -1180,11 +1192,18 @@ impl<'a> Resolver<'a> {
                 }
             }
             Statement::While {
-                condition, body, ..
+                condition,
+                body,
+                post_body,
+                ..
             } => {
                 Self::scan_expr_for_lambdas(condition, var_names, captured);
                 Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
+                for s in post_body {
+                    Self::scan_stmt_for_lambdas(s, var_names, captured);
+                }
             }
+            Statement::Break { .. } | Statement::Continue { .. } => {}
             Statement::ForIn { iterable, body, .. } => {
                 Self::scan_expr_for_lambdas(iterable, var_names, captured);
                 Self::scan_lambdas_for_captures(&body.statements, var_names, captured);
@@ -1456,18 +1475,46 @@ impl<'a> Resolver<'a> {
                 })
             }
             Statement::While {
-                condition, body, ..
+                condition,
+                body,
+                post_body,
+                ..
             } => {
                 let condition = self.resolve_expr(condition, scope)?;
 
+                self.loop_depth += 1;
                 scope.enter_scope();
                 let body_resolved = self.resolve_statements(body.statements, scope)?;
+                let post_body_resolved: Vec<ResolvedStatement> = post_body
+                    .into_iter()
+                    .map(|s| self.resolve_statement(s, scope))
+                    .collect::<Result<Vec<_>, _>>()?;
                 scope.exit_scope();
+                self.loop_depth -= 1;
 
                 Ok(ResolvedStatement::While {
                     condition,
                     body: body_resolved,
+                    post_body: post_body_resolved,
                 })
+            }
+            Statement::Break { span } => {
+                if self.loop_depth == 0 {
+                    return Err(format!(
+                        "error: break outside of loop\n  --> {}:{}:{}",
+                        self.filename, span.line, span.column
+                    ));
+                }
+                Ok(ResolvedStatement::Break)
+            }
+            Statement::Continue { span } => {
+                if self.loop_depth == 0 {
+                    return Err(format!(
+                        "error: continue outside of loop\n  --> {}:{}:{}",
+                        self.filename, span.line, span.column
+                    ));
+                }
+                Ok(ResolvedStatement::Continue)
             }
             Statement::Return { value, .. } => {
                 let value = if let Some(v) = value {
@@ -1528,6 +1575,7 @@ impl<'a> Resolver<'a> {
             } => {
                 let iterable = self.resolve_expr(iterable, scope)?;
 
+                self.loop_depth += 1;
                 scope.enter_scope();
                 // Declare loop variable as mutable within the loop
                 let slot = scope.declare(var, true);
@@ -1536,6 +1584,7 @@ impl<'a> Resolver<'a> {
                 let _arr_slot = scope.declare("__for_arr".to_string(), true);
                 let body_resolved = self.resolve_statements(body.statements, scope)?;
                 scope.exit_scope();
+                self.loop_depth -= 1;
 
                 Ok(ResolvedStatement::ForIn {
                     slot,
@@ -2381,7 +2430,9 @@ impl<'a> Resolver<'a> {
                         .as_ref()
                         .is_some_and(|eb| self.body_calls_function(eb, target_index))
             }
-            ResolvedStatement::While { condition, body } => {
+            ResolvedStatement::While {
+                condition, body, ..
+            } => {
                 self.expr_calls_function(condition, target_index)
                     || self.body_calls_function(body, target_index)
             }
@@ -2389,6 +2440,7 @@ impl<'a> Resolver<'a> {
                 self.expr_calls_function(iterable, target_index)
                     || self.body_calls_function(body, target_index)
             }
+            ResolvedStatement::Break | ResolvedStatement::Continue => false,
             ResolvedStatement::Return { value } => value
                 .as_ref()
                 .is_some_and(|v| self.expr_calls_function(v, target_index)),
@@ -2873,13 +2925,20 @@ fn collect_free_vars_statement(
             }
         }
         Statement::While {
-            condition, body, ..
+            condition,
+            body,
+            post_body,
+            ..
         } => {
             collect_free_vars_expr(condition, bound, free);
             for s in &body.statements {
                 collect_free_vars_statement(s, bound, free);
             }
+            for s in post_body {
+                collect_free_vars_statement(s, bound, free);
+            }
         }
+        Statement::Break { .. } | Statement::Continue { .. } => {}
         Statement::ForIn {
             var,
             iterable,
