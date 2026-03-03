@@ -29,6 +29,8 @@ pub struct StructInfo {
     pub fields: Vec<(String, Type)>,
     /// Methods from impl blocks: method_name -> function type
     pub methods: HashMap<String, Type>,
+    /// Method-level type parameters: method_name -> type_param_names
+    pub method_type_params: HashMap<String, Vec<String>>,
 }
 
 /// A type error with location information.
@@ -252,6 +254,7 @@ impl TypeChecker {
                 type_params: vec!["T".to_string()],
                 fields: vec![],
                 methods: HashMap::new(),
+                method_type_params: HashMap::new(),
             },
         );
         structs.insert(
@@ -261,6 +264,7 @@ impl TypeChecker {
                 type_params: vec!["K".to_string(), "V".to_string()],
                 fields: vec![],
                 methods: HashMap::new(),
+                method_type_params: HashMap::new(),
             },
         );
 
@@ -1028,6 +1032,7 @@ impl TypeChecker {
             type_params: struct_def.type_params.clone(),
             fields: Vec::new(),
             methods: HashMap::new(),
+            method_type_params: HashMap::new(),
         };
         self.structs
             .insert(struct_def.name.clone(), placeholder_info);
@@ -1473,12 +1478,24 @@ impl TypeChecker {
                 // Add method to struct's method table
                 if let Some(struct_info) = self.structs.get_mut(struct_name) {
                     struct_info.methods.insert(method.name.clone(), fn_type);
+                    // Track method-level type parameters
+                    if !method.type_params.is_empty() {
+                        struct_info
+                            .method_type_params
+                            .insert(method.name.clone(), method.type_params.clone());
+                    }
                 }
             } else {
                 // Associated function - add to struct's method table if struct exists,
                 // or register as a standalone function for builtin types
                 if let Some(struct_info) = self.structs.get_mut(struct_name) {
                     struct_info.methods.insert(method.name.clone(), fn_type);
+                    // Track method-level type parameters
+                    if !method.type_params.is_empty() {
+                        struct_info
+                            .method_type_params
+                            .insert(method.name.clone(), method.type_params.clone());
+                    }
                 } else {
                     // For builtin types (vec, map), register as {type}_{func} function
                     let func_name = format!("{}_{}", struct_name, method.name);
@@ -2811,6 +2828,7 @@ impl TypeChecker {
             Expr::MethodCall {
                 object,
                 method,
+                type_args: method_type_args,
                 args,
                 span,
                 object_type,
@@ -3013,6 +3031,44 @@ impl TypeChecker {
                                         substituted_ret.substitute_param(param_name, type_arg);
                                 }
                                 (substituted_params, Box::new(substituted_ret))
+                            } else {
+                                (params, ret)
+                            }
+                        } else {
+                            (params, ret)
+                        };
+
+                        // Substitute method-level type params (e.g., fun convert<U>(...))
+                        let (params, ret) = if !method_type_args.is_empty() {
+                            if let Some(ref info) = struct_info {
+                                if let Some(mtp) = info.method_type_params.get(method) {
+                                    let resolved_method_type_args: Vec<Type> = method_type_args
+                                        .iter()
+                                        .map(|ta| {
+                                            self.resolve_type_annotation(ta, *span).unwrap_or_else(
+                                                |e| {
+                                                    self.errors.push(e);
+                                                    self.fresh_var()
+                                                },
+                                            )
+                                        })
+                                        .collect();
+                                    let mut substituted_params = params;
+                                    let mut substituted_ret = *ret;
+                                    for (param_name, type_arg) in
+                                        mtp.iter().zip(resolved_method_type_args.iter())
+                                    {
+                                        substituted_params = substituted_params
+                                            .iter()
+                                            .map(|p| p.substitute_param(param_name, type_arg))
+                                            .collect();
+                                        substituted_ret =
+                                            substituted_ret.substitute_param(param_name, type_arg);
+                                    }
+                                    (substituted_params, Box::new(substituted_ret))
+                                } else {
+                                    (params, ret)
+                                }
                             } else {
                                 (params, ret)
                             }
