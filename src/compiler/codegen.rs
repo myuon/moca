@@ -2180,4 +2180,517 @@ mod tests {
         assert_eq!(chunk.functions.len(), 1);
         assert_eq!(chunk.functions[0].name, "foo");
     }
+
+    // =========================================================================
+    // Expression Code Generation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_bool_literals() {
+        let chunk = compile("__typeof(true);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I32Const(1)));
+
+        let chunk = compile("__typeof(false);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I32Const(0)));
+    }
+
+    #[test]
+    fn test_float_literal() {
+        let chunk = compile("__typeof(3.14);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Const(3.14)));
+    }
+
+    #[test]
+    fn test_nil_literal() {
+        let chunk = compile("__typeof(nil);").unwrap();
+        assert!(chunk.main.code.contains(&Op::RefNull));
+    }
+
+    #[test]
+    fn test_string_literal() {
+        let chunk = compile("__typeof(\"hello\");").unwrap();
+        assert!(chunk.main.code.contains(&Op::StringConst(0)));
+        assert_eq!(chunk.strings[0], "hello");
+    }
+
+    #[test]
+    fn test_multiple_strings() {
+        let chunk = compile("__typeof(\"foo\"); __typeof(\"bar\");").unwrap();
+        assert!(chunk.main.code.contains(&Op::StringConst(0)));
+        assert!(chunk.main.code.contains(&Op::StringConst(1)));
+        assert_eq!(chunk.strings[0], "foo");
+        assert_eq!(chunk.strings[1], "bar");
+    }
+
+    #[test]
+    fn test_unary_negation() {
+        let chunk = compile("__typeof(-42);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Const(42)));
+        assert!(chunk.main.code.contains(&Op::I64Neg));
+    }
+
+    #[test]
+    fn test_unary_not() {
+        let chunk = compile("__typeof(!true);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I32Eqz));
+    }
+
+    #[test]
+    fn test_subtraction() {
+        let chunk = compile("__typeof(10 - 3);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Sub));
+    }
+
+    #[test]
+    fn test_multiplication() {
+        let chunk = compile("__typeof(4 * 5);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Mul));
+    }
+
+    #[test]
+    fn test_division() {
+        let chunk = compile("__typeof(10 / 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64DivS));
+    }
+
+    #[test]
+    fn test_modulo() {
+        let chunk = compile("__typeof(10 % 3);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64RemS));
+    }
+
+    #[test]
+    fn test_comparison_operators() {
+        let chunk = compile("__typeof(1 < 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64LtS));
+
+        let chunk = compile("__typeof(1 <= 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64LeS));
+
+        let chunk = compile("__typeof(1 > 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64GtS));
+
+        let chunk = compile("__typeof(1 >= 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64GeS));
+
+        let chunk = compile("__typeof(1 == 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Eq));
+
+        let chunk = compile("__typeof(1 != 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Ne));
+    }
+
+    #[test]
+    fn test_float_arithmetic() {
+        let chunk = compile("__typeof(1.0 + 2.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Add));
+
+        let chunk = compile("__typeof(1.0 - 2.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Sub));
+
+        let chunk = compile("__typeof(1.0 * 2.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Mul));
+
+        let chunk = compile("__typeof(1.0 / 2.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Div));
+    }
+
+    #[test]
+    fn test_float_negation() {
+        let chunk = compile("__typeof(-1.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Neg));
+    }
+
+    #[test]
+    fn test_float_comparison() {
+        let chunk = compile("__typeof(1.0 < 2.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Lt));
+
+        let chunk = compile("__typeof(1.0 == 2.0);").unwrap();
+        assert!(chunk.main.code.contains(&Op::F64Eq));
+    }
+
+    #[test]
+    fn test_bitwise_operators() {
+        let chunk = compile("__typeof(5 & 3);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64And));
+
+        let chunk = compile("__typeof(5 | 3);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Or));
+
+        let chunk = compile("__typeof(5 ^ 3);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Xor));
+
+        let chunk = compile("__typeof(1 << 3);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Shl));
+
+        let chunk = compile("__typeof(8 >> 2);").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64ShrS));
+    }
+
+    #[test]
+    fn test_logical_and_short_circuit() {
+        let chunk = compile("__typeof(true && false);").unwrap();
+        // && uses Dup + BrIfFalse for short-circuit
+        assert!(chunk.main.code.contains(&Op::Dup));
+        assert!(
+            chunk
+                .main
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::BrIfFalse(_)))
+        );
+    }
+
+    #[test]
+    fn test_logical_or_short_circuit() {
+        let chunk = compile("__typeof(true || false);").unwrap();
+        // || uses Dup + BrIf for short-circuit
+        assert!(chunk.main.code.contains(&Op::Dup));
+        assert!(chunk.main.code.iter().any(|op| matches!(op, Op::BrIf(_))));
+    }
+
+    #[test]
+    fn test_array_literal() {
+        let chunk = compile("__typeof([1, 2, 3]);").unwrap();
+        // Array creates data array + struct
+        assert!(chunk.main.code.contains(&Op::HeapAlloc(3))); // data array
+        assert!(chunk.main.code.contains(&Op::HeapAlloc(2))); // Array struct [ptr, len]
+        assert!(chunk.main.code.contains(&Op::I64Const(3))); // len = 3
+    }
+
+    #[test]
+    fn test_heap_size_builtin() {
+        let chunk = compile("__heap_size([1]);").unwrap();
+        assert!(chunk.main.code.contains(&Op::HeapSize));
+    }
+
+    // =========================================================================
+    // Statement Code Generation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_let_statement() {
+        let chunk = compile("let x = 42;").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Const(42)));
+        assert!(
+            chunk
+                .main
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::LocalSet(_)))
+        );
+    }
+
+    #[test]
+    fn test_assignment() {
+        let chunk = compile("let x = 1; x = 2;").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Const(1)));
+        assert!(chunk.main.code.contains(&Op::I64Const(2)));
+        // Two LocalSet operations (init + assign)
+        let set_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::LocalSet(_)))
+            .count();
+        assert_eq!(set_count, 2);
+    }
+
+    #[test]
+    fn test_if_statement() {
+        let chunk = compile("let x = 1; if true { x = 2; }").unwrap();
+        assert!(
+            chunk
+                .main
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::BrIfFalse(_)))
+        );
+    }
+
+    #[test]
+    fn test_if_else_statement() {
+        let chunk = compile("let x = 0; if true { x = 1; } else { x = 2; }").unwrap();
+        // Should have BrIfFalse (jump to else) and Jmp (jump over else)
+        assert!(
+            chunk
+                .main
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::BrIfFalse(_)))
+        );
+        assert!(chunk.main.code.iter().any(|op| matches!(op, Op::Jmp(_))));
+    }
+
+    #[test]
+    fn test_while_loop() {
+        let chunk = compile("let i = 0; while i < 10 { i = i + 1; }").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64LtS));
+        assert!(
+            chunk
+                .main
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::BrIfFalse(_)))
+        );
+        assert!(chunk.main.code.iter().any(|op| matches!(op, Op::Jmp(_))));
+    }
+
+    #[test]
+    fn test_return_statement() {
+        let chunk = compile("fun foo() -> int { return 42; } __typeof(foo());").unwrap();
+        assert!(chunk.functions[0].code.contains(&Op::I64Const(42)));
+        assert!(chunk.functions[0].code.contains(&Op::Ret));
+    }
+
+    #[test]
+    fn test_return_void() {
+        let chunk = compile("fun foo() { return; } foo();").unwrap();
+        // Void return pushes RefNull
+        assert!(chunk.functions[0].code.contains(&Op::RefNull));
+        assert!(chunk.functions[0].code.contains(&Op::Ret));
+    }
+
+    #[test]
+    fn test_throw_statement() {
+        let chunk = compile("fun foo() { throw 1; } foo();").unwrap();
+        assert!(chunk.functions[0].code.contains(&Op::Throw));
+    }
+
+    #[test]
+    fn test_try_catch() {
+        let chunk = compile("try { throw 1; } catch e { __typeof(e); }").unwrap();
+        assert!(
+            chunk
+                .main
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::TryBegin(_)))
+        );
+        assert!(chunk.main.code.contains(&Op::TryEnd));
+    }
+
+    #[test]
+    fn test_break_continue() {
+        let chunk =
+            compile("let i = 0; while i < 10 { if i == 5 { break; } i = i + 1; continue; }")
+                .unwrap();
+        // break and continue generate Jmp instructions
+        let jmp_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::Jmp(_)))
+            .count();
+        // At least 3 Jmps: loop back, break, continue
+        assert!(jmp_count >= 3);
+    }
+
+    #[test]
+    fn test_expr_statement_drops_result() {
+        let chunk = compile("42;").unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Const(42)));
+        assert!(chunk.main.code.contains(&Op::Drop));
+    }
+
+    #[test]
+    fn test_struct_literal() {
+        let chunk =
+            compile("struct Point { x: int, y: int } let p = Point { x: 1, y: 2 };").unwrap();
+        assert!(chunk.main.code.contains(&Op::HeapAlloc(2)));
+    }
+
+    // =========================================================================
+    // Edge Cases
+    // =========================================================================
+
+    #[test]
+    fn test_deeply_nested_if() {
+        let source = "
+            let x = 0;
+            if true {
+                if true {
+                    if true {
+                        if true {
+                            if true {
+                                x = 42;
+                            }
+                        }
+                    }
+                }
+            }
+        ";
+        let chunk = compile(source).unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Const(42)));
+        // Should have 5 BrIfFalse instructions
+        let br_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::BrIfFalse(_)))
+            .count();
+        assert_eq!(br_count, 5);
+    }
+
+    #[test]
+    fn test_nested_while_loops() {
+        let source = "
+            let i = 0;
+            while i < 10 {
+                let j = 0;
+                while j < 10 {
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+        ";
+        let chunk = compile(source).unwrap();
+        // Two BrIfFalse (one per while loop)
+        let br_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::BrIfFalse(_)))
+            .count();
+        assert_eq!(br_count, 2);
+        // Two Jmp back to loop start
+        let jmp_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::Jmp(_)))
+            .count();
+        assert_eq!(jmp_count, 2);
+    }
+
+    #[test]
+    fn test_large_function_many_locals() {
+        let mut source = String::new();
+        source.push_str("fun big() -> int {\n");
+        for i in 0..50 {
+            source.push_str(&format!("    let v{} = {};\n", i, i));
+        }
+        // Sum them up in pairs to produce a result
+        source.push_str("    return v0 + v49;\n");
+        source.push_str("}\n");
+        source.push_str("__typeof(big());\n");
+
+        let chunk = compile(&source).unwrap();
+        assert_eq!(chunk.functions.len(), 1);
+        assert_eq!(chunk.functions[0].name, "big");
+        // Should have 50 local variables in the function
+        assert!(chunk.functions[0].locals_count >= 50);
+    }
+
+    #[test]
+    fn test_multiple_functions() {
+        let source = "
+            fun add(a: int, b: int) -> int { return a + b; }
+            fun sub(a: int, b: int) -> int { return a - b; }
+            fun mul(a: int, b: int) -> int { return a * b; }
+            __typeof(add(1, 2));
+            __typeof(sub(3, 1));
+            __typeof(mul(2, 3));
+        ";
+        let chunk = compile(source).unwrap();
+        assert_eq!(chunk.functions.len(), 3);
+        assert_eq!(chunk.functions[0].name, "add");
+        assert_eq!(chunk.functions[1].name, "sub");
+        assert_eq!(chunk.functions[2].name, "mul");
+    }
+
+    #[test]
+    fn test_recursive_function() {
+        let source = "
+            fun fib(n: int) -> int {
+                if n <= 1 { return n; }
+                return fib(n - 1) + fib(n - 2);
+            }
+            __typeof(fib(10));
+        ";
+        let chunk = compile(source).unwrap();
+        assert_eq!(chunk.functions.len(), 1);
+        assert_eq!(chunk.functions[0].name, "fib");
+        // fib calls itself: should have two Call instructions
+        let call_count = chunk.functions[0]
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::Call(0, 1)))
+            .count();
+        assert_eq!(call_count, 2);
+    }
+
+    #[test]
+    fn test_deeply_nested_expressions() {
+        // Test deeply nested arithmetic: ((((1 + 2) + 3) + 4) + 5)
+        let source = "__typeof(((((1 + 2) + 3) + 4) + 5));";
+        let chunk = compile(source).unwrap();
+        let add_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::I64Add))
+            .count();
+        assert_eq!(add_count, 4);
+    }
+
+    #[test]
+    fn test_complex_expression() {
+        let source = "__typeof((1 + 2) * (3 - 4) + 5);";
+        let chunk = compile(source).unwrap();
+        assert!(chunk.main.code.contains(&Op::I64Add));
+        assert!(chunk.main.code.contains(&Op::I64Mul));
+        assert!(chunk.main.code.contains(&Op::I64Sub));
+    }
+
+    #[test]
+    fn test_function_with_multiple_params() {
+        let source = "
+            fun f(a: int, b: int, c: int, d: int) -> int {
+                return a + b + c + d;
+            }
+            __typeof(f(1, 2, 3, 4));
+        ";
+        let chunk = compile(source).unwrap();
+        assert_eq!(chunk.functions[0].name, "f");
+        assert_eq!(chunk.functions[0].arity, 4);
+    }
+
+    #[test]
+    fn test_empty_function() {
+        let source = "fun noop() { } noop();";
+        let chunk = compile(source).unwrap();
+        assert_eq!(chunk.functions.len(), 1);
+        assert_eq!(chunk.functions[0].name, "noop");
+    }
+
+    #[test]
+    fn test_if_else_with_nested_loops() {
+        let source = "
+            let result = 0;
+            if true {
+                let i = 0;
+                while i < 5 {
+                    result = result + i;
+                    i = i + 1;
+                }
+            } else {
+                let j = 0;
+                while j < 3 {
+                    result = result - j;
+                    j = j + 1;
+                }
+            }
+        ";
+        let chunk = compile(source).unwrap();
+        // Should have 2 BrIfFalse (1 for if, 2 for while loops) and multiple Jmps
+        let br_count = chunk
+            .main
+            .code
+            .iter()
+            .filter(|op| matches!(op, Op::BrIfFalse(_)))
+            .count();
+        assert!(br_count >= 2);
+    }
 }
