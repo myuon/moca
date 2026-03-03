@@ -1,7 +1,7 @@
 use crate::compiler::ast::{Import, Item, Program};
 use crate::compiler::lexer::Lexer;
 use crate::compiler::parser::Parser;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -180,36 +180,24 @@ impl ModuleLoader {
             })
             .collect();
 
-        // Load imported modules and collect their items
+        // Load imported modules and collect their items (with transitive imports)
         let mut all_items = Vec::new();
+        let main_canonical = main_path
+            .canonicalize()
+            .unwrap_or_else(|_| main_path.to_path_buf());
+        let mut fully_loaded = HashSet::new();
+        let mut in_progress = HashSet::new();
+        in_progress.insert(main_canonical);
 
         for import in imports {
             let module_path = self.resolve_import(&import, main_path)?;
-            let module = self.load_module_timed(&module_path, Some(&mut load_timings))?;
-
-            // Add non-import items from the module
-            for item in &module.items {
-                match item {
-                    Item::Import(_) => {
-                        // TODO: Handle transitive imports
-                    }
-                    Item::FnDef(fn_def) => {
-                        all_items.push(Item::FnDef(fn_def.clone()));
-                    }
-                    Item::StructDef(struct_def) => {
-                        all_items.push(Item::StructDef(struct_def.clone()));
-                    }
-                    Item::ImplBlock(impl_block) => {
-                        all_items.push(Item::ImplBlock(impl_block.clone()));
-                    }
-                    Item::InterfaceDef(interface_def) => {
-                        all_items.push(Item::InterfaceDef(interface_def.clone()));
-                    }
-                    Item::Statement(_) => {
-                        // Module-level statements are not imported
-                    }
-                }
-            }
+            self.collect_module_items(
+                &module_path,
+                &mut all_items,
+                &mut fully_loaded,
+                &mut in_progress,
+                &mut load_timings,
+            )?;
         }
 
         // Add main program items (excluding imports)
@@ -231,6 +219,78 @@ impl ModuleLoader {
         }
 
         Ok((Program { items: all_items }, load_timings))
+    }
+
+    /// Recursively collect items from a module and its transitive imports.
+    ///
+    /// `fully_loaded` tracks modules that have been completely processed (for deduplication).
+    /// `in_progress` tracks modules currently being processed (for circular import detection).
+    fn collect_module_items(
+        &mut self,
+        module_path: &Path,
+        all_items: &mut Vec<Item>,
+        fully_loaded: &mut HashSet<PathBuf>,
+        in_progress: &mut HashSet<PathBuf>,
+        load_timings: &mut LoadTimings,
+    ) -> Result<(), String> {
+        let canonical = module_path
+            .canonicalize()
+            .unwrap_or_else(|_| module_path.to_path_buf());
+
+        // Skip already fully-loaded modules (diamond dependency deduplication)
+        if fully_loaded.contains(&canonical) {
+            return Ok(());
+        }
+
+        // Detect circular imports: module is currently being processed
+        if in_progress.contains(&canonical) {
+            return Err(format!(
+                "circular import detected: '{}' is already being imported",
+                module_path.display()
+            ));
+        }
+
+        in_progress.insert(canonical.clone());
+
+        let module = self.load_module_timed(module_path, Some(load_timings))?;
+
+        // Clone items to avoid borrow issues
+        let items: Vec<Item> = module.items.clone();
+
+        // First, recursively load transitive imports
+        for item in &items {
+            if let Item::Import(import) = item {
+                let transitive_path = self.resolve_import(import, module_path)?;
+                self.collect_module_items(
+                    &transitive_path,
+                    all_items,
+                    fully_loaded,
+                    in_progress,
+                    load_timings,
+                )?;
+            }
+        }
+
+        // Then, add non-import items from this module
+        for item in items {
+            match item {
+                Item::Import(_) => {
+                    // Already processed above
+                }
+                Item::Statement(_) => {
+                    // Module-level statements are not imported
+                }
+                other => {
+                    all_items.push(other);
+                }
+            }
+        }
+
+        // Mark as fully loaded and remove from in-progress
+        in_progress.remove(&canonical);
+        fully_loaded.insert(canonical);
+
+        Ok(())
     }
 }
 
@@ -327,6 +387,154 @@ mod tests {
 
         assert_eq!(fn_count, 1);
         assert_eq!(stmt_count, 2);
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_transitive_imports() {
+        let temp = temp_dir().join("moca_module_test_transitive");
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(&temp.join("src")).unwrap();
+
+        // main imports a, a imports b
+        fs::write(
+            temp.join("src/main.mc"),
+            "import a;\nlet x = fn_a();\nprint(x);",
+        )
+        .unwrap();
+        fs::write(
+            temp.join("src/a.mc"),
+            "import b;\nfun fn_a() { return fn_b(); }",
+        )
+        .unwrap();
+        fs::write(temp.join("src/b.mc"), "fun fn_b() { return 42; }").unwrap();
+
+        let mut loader = ModuleLoader::new(temp.clone());
+        let program = loader.load_with_imports(&temp.join("src/main.mc")).unwrap();
+
+        // Should have: fn_b (from b, loaded transitively) + fn_a (from a) + 2 statements from main
+        let fn_count = program
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::FnDef(_)))
+            .count();
+        assert_eq!(fn_count, 2);
+
+        // fn_b should come before fn_a (dependencies loaded first)
+        let fn_names: Vec<&str> = program
+            .items
+            .iter()
+            .filter_map(|i| {
+                if let Item::FnDef(f) = i {
+                    Some(f.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(fn_names, vec!["fn_b", "fn_a"]);
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_diamond_imports() {
+        let temp = temp_dir().join("moca_module_test_diamond");
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(&temp.join("src")).unwrap();
+
+        // main imports a and b; both a and b import shared
+        fs::write(
+            temp.join("src/main.mc"),
+            "import a;\nimport b;\nlet x = fn_a();\nlet y = fn_b();",
+        )
+        .unwrap();
+        fs::write(
+            temp.join("src/a.mc"),
+            "import shared;\nfun fn_a() { return shared_fn(); }",
+        )
+        .unwrap();
+        fs::write(
+            temp.join("src/b.mc"),
+            "import shared;\nfun fn_b() { return shared_fn(); }",
+        )
+        .unwrap();
+        fs::write(temp.join("src/shared.mc"), "fun shared_fn() { return 1; }").unwrap();
+
+        let mut loader = ModuleLoader::new(temp.clone());
+        let program = loader.load_with_imports(&temp.join("src/main.mc")).unwrap();
+
+        // shared_fn should appear exactly once (deduplication)
+        let fn_names: Vec<&str> = program
+            .items
+            .iter()
+            .filter_map(|i| {
+                if let Item::FnDef(f) = i {
+                    Some(f.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(fn_names, vec!["shared_fn", "fn_a", "fn_b"]);
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_circular_import_detection() {
+        let temp = temp_dir().join("moca_module_test_circular");
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(&temp.join("src")).unwrap();
+
+        // main imports a, a imports b, b imports a (circular)
+        fs::write(temp.join("src/main.mc"), "import a;\nprint(1);").unwrap();
+        fs::write(temp.join("src/a.mc"), "import b;\nfun fn_a() { return 1; }").unwrap();
+        fs::write(temp.join("src/b.mc"), "import a;\nfun fn_b() { return 2; }").unwrap();
+
+        let mut loader = ModuleLoader::new(temp.clone());
+        let result = loader.load_with_imports(&temp.join("src/main.mc"));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("circular import detected"),
+            "expected circular import error, got: {}",
+            err
+        );
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn test_self_import_detection() {
+        let temp = temp_dir().join("moca_module_test_self_import");
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(&temp.join("src")).unwrap();
+
+        // main imports a, a imports itself
+        fs::write(temp.join("src/main.mc"), "import a;\nprint(1);").unwrap();
+        fs::write(temp.join("src/a.mc"), "import a;\nfun fn_a() { return 1; }").unwrap();
+
+        let mut loader = ModuleLoader::new(temp.clone());
+        let result = loader.load_with_imports(&temp.join("src/main.mc"));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("circular import detected"),
+            "expected circular import error, got: {}",
+            err
+        );
 
         fs::remove_dir_all(&temp).ok();
     }
