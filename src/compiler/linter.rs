@@ -144,11 +144,18 @@ fn lint_statement(
             }
         }
         Statement::While {
-            condition, body, ..
+            condition,
+            body,
+            post_body,
+            ..
         } => {
             lint_expr(condition, rules, diagnostics);
             lint_block(body, rules, diagnostics);
+            for s in post_body {
+                lint_statement(s, rules, diagnostics);
+            }
         }
+        Statement::Break { .. } | Statement::Continue { .. } => {}
         Statement::ForIn { iterable, body, .. } => {
             lint_expr(iterable, rules, diagnostics);
             lint_block(body, rules, diagnostics);
@@ -686,13 +693,20 @@ fn collect_usages_stmt(stmt: &Statement, used: &mut HashSet<String>) {
             }
         }
         Statement::While {
-            condition, body, ..
+            condition,
+            body,
+            post_body,
+            ..
         } => {
             collect_usages_expr(condition, used);
             for s in &body.statements {
                 collect_usages_stmt(s, used);
             }
+            for s in post_body {
+                collect_usages_stmt(s, used);
+            }
         }
+        Statement::Break { .. } | Statement::Continue { .. } => {}
         Statement::ForIn { iterable, body, .. } => {
             collect_usages_expr(iterable, used);
             for s in &body.statements {

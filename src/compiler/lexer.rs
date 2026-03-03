@@ -32,10 +32,12 @@ pub enum TokenKind {
     Interface,
     Asm,
     Type,
-    New,   // new literal keyword
-    Const, // const keyword
-    Match, // match keyword
-    As,    // as keyword
+    New,      // new literal keyword
+    Const,    // const keyword
+    Match,    // match keyword
+    As,       // as keyword
+    Break,    // break keyword
+    Continue, // continue keyword
 
     // Literals
     Int(i64),
@@ -653,6 +655,8 @@ impl<'a> Lexer<'a> {
             "while" => TokenKind::While,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             "return" => TokenKind::Return,
             "true" => TokenKind::True,
             "false" => TokenKind::False,

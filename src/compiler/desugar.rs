@@ -298,15 +298,11 @@ impl Desugar {
             span,
         };
 
-        // while condition { body; var = var + 1; }
-        let mut while_body_stmts = desugared_body.statements;
-        while_body_stmts.push(increment);
+        // while condition { body } post_body { var = var + 1; }
         let while_stmt = Statement::While {
             condition,
-            body: Block {
-                statements: while_body_stmts,
-                span,
-            },
+            body: desugared_body,
+            post_body: vec![increment],
             span,
         };
 
@@ -403,12 +399,19 @@ impl Desugar {
             Statement::While {
                 condition,
                 body,
+                post_body,
                 span,
             } => Statement::While {
                 condition: self.desugar_expr(condition),
                 body: self.desugar_block(body),
+                post_body: post_body
+                    .into_iter()
+                    .map(|s| self.desugar_statement(s))
+                    .collect(),
                 span,
             },
+            Statement::Break { span } => Statement::Break { span },
+            Statement::Continue { span } => Statement::Continue { span },
             Statement::ForIn {
                 var,
                 iterable,

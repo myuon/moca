@@ -156,6 +156,13 @@ pub enum Statement {
     While {
         condition: Expr,
         body: Block,
+        post_body: Vec<Statement>,
+        span: Span,
+    },
+    Break {
+        span: Span,
+    },
+    Continue {
         span: Span,
     },
     ForIn {

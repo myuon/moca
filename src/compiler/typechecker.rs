@@ -927,11 +927,16 @@ impl TypeChecker {
                 }
             }
             Statement::While {
-                condition, body, ..
+                condition,
+                body,
+                post_body,
+                ..
             } => {
                 Self::resolve_expr_types(subst, condition);
                 Self::resolve_let_types(subst, &mut body.statements);
+                Self::resolve_let_types(subst, post_body);
             }
+            Statement::Break { .. } | Statement::Continue { .. } => {}
             Statement::ForIn { body, .. } | Statement::ForRange { body, .. } => {
                 Self::resolve_let_types(subst, &mut body.statements);
             }
@@ -1679,6 +1684,7 @@ impl TypeChecker {
             Statement::While {
                 condition,
                 body,
+                post_body,
                 span,
             } => {
                 let cond_type = self.infer_expr(condition, env);
@@ -1686,8 +1692,12 @@ impl TypeChecker {
                     self.errors.push(e);
                 }
                 self.infer_block(body, env);
+                for stmt in post_body {
+                    self.infer_statement(stmt, env);
+                }
                 Type::Nil
             }
+            Statement::Break { .. } | Statement::Continue { .. } => Type::Nil,
 
             Statement::ForIn {
                 var,
