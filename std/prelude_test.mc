@@ -327,3 +327,140 @@ fun _test_sort_float_random() {
     _assert_sorted_float(v, "sort_float random seed=42");
     assert_eq(v.len(), 100, "length should be preserved");
 }
+
+// ============================================================================
+// String Functions Tests
+// ============================================================================
+
+// starts_with tests
+fun _test_starts_with_true() {
+    assert_eq_bool(starts_with("hello world", "hello"), true, "starts_with 'hello'");
+    assert_eq_bool(starts_with("hello", "hello"), true, "starts_with exact match");
+    assert_eq_bool(starts_with("hello", ""), true, "starts_with empty prefix");
+    assert_eq_bool(starts_with("", ""), true, "empty starts_with empty");
+}
+
+fun _test_starts_with_false() {
+    assert_eq_bool(starts_with("hello world", "world"), false, "does not start with 'world'");
+    assert_eq_bool(starts_with("hello", "helloo"), false, "prefix longer than string");
+    assert_eq_bool(starts_with("", "a"), false, "empty does not start with 'a'");
+}
+
+// ends_with tests
+fun _test_ends_with_true() {
+    assert_eq_bool(ends_with("hello world", "world"), true, "ends_with 'world'");
+    assert_eq_bool(ends_with("hello", "hello"), true, "ends_with exact match");
+    assert_eq_bool(ends_with("hello", ""), true, "ends_with empty suffix");
+    assert_eq_bool(ends_with("", ""), true, "empty ends_with empty");
+}
+
+fun _test_ends_with_false() {
+    assert_eq_bool(ends_with("hello world", "hello"), false, "does not end with 'hello'");
+    assert_eq_bool(ends_with("hello", "helloo"), false, "suffix longer than string");
+    assert_eq_bool(ends_with("", "a"), false, "empty does not end with 'a'");
+}
+
+// substring tests
+fun _test_substring_basic() {
+    assert_eq_str(substring("hello world", 0, 5), "hello", "substring 0..5");
+    assert_eq_str(substring("hello world", 6, 11), "world", "substring 6..11");
+    assert_eq_str(substring("hello world", 0, 11), "hello world", "substring full");
+    assert_eq_str(substring("hello", 1, 4), "ell", "substring 1..4");
+}
+
+fun _test_substring_edge_cases() {
+    assert_eq_str(substring("hello", 0, 0), "", "substring empty range");
+    assert_eq_str(substring("hello", 5, 5), "", "substring at end");
+    assert_eq_str(substring("hello", 3, 2), "", "substring reversed range");
+    assert_eq_str(substring("hello", -1, 3), "hel", "substring clamp negative start");
+    assert_eq_str(substring("hello", 0, 100), "hello", "substring clamp end beyond length");
+    assert_eq_str(substring("", 0, 0), "", "substring of empty string");
+}
+
+// trim tests
+fun _test_trim_basic() {
+    assert_eq_str(trim("  hello  "), "hello", "trim spaces");
+    assert_eq_str(trim("hello"), "hello", "trim no whitespace");
+    assert_eq_str(trim("  hello"), "hello", "trim leading spaces");
+    assert_eq_str(trim("hello  "), "hello", "trim trailing spaces");
+}
+
+fun _test_trim_whitespace_types() {
+    assert_eq_str(trim(""), "", "trim empty string");
+    assert_eq_str(trim("   "), "", "trim only spaces");
+}
+
+// to_upper tests
+fun _test_to_upper() {
+    assert_eq_str(to_upper("hello"), "HELLO", "to_upper basic");
+    assert_eq_str(to_upper("Hello World"), "HELLO WORLD", "to_upper mixed case");
+    assert_eq_str(to_upper("HELLO"), "HELLO", "to_upper already upper");
+    assert_eq_str(to_upper(""), "", "to_upper empty");
+    assert_eq_str(to_upper("123abc"), "123ABC", "to_upper with numbers");
+}
+
+// to_lower tests
+fun _test_to_lower() {
+    assert_eq_str(to_lower("HELLO"), "hello", "to_lower basic");
+    assert_eq_str(to_lower("Hello World"), "hello world", "to_lower mixed case");
+    assert_eq_str(to_lower("hello"), "hello", "to_lower already lower");
+    assert_eq_str(to_lower(""), "", "to_lower empty");
+    assert_eq_str(to_lower("123ABC"), "123abc", "to_lower with numbers");
+}
+
+// split tests
+fun _test_split_basic() {
+    let parts = split("a,b,c", ",");
+    assert_eq(parts.len, 3, "split ',' count");
+    assert_eq_str(parts[0], "a", "split part 0");
+    assert_eq_str(parts[1], "b", "split part 1");
+    assert_eq_str(parts[2], "c", "split part 2");
+}
+
+fun _test_split_no_match() {
+    let parts = split("hello", ",");
+    assert_eq(parts.len, 1, "split no match count");
+    assert_eq_str(parts[0], "hello", "split no match part");
+}
+
+fun _test_split_multi_char_sep() {
+    let parts = split("a::b::c", "::");
+    assert_eq(parts.len, 3, "split '::' count");
+    assert_eq_str(parts[0], "a", "split '::' part 0");
+    assert_eq_str(parts[1], "b", "split '::' part 1");
+    assert_eq_str(parts[2], "c", "split '::' part 2");
+}
+
+fun _test_split_empty_parts() {
+    let parts = split(",a,,b,", ",");
+    assert_eq(parts.len, 5, "split with empty parts count");
+    assert_eq_str(parts[0], "", "split empty first");
+    assert_eq_str(parts[1], "a", "split a");
+    assert_eq_str(parts[2], "", "split empty middle");
+    assert_eq_str(parts[3], "b", "split b");
+    assert_eq_str(parts[4], "", "split empty last");
+}
+
+fun _test_split_empty_sep() {
+    let parts = split("abc", "");
+    assert_eq(parts.len, 3, "split empty sep count");
+    assert_eq_str(parts[0], "a", "split char a");
+    assert_eq_str(parts[1], "b", "split char b");
+    assert_eq_str(parts[2], "c", "split char c");
+}
+
+// replace tests
+fun _test_replace_basic() {
+    assert_eq_str(replace("hello world", "world", "moca"), "hello moca", "replace basic");
+    assert_eq_str(replace("aaa", "a", "bb"), "bbbbbb", "replace all occurrences");
+    assert_eq_str(replace("hello", "xyz", "abc"), "hello", "replace no match");
+}
+
+fun _test_replace_empty() {
+    assert_eq_str(replace("hello", "", "x"), "hello", "replace empty old returns original");
+    assert_eq_str(replace("hello world", "o", ""), "hell wrld", "replace with empty new");
+}
+
+fun _test_replace_multi_char() {
+    assert_eq_str(replace("foo bar foo", "foo", "baz"), "baz bar baz", "replace multi-char");
+}

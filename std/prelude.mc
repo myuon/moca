@@ -1413,6 +1413,128 @@ fun str_index_of(haystack: string, needle: string) -> int {
     return -1;
 }
 
+// Check if a string starts with the given prefix.
+fun starts_with(s: string, prefix: string) -> bool {
+    let s_len = len(s);
+    let p_len = len(prefix);
+    if p_len > s_len {
+        return false;
+    }
+    let i = 0;
+    while i < p_len {
+        if s[i] != prefix[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Check if a string ends with the given suffix.
+fun ends_with(s: string, suffix: string) -> bool {
+    let s_len = len(s);
+    let sf_len = len(suffix);
+    if sf_len > s_len {
+        return false;
+    }
+    let offset = s_len - sf_len;
+    let i = 0;
+    while i < sf_len {
+        if s[offset + i] != suffix[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Extract a substring from start (inclusive) to end (exclusive).
+// Clamps indices to valid range.
+fun substring(s: string, start: int, end: int) -> string {
+    let s_len = len(s);
+    // Clamp indices
+    if start < 0 { start = 0; }
+    if end > s_len { end = s_len; }
+    if start >= end {
+        return "";
+    }
+    let new_len = end - start;
+    let s_ptr: ptr<char> = s.data;
+    let data: ptr<char> = __alloc_heap(new_len);
+    let i = 0;
+    while i < new_len {
+        data[i] = s_ptr[start + i];
+        i = i + 1;
+    }
+    return __alloc_string(data, new_len);
+}
+
+// Remove leading and trailing ASCII whitespace (space, tab, newline, carriage return).
+fun trim(s: string) -> string {
+    let s_len = len(s);
+    if s_len == 0 {
+        return "";
+    }
+    // Find first non-whitespace
+    let start = 0;
+    while start < s_len && (s[start] == 32 || s[start] == 9 || s[start] == 10 || s[start] == 13) {
+        start = start + 1;
+    }
+    if start == s_len {
+        return "";
+    }
+    // Find last non-whitespace
+    let end = s_len;
+    while end > start && (s[end - 1] == 32 || s[end - 1] == 9 || s[end - 1] == 10 || s[end - 1] == 13) {
+        end = end - 1;
+    }
+    return substring(s, start, end);
+}
+
+// Convert ASCII lowercase letters to uppercase.
+fun to_upper(s: string) -> string {
+    let s_len = len(s);
+    if s_len == 0 {
+        return "";
+    }
+    let s_ptr: ptr<char> = s.data;
+    let data: ptr<char> = __alloc_heap(s_len);
+    let i = 0;
+    while i < s_len {
+        let c = s_ptr[i];
+        // 'a' = 97, 'z' = 122
+        if c >= 97 && c <= 122 {
+            data[i] = c - 32;
+        } else {
+            data[i] = c;
+        }
+        i = i + 1;
+    }
+    return __alloc_string(data, s_len);
+}
+
+// Convert ASCII uppercase letters to lowercase.
+fun to_lower(s: string) -> string {
+    let s_len = len(s);
+    if s_len == 0 {
+        return "";
+    }
+    let s_ptr: ptr<char> = s.data;
+    let data: ptr<char> = __alloc_heap(s_len);
+    let i = 0;
+    while i < s_len {
+        let c = s_ptr[i];
+        // 'A' = 65, 'Z' = 90
+        if c >= 65 && c <= 90 {
+            data[i] = c + 32;
+        } else {
+            data[i] = c;
+        }
+        i = i + 1;
+    }
+    return __alloc_string(data, s_len);
+}
+
 // ============================================================================
 // Array Functions (fixed-length array using heap intrinsics)
 // ============================================================================
@@ -1543,6 +1665,92 @@ impl<T> Vec<T> {
 }
 
 // Associated functions for vec<T> (syntax sugar for Vec<T>)
+
+// ============================================================================
+// String Functions (depending on Vec<T>)
+// ============================================================================
+
+// Split a string by a separator, returning a Vec of strings.
+fun split(s: string, sep: string) -> Vec<string> {
+    let s_len = len(s);
+    let sep_len = len(sep);
+
+    if sep_len == 0 {
+        // Split into individual characters
+        let result: Vec<string> = Vec<string> { data: __null_ptr(), len: 0, cap: 0 };
+        let i = 0;
+        while i < s_len {
+            result.push(substring(s, i, i + 1));
+            i = i + 1;
+        }
+        return result;
+    }
+
+    let result: Vec<string> = Vec<string> { data: __null_ptr(), len: 0, cap: 0 };
+    let start = 0;
+    while start <= s_len {
+        // Find next occurrence of separator
+        let idx = str_index_of(substring(s, start, s_len), sep);
+        if idx == -1 {
+            // No more separators: add the rest
+            result.push(substring(s, start, s_len));
+            start = s_len + 1;
+        } else {
+            result.push(substring(s, start, start + idx));
+            start = start + idx + sep_len;
+        }
+    }
+    return result;
+}
+
+// Replace all occurrences of old with new_str in s.
+fun replace(s: string, old: string, new_str: string) -> string {
+    let old_len = len(old);
+    if old_len == 0 {
+        return s;
+    }
+    let parts = split(s, old);
+    let n = parts.len;
+    if n <= 1 {
+        return s;
+    }
+    // Join parts with new_str
+    let new_len = len(new_str);
+    let total = 0;
+    let i = 0;
+    while i < n {
+        total = total + len(parts[i]);
+        i = i + 1;
+    }
+    total = total + new_len * (n - 1);
+
+    let data: ptr<char> = __alloc_heap(total);
+    let off = 0;
+    i = 0;
+    while i < n {
+        let part = parts[i];
+        let part_ptr: ptr<char> = part.data;
+        let part_len = part.len;
+        let j = 0;
+        while j < part_len {
+            data[off] = part_ptr[j];
+            off = off + 1;
+            j = j + 1;
+        }
+        if i < n - 1 {
+            let ns_ptr: ptr<char> = new_str.data;
+            j = 0;
+            while j < new_len {
+                data[off] = ns_ptr[j];
+                off = off + 1;
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return __alloc_string(data, total);
+}
+
 // ============================================================================
 // Map Functions (HashMap implementation using chaining)
 // ============================================================================
