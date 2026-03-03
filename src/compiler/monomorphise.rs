@@ -326,13 +326,47 @@ impl InstantiationCollector {
             }
             Expr::MethodCall {
                 object,
+                method,
                 type_args,
                 args,
+                object_type,
                 ..
             } => {
                 self.collect_expr(object);
-                // TODO: Handle generic method calls
-                let _ = type_args; // Suppress unused warning for now
+
+                // Handle generic method calls: obj.method<U>(args)
+                if !type_args.is_empty() {
+                    // Extract struct name and type args from object_type
+                    if let Some((base_name, struct_type_args)) =
+                        Self::extract_struct_info(object_type)
+                    {
+                        // Register struct-level instantiation if the struct is generic
+                        if self.generic_structs.contains_key(&base_name)
+                            && !struct_type_args.is_empty()
+                        {
+                            self.instantiations.insert(Instantiation {
+                                name: base_name.clone(),
+                                type_args: struct_type_args,
+                            });
+                        }
+
+                        // Register method-level instantiation using the base struct name
+                        let qualified_name = format!("{}::{}", base_name, method);
+                        if self.generic_functions.contains_key(&qualified_name) {
+                            let fn_types: Vec<Type> = type_args
+                                .iter()
+                                .filter_map(|ta| ta.to_type().ok())
+                                .collect();
+                            if fn_types.len() == type_args.len() {
+                                self.instantiations.insert(Instantiation {
+                                    name: qualified_name,
+                                    type_args: fn_types,
+                                });
+                            }
+                        }
+                    }
+                }
+
                 for arg in args {
                     self.collect_expr(arg);
                 }
@@ -470,6 +504,42 @@ impl InstantiationCollector {
             | Expr::Nil { .. }
             | Expr::Ident { .. }
             | Expr::Asm(_) => {}
+        }
+    }
+
+    /// Extract the struct name from an object_type, handling both plain
+    /// structs and already-monomorphised generic structs.
+    fn extract_struct_name(object_type: &Option<Type>) -> Option<String> {
+        match object_type.as_ref()? {
+            Type::Struct { name, .. } => Some(name.clone()),
+            Type::GenericStruct {
+                name, type_args, ..
+            } => {
+                if type_args.is_empty() || type_args.iter().any(|t| matches!(t, Type::Param { .. }))
+                {
+                    // Unspecialized or still has type params — use raw name
+                    Some(name.clone())
+                } else {
+                    // Fully specialized — use mangled name
+                    let inst = Instantiation {
+                        name: name.clone(),
+                        type_args: type_args.clone(),
+                    };
+                    Some(inst.mangled_name())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract both the base struct name and type args from an object_type.
+    fn extract_struct_info(object_type: &Option<Type>) -> Option<(String, Vec<Type>)> {
+        match object_type.as_ref()? {
+            Type::Struct { name, .. } => Some((name.clone(), Vec::new())),
+            Type::GenericStruct {
+                name, type_args, ..
+            } => Some((name.clone(), type_args.clone())),
+            _ => None,
         }
     }
 
@@ -690,6 +760,10 @@ impl Monomorphiser {
     pub fn generate_all(&self, instantiations: &HashSet<Instantiation>) -> Vec<Item> {
         let mut items = Vec::new();
 
+        // Collect method-level specializations keyed by struct name
+        // to emit them as impl block methods rather than standalone functions.
+        let mut method_specializations: HashMap<String, Vec<FnDef>> = HashMap::new();
+
         // Sort instantiations by mangled name for deterministic output order.
         // HashSet iteration order is non-deterministic, which would cause
         // function indices to vary between runs, breaking vtable entries.
@@ -697,10 +771,38 @@ impl Monomorphiser {
         sorted_insts.sort_by_key(|inst| inst.mangled_name());
 
         for inst in sorted_insts {
-            if self.generic_functions.contains_key(&inst.name)
-                && let Some(specialized_fn) = self.specialize_function(inst)
-            {
-                items.push(Item::FnDef(specialized_fn));
+            if self.generic_functions.contains_key(&inst.name) {
+                // Check if this is a qualified method name (StructName::method)
+                if let Some((struct_name, method_name)) = inst.name.split_once("::") {
+                    if let Some(specialized_fn) = self.specialize_function(inst) {
+                        // Extract just the method name part from the mangled name
+                        // e.g., "Converter::convert__string" → "convert__string"
+                        let mangled = specialized_fn.name.clone();
+                        let method_mangled = mangled
+                            .split_once("::")
+                            .map(|(_, m)| m.to_string())
+                            .unwrap_or_else(|| {
+                                // Fallback: construct from method name + type suffix
+                                let suffix = inst
+                                    .type_args
+                                    .iter()
+                                    .map(mangle_type)
+                                    .collect::<Vec<_>>()
+                                    .join("_");
+                                format!("{}__{}", method_name, suffix)
+                            });
+                        let method_fn = FnDef {
+                            name: method_mangled,
+                            ..specialized_fn
+                        };
+                        method_specializations
+                            .entry(struct_name.to_string())
+                            .or_default()
+                            .push(method_fn);
+                    }
+                } else if let Some(specialized_fn) = self.specialize_function(inst) {
+                    items.push(Item::FnDef(specialized_fn));
+                }
             } else if self.generic_structs.contains_key(&inst.name) {
                 // Generate both specialized struct and impl blocks
                 if let Some(specialized_struct) = self.specialize_struct(inst) {
@@ -710,6 +812,18 @@ impl Monomorphiser {
                     items.push(Item::ImplBlock(specialized_impl));
                 }
             }
+        }
+
+        // Emit method specializations as impl blocks
+        for (struct_name, methods) in method_specializations {
+            items.push(Item::ImplBlock(ImplBlock {
+                type_params: Vec::new(),
+                interface_name: None,
+                struct_name,
+                struct_type_args: Vec::new(),
+                methods,
+                span: crate::compiler::lexer::Span { line: 0, column: 0 },
+            }));
         }
 
         items
@@ -1798,18 +1912,72 @@ fn rewrite_expr(expr: &Expr, instantiations: &HashSet<Instantiation>) -> Expr {
             span,
             object_type,
             inferred_type,
-        } => Expr::MethodCall {
-            object: Box::new(rewrite_expr(object, instantiations)),
-            method: method.clone(),
-            type_args: type_args.clone(),
-            args: args
-                .iter()
-                .map(|a| rewrite_expr(a, instantiations))
-                .collect(),
-            span: *span,
-            object_type: object_type.clone(),
-            inferred_type: inferred_type.clone(),
-        },
+        } => {
+            // Handle generic method calls: rewrite method name to mangled form
+            if !type_args.is_empty() {
+                let concrete_types: Vec<Type> = type_args
+                    .iter()
+                    .filter_map(|ta| ta.to_type().ok())
+                    .collect();
+                if concrete_types.len() == type_args.len() {
+                    // Try both base name and mangled struct name for lookup
+                    let matching_inst = InstantiationCollector::extract_struct_info(object_type)
+                        .and_then(|(base_name, _)| {
+                            let base_qualified = format!("{}::{}", base_name, method);
+                            let inst = Instantiation {
+                                name: base_qualified,
+                                type_args: concrete_types.clone(),
+                            };
+                            if instantiations.contains(&inst) {
+                                return Some(inst);
+                            }
+                            // Also try mangled struct name
+                            if let Some(mangled) =
+                                InstantiationCollector::extract_struct_name(object_type)
+                                && mangled != base_name
+                            {
+                                let mangled_qualified = format!("{}::{}", mangled, method);
+                                let inst = Instantiation {
+                                    name: mangled_qualified,
+                                    type_args: concrete_types,
+                                };
+                                if instantiations.contains(&inst) {
+                                    return Some(inst);
+                                }
+                            }
+                            None
+                        });
+                    if let Some(inst) = matching_inst {
+                        let mangled_method =
+                            inst.mangled_name().split("::").last().unwrap().to_string();
+                        return Expr::MethodCall {
+                            object: Box::new(rewrite_expr(object, instantiations)),
+                            method: mangled_method,
+                            type_args: Vec::new(),
+                            args: args
+                                .iter()
+                                .map(|a| rewrite_expr(a, instantiations))
+                                .collect(),
+                            span: *span,
+                            object_type: object_type.clone(),
+                            inferred_type: inferred_type.clone(),
+                        };
+                    }
+                }
+            }
+            Expr::MethodCall {
+                object: Box::new(rewrite_expr(object, instantiations)),
+                method: method.clone(),
+                type_args: type_args.clone(),
+                args: args
+                    .iter()
+                    .map(|a| rewrite_expr(a, instantiations))
+                    .collect(),
+                span: *span,
+                object_type: object_type.clone(),
+                inferred_type: inferred_type.clone(),
+            }
+        }
         Expr::AssociatedFunctionCall {
             type_name,
             type_args,
