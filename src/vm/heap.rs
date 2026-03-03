@@ -1592,4 +1592,351 @@ mod tests {
         assert_eq!(heap.read_typed(u8_arr, 0), Some(0xAB));
         assert_eq!(heap.read_typed(i64_arr, 0), Some(12345));
     }
+
+    // =========================================================================
+    // Mass Allocation & GC Trigger Tests
+    // =========================================================================
+
+    #[test]
+    fn test_mass_allocation_gc_trigger() {
+        let mut heap = Heap::new_with_config(None, true);
+
+        // Allocate many objects, keeping only a few as roots
+        let mut roots = Vec::new();
+        for i in 0..500 {
+            let r = heap.alloc_slots(vec![Value::I64(i)]).unwrap();
+            // Keep every 50th object
+            if i % 50 == 0 {
+                roots.push(Value::Ref(r));
+            }
+        }
+
+        let before_gc = heap.object_count();
+        assert_eq!(before_gc, 500);
+
+        // Trigger GC manually
+        let root_values: Vec<Value> = roots.clone();
+        heap.collect(&root_values);
+
+        // Only the kept roots should survive (10 objects: 0, 50, 100, ..., 450)
+        assert_eq!(heap.object_count(), 10);
+
+        // All surviving objects should have correct values
+        for (idx, root) in roots.iter().enumerate() {
+            if let Value::Ref(r) = root {
+                let obj = heap.get(*r).unwrap();
+                assert_eq!(obj.slots[0], Value::I64((idx * 50) as i64));
+            }
+        }
+    }
+
+    #[test]
+    fn test_mass_allocation_with_gc_threshold() {
+        // Use a small heap with GC enabled to force GC during allocation
+        let mut heap = Heap::new_with_config(None, true);
+        // Lower the GC threshold to trigger sooner
+        heap.gc_threshold = 1024;
+
+        let mut live_refs = Vec::new();
+        for i in 0..200 {
+            let r = heap
+                .alloc_slots(vec![Value::I64(i), Value::I64(i * 2)])
+                .unwrap();
+            // Keep only the last 10 objects alive
+            if i >= 190 {
+                live_refs.push(r);
+            }
+
+            // Simulate what the VM does: check and collect
+            if heap.should_gc() {
+                let roots: Vec<Value> = live_refs.iter().map(|r| Value::Ref(*r)).collect();
+                heap.collect(&roots);
+            }
+        }
+
+        // All surviving refs should be valid
+        for (idx, r) in live_refs.iter().enumerate() {
+            let i = (190 + idx) as i64;
+            let obj = heap.get(*r).unwrap();
+            assert_eq!(obj.slots[0], Value::I64(i));
+            assert_eq!(obj.slots[1], Value::I64(i * 2));
+        }
+    }
+
+    #[test]
+    fn test_mass_allocation_mixed_types() {
+        let mut heap = Heap::new();
+
+        let mut roots = Vec::new();
+        for i in 0..100 {
+            match i % 3 {
+                0 => {
+                    let r = heap.alloc_slots(vec![Value::I64(i)]).unwrap();
+                    if i % 30 == 0 {
+                        roots.push(Value::Ref(r));
+                    }
+                }
+                1 => {
+                    let r = heap.alloc_typed_array(3, ElemKind::I64).unwrap();
+                    heap.write_typed(r, 0, i as u64).unwrap();
+                    if i % 31 == 0 {
+                        roots.push(Value::Ref(r));
+                    }
+                }
+                _ => {
+                    let r = heap.alloc_typed_array(5, ElemKind::U8).unwrap();
+                    heap.write_typed(r, 0, (i % 256) as u64).unwrap();
+                    if i % 32 == 0 {
+                        roots.push(Value::Ref(r));
+                    }
+                }
+            }
+        }
+
+        let before = heap.object_count();
+        assert_eq!(before, 100);
+
+        heap.collect(&roots);
+
+        // Only root objects should survive
+        assert_eq!(heap.object_count(), roots.len());
+    }
+
+    // =========================================================================
+    // Circular Reference Tests
+    // =========================================================================
+
+    #[test]
+    fn test_gc_circular_reference_two_objects() {
+        let mut heap = Heap::new();
+
+        // Create two objects that reference each other
+        let a = heap.alloc_slots(vec![Value::Null]).unwrap();
+        let b = heap.alloc_slots(vec![Value::Ref(a)]).unwrap();
+        // Complete the cycle: a -> b
+        heap.write_slot(a, 0, Value::Ref(b)).unwrap();
+
+        // Verify the cycle exists
+        assert_eq!(heap.read_slot(a, 0), Some(Value::Ref(b)));
+        assert_eq!(heap.read_slot(b, 0), Some(Value::Ref(a)));
+
+        // GC with a as root: both should survive (b is reachable from a)
+        heap.collect(&[Value::Ref(a)]);
+        assert_eq!(heap.object_count(), 2);
+        assert_eq!(heap.read_slot(a, 0), Some(Value::Ref(b)));
+        assert_eq!(heap.read_slot(b, 0), Some(Value::Ref(a)));
+    }
+
+    #[test]
+    fn test_gc_circular_reference_unreachable() {
+        let mut heap = Heap::new();
+
+        // Create a cycle that is NOT reachable from roots
+        let a = heap.alloc_slots(vec![Value::Null]).unwrap();
+        let b = heap.alloc_slots(vec![Value::Ref(a)]).unwrap();
+        heap.write_slot(a, 0, Value::Ref(b)).unwrap();
+
+        // Create a separate live object
+        let live = heap.alloc_slots(vec![Value::I64(42)]).unwrap();
+
+        assert_eq!(heap.object_count(), 3);
+
+        // GC with only 'live' as root: the cycle should be collected
+        heap.collect(&[Value::Ref(live)]);
+        assert_eq!(heap.object_count(), 1);
+        assert_eq!(heap.get(live).unwrap().slots[0], Value::I64(42));
+    }
+
+    #[test]
+    fn test_gc_circular_reference_three_objects() {
+        let mut heap = Heap::new();
+
+        // Create a 3-node cycle: a -> b -> c -> a
+        let a = heap.alloc_slots(vec![Value::Null]).unwrap();
+        let b = heap.alloc_slots(vec![Value::Null]).unwrap();
+        let c = heap.alloc_slots(vec![Value::Ref(a)]).unwrap();
+        heap.write_slot(a, 0, Value::Ref(b)).unwrap();
+        heap.write_slot(b, 0, Value::Ref(c)).unwrap();
+
+        // GC with a as root: all three should survive
+        heap.collect(&[Value::Ref(a)]);
+        assert_eq!(heap.object_count(), 3);
+
+        // Verify cycle is intact
+        assert_eq!(heap.read_slot(a, 0), Some(Value::Ref(b)));
+        assert_eq!(heap.read_slot(b, 0), Some(Value::Ref(c)));
+        assert_eq!(heap.read_slot(c, 0), Some(Value::Ref(a)));
+    }
+
+    #[test]
+    fn test_gc_circular_reference_via_typed_ref_array() {
+        let mut heap = Heap::new();
+
+        // Create a cycle using typed Ref arrays
+        let a = heap.alloc_typed_array(1, ElemKind::Ref).unwrap();
+        let b = heap.alloc_typed_array(1, ElemKind::Ref).unwrap();
+
+        // a -> b -> a
+        heap.write_typed(a, 0, b.index as u64).unwrap();
+        heap.write_typed(b, 0, a.index as u64).unwrap();
+
+        // With a as root, both survive
+        heap.collect(&[Value::Ref(a)]);
+        assert_eq!(heap.object_count(), 2);
+
+        // Without any root, both are collected
+        heap.collect(&[]);
+        assert_eq!(heap.object_count(), 0);
+    }
+
+    #[test]
+    fn test_gc_self_referencing_object() {
+        let mut heap = Heap::new();
+
+        // Create an object that references itself
+        let a = heap.alloc_slots(vec![Value::Null]).unwrap();
+        heap.write_slot(a, 0, Value::Ref(a)).unwrap();
+
+        assert_eq!(heap.read_slot(a, 0), Some(Value::Ref(a)));
+
+        // GC should handle self-reference without infinite loop
+        heap.collect(&[Value::Ref(a)]);
+        assert_eq!(heap.object_count(), 1);
+        assert_eq!(heap.read_slot(a, 0), Some(Value::Ref(a)));
+    }
+
+    // =========================================================================
+    // Heap Integrity After GC Tests
+    // =========================================================================
+
+    #[test]
+    fn test_heap_integrity_after_gc() {
+        let mut heap = Heap::new();
+
+        // Create a mix of live and dead objects
+        let live1 = heap
+            .alloc_slots(vec![Value::I64(111), Value::I64(222)])
+            .unwrap();
+        let _dead1 = heap.alloc_slots(vec![Value::I64(999)]).unwrap();
+        let live2 = heap.alloc_string("hello".to_string()).unwrap();
+        let _dead2 = heap
+            .alloc_slots(vec![Value::I64(888), Value::I64(777)])
+            .unwrap();
+        let live3 = heap.alloc_typed_array(3, ElemKind::I64).unwrap();
+        heap.write_typed(live3, 0, 10).unwrap();
+        heap.write_typed(live3, 1, 20).unwrap();
+        heap.write_typed(live3, 2, 30).unwrap();
+
+        heap.collect(&[Value::Ref(live1), Value::Ref(live2), Value::Ref(live3)]);
+
+        // Verify all live objects retain their data
+        let obj1 = heap.get(live1).unwrap();
+        assert_eq!(obj1.slots[0], Value::I64(111));
+        assert_eq!(obj1.slots[1], Value::I64(222));
+
+        let obj2 = heap.get(live2).unwrap();
+        assert_eq!(obj2.slots.len(), 2); // [ptr, len]
+        assert_eq!(obj2.slots[1], Value::I64(5)); // len = 5
+
+        assert_eq!(heap.read_typed(live3, 0), Some(10));
+        assert_eq!(heap.read_typed(live3, 1), Some(20));
+        assert_eq!(heap.read_typed(live3, 2), Some(30));
+
+        assert_eq!(heap.object_count(), 3 + 1); // +1 for string data array
+    }
+
+    #[test]
+    fn test_heap_integrity_after_multiple_gc_cycles() {
+        let mut heap = Heap::new();
+
+        // Cycle 1: Create objects, GC, verify
+        let r1 = heap
+            .alloc_slots(vec![Value::I64(1), Value::I64(2)])
+            .unwrap();
+        for i in 0..20 {
+            let _ = heap.alloc_slots(vec![Value::I64(i + 100)]).unwrap();
+        }
+        heap.collect(&[Value::Ref(r1)]);
+        assert_eq!(heap.object_count(), 1);
+        assert_eq!(heap.get(r1).unwrap().slots[0], Value::I64(1));
+
+        // Cycle 2: Allocate more (should reuse freed memory), GC again
+        let r2 = heap.alloc_slots(vec![Value::I64(3)]).unwrap();
+        for i in 0..30 {
+            let _ = heap.alloc_slots(vec![Value::I64(i + 200)]).unwrap();
+        }
+        heap.collect(&[Value::Ref(r1), Value::Ref(r2)]);
+        assert_eq!(heap.object_count(), 2);
+        assert_eq!(heap.get(r1).unwrap().slots[0], Value::I64(1));
+        assert_eq!(heap.get(r2).unwrap().slots[0], Value::I64(3));
+
+        // Cycle 3: Remove r1, keep r2 and add r3
+        let r3 = heap
+            .alloc_slots(vec![Value::I64(5), Value::I64(6)])
+            .unwrap();
+        heap.collect(&[Value::Ref(r2), Value::Ref(r3)]);
+        assert_eq!(heap.object_count(), 2);
+        assert_eq!(heap.get(r2).unwrap().slots[0], Value::I64(3));
+        assert_eq!(heap.get(r3).unwrap().slots[0], Value::I64(5));
+        assert_eq!(heap.get(r3).unwrap().slots[1], Value::I64(6));
+    }
+
+    #[test]
+    fn test_heap_integrity_object_graph_after_gc() {
+        let mut heap = Heap::new();
+
+        // Build a tree: root -> [child1, child2], child1 -> [leaf]
+        let leaf = heap.alloc_slots(vec![Value::I64(42)]).unwrap();
+        let child1 = heap.alloc_slots(vec![Value::Ref(leaf)]).unwrap();
+        let child2 = heap.alloc_slots(vec![Value::I64(99)]).unwrap();
+        let root = heap
+            .alloc_slots(vec![Value::Ref(child1), Value::Ref(child2)])
+            .unwrap();
+
+        // Also create garbage
+        for _ in 0..10 {
+            let _ = heap.alloc_slots(vec![Value::I64(0)]).unwrap();
+        }
+
+        heap.collect(&[Value::Ref(root)]);
+
+        // Tree should be intact: 4 objects
+        assert_eq!(heap.object_count(), 4);
+
+        // Verify full traversal
+        let root_obj = heap.get(root).unwrap();
+        let c1_ref = root_obj.slots[0].as_ref().unwrap();
+        let c2_ref = root_obj.slots[1].as_ref().unwrap();
+
+        let c1_obj = heap.get(c1_ref).unwrap();
+        let leaf_ref = c1_obj.slots[0].as_ref().unwrap();
+        let leaf_obj = heap.get(leaf_ref).unwrap();
+        assert_eq!(leaf_obj.slots[0], Value::I64(42));
+
+        let c2_obj = heap.get(c2_ref).unwrap();
+        assert_eq!(c2_obj.slots[0], Value::I64(99));
+    }
+
+    #[test]
+    fn test_heap_bytes_allocated_consistency() {
+        let mut heap = Heap::new();
+
+        let r1 = heap
+            .alloc_slots(vec![Value::I64(1), Value::I64(2)])
+            .unwrap();
+        let _r2 = heap.alloc_slots(vec![Value::I64(3)]).unwrap();
+        let r3 = heap.alloc_typed_array(4, ElemKind::I64).unwrap();
+
+        let before_gc_bytes = heap.bytes_allocated();
+        assert!(before_gc_bytes > 0);
+
+        // GC: keep r1 and r3, drop r2
+        heap.collect(&[Value::Ref(r1), Value::Ref(r3)]);
+
+        let after_gc_bytes = heap.bytes_allocated();
+        // After GC, bytes_allocated should decrease (r2 was freed)
+        assert!(after_gc_bytes < before_gc_bytes);
+        // bytes_allocated should still be positive (two objects remain)
+        assert!(after_gc_bytes > 0);
+    }
 }
