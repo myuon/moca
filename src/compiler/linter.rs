@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::compiler::ast::{Block, Expr, FnDef, Item, Program, Statement};
+use crate::compiler::ast::{Block, Expr, FnDef, Item, Param, Program, Statement};
 use crate::compiler::lexer::Span;
 use crate::compiler::types::{Type, TypeAnnotation};
 
@@ -268,9 +268,9 @@ fn lint_expr(expr: &Expr, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<Dia
             }
             lint_expr(expr, rules, diagnostics);
         }
-        Expr::Lambda { body, .. } => {
+        Expr::Lambda { params, body, .. } => {
             lint_block(body, rules, diagnostics);
-            check_unused_variables_in_stmts(&body.statements, diagnostics);
+            check_unused_variables_in_stmts_with_params(params, &body.statements, diagnostics);
         }
         Expr::CallExpr { callee, args, .. } => {
             lint_expr(callee, rules, diagnostics);
@@ -556,10 +556,26 @@ impl LintRule for RedundantAsDyn {
 /// Collects all variable declarations and all identifier usages,
 /// then reports declarations that are never referenced.
 fn check_unused_variables_in_stmts(stmts: &[Statement], diagnostics: &mut Vec<Diagnostic>) {
+    check_unused_variables_in_stmts_with_params(&[], stmts, diagnostics);
+}
+
+/// Check for unused variables in a list of statements, also treating the given
+/// params (e.g. lambda parameters) as declarations.
+fn check_unused_variables_in_stmts_with_params(
+    params: &[Param],
+    stmts: &[Statement],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     // Map from variable name to (span, declaration_order) for reporting
     let mut declarations: HashMap<String, (Span, usize)> = HashMap::new();
     let mut used_names: HashSet<String> = HashSet::new();
     let mut order = 0;
+
+    // Add params as declarations
+    for param in params {
+        declarations.insert(param.name.clone(), (param.span, order));
+        order += 1;
+    }
 
     for stmt in stmts {
         collect_declarations_stmt(stmt, &mut declarations, &mut order);
