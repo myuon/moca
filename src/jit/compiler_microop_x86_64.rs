@@ -91,6 +91,8 @@ pub struct MicroOpJitCompiler {
     /// Code offset after loop_reg_loads (backward jump target).
     /// Forward jumps use labels[ls] (before loads), backward jump uses this (after loads).
     loop_body_offset: Option<usize>,
+    /// Detected vectorizable sum-reduction pattern for SIMD acceleration.
+    vec_sum_info: Option<VecSumInfo>,
 }
 
 /// Kind of forward reference for patching.
@@ -103,6 +105,21 @@ enum RefKind {
     Je,
     /// Jcc rel32 (6 bytes: 0F 8x xx xx xx xx)
     Jcc,
+}
+
+/// Detected vectorizable sum-reduction pattern in an inner loop.
+/// Pattern: HeapLoad2(I64) + AddI64 accumulation with an increment-by-1 counter.
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug, Clone)]
+struct VecSumInfo {
+    /// VReg holding the accumulator (e.g., total)
+    accum: VReg,
+    /// VReg holding the loop counter (e.g., i)
+    counter: VReg,
+    /// VReg holding the loop limit (e.g., n)
+    limit: VReg,
+    /// VReg holding the array object
+    obj: VReg,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -125,6 +142,7 @@ impl MicroOpJitCompiler {
             all_reg_map: HashMap::new(),
             loop_range: None,
             loop_body_offset: None,
+            vec_sum_info: None,
         }
     }
 
@@ -999,6 +1017,183 @@ impl MicroOpJitCompiler {
         self.emit_loop_reg_loads();
     }
 
+    // ==================== SIMD Vectorization ====================
+
+    /// Detect a vectorizable sum-reduction pattern in the inner loop.
+    ///
+    /// Pattern (6 instructions):
+    ///   CmpI64   { dst: _, a: counter, b: limit, cond: LtS }
+    ///   BrIfFalse { cond: _, target: > le }
+    ///   HeapLoad2 { dst: tmp, obj: obj, idx: counter, elem_kind: I64 }
+    ///   AddI64   { dst: accum, a: accum, b: tmp }
+    ///   AddI64Imm { dst: counter, a: counter, imm: 1 }
+    ///   Jmp      { target: ls }
+    fn detect_vectorizable_sum(ops: &[MicroOp], ls: usize, le: usize) -> Option<VecSumInfo> {
+        // Must be exactly 6 instructions
+        if le - ls != 5 {
+            return None;
+        }
+
+        // Instruction 0: CmpI64 { dst, a: counter, b: limit, cond: LtS }
+        let (counter, limit) = match &ops[ls] {
+            MicroOp::CmpI64 {
+                a,
+                b,
+                cond: CmpCond::LtS,
+                ..
+            } => (*a, *b),
+            MicroOp::CmpI64Imm {
+                a,
+                imm,
+                cond: CmpCond::LtS,
+                ..
+            } => {
+                // CmpI64Imm variant — limit is an immediate, not a VReg.
+                // We don't support this case yet (need limit in a VReg for SIMD).
+                let _ = (a, imm);
+                return None;
+            }
+            _ => return None,
+        };
+
+        // Instruction 1: BrIfFalse (exit branch)
+        match &ops[ls + 1] {
+            MicroOp::BrIfFalse { target, .. } if *target > le => {}
+            _ => return None,
+        }
+
+        // Instruction 2: HeapLoad2(I64) { dst: tmp, obj, idx: counter }
+        let (tmp, obj) = match &ops[ls + 2] {
+            MicroOp::HeapLoad2 {
+                dst,
+                obj,
+                idx,
+                elem_kind: ElemKind::I64,
+            } if *idx == counter => (*dst, *obj),
+            _ => return None,
+        };
+
+        // Instruction 3: AddI64 { dst: accum, a: accum, b: tmp }
+        let accum = match &ops[ls + 3] {
+            MicroOp::AddI64 { dst, a, b } if *b == tmp && *dst == *a => *dst,
+            _ => return None,
+        };
+
+        // Instruction 4: AddI64Imm { dst: counter, a: counter, imm: 1 }
+        match &ops[ls + 4] {
+            MicroOp::AddI64Imm { dst, a, imm } if *dst == counter && *a == counter && *imm == 1 => {
+            }
+            _ => return None,
+        }
+
+        // Instruction 5: Jmp back to ls
+        match &ops[ls + 5] {
+            MicroOp::Jmp { target, .. } if *target == ls => {}
+            _ => return None,
+        }
+
+        Some(VecSumInfo {
+            accum,
+            counter,
+            limit,
+            obj,
+        })
+    }
+
+    /// Emit a SIMD sum-reduction preamble before the scalar loop.
+    ///
+    /// Processes 2 i64 elements per iteration using SSE2 PADDQ,
+    /// then reduces to scalar and falls through to the normal
+    /// scalar loop for the remaining 0–1 elements.
+    fn emit_simd_sum_preamble(&mut self, info: &VecSumInfo) {
+        // Require that the obj VReg has a hoisted inner pointer.
+        let inner_base_reg = match self.hoisted_inner_ptrs.get(&info.obj.0) {
+            Some(&reg) => reg,
+            None => return,
+        };
+
+        // Phase 1: Load limit, compute n_vec = limit & ~1, check if SIMD is worthwhile
+        {
+            let reg_map = &self.all_reg_map;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+
+            // TMP3 = limit
+            Self::load_vreg(&mut asm, regs::TMP3, &info.limit, reg_map);
+            // n_vec = limit & ~1 (round down to multiple of 2)
+            asm.and_ri32(regs::TMP3, -2);
+
+            // TMP0 = counter
+            Self::load_vreg(&mut asm, regs::TMP0, &info.counter, reg_map);
+
+            // Skip SIMD if counter >= n_vec
+            asm.cmp_rr(regs::TMP0, regs::TMP3);
+        }
+        // Record skip-jump position and emit placeholder
+        let skip_jge_offset = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            asm.jcc_rel32(Cond::Ge, 0); // placeholder — will be patched
+        }
+
+        // Phase 2: SIMD loop
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Save n_vec in TMP4 (R8) for the loop comparison
+            asm.mov_rr(regs::TMP4, regs::TMP3);
+            // Zero the XMM accumulator
+            asm.pxor(0, 0); // PXOR xmm0, xmm0
+        }
+        let simd_loop_start = self.buf.len();
+        {
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            // Compute address: TMP1 = inner_base + counter * 8
+            asm.mov_rr(regs::TMP1, regs::TMP0);
+            asm.shl_ri(regs::TMP1, 3);
+            asm.add_rr(regs::TMP1, inner_base_reg);
+            // Load 2 packed i64s
+            asm.movdqu_load(1, regs::TMP1, 0); // MOVDQU xmm1, [TMP1]
+            // Accumulate
+            asm.paddq(0, 1); // PADDQ xmm0, xmm1
+            // counter += 2
+            asm.add_ri32(regs::TMP0, 2);
+            // Loop: counter < n_vec?
+            asm.cmp_rr(regs::TMP0, regs::TMP4);
+        }
+        // Backward jump to simd_loop_start
+        {
+            let jl_offset = self.buf.len();
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+            let rel = simd_loop_start as i32 - (jl_offset as i32 + 6); // 6 = Jcc rel32 size
+            asm.jcc_rel32(Cond::L, rel);
+        }
+
+        // Phase 3: Horizontal reduce and store results
+        {
+            let reg_map = &self.all_reg_map;
+            let mut asm = X86_64Assembler::new(&mut self.buf);
+
+            // Store updated counter
+            Self::store_vreg(&mut asm, regs::TMP0, &info.counter, reg_map);
+
+            // Horizontal reduce: xmm0 = [a, b] → a + b
+            asm.pshufd(1, 0, 0x4E); // PSHUFD xmm1, xmm0, 0x4E (swap high/low qwords)
+            asm.paddq(0, 1); // PADDQ xmm0, xmm1 → xmm0.low = a + b
+            asm.movq_r64_xmm(regs::TMP0, 0); // MOVQ TMP0, xmm0
+
+            // Add SIMD result to accumulator
+            Self::load_vreg(&mut asm, regs::TMP1, &info.accum, reg_map);
+            asm.add_rr(regs::TMP1, regs::TMP0);
+            Self::store_vreg(&mut asm, regs::TMP1, &info.accum, reg_map);
+        }
+
+        // Patch the skip-jump to land here (after SIMD preamble)
+        let skip_target = self.buf.len();
+        let code = self.buf.code_mut();
+        let imm_offset = skip_jge_offset + 2; // skip 0F 8x prefix
+        let rel = skip_target as i32 - (skip_jge_offset as i32 + 6); // 6 = Jcc rel32 size
+        code[imm_offset..imm_offset + 4].copy_from_slice(&rel.to_le_bytes());
+    }
+
     /// Compile a MicroOp function to native x86-64 code.
     pub fn compile(
         mut self,
@@ -1107,6 +1302,11 @@ impl MicroOpJitCompiler {
             }
         }
 
+        // Detect vectorizable sum-reduction pattern in the inner loop.
+        if let Some((ls, le)) = detected_loop {
+            self.vec_sum_info = Self::detect_vectorizable_sum(&converted.micro_ops, ls, le);
+        }
+
         // Compute loop-scoped shadow conflicts and vreg type overrides.
         // Within the detected inner loop, use narrower scope to avoid false
         // shadow-conflict marking (e.g., a VReg written with one type inside
@@ -1183,6 +1383,13 @@ impl MicroOpJitCompiler {
                 && !self.loop_regs.is_empty()
             {
                 self.emit_loop_reg_loads();
+
+                // Emit SIMD vectorized preamble (runs once on loop entry).
+                // The scalar loop handles remaining elements after SIMD.
+                if let Some(info) = self.vec_sum_info.clone() {
+                    self.emit_simd_sum_preamble(&info);
+                }
+
                 self.loop_body_offset = Some(self.buf.len());
             }
 
@@ -1445,6 +1652,16 @@ impl MicroOpJitCompiler {
         }
         if !self.loop_regs.is_empty() {
             self.emit_loop_reg_loads();
+        }
+
+        // Detect and emit SIMD vectorized preamble for sum-reduction loops.
+        let vec_info = Self::detect_vectorizable_sum(
+            &converted.micro_ops,
+            loop_start_microop_pc,
+            loop_end_microop_pc,
+        );
+        if let Some(ref info) = vec_info {
+            self.emit_simd_sum_preamble(info);
         }
 
         // Epilogue label: one past the loop end
