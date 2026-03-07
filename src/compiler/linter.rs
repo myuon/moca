@@ -64,6 +64,9 @@ pub fn lint_program(
     // Check unused variables in top-level statements
     check_unused_variables_in_stmts(&top_level_stmts, &mut diagnostics);
 
+    // Check unreachable code in top-level statements
+    check_unreachable_code(&top_level_stmts, &mut diagnostics);
+
     diagnostics
 }
 
@@ -99,6 +102,7 @@ fn lint_block(block: &Block, rules: &[Box<dyn LintRule>], diagnostics: &mut Vec<
     for stmt in &block.statements {
         lint_statement(stmt, rules, diagnostics);
     }
+    check_unreachable_code(&block.statements, diagnostics);
 }
 
 fn lint_statement(
@@ -778,6 +782,61 @@ fn collect_usages_stmt(stmt: &Statement, used: &mut HashSet<String>) {
                 collect_usages_stmt(s, used);
             }
         }
+    }
+}
+
+// ============================================================================
+// Unreachable Code Detection
+// ============================================================================
+
+/// Check for unreachable code in a block.
+/// Warns when statements appear after `return`, `throw`, `break`, or `continue`.
+fn check_unreachable_code(stmts: &[Statement], diagnostics: &mut Vec<Diagnostic>) {
+    let mut found_terminator = false;
+
+    for stmt in stmts {
+        if found_terminator {
+            diagnostics.push(Diagnostic {
+                rule: "unreachable-code".to_string(),
+                message: "unreachable code after a return, throw, break, or continue statement"
+                    .to_string(),
+                span: stmt_span(stmt),
+            });
+            // Only report the first unreachable statement in the block
+            break;
+        }
+
+        match stmt {
+            Statement::Return { .. }
+            | Statement::Throw { .. }
+            | Statement::Break { .. }
+            | Statement::Continue { .. } => {
+                found_terminator = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extract the span from a statement.
+fn stmt_span(stmt: &Statement) -> Span {
+    match stmt {
+        Statement::Let { span, .. }
+        | Statement::Assign { span, .. }
+        | Statement::IndexAssign { span, .. }
+        | Statement::FieldAssign { span, .. }
+        | Statement::If { span, .. }
+        | Statement::While { span, .. }
+        | Statement::Break { span }
+        | Statement::Continue { span }
+        | Statement::ForIn { span, .. }
+        | Statement::ForRange { span, .. }
+        | Statement::Return { span, .. }
+        | Statement::Throw { span, .. }
+        | Statement::Try { span, .. }
+        | Statement::Expr { span, .. }
+        | Statement::Const { span, .. }
+        | Statement::MatchDyn { span, .. } => *span,
     }
 }
 
