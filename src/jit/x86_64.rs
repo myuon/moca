@@ -748,6 +748,71 @@ impl<'a> X86_64Assembler<'a> {
         self.buf.emit_u8(0x89); // MOV r/m32, r32
         self.buf.emit_u8(Self::modrm(0b11, src.code(), dst.code()));
     }
+
+    // ==================== SSE2 SIMD (128-bit packed integer) ====================
+
+    /// PXOR xmm1, xmm2 (packed bitwise XOR — used to zero an XMM register)
+    pub fn pxor(&mut self, dst: u8, src: u8) {
+        // 66 0F EF /r — PXOR xmm1, xmm2/m128
+        self.buf.emit_u8(0x66);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0xEF);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+    }
+
+    /// PADDQ xmm1, xmm2 (packed add quadwords: 2×i64)
+    pub fn paddq(&mut self, dst: u8, src: u8) {
+        // 66 0F D4 /r — PADDQ xmm1, xmm2/m128
+        self.buf.emit_u8(0x66);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0xD4);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+    }
+
+    /// MOVDQU xmm, [base + disp32] (unaligned 128-bit load from memory)
+    pub fn movdqu_load(&mut self, dst: u8, base: Reg, disp: i32) {
+        // F3 0F 6F /r — MOVDQU xmm1, m128
+        self.buf.emit_u8(0xF3);
+        if base.needs_rex_ext() {
+            self.buf.emit_u8(0x41); // REX.B
+        }
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x6F);
+
+        if base == Reg::Rsp || base == Reg::R12 {
+            if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+                self.buf.emit_u8(Self::modrm(0b00, dst, 0b100));
+                self.buf.emit_u8(0x24);
+            } else if (-128..=127).contains(&disp) {
+                self.buf.emit_u8(Self::modrm(0b01, dst, 0b100));
+                self.buf.emit_u8(0x24);
+                self.buf.emit_u8(disp as u8);
+            } else {
+                self.buf.emit_u8(Self::modrm(0b10, dst, 0b100));
+                self.buf.emit_u8(0x24);
+                self.buf.emit_u32(disp as u32);
+            }
+        } else if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+            self.buf.emit_u8(Self::modrm(0b00, dst, base.code()));
+        } else if (-128..=127).contains(&disp) {
+            self.buf.emit_u8(Self::modrm(0b01, dst, base.code()));
+            self.buf.emit_u8(disp as u8);
+        } else {
+            self.buf.emit_u8(Self::modrm(0b10, dst, base.code()));
+            self.buf.emit_u32(disp as u32);
+        }
+    }
+
+    /// PSHUFD xmm1, xmm2, imm8 (shuffle 32-bit doublewords)
+    /// Used for horizontal reduction: imm8=0x4E swaps high and low qwords.
+    pub fn pshufd(&mut self, dst: u8, src: u8, imm: u8) {
+        // 66 0F 70 /r ib — PSHUFD xmm1, xmm2/m128, imm8
+        self.buf.emit_u8(0x66);
+        self.buf.emit_u8(0x0F);
+        self.buf.emit_u8(0x70);
+        self.buf.emit_u8(Self::modrm(0b11, dst, src));
+        self.buf.emit_u8(imm);
+    }
 }
 
 #[cfg(test)]
@@ -1143,5 +1208,68 @@ mod tests {
 
         // MOVZX RAX, AL = 48 0F B6 C0
         assert_eq!(buf.code(), &[0x48, 0x0F, 0xB6, 0xC0]);
+    }
+
+    // ==================== SSE2 SIMD tests ====================
+
+    #[test]
+    fn test_pxor() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.pxor(0, 0); // PXOR xmm0, xmm0
+
+        // 66 0F EF C0
+        assert_eq!(buf.code(), &[0x66, 0x0F, 0xEF, 0xC0]);
+    }
+
+    #[test]
+    fn test_paddq() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.paddq(0, 1); // PADDQ xmm0, xmm1
+
+        // 66 0F D4 C1
+        assert_eq!(buf.code(), &[0x66, 0x0F, 0xD4, 0xC1]);
+    }
+
+    #[test]
+    fn test_movdqu_load() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.movdqu_load(1, Reg::Rax, 0); // MOVDQU xmm1, [RAX]
+
+        // F3 0F 6F 08
+        assert_eq!(buf.code(), &[0xF3, 0x0F, 0x6F, 0x08]);
+    }
+
+    #[test]
+    fn test_movdqu_load_disp8() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.movdqu_load(1, Reg::Rax, 16); // MOVDQU xmm1, [RAX+16]
+
+        // F3 0F 6F 48 10
+        assert_eq!(buf.code(), &[0xF3, 0x0F, 0x6F, 0x48, 0x10]);
+    }
+
+    #[test]
+    fn test_movdqu_load_r13() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.movdqu_load(0, Reg::R13, 0); // MOVDQU xmm0, [R13+0]
+
+        // R13 (like RBP) always needs a displacement byte even for disp=0
+        // F3 41 0F 6F 45 00
+        assert_eq!(buf.code(), &[0xF3, 0x41, 0x0F, 0x6F, 0x45, 0x00]);
+    }
+
+    #[test]
+    fn test_pshufd() {
+        let mut buf = CodeBuffer::new();
+        let mut asm = X86_64Assembler::new(&mut buf);
+        asm.pshufd(1, 0, 0x4E); // PSHUFD xmm1, xmm0, 0x4E
+
+        // 66 0F 70 C8 4E
+        assert_eq!(buf.code(), &[0x66, 0x0F, 0x70, 0xC8, 0x4E]);
     }
 }
